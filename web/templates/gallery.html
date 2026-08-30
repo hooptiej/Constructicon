@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Gallery — Image Repo{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+
+<div class="app-main">
+  <div>
+    <h1 class="page-title">Gallery</h1>
+    <p class="page-subtitle">All uploaded screenshots and documents — drag a file in from anywhere to upload.</p>
+  </div>
+
+  <div class="recent-carousel">
+    <button type="button" class="carousel-arrow" id="recent-prev" aria-label="Scroll left">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="recent-banner" id="recent-banner"></div>
+    <button type="button" class="carousel-arrow" id="recent-next" aria-label="Scroll right">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+
+  <div class="filter-row">
+    <div class="search-box">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex-shrink:0">
+        <circle cx="11" cy="11" r="7" stroke="#6E6B57" stroke-width="1.6"/>
+        <path d="M21 21L16.65 16.65" stroke="#6E6B57" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <input id="search-input" placeholder="Search description, tags, filename...">
+    </div>
+  </div>
+
+  <div id="sections"></div>
+  <p class="empty-state" id="empty-state" style="display:none">No uploads match your search.</p>
+</div>
+<script>
+// --- Gallery: search/filter, grouped into sections by uploader ---
+const CLIENT_COLORS = {};
+const PALETTE = ["#B98B5E", "#8B7355", "#C9A66B", "#7FA37C", "#9CAD5E"];
+function colorFor(client) {
+  if (!client) return "#6E6B57";
+  if (!CLIENT_COLORS[client]) {
+    CLIENT_COLORS[client] = PALETTE[Object.keys(CLIENT_COLORS).length % PALETTE.length];
+  }
+  return CLIENT_COLORS[client];
+}
+const sectionsEl = document.getElementById('sections');
+const emptyState = document.getElementById('empty-state');
+const imgExt = /\.(png|jpe?g)$/i;
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+const OCR_LAMP_META = {
+  pending: { color: '#BA7517', title: 'OCR in progress…' },
+  done:    { color: '#7FA37C', title: null }, // filled with extracted text below
+  failed:  { color: '#E24B4A', title: 'OCR failed' },
+  none:    { color: '#E24B4A', title: 'OCR not run yet' },
+};
+function ocrLampHtml(item) {
+  if (!imgExt.test(item.filename)) return '';
+  const meta = OCR_LAMP_META[item.ocr_status || 'none'];
+  const title = item.ocr_status === 'done' ? (item.extracted_text || 'OCR found no text') : meta.title;
+  return `<span class="ocr-lamp" style="background:${meta.color}" title="${escapeHtml(title)}"></span>`;
+}
+
+const LOCK_ICON = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+  <rect x="5" y="11" width="14" height="9" rx="2" stroke="#6E6B57" stroke-width="1.4"/>
+  <path d="M8 11V8C8 5.79086 9.79086 4 12 4C14.2091 4 16 5.79086 16 8V11" stroke="#6E6B57" stroke-width="1.4"/>
+</svg>`;
+const FILE_ICON = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+  <rect x="3" y="4" width="18" height="16" rx="2" stroke="#3F4530" stroke-width="1.4"/>
+  <circle cx="8" cy="9" r="1.6" stroke="#3F4530" stroke-width="1.4"/>
+  <path d="M3 16L8.5 11.5L13 15L16.5 12L21 16" stroke="#3F4530" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+function cardHtml(item) {
+  const isImage = imgExt.test(item.filename);
+  return `
+    <a href="/image/${item.slug}" class="gallery-card">
+      <div class="gallery-thumb${item.redacted ? ' redacted-thumb' : ''}">
+        ${item.redacted ? LOCK_ICON : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON)}
+      </div>
+      <div class="gallery-body">
+        <div>
+          <span class="gallery-filename mono">${item.filename}</span> ${ocrLampHtml(item)}
+          <div class="gallery-date">${new Date(item.uploaded_at * 1000).toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'})} · <span class="uploader-label">${item.uploaded_by_display}</span></div>
+        </div>
+        <div class="gallery-tags">${item.tags.map(t => `<span class="chip">${t}</span>`).join('')}</div>
+        <div class="gallery-meta-row">
+          <span class="client-badge">
+            <span class="client-dot" style="background:${colorFor(item.client)}"></span>
+            <span class="client-name">${item.client || 'Unknown client'}</span>
+          </span>
+          ${item.ticket_id ? `<span class="ticket-pill mono">#${item.ticket_id}</span>` : ''}
+        </div>
+      </div>
+    </a>`;
+}
+
+const PANE_LIMIT = 4;
+
+// Groups already come from the server as {uploaded_by, total, items} —
+// each fetched with its own query, so one prolific uploader can't crowd
+// others out (see /api/gallery). Server already orders items newest-first
+// within each group and returns at most PANE_LIMIT of them.
+function render(groups) {
+  sectionsEl.innerHTML = '';
+  emptyState.style.display = groups.length ? 'none' : 'block';
+
+  for (const group of groups) {
+    const countLabel = group.total > PANE_LIMIT
+      ? `${PANE_LIMIT} most recent of ${group.total}`
+      : `${group.total} upload${group.total > 1 ? 's' : ''}`;
+    const pane = document.createElement('div');
+    pane.className = 'user-pane';
+    pane.innerHTML = `
+      <a class="gallery-section-header" href="/gallery/user/${encodeURIComponent(group.uploaded_by)}">
+        <span class="gallery-section-title">${group.uploaded_by_display}</span>
+        <span class="gallery-section-count">${countLabel}</span>
+      </a>
+      <div class="gallery-grid">${group.items.map(cardHtml).join('')}</div>`;
+    sectionsEl.appendChild(pane);
+  }
+}
+
+const recentBanner = document.getElementById('recent-banner');
+function recentThumbHtml(item) {
+  const isImage = imgExt.test(item.filename);
+  return `<a class="recent-thumb${item.redacted ? ' redacted-thumb' : ''}" href="/image/${item.slug}" title="${escapeHtml(item.filename + ' — ' + item.uploaded_by_display + (item.redacted ? ' (redacted)' : ''))}">
+    ${item.redacted ? LOCK_ICON.replace('width="22" height="22"', 'width="16" height="16"') : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON.replace('width="26" height="26"', 'width="16" height="16"'))}
+  </a>`;
+}
+
+let recentSetWidth = 0;
+function renderRecentBanner(items) {
+  const shown = items.slice(0, 16);
+  if (!shown.length) {
+    recentBanner.innerHTML = '';
+    recentSetWidth = 0;
+    return;
+  }
+  // Render the set twice back-to-back so there's always more strip to scroll
+  // into — the scroll listener below snaps the position back by one set's
+  // width once you cross into the duplicate, making the loop seamless.
+  recentBanner.innerHTML = shown.map(recentThumbHtml).join('') + shown.map(recentThumbHtml).join('');
+  requestAnimationFrame(() => { recentSetWidth = recentBanner.scrollWidth / 2; });
+}
+
+async function loadRecent() {
+  const res = await fetch('/api/search');
+  renderRecentBanner(await res.json());
+}
+
+const CAROUSEL_STEP = 3;
+const CAROUSEL_THUMB_STEP = 60 + 10; // .recent-thumb width + gap
+
+document.getElementById('recent-prev').addEventListener('click', () => {
+  // Near the start with nothing to scroll back into — hop to the identical
+  // spot in the duplicated second set first, so the step back looks continuous.
+  if (recentSetWidth && recentBanner.scrollLeft < CAROUSEL_THUMB_STEP * CAROUSEL_STEP) {
+    recentBanner.scrollLeft += recentSetWidth;
+  }
+  recentBanner.scrollBy({ left: -CAROUSEL_THUMB_STEP * CAROUSEL_STEP, behavior: 'smooth' });
+});
+document.getElementById('recent-next').addEventListener('click', () => {
+  recentBanner.scrollBy({ left: CAROUSEL_THUMB_STEP * CAROUSEL_STEP, behavior: 'smooth' });
+});
+
+// Covers manual scroll/trackpad too, not just the arrows: once you scroll
+// past the first set, snap back by exactly one set's width. The duplicate
+// set makes that jump pixel-identical, so it reads as an endless loop.
+recentBanner.addEventListener('scroll', () => {
+  if (recentSetWidth && recentBanner.scrollLeft >= recentSetWidth) {
+    recentBanner.scrollLeft -= recentSetWidth;
+  }
+});
+
+async function load() {
+  const q = document.getElementById('search-input').value;
+  const params = new URLSearchParams();
+  if (q) params.set('query', q);
+  const res = await fetch(`/api/gallery?${params}`);
+  render(await res.json());
+}
+
+let debounceTimer;
+document.getElementById('search-input').addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(load, 200);
+});
+
+document.addEventListener('imagerepo:upload-complete', () => {
+  load();
+  loadRecent();
+});
+
+load();
+loadRecent();
+</script>
+{% endblock %}

@@ -1,0 +1,10 @@
+venv/
+storage/
+imagerepo.db
+imagerepo.db-journal
+*.log
+hudu_clients.json
+__pycache__/
+*.pyc
+.git/
+.gitignore

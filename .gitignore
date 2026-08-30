@@ -1,0 +1,28 @@
+# Secrets — never committed, per the non-negotiable secrets rule
+.env
+.env.*
+*.key
+*.pem
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Runtime data — user uploads and the SQLite index are data, not code
+storage/
+imagerepo.db
+imagerepo.db-journal
+
+# Uploaded desktop-app build — a binary artifact someone uploads from
+# account settings, not something built from this source
+desktop_app_build/
+
+# Logs
+*.log
+
+# Synced/generated artifacts
+hudu_clients.json
+
+# OS
+.DS_Store

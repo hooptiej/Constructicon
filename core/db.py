@@ -1,0 +1,616 @@
+"""SQLite index for the image repo. One row per upload."""
+
+import json
+import sqlite3
+import time
+from pathlib import Path
+
+DB_PATH = Path(__file__).resolve().parent.parent / "imagerepo.db"
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS capture_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT UNIQUE NOT NULL,
+    source TEXT NOT NULL DEFAULT 'screenshot',
+    client TEXT,
+    ticket_id TEXT,
+    timestamp REAL NOT NULL,
+    tech TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    extracted_text TEXT NOT NULL DEFAULT '',
+    artifact_link TEXT,
+    embedding BLOB,
+    tags TEXT NOT NULL DEFAULT '[]',
+    redacted INTEGER NOT NULL DEFAULT 0,
+    filename TEXT,
+    stored_filename TEXT,
+    file_size INTEGER,
+    source_modified_at REAL,
+    ocr_status TEXT,
+    ocr_started_at REAL,
+    perceptual_hash TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_capture_events_source ON capture_events(source);
+CREATE INDEX IF NOT EXISTS idx_capture_events_client ON capture_events(client);
+CREATE INDEX IF NOT EXISTS idx_capture_events_ticket ON capture_events(ticket_id);
+CREATE TABLE IF NOT EXISTS clients (
+    name TEXT PRIMARY KEY,
+    category TEXT NOT NULL,
+    nickname TEXT
+);
+CREATE TABLE IF NOT EXISTS client_domains (
+    client_name TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    PRIMARY KEY (client_name, domain)
+);
+CREATE TABLE IF NOT EXISTS users (
+    email TEXT PRIMARY KEY,
+    first_seen REAL NOT NULL,
+    display_name TEXT,
+    avatar_color TEXT,
+    avatar_image BLOB
+);
+CREATE TABLE IF NOT EXISTS capture_event_relations (
+    slug_a TEXT NOT NULL,
+    slug_b TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (slug_a, slug_b)
+);
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user TEXT NOT NULL,
+    label TEXT NOT NULL,
+    token_hash TEXT UNIQUE NOT NULL,
+    created_at REAL NOT NULL,
+    last_used_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user);
+"""
+
+SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
+
+
+def ensure_special_clients():
+    conn = get_conn()
+    for name in SPECIAL_CLIENTS:
+        conn.execute("INSERT OR IGNORE INTO clients (name, category) VALUES (?, 'special')", (name,))
+    conn.commit()
+    conn.close()
+
+
+def sync_hudu_clients(companies):
+    """Replace the Hudu-sourced client list wholesale — called periodically
+    so renamed/archived companies don't linger. Special categories (Unknown,
+    Not Business, Internal Infrastructure) are untouched.
+
+    Each item is either a plain name string (no nickname/domains — older
+    sync data) or a {"name": ..., "nickname": ..., "domains": [...]} dict,
+    so this stays compatible with whatever the upstream Hudu export
+    currently produces. "domains" is any domain worth matching in OCR text —
+    typically the company's website plus any Cloudflare-managed zones.
+    """
+    conn = get_conn()
+    conn.execute("DELETE FROM client_domains WHERE client_name IN (SELECT name FROM clients WHERE category = 'hudu')")
+    conn.execute("DELETE FROM clients WHERE category = 'hudu'")
+    rows, domain_rows = [], []
+    for c in companies:
+        if isinstance(c, str):
+            rows.append((c, None))
+            continue
+        name = c["name"]
+        rows.append((name, c.get("nickname") or None))
+        for domain in c.get("domains") or []:
+            if domain:
+                domain_rows.append((name, domain.strip().lower()))
+    conn.executemany(
+        "INSERT OR IGNORE INTO clients (name, category, nickname) VALUES (?, 'hudu', ?)",
+        rows,
+    )
+    if domain_rows:
+        conn.executemany(
+            "INSERT OR IGNORE INTO client_domains (client_name, domain) VALUES (?, ?)",
+            domain_rows,
+        )
+    conn.commit()
+    conn.close()
+
+
+def add_test_client(name, nickname=None, domains=None):
+    """A fake client for exercising the pipeline (OCR auto-tag matching,
+    similarity, dropdowns) without mixing invented data into the real
+    Hudu-synced list. Deliberately its own category, not 'hudu' — that
+    category gets wiped and rebuilt wholesale on every sync_hudu_clients()
+    call, which would silently delete a fake client the next time a real
+    sync runs."""
+    conn = get_conn()
+    conn.execute("INSERT OR IGNORE INTO clients (name, category, nickname) VALUES (?, 'test', ?)", (name, nickname))
+    if domains:
+        conn.executemany(
+            "INSERT OR IGNORE INTO client_domains (client_name, domain) VALUES (?, ?)",
+            [(name, d.strip().lower()) for d in domains if d],
+        )
+    conn.commit()
+    conn.close()
+
+
+def list_client_domains():
+    """(client_name, domain) pairs — a client can have more than one, so this
+    is flat rows rather than one-per-client like list_client_aliases."""
+    conn = get_conn()
+    rows = conn.execute("SELECT client_name, domain FROM client_domains").fetchall()
+    conn.close()
+    return [(r["client_name"], r["domain"]) for r in rows]
+
+
+def list_client_aliases():
+    """(name, nickname) pairs for real Hudu-synced clients plus any fake
+    test clients — used to auto-tag OCR'd text by client, not the UI
+    dropdown (list_clients handles that, and keeps test clients visually
+    separate)."""
+    conn = get_conn()
+    rows = conn.execute("SELECT name, nickname FROM clients WHERE category IN ('hudu', 'test')").fetchall()
+    conn.close()
+    return [(r["name"], r["nickname"]) for r in rows]
+
+
+def list_clients():
+    conn = get_conn()
+    specials = conn.execute("SELECT name FROM clients WHERE category = 'special' ORDER BY name").fetchall()
+    hudu = conn.execute("SELECT name FROM clients WHERE category = 'hudu' ORDER BY name").fetchall()
+    test = conn.execute("SELECT name FROM clients WHERE category = 'test' ORDER BY name").fetchall()
+    conn.close()
+    return {
+        "special": [r["name"] for r in specials],
+        "clients": [r["name"] for r in hudu],
+        "test": [r["name"] for r in test],
+    }
+
+
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_conn()
+    # Pre-generic-schema table from before the capture_events rework — sample
+    # data only, safe to drop rather than migrate. Confirmed with Jason 2026-08-27.
+    conn.execute("DROP TABLE IF EXISTS uploads")
+    conn.executescript(SCHEMA)
+    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(capture_events)")}
+    for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+    existing_user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    # avatar_icon (emoji-based avatars) replaced by avatar_image — dropped
+    # rather than left inert. Confirmed with Jason 2026-08-27: start anew,
+    # no migration of the old emoji value.
+    if "avatar_icon" in existing_user_columns:
+        conn.execute("ALTER TABLE users DROP COLUMN avatar_icon")
+    for column, ddl_type in (("display_name", "TEXT"), ("avatar_color", "TEXT"), ("avatar_image", "BLOB")):
+        if column not in existing_user_columns:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {column} {ddl_type}")
+    existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
+    if "nickname" not in existing_client_columns:
+        conn.execute("ALTER TABLE clients ADD COLUMN nickname TEXT")
+    conn.commit()
+    conn.close()
+
+
+def _row_to_dict(row):
+    d = dict(row)
+    d["tags"] = json.loads(d["tags"])
+    return d
+
+
+def insert_upload(slug, filename, stored_filename, uploaded_by, description="", tags=None, ticket_id=None, client=None,
+                   source="screenshot", file_size=None, source_modified_at=None, ocr_status=None):
+    conn = get_conn()
+    now = time.time()
+    conn.execute(
+        "INSERT INTO capture_events (slug, source, client, ticket_id, timestamp, tech, description, "
+        "extracted_text, artifact_link, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)",
+        (slug, source, client, ticket_id, now, uploaded_by, description,
+         f"/f/{slug}", json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
+         now if ocr_status == "pending" else None),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_pending_ocr():
+    """Rows whose OCR never finished — normally just a brief in-flight window,
+    but a process restart while a background OCR task was queued or running
+    leaves a row stuck here forever unless something re-triggers it."""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM capture_events WHERE ocr_status = 'pending'").fetchall()
+    conn.close()
+    return [_row_to_dict(r) for r in rows]
+
+
+def set_ocr_status(slug, status):
+    """Setting status to "pending" also stamps ocr_started_at — lets the
+    watchdog measure how long the *current* attempt has been running,
+    independent of how old the upload itself is."""
+    conn = get_conn()
+    if status == "pending":
+        conn.execute("UPDATE capture_events SET ocr_status = ?, ocr_started_at = ? WHERE slug = ?", (status, time.time(), slug))
+    else:
+        conn.execute("UPDATE capture_events SET ocr_status = ? WHERE slug = ?", (status, slug))
+    conn.commit()
+    conn.close()
+
+
+def list_stale_pending_ocr(older_than_seconds):
+    """Rows stuck at ocr_status='pending' for suspiciously long — the
+    watchdog re-fires these rather than assuming they're just queued behind
+    a big batch forever."""
+    conn = get_conn()
+    cutoff = time.time() - older_than_seconds
+    rows = conn.execute(
+        "SELECT * FROM capture_events WHERE ocr_status = 'pending' AND ocr_started_at < ?", (cutoff,)
+    ).fetchall()
+    conn.close()
+    return [_row_to_dict(r) for r in rows]
+
+
+def set_perceptual_hash(slug, phash):
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET perceptual_hash = ? WHERE slug = ?", (phash, slug))
+    conn.commit()
+    conn.close()
+
+
+def set_embedding(slug, embedding_bytes):
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET embedding = ? WHERE slug = ?", (embedding_bytes, slug))
+    conn.commit()
+    conn.close()
+
+
+def list_hash_and_embedding_candidates(exclude_slug):
+    """(slug, perceptual_hash, embedding) for every other row that has at
+    least one of the two signals — used for live similarity comparison,
+    not cached, so there's nothing to invalidate as new rows come in."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug, perceptual_hash, embedding FROM capture_events "
+        "WHERE slug != ? AND (perceptual_hash IS NOT NULL OR embedding IS NOT NULL)",
+        (exclude_slug,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_by_slug(slug):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM capture_events WHERE slug = ?", (slug,)).fetchone()
+    conn.close()
+    return _row_to_dict(row) if row else None
+
+
+def find_duplicate(filename, file_size, source_modified_at):
+    """A prior capture_event is only treated as a duplicate when filename,
+    file size, and the source file's own last-modified time all agree —
+    matching just the name or just the size is too easy to collide on by
+    coincidence (e.g. two unrelated 'screenshot.png' drops).
+    """
+    if not filename or file_size is None or source_modified_at is None:
+        return None
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM capture_events WHERE filename = ? AND file_size = ? AND source_modified_at = ? "
+        "ORDER BY timestamp ASC LIMIT 1",
+        (filename, file_size, source_modified_at),
+    ).fetchone()
+    conn.close()
+    return _row_to_dict(row) if row else None
+
+
+def update_tags(slug, description=None, tags=None, ticket_id=None, client=None):
+    existing = get_by_slug(slug)
+    if existing is None:
+        return None
+    conn = get_conn()
+    conn.execute(
+        "UPDATE capture_events SET description = ?, tags = ?, ticket_id = ?, client = ? WHERE slug = ?",
+        (
+            description if description is not None else existing["description"],
+            json.dumps(tags) if tags is not None else json.dumps(existing["tags"]),
+            ticket_id if ticket_id is not None else existing["ticket_id"],
+            client if client is not None else existing["client"],
+            slug,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return get_by_slug(slug)
+
+
+def add_tags(slug, new_tags):
+    """Merge new_tags into the row's existing tags (deduped) instead of
+    replacing them — for auto-tagging, so it never clobbers tags a person
+    already set by hand."""
+    existing = get_by_slug(slug)
+    if existing is None:
+        return
+    merged = existing["tags"] + [t for t in new_tags if t not in existing["tags"]]
+    if merged == existing["tags"]:
+        return
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET tags = ? WHERE slug = ?", (json.dumps(merged), slug))
+    conn.commit()
+    conn.close()
+
+
+def set_client_if_empty(slug, client):
+    """Only sets client if it's currently unset — auto-detection should
+    never override a client a person already picked by hand."""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE capture_events SET client = ? WHERE slug = ? AND (client IS NULL OR client = '')",
+        (client, slug),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_uploaders(query=None, client=None):
+    """Distinct techs matching the given filters, each with their total
+    count and most recent capture time — used to group the gallery fairly so
+    one prolific uploader can't crowd others out of a single global LIMIT.
+    """
+    conn = get_conn()
+    clauses, params = [], []
+    if query:
+        clauses.append("(description LIKE ? OR filename LIKE ?)")
+        params += [f"%{query}%", f"%{query}%"]
+    if client:
+        clauses.append("client = ?")
+        params.append(client)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = conn.execute(
+        f"SELECT tech AS uploaded_by, COUNT(*) as total, MAX(timestamp) as most_recent "
+        f"FROM capture_events {where} GROUP BY tech ORDER BY most_recent DESC",
+        params,
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def search(query=None, tags=None, client=None, uploaded_by=None, limit=50):
+    conn = get_conn()
+    clauses, params = [], []
+    if query:
+        clauses.append("(description LIKE ? OR filename LIKE ? OR extracted_text LIKE ?)")
+        params += [f"%{query}%", f"%{query}%", f"%{query}%"]
+    if client:
+        clauses.append("client = ?")
+        params.append(client)
+    if uploaded_by:
+        clauses.append("tech = ?")
+        params.append(uploaded_by)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = conn.execute(
+        f"SELECT * FROM capture_events {where} ORDER BY timestamp DESC LIMIT ?", params + [limit]
+    ).fetchall()
+    conn.close()
+    results = [_row_to_dict(r) for r in rows]
+    if tags:
+        wanted = set(tags)
+        results = [r for r in results if wanted & set(r["tags"])]
+    return results
+
+
+def record_user(email):
+    """Track that this email has logged in — the source of truth for
+    'known users' shown in the presence indicator, independent of session
+    expiry or whether they've ever uploaded anything.
+    """
+    conn = get_conn()
+    conn.execute("INSERT OR IGNORE INTO users (email, first_seen) VALUES (?, ?)", (email, time.time()))
+    conn.commit()
+    conn.close()
+
+
+def list_users():
+    conn = get_conn()
+    rows = conn.execute("SELECT email FROM users ORDER BY email").fetchall()
+    conn.close()
+    return [r["email"] for r in rows]
+
+
+def get_profile(email):
+    """Profile metadata only — avatar_image is a BLOB fetched separately via
+    get_avatar_image() so callers that just need display_name/color don't
+    drag image bytes along."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT email, display_name, avatar_color, (avatar_image IS NOT NULL) AS has_avatar FROM users WHERE email = ?",
+        (email,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    d = dict(row)
+    d["has_avatar"] = bool(d["has_avatar"])
+    return d
+
+
+def update_profile(email, display_name=None, avatar_color=None):
+    """Requires the user already have a row (created by record_user() on first
+    login) — there's nothing sensible to attach a profile to otherwise."""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE users SET display_name = ?, avatar_color = ? WHERE email = ?",
+        (display_name or None, avatar_color or None, email),
+    )
+    conn.commit()
+    conn.close()
+    return get_profile(email)
+
+
+def list_profiles():
+    """All known users' profile info, keyed by email — fetched once per
+    request rather than per row so rendering a gallery page doesn't run one
+    lookup per item."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT email, display_name, avatar_color, (avatar_image IS NOT NULL) AS has_avatar FROM users"
+    ).fetchall()
+    conn.close()
+    result = {}
+    for r in rows:
+        d = dict(r)
+        d["has_avatar"] = bool(d["has_avatar"])
+        result[d["email"]] = d
+    return result
+
+
+def set_avatar_image(email, png_bytes):
+    conn = get_conn()
+    conn.execute("UPDATE users SET avatar_image = ? WHERE email = ?", (png_bytes, email))
+    conn.commit()
+    conn.close()
+
+
+def clear_avatar_image(email):
+    conn = get_conn()
+    conn.execute("UPDATE users SET avatar_image = NULL WHERE email = ?", (email,))
+    conn.commit()
+    conn.close()
+
+
+def get_avatar_image(email):
+    conn = get_conn()
+    row = conn.execute("SELECT avatar_image FROM users WHERE email = ?", (email,)).fetchone()
+    conn.close()
+    return row["avatar_image"] if row and row["avatar_image"] is not None else None
+
+
+def backfill_users_from_uploads():
+    """One-time catch-up for logins that happened before the users table
+    existed — anyone who's ever captured something counts as a known user."""
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO users (email, first_seen) "
+        "SELECT tech, MIN(timestamp) FROM capture_events WHERE tech LIKE '%@%' GROUP BY tech"
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_extracted_text(slug, text):
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET extracted_text = ? WHERE slug = ?", (text, slug))
+    conn.commit()
+    conn.close()
+
+
+def mark_redacted(slug):
+    """File removed (sensitive content), metadata kept for future correlation."""
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET redacted = 1 WHERE slug = ?", (slug,))
+    conn.commit()
+    conn.close()
+    return get_by_slug(slug)
+
+
+def delete_upload(slug):
+    """Full delete — removes the metadata row entirely. Caller is responsible
+    for deleting the actual file(s) from storage first."""
+    conn = get_conn()
+    conn.execute("DELETE FROM capture_events WHERE slug = ?", (slug,))
+    conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? OR slug_b = ?", (slug, slug))
+    conn.commit()
+    conn.close()
+
+
+def add_relation(slug_a, slug_b):
+    """Symmetric — stored both directions so listing either side's related
+    items is a single indexed lookup, not an OR query."""
+    if slug_a == slug_b:
+        return
+    conn = get_conn()
+    now = time.time()
+    conn.execute(
+        "INSERT OR IGNORE INTO capture_event_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)",
+        (slug_a, slug_b, now),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO capture_event_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)",
+        (slug_b, slug_a, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_relation(slug_a, slug_b):
+    conn = get_conn()
+    conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? AND slug_b = ?", (slug_a, slug_b))
+    conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? AND slug_b = ?", (slug_b, slug_a))
+    conn.commit()
+    conn.close()
+
+
+def list_related(slug):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT ce.* FROM capture_event_relations r JOIN capture_events ce ON ce.slug = r.slug_b "
+        "WHERE r.slug_a = ? ORDER BY ce.timestamp DESC",
+        (slug,),
+    ).fetchall()
+    conn.close()
+    return [_row_to_dict(r) for r in rows]
+
+
+# --- API tokens (desktop app auth) ---
+# Only the hash is ever stored — the raw token is returned once, at creation,
+# and can't be recovered after that; losing it means generating a new one.
+
+def create_api_token(user, label, token_hash):
+    conn = get_conn()
+    created_at = time.time()
+    cur = conn.execute(
+        "INSERT INTO api_tokens (user, label, token_hash, created_at) VALUES (?, ?, ?, ?)",
+        (user, label, token_hash, created_at),
+    )
+    conn.commit()
+    token_id = cur.lastrowid
+    conn.close()
+    return {"id": token_id, "label": label, "created_at": created_at, "last_used_at": None}
+
+
+def list_api_tokens(user):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, label, created_at, last_used_at FROM api_tokens WHERE user = ? ORDER BY created_at DESC",
+        (user,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def revoke_api_token(user, token_id):
+    """Scoped to `user` so a tech can only ever revoke their own tokens."""
+    conn = get_conn()
+    conn.execute("DELETE FROM api_tokens WHERE id = ? AND user = ?", (token_id, user))
+    conn.commit()
+    conn.close()
+
+
+def get_user_by_token_hash(token_hash):
+    conn = get_conn()
+    row = conn.execute("SELECT user FROM api_tokens WHERE token_hash = ?", (token_hash,)).fetchone()
+    conn.close()
+    return row["user"] if row else None
+
+
+def touch_api_token_last_used(token_hash):
+    conn = get_conn()
+    conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?", (time.time(), token_hash))
+    conn.commit()
+    conn.close()

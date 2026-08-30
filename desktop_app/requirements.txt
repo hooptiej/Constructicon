@@ -1,0 +1,14 @@
+altgraph==0.17.5
+certifi==2026.7.22
+charset_normalizer==3.5.1
+idna==3.19
+macholib==1.16.4
+modulegraph==0.19.7
+packaging==26.3
+py2app==0.28.10
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2
+requests==2.34.2
+rumps==0.4.0
+urllib3==2.7.0
+watchdog==6.0.0

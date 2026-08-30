@@ -40,21 +40,39 @@ pieces rather than writing a new backend:
 - `core/auth.py` (OTP login, already de-scoped from the
   `computercats.net` domain lock) carries over for the authoring side.
 
-**Tag taxonomy — 3 levels deep.** Flat tags (imagerepo's current
-`tags TEXT` JSON array) aren't enough to reproduce the site's existing
-structure. Modeled on [hooptiej.github.io](https://hooptiej.github.io)'s
-own nav (`Home / Blog / Projects`) and Projects' category pages:
+**Tag taxonomy — loose and nestable, not fixed columns.** Flat tags
+(imagerepo's original `tags TEXT` JSON array) aren't enough to
+reproduce the site's existing structure, but a rigid 3-column
+Section/Category/Tag split turned out to be the wrong shape too — a
+post should be able to attach to *any* tag, at *any* depth, and to
+*more than one at once* (e.g. a build post tagged under both
+`FPV and Flight` and `3D Modeling and Printing`). So instead:
 
-1. **Section** — e.g. `Blog`, `Projects`
-2. **Category** — e.g. `FPV and Flight`, `AlienWhoop & TinyShark`,
-   `Kerbal Space Program Builds`, `3D Modeling and Printing`,
-   `Other Builds`
-3. **Tag** — free-form, specific to a post (e.g. `camera-mount`,
-   `flight-time`, a particular build name)
+- `core/db.py` has a `blog_tags` table — each row is `{name, slug,
+  parent_id}`, nestable to any depth (not just 3 fixed levels).
+  `get_or_create_tag(name, parent_id)` makes new tags on the fly,
+  deduped per-parent so the same name can exist under different
+  parents without colliding.
+- `post_tags` is a plain many-to-many join between posts
+  (`capture_events.slug`) and `blog_tags.id` — a post can carry as
+  many tags as make sense, spanning multiple branches of the tree.
+- Modeled loosely on [hooptiej.github.io](https://hooptiej.github.io)'s
+  existing category breakdown (`FPV and Flight`, `AlienWhoop &
+  TinyShark`, `Kerbal Space Program Builds`, `3D Modeling and
+  Printing`, `Other Builds`) as the starting set of top-level tags,
+  not as a fixed schema.
 
-Schema for this isn't finalized yet — options are three real columns
-vs. a slash-delimited path vs. a proper parent-linked tag table. Decide
-once post authoring is actually being built, not before.
+**How the three pages use this:**
+- **Blog** — plain reverse-chronological feed of every post
+  (`db.list_recent_posts()` with a high limit), tags irrelevant to the
+  ordering.
+- **Home** — a highlights strip: the same feed, just a small limit
+  (`db.list_recent_posts(n)`).
+- **Projects** — a table of contents built straight from the tag tree
+  (`db.list_tag_tree()`), nested to match; picking any tag (root or
+  child) lists every post filed under it *or any of its descendants*
+  (`db.list_posts_for_tag(tag_id)`), so a top-level category page
+  doesn't require posts to be tagged with the category itself.
 
 **Design guide:** [hooptiej.github.io](https://hooptiej.github.io) (the
 already-migrated static site) is the primary structural reference —

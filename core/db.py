@@ -1,6 +1,7 @@
 """SQLite index for the image repo. One row per upload."""
 
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -66,6 +67,19 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user);
+CREATE TABLE IF NOT EXISTS blog_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    parent_id INTEGER REFERENCES blog_tags(id)
+);
+CREATE INDEX IF NOT EXISTS idx_blog_tags_parent ON blog_tags(parent_id);
+CREATE TABLE IF NOT EXISTS post_tags (
+    post_slug TEXT NOT NULL,
+    tag_id INTEGER NOT NULL REFERENCES blog_tags(id),
+    PRIMARY KEY (post_slug, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag_id);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -614,3 +628,131 @@ def touch_api_token_last_used(token_hash):
     conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?", (time.time(), token_hash))
     conn.commit()
     conn.close()
+
+
+# --- Blog tags ---
+# A loose, nestable tag tree (Section > Category > ... as deep as someone
+# wants to go) separate from capture_events' own flat `tags` JSON column,
+# which is a different feature (freeform screenshot labels). A post can
+# carry any number of these tags at any depth — there's no fixed "one
+# category per post" rule, which is what lets the Projects page act as a
+# real table of contents instead of a forced single-parent taxonomy.
+
+def _slugify(name):
+    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+    return slug or "tag"
+
+
+def get_or_create_tag(name, parent_id=None):
+    """Looked up by (name, parent_id) so the same tag name can exist under
+    different parents (e.g. a "Camera" tag under both "FPV" and "3D
+    Printing") without colliding — only the slug has to be globally unique,
+    and a name collision there just gets a numeric suffix."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM blog_tags WHERE name = ? AND parent_id IS ?", (name, parent_id)
+    ).fetchone()
+    if row:
+        conn.close()
+        return dict(row)
+    slug = _slugify(name)
+    base_slug = slug
+    n = 2
+    while conn.execute("SELECT 1 FROM blog_tags WHERE slug = ?", (slug,)).fetchone():
+        slug = f"{base_slug}-{n}"
+        n += 1
+    cur = conn.execute(
+        "INSERT INTO blog_tags (name, slug, parent_id) VALUES (?, ?, ?)", (name, slug, parent_id)
+    )
+    conn.commit()
+    tag_id = cur.lastrowid
+    conn.close()
+    return {"id": tag_id, "name": name, "slug": slug, "parent_id": parent_id}
+
+
+def attach_tags(post_slug, tag_ids):
+    conn = get_conn()
+    conn.executemany(
+        "INSERT OR IGNORE INTO post_tags (post_slug, tag_id) VALUES (?, ?)",
+        [(post_slug, tag_id) for tag_id in tag_ids],
+    )
+    conn.commit()
+    conn.close()
+
+
+def detach_tag(post_slug, tag_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM post_tags WHERE post_slug = ? AND tag_id = ?", (post_slug, tag_id))
+    conn.commit()
+    conn.close()
+
+
+def list_tags_for_post(post_slug):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT t.* FROM blog_tags t JOIN post_tags pt ON pt.tag_id = t.id WHERE pt.post_slug = ? ORDER BY t.name",
+        (post_slug,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def list_tag_tree():
+    """Every tag, nested under its parent — the Projects page's table of
+    contents renders straight from this. Built in Python rather than a
+    recursive CTE since the tree is small and this is far easier to read."""
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM blog_tags ORDER BY name").fetchall()]
+    conn.close()
+    by_id = {row["id"]: {**row, "children": []} for row in rows}
+    roots = []
+    for row in rows:
+        node = by_id[row["id"]]
+        if row["parent_id"] is not None and row["parent_id"] in by_id:
+            by_id[row["parent_id"]]["children"].append(node)
+        else:
+            roots.append(node)
+    return roots
+
+
+def _descendant_tag_ids(tag_id):
+    conn = get_conn()
+    rows = conn.execute("SELECT id, parent_id FROM blog_tags").fetchall()
+    conn.close()
+    children_by_parent = {}
+    for r in rows:
+        children_by_parent.setdefault(r["parent_id"], []).append(r["id"])
+    ids = [tag_id]
+    frontier = [tag_id]
+    while frontier:
+        frontier = [child for parent in frontier for child in children_by_parent.get(parent, [])]
+        ids.extend(frontier)
+    return ids
+
+
+def list_posts_for_tag(tag_id, include_descendants=True, limit=50):
+    """Posts tagged with `tag_id`, or anywhere under it in the tree when
+    include_descendants — e.g. the "Projects" root category page shows
+    every post filed under any of its child tags too, not just posts
+    tagged with "Projects" directly (which would almost never happen)."""
+    tag_ids = _descendant_tag_ids(tag_id) if include_descendants else [tag_id]
+    placeholders = ",".join("?" for _ in tag_ids)
+    conn = get_conn()
+    rows = conn.execute(
+        f"SELECT DISTINCT ce.* FROM capture_events ce JOIN post_tags pt ON pt.post_slug = ce.slug "
+        f"WHERE pt.tag_id IN ({placeholders}) ORDER BY ce.timestamp DESC LIMIT ?",
+        tag_ids + [limit],
+    ).fetchall()
+    conn.close()
+    return [_row_to_dict(r) for r in rows]
+
+
+def list_recent_posts(limit=10):
+    """Chronological feed — the Blog page uses this with a high limit, Home's
+    highlights strip uses it with a small one. Same query either way."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM capture_events WHERE redacted = 0 ORDER BY timestamp DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [_row_to_dict(r) for r in rows]

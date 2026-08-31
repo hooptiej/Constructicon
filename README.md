@@ -79,22 +79,21 @@ post should be able to attach to *any* tag, at *any* depth, and to
   Printing`, `Other Builds`) as the starting set of top-level tags,
   not as a fixed schema.
 
-**How the three pages use this:**
+**How the pages use this (current, post-owner-decision):**
 - **Blog** — plain reverse-chronological feed of every post
   (`db.list_recent_posts()` with a high limit), tags irrelevant to the
-  ordering.
-- **Home** — a highlights strip: the same feed, just a small limit
-  (`db.list_recent_posts(n)`).
-- **Projects** — a table of contents built straight from the tag tree
-  (`db.list_tag_tree()`), nested to match; picking any tag (root or
-  child) lists every post filed under it *or any of its descendants*
-  (`db.list_posts_for_tag(tag_id)`), so a top-level category page
-  doesn't require posts to be tagged with the category itself.
+  ordering. Not yet wired up as a route.
+- **Home (`/`)** — the gallery itself (left third of the page) plus a
+  curated Projects section (right two-thirds), not a redirect to a
+  separate gallery page. `GET /gallery` is kept only as a
+  redirect-alias to `/` for old links/bookmarks.
 
-**Projects — curated collections, distinct from the tag tree.** Don't
-confuse this with the "Projects" *page* above (the tag-tree table of
-contents) — `core/db.py` also has a separate `projects` table for
-hand-assembled portfolio cards: a title, description, optional
+**Projects — curated collections, distinct from the tag tree.** The
+site's Projects UI (the right-hand column on `/`) is **not** an
+auto-generated table of contents over the tag tree — that was the
+original plan (see the tag-taxonomy section above) but the owner
+decided against it. Instead, `core/db.py`'s separate `projects` table
+holds hand-assembled portfolio cards: a title, description, optional
 `cover_slug` (a `capture_events.slug` to use as the card's cover
 image, no FK constraint since capture_events rows can be deleted
 independently), and a freeform `status` (`'active'`, `'archived'`,
@@ -104,14 +103,21 @@ curated set an owner assembles by hand — "projects are how the other
 objects come together." `project_items` is the many-to-many join
 (`project_id`, `post_slug`, `sort_order`) with a manual `sort_order`
 so items within a project can be arranged on purpose rather than just
-falling out in chronological order.
+falling out in chronological order. The tag tree still has a job here
+though: picking a top-level tag chip on the Projects section filters
+those cards down to projects with at least one item tagged under that
+tag or its descendants (`db.list_posts_for_tag(tag_id)`, intersected
+against each project's `list_project_items`) — tags are the
+filter/browse axis for curated cards, not a direct listing of raw
+posts.
 
 - `db.create_project(title, ...)` auto-generates a unique slug from
   the title, same dedup-with-numeric-suffix pattern as
   `get_or_create_tag`; `db.get_project(id_or_slug)` looks up either
-  way since a project detail page will likely be reached by slug in a
-  URL; `db.list_projects(status=None)` and `db.update_project(...)`
-  (partial update, bumps `updated_at`) round out the card itself.
+  way since the project detail page (`GET /project/<slug>`) is reached
+  by slug in the URL; `db.list_projects(status=None)` and
+  `db.update_project(...)` (partial update, bumps `updated_at`) round
+  out the card itself.
 - `db.add_item_to_project(project_id, post_slug, sort_order=None)`
   appends at the end when no explicit order is given;
   `db.remove_item_from_project(...)` detaches one;
@@ -119,8 +125,10 @@ falling out in chronological order.
   against `capture_events`, mirroring `list_posts_for_tag`) in
   `sort_order`; `db.list_projects_for_post(post_slug)` is the reverse
   lookup, backed by `idx_project_items_slug`.
-- No routes/templates yet — this phase is data-layer only, same as
-  the `media_type` work above.
+- `web/app.py`'s `home_page` (`GET /`) and `project_detail_page`
+  (`GET /project/<slug>`) are the routes; `scripts/seed_example_projects.py`
+  seeds a few real example projects from already-backfilled content (not
+  auto-run — see that script's docstring).
 
 **Design guide:** [hooptiej.github.io](https://hooptiej.github.io) (the
 already-migrated static site) is the primary structural reference —
@@ -137,5 +145,21 @@ favicons, boot logos) is available here independent of that repo:
 `hero-alien-icon.png`, `favicon-16.png`, `favicon-32.png`,
 `apple-touch-icon.png`, `bootlogo-1.png`–`bootlogo-5.png`,
 `bootlogos-bg.jpg`. Photos (desk shots, build photos) were left out —
-those are post *content*, not brand assets, and belong in imagerepo's
+those are post *content*, not brand assets, and belong in Constructicon's
 own storage once the blog is actually ingesting them.
+
+`web/app.py` mounts this directory at `/brand` (separate from
+`web/static/`, which stays app-owned CSS/JS) and `web/templates/base.html` /
+`_header.html` pull the favicons and the logo from it, so the app no longer
+carries its old placeholder "Image Repo" branding or alien-face logo SVG.
+
+## Palette
+
+`web/static/style.css`'s `:root` custom properties are a
+Transformers-Constructicons palette (construction-vehicle yellow-green body
+color, deep purple accents, dark chassis, sparing yellow/black hazard-stripe
+accents via the `.hazard-stripe` class) rather than a generic dark theme —
+this is meant to feel like industrial construction equipment, tastefully,
+not a toy page. Swap the `--accent`/`--purple*`/`--hazard-*` variables there
+if the palette needs adjusting later; nothing else in the CSS should need to
+change to retheme.

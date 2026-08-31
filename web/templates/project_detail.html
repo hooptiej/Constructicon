@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ project.title }} — Constructicon{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+<div class="app-main">
+  <a class="back-link" href="/">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Back to projects
+  </a>
+
+  <div class="project-detail-header">
+    {% if cover_url %}
+    <div class="project-cover" style="height:200px;border-radius:12px;border:1px solid var(--border)">
+      <img src="{{ cover_url }}" alt="">
+    </div>
+    {% endif %}
+    <div>
+      <h1 class="page-title">{{ project.title }}</h1>
+      {% if project.description %}<p class="page-subtitle">{{ project.description }}</p>{% endif %}
+    </div>
+    <span class="project-status-pill{% if project.status == 'archived' %} archived{% endif %}" style="width:fit-content">{{ project.status }}</span>
+    <div class="hazard-stripe" style="width:64px"></div>
+  </div>
+
+  {% if items %}
+  <div class="project-item-grid">
+    {% for item in items %}
+    <a class="project-item-card" href="{{ item.link }}" {% if item.external %}target="_blank" rel="noopener"{% endif %}>
+      <div class="project-item-thumb">
+        {% if item.thumb_url %}
+          <img src="{{ item.thumb_url }}" loading="lazy" alt="">
+        {% else %}
+          <span class="media-type-pill">{{ item.media_type }}</span>
+        {% endif %}
+      </div>
+      <div class="project-item-body">
+        <div class="project-item-title">{{ item.title }}</div>
+        <div class="project-item-meta">{{ item.media_type }}{% if item.external %} · opens externally{% endif %}</div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty-state">This project has no items yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

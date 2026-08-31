@@ -1,40 +1,96 @@
 {% extends "base.html" %}
-{% block title %}Gallery — Constructicon{% endblock %}
+{% block title %}Constructicon{% endblock %}
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 
 <div class="app-main">
   <div>
-    <h1 class="page-title">Gallery</h1>
-    <p class="page-subtitle">All uploaded screenshots and documents — drag a file in from anywhere to upload.</p>
+    <h1 class="page-title">Constructicon</h1>
+    <p class="page-subtitle">Uploads on the left, curated projects on the right — drag a file in from anywhere to upload.</p>
   </div>
 
-  <div class="recent-carousel">
-    <button type="button" class="carousel-arrow" id="recent-prev" aria-label="Scroll left">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button>
-    <div class="recent-banner" id="recent-banner"></div>
-    <button type="button" class="carousel-arrow" id="recent-next" aria-label="Scroll right">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button>
-  </div>
+  <div class="home-columns">
+    <!-- Left third: the gallery, unchanged from its own dedicated page. -->
+    <div class="home-col">
+      <div class="home-col-header">
+        <h2>Gallery</h2>
+      </div>
 
-  <div class="filter-row">
-    <div class="search-box">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex-shrink:0">
-        <circle cx="11" cy="11" r="7" stroke="#6E6B57" stroke-width="1.6"/>
-        <path d="M21 21L16.65 16.65" stroke="#6E6B57" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
-      <input id="search-input" placeholder="Search description, tags, filename...">
+      <div class="recent-carousel">
+        <button type="button" class="carousel-arrow" id="recent-prev" aria-label="Scroll left">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="recent-banner" id="recent-banner"></div>
+        <button type="button" class="carousel-arrow" id="recent-next" aria-label="Scroll right">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+
+      <div class="filter-row">
+        <div class="search-box">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex-shrink:0">
+            <circle cx="11" cy="11" r="7" stroke="#6E6B57" stroke-width="1.6"/>
+            <path d="M21 21L16.65 16.65" stroke="#6E6B57" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          <input id="search-input" placeholder="Search description, tags, filename...">
+        </div>
+      </div>
+
+      <div id="sections" class="home-gallery-sections"></div>
+      <p class="empty-state" id="empty-state" style="display:none">No uploads match your search.</p>
+    </div>
+
+    <!-- Right two-thirds: curated project cards, filterable by top-level tag. -->
+    <div class="home-col">
+      <div class="home-col-header">
+        <h2>Projects</h2>
+      </div>
+      <div class="hazard-stripe" style="width:64px"></div>
+
+      {% if top_tags %}
+      <div class="tag-chip-row">
+        <a class="tag-chip{% if not selected_tag_slug %} active{% endif %}" href="/">All</a>
+        {% for t in top_tags %}
+        <a class="tag-chip{% if selected_tag_slug == t.slug %} active{% endif %}" href="/?tag={{ t.slug }}">{{ t.name }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if projects %}
+      <div class="project-grid">
+        {% for p in projects %}
+        <a class="project-card" href="/project/{{ p.slug }}">
+          <div class="project-cover">
+            {% if p.cover_url %}
+              <img src="{{ p.cover_url }}" loading="lazy" alt="">
+            {% else %}
+              <div class="project-cover-placeholder"></div>
+            {% endif %}
+          </div>
+          <div class="project-body">
+            <div class="project-title">{{ p.title }}</div>
+            {% if p.description %}<div class="project-desc">{{ p.description }}</div>{% endif %}
+            <div class="project-meta-row">
+              <span class="project-status-pill{% if p.status == 'archived' %} archived{% endif %}">{{ p.status }}</span>
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty-state">
+        {% if selected_tag_slug %}No projects tagged under this category yet.{% else %}No projects yet.{% endif %}
+      </p>
+      {% endif %}
     </div>
   </div>
-
-  <div id="sections"></div>
-  <p class="empty-state" id="empty-state" style="display:none">No uploads match your search.</p>
 </div>
 <script>
-// --- Gallery: search/filter, grouped into sections by uploader ---
+// --- Gallery pane (left column): search/filter, grouped into sections by
+// uploader. Same behavior as the old dedicated /gallery page — the Projects
+// column alongside it is server-rendered and reloads via the ?tag= query
+// param instead, so nothing here needs to know about it.
 const CLIENT_COLORS = {};
 const PALETTE = ["#B98B5E", "#8B7355", "#C9A66B", "#7FA37C", "#9CAD5E"];
 function colorFor(client) {
@@ -101,10 +157,6 @@ function cardHtml(item) {
 
 const PANE_LIMIT = 4;
 
-// Groups already come from the server as {uploaded_by, total, items} —
-// each fetched with its own query, so one prolific uploader can't crowd
-// others out (see /api/gallery). Server already orders items newest-first
-// within each group and returns at most PANE_LIMIT of them.
 function render(groups) {
   sectionsEl.innerHTML = '';
   emptyState.style.display = groups.length ? 'none' : 'block';
@@ -141,9 +193,6 @@ function renderRecentBanner(items) {
     recentSetWidth = 0;
     return;
   }
-  // Render the set twice back-to-back so there's always more strip to scroll
-  // into — the scroll listener below snaps the position back by one set's
-  // width once you cross into the duplicate, making the loop seamless.
   recentBanner.innerHTML = shown.map(recentThumbHtml).join('') + shown.map(recentThumbHtml).join('');
   requestAnimationFrame(() => { recentSetWidth = recentBanner.scrollWidth / 2; });
 }
@@ -157,8 +206,6 @@ const CAROUSEL_STEP = 3;
 const CAROUSEL_THUMB_STEP = 60 + 10; // .recent-thumb width + gap
 
 document.getElementById('recent-prev').addEventListener('click', () => {
-  // Near the start with nothing to scroll back into — hop to the identical
-  // spot in the duplicated second set first, so the step back looks continuous.
   if (recentSetWidth && recentBanner.scrollLeft < CAROUSEL_THUMB_STEP * CAROUSEL_STEP) {
     recentBanner.scrollLeft += recentSetWidth;
   }
@@ -168,9 +215,6 @@ document.getElementById('recent-next').addEventListener('click', () => {
   recentBanner.scrollBy({ left: CAROUSEL_THUMB_STEP * CAROUSEL_STEP, behavior: 'smooth' });
 });
 
-// Covers manual scroll/trackpad too, not just the arrows: once you scroll
-// past the first set, snap back by exactly one set's width. The duplicate
-// set makes that jump pixel-identical, so it reads as an endless loop.
 recentBanner.addEventListener('scroll', () => {
   if (recentSetWidth && recentBanner.scrollLeft >= recentSetWidth) {
     recentBanner.scrollLeft -= recentSetWidth;

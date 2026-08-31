@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ uploader_display }} — Image Repo{% endblock %}
+{% block title %}{{ uploader_display }} — Constructicon{% endblock %}
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
@@ -63,7 +63,7 @@ function cardHtml(item) {
       </div>
       <div class="gallery-body">
         <div>
-          <span class="gallery-filename mono">${item.filename}</span> ${ocrLampHtml(item)}
+          <span class="gallery-filename mono">${escapeHtml(item.display_name)}</span> ${ocrLampHtml(item)}
           <div class="gallery-date">${new Date(item.uploaded_at * 1000).toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'})}</div>
         </div>
         <div class="gallery-tags">${item.tags.map(t => `<span class="chip">${t}</span>`).join('')}</div>

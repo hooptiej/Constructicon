@@ -67,6 +67,23 @@ CREATE TABLE IF NOT EXISTS post_tags (
     PRIMARY KEY (post_slug, tag_id)
 );
 CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag_id);
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT UNIQUE NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    cover_slug TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_items (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    post_slug TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (project_id, post_slug)
+);
+CREATE INDEX IF NOT EXISTS idx_project_items_slug ON project_items(post_slug);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -618,3 +635,143 @@ def list_recent_posts(limit=10):
     ).fetchall()
     conn.close()
     return [_row_to_dict(r) for r in rows]
+
+
+# --- Projects ---
+# A curated collection of posts an owner deliberately assembles into one
+# card — distinct from blog_tags/post_tags, which is automatic grouping by
+# whatever tags a post happens to carry. A project has its own identity
+# (title, description, optional cover image) and a hand-ordered set of
+# member posts, rather than being derived from tag membership.
+
+def create_project(title, description="", cover_slug=None, status="active"):
+    """Auto-generates a unique slug from title, same dedup-with-numeric-
+    suffix pattern as get_or_create_tag."""
+    conn = get_conn()
+    slug = _slugify(title)
+    base_slug = slug
+    n = 2
+    while conn.execute("SELECT 1 FROM projects WHERE slug = ?", (slug,)).fetchone():
+        slug = f"{base_slug}-{n}"
+        n += 1
+    now = time.time()
+    cur = conn.execute(
+        "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (slug, title, description, cover_slug, status, now, now),
+    )
+    conn.commit()
+    project_id = cur.lastrowid
+    conn.close()
+    return {
+        "id": project_id,
+        "slug": slug,
+        "title": title,
+        "description": description,
+        "cover_slug": cover_slug,
+        "status": status,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def get_project(id_or_slug):
+    """Look up by either numeric id or slug — a project detail page will
+    likely be reached by slug in a URL, but internal callers (e.g.
+    add_item_to_project) often already have the id."""
+    conn = get_conn()
+    if isinstance(id_or_slug, int) or (isinstance(id_or_slug, str) and id_or_slug.isdigit()):
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (int(id_or_slug),)).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM projects WHERE slug = ?", (id_or_slug,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_projects(status=None):
+    conn = get_conn()
+    if status is not None:
+        rows = conn.execute(
+            "SELECT * FROM projects WHERE status = ? ORDER BY updated_at DESC", (status,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None):
+    """Partial update — only overwrites fields that were passed, same
+    pattern as update_tags() for capture_events. Bumps updated_at."""
+    existing = get_project(id_or_slug)
+    if existing is None:
+        return None
+    conn = get_conn()
+    now = time.time()
+    conn.execute(
+        "UPDATE projects SET title = ?, description = ?, cover_slug = ?, status = ?, updated_at = ? WHERE id = ?",
+        (
+            title if title is not None else existing["title"],
+            description if description is not None else existing["description"],
+            cover_slug if cover_slug is not None else existing["cover_slug"],
+            status if status is not None else existing["status"],
+            now,
+            existing["id"],
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return get_project(existing["id"])
+
+
+def add_item_to_project(project_id, post_slug, sort_order=None):
+    """If sort_order isn't given, appends at the end (max existing
+    sort_order + 1, or 0 if the project has no items yet)."""
+    conn = get_conn()
+    if sort_order is None:
+        row = conn.execute(
+            "SELECT MAX(sort_order) AS m FROM project_items WHERE project_id = ?", (project_id,)
+        ).fetchone()
+        sort_order = (row["m"] + 1) if row["m"] is not None else 0
+    conn.execute(
+        "INSERT OR IGNORE INTO project_items (project_id, post_slug, sort_order) VALUES (?, ?, ?)",
+        (project_id, post_slug, sort_order),
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_item_from_project(project_id, post_slug):
+    conn = get_conn()
+    conn.execute(
+        "DELETE FROM project_items WHERE project_id = ? AND post_slug = ?", (project_id, post_slug)
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_project_items(project_id):
+    """The posts in a project, ordered by sort_order, joined with
+    capture_events so full post data comes back — mirrors how
+    list_posts_for_tag joins post_tags to capture_events."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT ce.* FROM project_items pi JOIN capture_events ce ON ce.slug = pi.post_slug "
+        "WHERE pi.project_id = ? ORDER BY pi.sort_order ASC",
+        (project_id,),
+    ).fetchall()
+    conn.close()
+    return [_row_to_dict(r) for r in rows]
+
+
+def list_projects_for_post(post_slug):
+    """Reverse lookup — which projects contain a given post. Uses
+    idx_project_items_slug."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT p.* FROM projects p JOIN project_items pi ON pi.project_id = p.id "
+        "WHERE pi.post_slug = ? ORDER BY p.updated_at DESC",
+        (post_slug,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

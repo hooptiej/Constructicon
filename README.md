@@ -91,6 +91,37 @@ post should be able to attach to *any* tag, at *any* depth, and to
   (`db.list_posts_for_tag(tag_id)`), so a top-level category page
   doesn't require posts to be tagged with the category itself.
 
+**Projects — curated collections, distinct from the tag tree.** Don't
+confuse this with the "Projects" *page* above (the tag-tree table of
+contents) — `core/db.py` also has a separate `projects` table for
+hand-assembled portfolio cards: a title, description, optional
+`cover_slug` (a `capture_events.slug` to use as the card's cover
+image, no FK constraint since capture_events rows can be deleted
+independently), and a freeform `status` (`'active'`, `'archived'`,
+whatever — no CHECK constraint). Where the tag tree groups posts
+automatically by whatever tags they carry, a project is a deliberate
+curated set an owner assembles by hand — "projects are how the other
+objects come together." `project_items` is the many-to-many join
+(`project_id`, `post_slug`, `sort_order`) with a manual `sort_order`
+so items within a project can be arranged on purpose rather than just
+falling out in chronological order.
+
+- `db.create_project(title, ...)` auto-generates a unique slug from
+  the title, same dedup-with-numeric-suffix pattern as
+  `get_or_create_tag`; `db.get_project(id_or_slug)` looks up either
+  way since a project detail page will likely be reached by slug in a
+  URL; `db.list_projects(status=None)` and `db.update_project(...)`
+  (partial update, bumps `updated_at`) round out the card itself.
+- `db.add_item_to_project(project_id, post_slug, sort_order=None)`
+  appends at the end when no explicit order is given;
+  `db.remove_item_from_project(...)` detaches one;
+  `db.list_project_items(project_id)` returns full post data (joined
+  against `capture_events`, mirroring `list_posts_for_tag`) in
+  `sort_order`; `db.list_projects_for_post(post_slug)` is the reverse
+  lookup, backed by `idx_project_items_slug`.
+- No routes/templates yet — this phase is data-layer only, same as
+  the `media_type` work above.
+
 **Design guide:** [hooptiej.github.io](https://hooptiej.github.io) (the
 already-migrated static site) is the primary structural reference —
 its nav, its Projects category breakdown, its per-post layout. The old

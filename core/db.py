@@ -29,7 +29,11 @@ CREATE TABLE IF NOT EXISTS capture_events (
     source_modified_at REAL,
     ocr_status TEXT,
     ocr_started_at REAL,
-    perceptual_hash TEXT
+    perceptual_hash TEXT,
+    media_type TEXT NOT NULL DEFAULT 'image',
+    external_url TEXT,
+    content_description TEXT,
+    content_date REAL
 );
 CREATE INDEX IF NOT EXISTS idx_capture_events_source ON capture_events(source);
 CREATE INDEX IF NOT EXISTS idx_capture_events_client ON capture_events(client);
@@ -180,6 +184,14 @@ def init_db():
     for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+    # media_type is a loose classifier ('image' | 'video' | 'youtube' | 'document' | 'any', or
+    # anything else a caller wants) — deliberately no CHECK constraint. Existing rows predate
+    # this column and are all screenshots, so they default to 'image' below.
+    if "media_type" not in existing_columns:
+        conn.execute("ALTER TABLE capture_events ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'")
+    for column, ddl_type in (("external_url", "TEXT"), ("content_description", "TEXT"), ("content_date", "REAL")):
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
     existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
     if "nickname" not in existing_client_columns:
         conn.execute("ALTER TABLE clients ADD COLUMN nickname TEXT")
@@ -194,19 +206,42 @@ def _row_to_dict(row):
 
 
 def insert_upload(slug, filename, stored_filename, uploaded_by, description="", tags=None, ticket_id=None, client=None,
-                   source="screenshot", file_size=None, source_modified_at=None, ocr_status=None):
+                   source="screenshot", file_size=None, source_modified_at=None, ocr_status=None,
+                   media_type="image", external_url=None, content_description=None, content_date=None):
+    """Creates a capture_events row. filename/stored_filename are for uploaded files and can be
+    None for content that lives elsewhere (media_type='youtube' + external_url, for example) —
+    there's no requirement that a row correspond to an actual file on disk.
+
+    media_type/external_url/content_description/content_date describe the content itself,
+    separate from source/description which are about how/why the row was captured. See the
+    capture_events column comments in SCHEMA for the distinction.
+    """
     conn = get_conn()
     now = time.time()
     conn.execute(
         "INSERT INTO capture_events (slug, source, client, ticket_id, timestamp, tech, description, "
-        "extracted_text, artifact_link, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)",
+        "extracted_text, artifact_link, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
+        "media_type, external_url, content_description, content_date) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (slug, source, client, ticket_id, now, uploaded_by, description,
          f"/f/{slug}", json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
-         now if ocr_status == "pending" else None),
+         now if ocr_status == "pending" else None,
+         media_type, external_url, content_description, content_date),
     )
     conn.commit()
     conn.close()
+
+
+def insert_content(slug, uploaded_by, media_type, external_url=None, content_description=None, content_date=None,
+                    description="", tags=None, ticket_id=None, client=None, source="external"):
+    """Thin wrapper around insert_upload for rows with no uploaded file — e.g. a YouTube video,
+    where the content lives at external_url rather than in local storage. filename/stored_filename
+    are left None and OCR-related fields don't apply."""
+    insert_upload(
+        slug, None, None, uploaded_by, description=description, tags=tags, ticket_id=ticket_id, client=client,
+        source=source, media_type=media_type, external_url=external_url,
+        content_description=content_description, content_date=content_date,
+    )
 
 
 def list_pending_ocr():

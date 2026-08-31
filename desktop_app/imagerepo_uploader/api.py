@@ -9,6 +9,14 @@ import requests
 
 REQUEST_TIMEOUT_SECONDS = 30
 
+# Identifies every request from this app (both the silent Desktop-folder
+# watcher and the in-app drop zone — see watcher.py/dropzone.py) as an
+# automated/unattended upload, as opposed to a deliberate one-off drag-drop
+# through the web UI's own upload drawer. The server (web/app.py's
+# api_upload) uses this to pick the right Source string for capture_events.tech
+# — see core/db.py's SOURCE_AUTOMATED_UPLOAD/SOURCE_MANUAL_UPLOAD.
+CLIENT_IDENTITY_HEADERS = {"X-Imagerepo-Client": "desktop-app"}
+
 
 class UploadError(Exception):
     """Carries the server's actual error detail, not a generic failure."""
@@ -31,7 +39,9 @@ def upload_file(base_url, path, description="", tags=None, ticket_id="", client=
     with open(path, "rb") as f:
         files = {"file": (os.path.basename(path), f)}
         try:
-            resp = requests.post(url, data=data, files=files, timeout=REQUEST_TIMEOUT_SECONDS)
+            resp = requests.post(
+                url, data=data, files=files, headers=CLIENT_IDENTITY_HEADERS, timeout=REQUEST_TIMEOUT_SECONDS
+            )
         except requests.RequestException as e:
             raise UploadError(f"Couldn't reach {base_url}: {e}")
     if resp.status_code == 409:

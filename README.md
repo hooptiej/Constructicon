@@ -54,8 +54,14 @@ pieces rather than writing a new backend:
   LAN-only dev server (no port forward), so the network perimeter is
   the security boundary, not an auth system. (imagerepo's original
   multi-tech OTP login/session/presence machinery was stripped out;
-  see `capture_events.tech`, which is now just freeform attribution
-  text rather than a real user identity.)
+  `capture_events.tech` stuck around and is now a **Source** label —
+  who or what actually added the row, and how — rather than a real
+  user identity. See `core/db.py`'s `SOURCE_*` constants and
+  `source_migrated_from()`/`source_group()` for the fixed vocabulary
+  (manual web upload, automated desktop-uploader upload, migrated by
+  Claude from some named source, or authored by Claude directly) and
+  how it's grouped for the compact gallery views. Shown in full as
+  "Source" on each item's `/object/<slug>` detail page.)
 
 **Tag taxonomy — loose and nestable, not fixed columns.** Flat tags
 (imagerepo's original `tags TEXT` JSON array) aren't enough to

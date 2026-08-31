@@ -41,12 +41,16 @@ def _to_public(row):
 
 @mcp.tool()
 def imagerepo_upload(filename: str, content_base64: str, description: str = "", tags: list[str] | None = None,
-                      ticket_id: str | None = None, client: str | None = None, uploaded_by: str = "claude",
+                      ticket_id: str | None = None, client: str | None = None, uploaded_by: str = db.SOURCE_AUTHORED,
                       source_modified_at: float | None = None) -> dict:
     """Upload an image or document to the repo and get back a stable hotlink URL.
 
     filename: original filename, used only to determine the extension (.png/.jpg/.jpeg/.pdf).
     content_base64: raw file bytes, base64-encoded.
+    uploaded_by: the Source string to record (capture_events.tech) — defaults to
+      "Claude — authored" (this tool call created the content directly). Pass
+      db.source_migrated_from("<source>") instead when the content is being brought
+      in from somewhere else rather than authored fresh.
     source_modified_at: the source file's own last-modified time (unix seconds), if known —
       used to detect re-uploads of the exact same file. If omitted, duplicate detection is skipped.
     If filename, file size, and source_modified_at all match an existing entry, no new row is

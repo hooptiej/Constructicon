@@ -62,7 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import db  # noqa: E402
 
-UPLOADED_BY = "hooptiej"  # site owner -- this script has no real "tech" doing the capturing
+UPLOADED_BY = db.source_migrated_from("hooptiej.github.io")  # Source: this is an automated migration, not a real "tech" doing the capturing
 CAPTURE_NOTE = "Backfilled from hooptiej.github.io (Phase 4 content migration)"
 SITE_ROOT = "https://hooptiej.com"
 

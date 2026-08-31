@@ -88,6 +88,47 @@ CREATE INDEX IF NOT EXISTS idx_project_items_slug ON project_items(post_slug);
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
 
+# --- Source (capture_events.tech) ---
+# `tech` used to record which technician uploaded a screenshot, back when
+# imagerepo was a real multi-tech tool gated behind auth. Auth is gone
+# (Phase 1) and this is a single-owner site now, so the column has been
+# repurposed as a "Source" label: who or what actually added the row, and
+# how. Every value written into `tech` should be one of these four exact
+# strings (SOURCE_MIGRATED is a template — fill in `<source>`):
+SOURCE_MANUAL_UPLOAD = "Hooptie J (me) — manual upload"
+SOURCE_AUTOMATED_UPLOAD = "Hooptie J (me) — automated upload"
+SOURCE_AUTHORED = "Claude — authored"  # Not written by anything yet — reserved for a
+# future script that generates original content (e.g. a write-up) rather than
+# migrating existing content from somewhere else. See SOURCE_MIGRATED for that case.
+
+
+def source_migrated_from(source):
+    """"Claude — migrated from <source>" — for automated migration scripts
+    that bring in existing content from elsewhere (e.g. source="hooptiej.github.io"
+    for scripts/backfill_from_hooptiej_site.py)."""
+    return f"Claude — migrated from {source}"
+
+
+# Known "who" prefixes a Source string can start with — used to bucket the
+# compact gallery views (home page panes, /gallery/user/<x>) under a short
+# grouping key instead of showing/URL-encoding the full sentence-length
+# Source string in a narrow layout. The full string is still stored as-is in
+# `tech` and always shown in full on the object detail page.
+SOURCE_GROUPS = ["Hooptie J (me)", "Claude"]
+
+
+def source_group(tech):
+    """Short grouping key for a Source string, e.g. "Hooptie J (me) — manual
+    upload" groups under "Hooptie J (me)". Falls back to the value unchanged
+    if it doesn't start with a known prefix (covers legacy rows from before
+    this repurposing, e.g. the literal old default "hooptiej")."""
+    if not tech:
+        return tech
+    for group in SOURCE_GROUPS:
+        if tech == group or tech.startswith(group + " —") or tech.startswith(group + " -"):
+            return group
+    return tech
+
 
 def ensure_special_clients():
     conn = get_conn()
@@ -399,9 +440,15 @@ def set_client_if_empty(slug, client):
 
 
 def list_uploaders(query=None, client=None):
-    """Distinct techs matching the given filters, each with their total
-    count and most recent capture time — used to group the gallery fairly so
-    one prolific uploader can't crowd others out of a single global LIMIT.
+    """Distinct Source *groups* (see source_group()) matching the given
+    filters, each with their total count and most recent capture time — used
+    to group the gallery fairly so one prolific uploader can't crowd others
+    out of a single global LIMIT. Grouped in Python rather than SQL `GROUP BY
+    tech` since Source values are now full sentences (e.g. "Hooptie J (me) —
+    manual upload" vs "... — automated upload") and the gallery groups on the
+    shorter "who" prefix, not the exact string — row counts here are small
+    enough (single-owner site) that this is simpler than fighting SQL string
+    slicing.
     """
     conn = get_conn()
     clauses, params = [], []
@@ -412,13 +459,15 @@ def list_uploaders(query=None, client=None):
         clauses.append("client = ?")
         params.append(client)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    rows = conn.execute(
-        f"SELECT tech AS uploaded_by, COUNT(*) as total, MAX(timestamp) as most_recent "
-        f"FROM capture_events {where} GROUP BY tech ORDER BY most_recent DESC",
-        params,
-    ).fetchall()
+    rows = conn.execute(f"SELECT tech, timestamp FROM capture_events {where}", params).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    groups = {}
+    for r in rows:
+        key = source_group(r["tech"])
+        g = groups.setdefault(key, {"uploaded_by": key, "total": 0, "most_recent": 0})
+        g["total"] += 1
+        g["most_recent"] = max(g["most_recent"], r["timestamp"])
+    return sorted(groups.values(), key=lambda g: g["most_recent"], reverse=True)
 
 
 def search(query=None, tags=None, client=None, uploaded_by=None, limit=50):
@@ -431,8 +480,12 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50):
         clauses.append("client = ?")
         params.append(client)
     if uploaded_by:
-        clauses.append("tech = ?")
-        params.append(uploaded_by)
+        # Matches either the exact Source string or rows whose Source starts
+        # with `uploaded_by` as its group prefix (see source_group()) — lets
+        # callers filter by either a full Source string or the short grouping
+        # key the gallery views link with (e.g. "Hooptie J (me)").
+        clauses.append("(tech = ? OR tech LIKE ? OR tech LIKE ?)")
+        params += [uploaded_by, f"{uploaded_by} —%", f"{uploaded_by} -%"]
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = conn.execute(
         f"SELECT * FROM capture_events {where} ORDER BY timestamp DESC LIMIT ?", params + [limit]

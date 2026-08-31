@@ -35,10 +35,15 @@ if _BRAND_DIR.is_dir():
     app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
-# Attribution text stored in capture_events.tech when a client doesn't supply
-# its own — this is a single-owner site, not a multi-tech tool, so there's no
-# real user identity behind it anymore.
-DEFAULT_UPLOADER = "hooptiej"
+# Source (capture_events.tech): who or what actually added a row, and how —
+# see core/db.py's SOURCE_* constants/source_group() for the full vocabulary
+# and grouping logic. The web upload drawer and the desktop uploader app both
+# POST to /api/upload with no client-supplied identity (this is a
+# single-owner site, not a multi-tech tool) — the server tells them apart by
+# the desktop app's identifying request header (see api_upload below) and
+# stamps the right Source string itself rather than trusting a client field.
+DESKTOP_APP_CLIENT_HEADER = "X-Imagerepo-Client"
+DESKTOP_APP_CLIENT_VALUE = "desktop-app"
 
 DESKTOP_APP_DIR = Path(__file__).resolve().parent.parent / "desktop_app"
 # Separate from both desktop_app/ (source) and storage/ (capture-event
@@ -64,8 +69,14 @@ def _to_public(row):
         "ticket_id": row["ticket_id"],
         "client": row["client"],
         "uploaded_at": row["timestamp"],
+        # uploaded_by keeps the exact Source string (identity/filter key —
+        # used by /api/gallery and search); uploaded_by_display is the short
+        # grouping label (see core/db.py's source_group()) for compact card
+        # UI, so a long Source sentence like "Hooptie J (me) — manual upload"
+        # doesn't overflow a gallery card's small meta line. The full string
+        # is only spelled out in full on the object detail page.
         "uploaded_by": row["tech"],
-        "uploaded_by_display": row["tech"],
+        "uploaded_by_display": db.source_group(row["tech"]),
         "redacted": bool(row["redacted"]),
         "source": row["source"],
         "extracted_text": row["extracted_text"],
@@ -139,7 +150,10 @@ def _to_object_detail(row):
         "client": row["client"],
         "uploaded_at": row["timestamp"],
         "uploaded_at_display": _friendly_datetime(row["timestamp"]),
-        "uploaded_by_display": row["tech"],
+        # Full Source string, unshortened — this is the one place it's meant
+        # to be spelled out in full (see _to_public for the compact/grouped
+        # version used everywhere else).
+        "source_display": row["tech"],
         "redacted": bool(row["redacted"]),
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
@@ -395,9 +409,15 @@ async def api_upload(
     ticket_id: str = Form(""),
     client: str = Form(""),
     modified_at: str = Form(""),
-    tech: str = Form(""),
 ):
-    user = tech.strip() or DEFAULT_UPLOADER
+    # Which Source string a browser upload gets is decided server-side, not
+    # by a client-supplied field — the desktop uploader app (see
+    # desktop_app/imagerepo_uploader/api.py) identifies itself with this
+    # header on every request; the web upload drawer sends nothing extra, so
+    # its absence is what marks a deliberate one-off drag-drop through the
+    # browser UI.
+    is_desktop_app = request.headers.get(DESKTOP_APP_CLIENT_HEADER) == DESKTOP_APP_CLIENT_VALUE
+    user = db.SOURCE_AUTOMATED_UPLOAD if is_desktop_app else db.SOURCE_MANUAL_UPLOAD
     content = await file.read()
     file_size = len(content)
     source_modified_at = float(modified_at) / 1000 if modified_at else None
@@ -552,6 +572,9 @@ def api_gallery(request: Request, query: str = "", client: str = "", per_user: i
     for u in uploaders:
         items = db.search(query=query or None, client=client or None, uploaded_by=u["uploaded_by"], limit=per_user)
         groups.append({
+            # u["uploaded_by"] is already the short group key (see
+            # db.list_uploaders) — used both as the display label and as the
+            # /gallery/user/<uploader> link target.
             "uploaded_by": u["uploaded_by"],
             "uploaded_by_display": u["uploaded_by"],
             "total": u["total"],

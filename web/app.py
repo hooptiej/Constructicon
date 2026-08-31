@@ -1,5 +1,8 @@
-"""Image Repo web app: login (Microsoft SSO stub + email-OTP), upload, gallery,
-and the public /f/{slug} hotlink route.
+"""Image Repo web app: upload, gallery, and the public /f/{slug} hotlink
+route.
+
+No auth — this runs on a LAN-only dev server with no port forward, so the
+network perimeter is the security boundary, not a login gate.
 """
 
 import asyncio
@@ -18,15 +21,16 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from core import auth, db, ocr, similarity, storage
+from core import db, ocr, similarity, storage
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
-SESSION_COOKIE = "imagerepo_session"
-
-AVATAR_COLORS = ["#B98B5E", "#8B7355", "#C9A66B", "#7FA37C", "#9CAD5E", "#6B8FA3", "#A36B8F"]
+# Attribution text stored in capture_events.tech when a client doesn't supply
+# its own — this is a single-owner site, not a multi-tech tool, so there's no
+# real user identity behind it anymore.
+DEFAULT_UPLOADER = "hooptiej"
 
 DESKTOP_APP_DIR = Path(__file__).resolve().parent.parent / "desktop_app"
 # Separate from both desktop_app/ (source) and storage/ (capture-event
@@ -36,42 +40,7 @@ DESKTOP_APP_BUILD_DIR = Path(__file__).resolve().parent.parent / "desktop_app_bu
 DESKTOP_APP_BUILD_PATH = DESKTOP_APP_BUILD_DIR / "ImageRepo-Uploader.zip"
 
 
-def current_user(request: Request):
-    token = request.cookies.get(SESSION_COOKIE)
-    if token:
-        session = auth.get_session(token)
-        if session is not None:
-            auth.touch_presence(session["email"])
-            return session["email"]
-    # Falls back to an API token (Authorization: Bearer ir_...) for the
-    # desktop uploader and other unattended clients that can't hold a
-    # browser session cookie.
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        raw_token = auth_header[7:].strip()
-        token_hash = auth.hash_api_token(raw_token)
-        user = db.get_user_by_token_hash(token_hash)
-        if user is not None:
-            db.touch_api_token_last_used(token_hash)
-            return user
-    return None
-
-
-def require_login(request: Request):
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=303, headers={"Location": "/login"})
-    return user
-
-
-def _display_name(tech, profile):
-    if profile and profile.get("display_name"):
-        return profile["display_name"]
-    return tech.split("@")[0] if "@" in tech else tech
-
-
-def _to_public(row, profiles=None):
-    profile = (profiles or {}).get(row["tech"])
+def _to_public(row):
     return {
         "slug": row["slug"],
         "url": f"/f/{row['slug']}",
@@ -83,9 +52,7 @@ def _to_public(row, profiles=None):
         "client": row["client"],
         "uploaded_at": row["timestamp"],
         "uploaded_by": row["tech"],
-        "uploaded_by_display": _display_name(row["tech"], profile),
-        "uploaded_by_avatar_url": f"/avatar/{row['tech']}" if (profile or {}).get("has_avatar") else None,
-        "uploaded_by_avatar_color": (profile or {}).get("avatar_color"),
+        "uploaded_by_display": row["tech"],
         "redacted": bool(row["redacted"]),
         "source": row["source"],
         "extracted_text": row["extracted_text"],
@@ -123,7 +90,6 @@ async def _ocr_watchdog():
 async def startup():
     db.init_db()
     db.ensure_special_clients()
-    db.backfill_users_from_uploads()
     # Self-heal: a redeploy/restart while OCR was still queued or running for
     # a row leaves it stuck at ocr_status="pending" forever otherwise, since
     # nothing else will ever retry it. Fired as background threads, not run
@@ -144,58 +110,11 @@ def healthz():
     return {"ok": True}
 
 
-# --- Auth ---
-
-@app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request):
-    if current_user(request):
-        return RedirectResponse("/gallery", status_code=303)
-    return templates.TemplateResponse(request, "login.html", {})
-
-
-@app.get("/auth/microsoft/start")
-def microsoft_start():
-    # Not wired up: needs an Entra app registration (client ID, secret,
-    # redirect URI) in the Computer Cats tenant before this can redirect
-    # to Microsoft's OAuth endpoint.
-    return HTMLResponse(
-        "<p>Sign-in with Microsoft isn't configured yet — needs an Entra app "
-        "registration for this app. <a href='/login'>Back</a></p>",
-        status_code=501,
-    )
-
-
-@app.post("/auth/email/request-code")
-def request_code(request: Request, email: str = Form(...)):
-    code = auth.request_code(email)
-    return templates.TemplateResponse(request, "verify_code.html", {"email": email, "dev_code": code})
-
-
-@app.post("/auth/email/verify")
-def verify_code(request: Request, email: str = Form(...), code: str = Form(...)):
-    if not auth.verify_code(email, code):
-        return templates.TemplateResponse(
-            request, "verify_code.html", {"email": email, "error": "That code is wrong or expired."}
-        )
-    db.record_user(email)
-    token = auth.create_session(email)
-    response = RedirectResponse("/gallery", status_code=303)
-    response.set_cookie(SESSION_COOKIE, token, httponly=True, max_age=auth.SESSION_TTL)
-    return response
-
-
-@app.post("/auth/logout")
-def logout():
-    response = RedirectResponse("/login", status_code=303)
-    response.delete_cookie(SESSION_COOKIE)
-    return response
-
-
 # --- Pages ---
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    return RedirectResponse("/gallery" if current_user(request) else "/login", status_code=303)
+    return RedirectResponse("/gallery", status_code=303)
 
 
 @app.get("/upload")
@@ -206,55 +125,37 @@ def upload_page_redirect():
 
 @app.get("/gallery", response_class=HTMLResponse)
 def gallery_page(request: Request):
-    user = current_user(request)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
-    return templates.TemplateResponse(request, "gallery.html", {"active": "gallery", "user_email": user})
+    return templates.TemplateResponse(request, "gallery.html", {"active": "gallery"})
 
 
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str):
-    user = current_user(request)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
-    profiles = db.list_profiles()
     rows = db.search(uploaded_by=uploader, limit=1000)
-    items = [_to_public(r, profiles) for r in rows]
+    items = [_to_public(r) for r in rows]
     return templates.TemplateResponse(
         request, "user_gallery.html",
-        {"user_email": user, "uploader": uploader, "uploader_display": _display_name(uploader, profiles.get(uploader)), "items": items},
+        {"uploader": uploader, "uploader_display": uploader, "items": items},
     )
 
 
 @app.get("/image/{slug}", response_class=HTMLResponse)
 def image_detail_page(request: Request, slug: str):
-    user = current_user(request)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
-    profiles = db.list_profiles()
-    item = _to_public(row, profiles)
+    item = _to_public(row)
     item["uploaded_at_display"] = datetime.fromtimestamp(item["uploaded_at"]).strftime("%b %-d, %Y at %-I:%M %p")
     full_url = str(request.base_url).rstrip("/") + item["url"]
-    related = [_to_public(r, profiles) for r in db.list_related(slug)]
+    related = [_to_public(r) for r in db.list_related(slug)]
     return templates.TemplateResponse(
         request, "image_detail.html",
-        {"user_email": user, "item": item, "full_url": full_url, "related": related},
+        {"item": item, "full_url": full_url, "related": related},
     )
 
 
 @app.get("/account", response_class=HTMLResponse)
 def account_page(request: Request):
-    user = current_user(request)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
-    profile = db.get_profile(user) or {}
-    return templates.TemplateResponse(
-        request, "account.html",
-        {"user_email": user, "profile": profile, "avatar_colors": AVATAR_COLORS},
-    )
+    return templates.TemplateResponse(request, "account.html", {})
 
 
 # --- API ---
@@ -269,10 +170,9 @@ async def api_upload(
     ticket_id: str = Form(""),
     client: str = Form(""),
     modified_at: str = Form(""),
+    tech: str = Form(""),
 ):
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
+    user = tech.strip() or DEFAULT_UPLOADER
     content = await file.read()
     file_size = len(content)
     source_modified_at = float(modified_at) / 1000 if modified_at else None
@@ -304,25 +204,21 @@ async def api_upload(
     # polls GET /api/image/{slug} to see ocr_status flip from "pending".
     if is_image:
         background_tasks.add_task(ocr.run_ocr, slug)
-    return JSONResponse(_to_public(db.get_by_slug(slug), db.list_profiles()))
+    return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 
 @app.get("/api/image/{slug}")
 def api_get_image(request: Request, slug: str):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
-    return JSONResponse(_to_public(row, db.list_profiles()))
+    return JSONResponse(_to_public(row))
 
 
 @app.post("/api/image/{slug}/ocr")
 def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks):
     """Force a (re-)run of OCR — for images that never got it, or a lousy
     first pass worth retrying."""
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -332,7 +228,7 @@ def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks
         raise HTTPException(status_code=400, detail=f"OCR isn't available for {Path(row['filename']).suffix} files")
     db.set_ocr_status(slug, "pending")
     background_tasks.add_task(ocr.run_ocr, slug)
-    return JSONResponse(_to_public(db.get_by_slug(slug), db.list_profiles()))
+    return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 
 @app.post("/api/image/{slug}")
@@ -344,8 +240,6 @@ def api_update_image(
     ticket_id: str = Form(""),
     client: str = Form(""),
 ):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     try:
         tag_list = json.loads(tags) if tags else []
     except json.JSONDecodeError:
@@ -353,28 +247,24 @@ def api_update_image(
     row = db.update_tags(slug, description=description, tags=tag_list, ticket_id=ticket_id or None, client=client or None)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
-    return JSONResponse(_to_public(row, db.list_profiles()))
+    return JSONResponse(_to_public(row))
 
 
 @app.post("/api/image/{slug}/redact")
 def api_redact_image(request: Request, slug: str):
     """Delete the file only — sensitive content (e.g. a visible password) —
     but keep the metadata for future correlation."""
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
     storage.delete_files(slug, row["stored_filename"])
     updated = db.mark_redacted(slug)
-    return JSONResponse(_to_public(updated, db.list_profiles()))
+    return JSONResponse(_to_public(updated))
 
 
 @app.post("/api/image/{slug}/delete")
 def api_delete_image(request: Request, slug: str):
     """Full delete — file and metadata both gone, no recovery."""
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -385,24 +275,18 @@ def api_delete_image(request: Request, slug: str):
 
 @app.post("/api/image/{slug}/related")
 def api_add_related(request: Request, slug: str, related_slug: str = Form(...)):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     if db.get_by_slug(slug) is None:
         raise HTTPException(status_code=404, detail="not found")
     if db.get_by_slug(related_slug) is None:
         raise HTTPException(status_code=404, detail="related image not found")
     db.add_relation(slug, related_slug)
-    profiles = db.list_profiles()
-    return JSONResponse([_to_public(r, profiles) for r in db.list_related(slug)])
+    return JSONResponse([_to_public(r) for r in db.list_related(slug)])
 
 
 @app.post("/api/image/{slug}/related/remove")
 def api_remove_related(request: Request, slug: str, related_slug: str = Form(...)):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     db.remove_relation(slug, related_slug)
-    profiles = db.list_profiles()
-    return JSONResponse([_to_public(r, profiles) for r in db.list_related(slug)])
+    return JSONResponse([_to_public(r) for r in db.list_related(slug)])
 
 
 @app.get("/api/image/{slug}/similar")
@@ -412,18 +296,15 @@ def api_get_similar(request: Request, slug: str):
     Each result carries similarity_reason ("visual"/"text"/"both") and
     similarity_score so the UI can label why it's suggested.
     """
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     if db.get_by_slug(slug) is None:
         raise HTTPException(status_code=404, detail="not found")
-    profiles = db.list_profiles()
     matches = similarity.find_similar(slug)
     results = []
     for m in matches:
         row = db.get_by_slug(m["slug"])
         if row is None:
             continue
-        item = _to_public(row, profiles)
+        item = _to_public(row)
         item["similarity_reason"] = m["reason"]
         item["similarity_score"] = round(m["score"], 3)
         results.append(item)
@@ -436,141 +317,17 @@ def api_gallery(request: Request, query: str = "", client: str = "", per_user: i
     plus their real total, queried per-uploader so no single prolific
     uploader's activity can push others out of a global result limit.
     """
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    profiles = db.list_profiles()
     uploaders = db.list_uploaders(query=query or None, client=client or None)
     groups = []
     for u in uploaders:
         items = db.search(query=query or None, client=client or None, uploaded_by=u["uploaded_by"], limit=per_user)
         groups.append({
             "uploaded_by": u["uploaded_by"],
-            "uploaded_by_display": _display_name(u["uploaded_by"], profiles.get(u["uploaded_by"])),
+            "uploaded_by_display": u["uploaded_by"],
             "total": u["total"],
-            "items": [_to_public(r, profiles) for r in items],
+            "items": [_to_public(r) for r in items],
         })
     return JSONResponse(groups)
-
-
-@app.get("/api/online")
-def api_online(request: Request):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    profiles = db.list_profiles()
-    known = [
-        {
-            "email": email,
-            "display_name": _display_name(email, profiles.get(email)),
-            "avatar_url": f"/avatar/{email}" if (profiles.get(email) or {}).get("has_avatar") else None,
-            "avatar_color": (profiles.get(email) or {}).get("avatar_color"),
-        }
-        for email in db.list_users()
-    ]
-    return JSONResponse({"online": auth.list_online(), "known": known})
-
-
-@app.get("/api/profile")
-def api_get_profile(request: Request):
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    profile = db.get_profile(user) or {"email": user, "display_name": None, "avatar_color": None, "has_avatar": False}
-    return JSONResponse({**profile, "avatar_url": f"/avatar/{user}" if profile.get("has_avatar") else None})
-
-
-@app.post("/api/account")
-def api_update_account(
-    request: Request,
-    display_name: str = Form(""),
-    avatar_color: str = Form(""),
-):
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    display_name = display_name.strip()
-    if avatar_color and avatar_color not in AVATAR_COLORS:
-        raise HTTPException(status_code=400, detail=f"'{avatar_color}' isn't one of the available avatar colors")
-    profile = db.update_profile(user, display_name=display_name or None, avatar_color=avatar_color or None)
-    return JSONResponse(profile)
-
-
-@app.post("/api/account/avatar")
-async def api_upload_avatar(request: Request, file: UploadFile = File(...)):
-    """Accepts the already-cropped square PNG the client-side cropper exports
-    (from an existing repo image or a fresh upload) and stores it directly on
-    the user's profile row — this is a profile photo, not a capture event, so
-    it doesn't go through storage.save_file()/insert_upload() at all."""
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    content = await file.read()
-    if len(content) > storage.MAX_BYTES:
-        raise HTTPException(status_code=400, detail=f"Avatar image exceeds {storage.MAX_BYTES // (1024*1024)}MB limit")
-    try:
-        normalized = storage.normalize_avatar(content)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Couldn't read that as an image: {e}")
-    db.set_avatar_image(user, normalized)
-    return JSONResponse({"avatar_url": f"/avatar/{user}"})
-
-
-@app.post("/api/account/avatar/remove")
-def api_remove_avatar(request: Request):
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    db.clear_avatar_image(user)
-    return JSONResponse({"avatar_url": None})
-
-
-@app.post("/api/account/delete-my-uploads")
-def api_delete_my_uploads(request: Request):
-    """Full delete of every capture-event this account uploaded — file and
-    metadata, no recovery. Scoped strictly to the caller's own tech
-    identity; there's no way to delete someone else's uploads this way."""
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    rows = db.search(uploaded_by=user, limit=100000)
-    for row in rows:
-        storage.delete_files(row["slug"], row["stored_filename"])
-        db.delete_upload(row["slug"])
-    return JSONResponse({"deleted": len(rows)})
-
-
-@app.get("/api/account/tokens")
-def api_list_tokens(request: Request):
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    return JSONResponse(db.list_api_tokens(user))
-
-
-@app.post("/api/account/tokens")
-def api_create_token(request: Request, label: str = Form(...)):
-    """Named, revocable API tokens for the desktop uploader (and any other
-    unattended client) — a tech can hold several at once, one per machine,
-    each independently revocable if a laptop is lost. The raw token is
-    returned here once; only its hash is ever stored, so it can't be shown
-    again after this response."""
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    label = label.strip()
-    if not label:
-        raise HTTPException(status_code=400, detail="Token label is required — e.g. the machine name")
-    raw_token = auth.generate_api_token()
-    row = db.create_api_token(user, label, auth.hash_api_token(raw_token))
-    return JSONResponse({**row, "token": raw_token})
-
-
-@app.post("/api/account/tokens/revoke")
-def api_revoke_token(request: Request, token_id: int = Form(...)):
-    user = current_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    db.revoke_api_token(user, token_id)
-    return JSONResponse(db.list_api_tokens(user))
 
 
 @app.get("/downloads/imagerepo-uploader-source.zip")
@@ -580,8 +337,6 @@ def download_desktop_app_source(request: Request):
     else runs on). Zipped fresh from disk on every request rather than a
     pre-built artifact, so it's never out of sync with what's actually in
     the repo."""
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(DESKTOP_APP_DIR.rglob("*")):
@@ -598,8 +353,6 @@ def download_desktop_app_source(request: Request):
 
 @app.get("/api/account/desktop-app-build")
 def api_get_desktop_app_build(request: Request):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     if not DESKTOP_APP_BUILD_PATH.exists():
         return JSONResponse({"exists": False})
     stat = DESKTOP_APP_BUILD_PATH.stat()
@@ -613,8 +366,6 @@ async def api_upload_desktop_app_build(request: Request, file: UploadFile = File
     here so everyone else can just download a working binary instead of
     building their own. No versioning: whoever uploads last is what
     everyone gets next."""
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     if not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Expected a .zip file (zip the built .app, don't upload it unzipped)")
     content = await file.read()
@@ -628,8 +379,6 @@ async def api_upload_desktop_app_build(request: Request, file: UploadFile = File
 
 @app.get("/downloads/imagerepo-uploader.zip")
 def download_desktop_app_build(request: Request):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     if not DESKTOP_APP_BUILD_PATH.exists():
         raise HTTPException(
             status_code=404,
@@ -639,30 +388,16 @@ def download_desktop_app_build(request: Request):
     return FileResponse(DESKTOP_APP_BUILD_PATH, media_type="application/zip", filename="ImageRepo Uploader.zip")
 
 
-@app.get("/avatar/{email}")
-def get_avatar(request: Request, email: str):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    image = db.get_avatar_image(email)
-    if image is None:
-        raise HTTPException(status_code=404, detail="no avatar set for this user")
-    return Response(content=image, media_type="image/png")
-
-
 @app.get("/api/clients")
 def api_clients(request: Request):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     return JSONResponse(db.list_clients())
 
 
 @app.get("/api/search")
 def api_search(request: Request, query: str = "", tags: str = "", client: str = ""):
-    if current_user(request) is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
     tag_list = [t for t in tags.split(",") if t] or None
     results = db.search(query=query or None, tags=tag_list, client=client or None)
-    return JSONResponse([_to_public(r, db.list_profiles()) for r in results])
+    return JSONResponse([_to_public(r) for r in results])
 
 
 # --- Public hotlink (no auth — Hudu/Slack need to fetch this directly) ---

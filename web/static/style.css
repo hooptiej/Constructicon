@@ -160,7 +160,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .app-main { padding: 32px; display: flex; flex-direction: column; gap: 22px; }
 .page-title { font-size: 20px; font-weight: 500; margin: 0; }
 .page-subtitle { font-size: 13px; color: var(--text-2); margin: 4px 0 0; }
-.home-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.user-gallery-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
 /* --- Upload --- */
 .upload-layout { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }

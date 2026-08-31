@@ -5,12 +5,9 @@
 {% include "_upload_drawer.html" %}
 
 <div class="app-main">
-  <div class="home-title-row">
-    <div>
-      <h1 class="page-title">Constructicon</h1>
-      <p class="page-subtitle">Uploads on the left, curated projects on the right — drag a file in from anywhere to upload.</p>
-    </div>
-    <button type="button" class="btn-danger" id="delete-all-btn" title="Development convenience while content is still in flux">Delete all</button>
+  <div>
+    <h1 class="page-title">Constructicon</h1>
+    <p class="page-subtitle">Uploads on the left, curated projects on the right — drag a file in from anywhere to upload.</p>
   </div>
 
   <div class="home-columns">
@@ -245,17 +242,5 @@ document.addEventListener('imagerepo:upload-complete', () => {
 
 load();
 loadRecent();
-
-document.getElementById('delete-all-btn').addEventListener('click', async () => {
-  if (!confirm('Delete EVERYTHING — every upload, tag, and project? This cannot be undone.')) return;
-  const res = await fetch('/api/delete-all', { method: 'POST' });
-  if (res.ok) {
-    const body = await res.json();
-    alert(`Deleted ${body.deleted} item${body.deleted === 1 ? '' : 's'}.`);
-    window.location.reload();
-  } else {
-    alert('Delete failed.');
-  }
-});
 </script>
 {% endblock %}

@@ -8,9 +8,12 @@
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
     Back to gallery
   </a>
-  <div>
-    <h1 class="page-title">{{ uploader_display }}</h1>
-    <p class="page-subtitle">{{ items | length }} upload{{ 's' if items|length != 1 else '' }}</p>
+  <div class="user-gallery-title-row">
+    <div>
+      <h1 class="page-title">{{ uploader_display }}</h1>
+      <p class="page-subtitle">{{ items | length }} upload{{ 's' if items|length != 1 else '' }}</p>
+    </div>
+    <button type="button" class="btn-danger" id="delete-all-btn" title="Development convenience while content is still in flux">Delete all</button>
   </div>
   <div class="gallery-grid" id="user-gallery-grid"></div>
   <p class="empty-state" id="empty-state" {% if items %}style="display:none"{% endif %}>No uploads yet.</p>
@@ -83,6 +86,18 @@ document.getElementById('user-gallery-grid').innerHTML = items.map(cardHtml).joi
 
 document.addEventListener('imagerepo:upload-complete', (e) => {
   if (!e.detail.failures.length) location.reload();
+});
+
+document.getElementById('delete-all-btn').addEventListener('click', async () => {
+  if (!confirm('Delete EVERYTHING — every upload, tag, and project? This cannot be undone.')) return;
+  const res = await fetch('/api/delete-all', { method: 'POST' });
+  if (res.ok) {
+    const body = await res.json();
+    alert(`Deleted ${body.deleted} item${body.deleted === 1 ? '' : 's'}.`);
+    window.location.href = '/';
+  } else {
+    alert('Delete failed.');
+  }
 });
 </script>
 {% endblock %}

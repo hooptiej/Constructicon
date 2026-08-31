@@ -286,6 +286,30 @@ def home_page(request: Request, tag: str = ""):
     )
 
 
+@app.post("/api/delete-all")
+def api_delete_all():
+    """Wipe every capture_events row (and its files), plus tags and
+    projects — a full reset. Stands in for imagerepo's old per-user
+    'delete my uploads' button now that multi-user accounts are gone;
+    single-owner site, so 'my uploads' and 'everything' are the same set.
+    Development convenience while content/schema are still in flux, not a
+    feature meant to stick around once the site has real content worth
+    protecting."""
+    rows = db.search(limit=100000)
+    for row in rows:
+        if row.get("stored_filename"):
+            storage.delete_files(row["slug"], row["stored_filename"])
+        db.delete_upload(row["slug"])
+    conn = db.get_conn()
+    conn.execute("DELETE FROM post_tags")
+    conn.execute("DELETE FROM project_items")
+    conn.execute("DELETE FROM projects")
+    conn.execute("DELETE FROM blog_tags")
+    conn.commit()
+    conn.close()
+    return JSONResponse({"deleted": len(rows)})
+
+
 @app.get("/upload")
 def upload_page_redirect():
     # Upload is now a pane on the home page, not its own screen.

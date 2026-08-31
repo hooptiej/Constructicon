@@ -8,6 +8,7 @@ network perimeter is the security boundary, not a login gate.
 import asyncio
 import io
 import json
+import re
 import sys
 import threading
 import zipfile
@@ -73,6 +74,78 @@ def _to_public(row):
     }
 
 
+YOUTUBE_ID_RE = re.compile(r'(?:v=|/embed/|youtu\.be/)([A-Za-z0-9_-]{6,})')
+
+
+def _youtube_embed_url(external_url):
+    """Extracts the video ID from any of the URL shapes we might have stored
+    (watch?v=, youtu.be/, or an already-embed URL) and builds a canonical
+    embed URL. Returns None if external_url doesn't look like a YouTube link
+    at all — the template falls back to a plain external-link CTA in that
+    case rather than rendering a broken iframe."""
+    if not external_url:
+        return None
+    m = YOUTUBE_ID_RE.search(external_url)
+    return f"https://www.youtube.com/embed/{m.group(1)}" if m else None
+
+
+def _friendly_date(epoch):
+    """'%-d'-style formatting (no leading zero) without relying on the
+    platform-specific %-d/%-e strftime extension, which isn't available on
+    Windows — this runs cross-platform."""
+    if not epoch:
+        return None
+    dt = datetime.fromtimestamp(epoch)
+    return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
+
+
+def _friendly_datetime(epoch):
+    if not epoch:
+        return None
+    dt = datetime.fromtimestamp(epoch)
+    hour12 = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{_friendly_date(epoch)} at {hour12}:{dt.minute:02d} {ampm}"
+
+
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
+
+
+def _to_object_detail(row):
+    """Full detail-page shape for GET /object/<slug> — unlike _to_public,
+    this works for any media_type, not just uploaded images. filename can be
+    None (a youtube/document row with no local file — see insert_content in
+    core/db.py), so nothing here assumes it's set.
+    """
+    filename = row.get("filename")
+    is_file = bool(filename)
+    media_type = row.get("media_type") or "image"
+    return {
+        "slug": row["slug"],
+        "media_type": media_type,
+        "filename": filename,
+        "is_file": is_file,
+        "is_image_file": is_file and Path(filename).suffix.lower() in IMAGE_SUFFIXES,
+        "url": f"/f/{row['slug']}" if is_file else None,
+        "thumb_url": f"/f/{row['slug']}/thumb" if is_file else None,
+        "external_url": row.get("external_url"),
+        "youtube_embed_url": _youtube_embed_url(row.get("external_url")) if media_type == "youtube" else None,
+        "content_description": row.get("content_description"),
+        "content_date_display": _friendly_date(row.get("content_date")),
+        "display_name": filename or row.get("content_description") or row["slug"],
+        "description": row["description"],
+        "tags": row["tags"],
+        "ticket_id": row["ticket_id"],
+        "client": row["client"],
+        "uploaded_at": row["timestamp"],
+        "uploaded_at_display": _friendly_datetime(row["timestamp"]),
+        "uploaded_by_display": row["tech"],
+        "redacted": bool(row["redacted"]),
+        "extracted_text": row["extracted_text"],
+        "ocr_status": row["ocr_status"],
+    }
+
+
 def _flatten_tags(nodes):
     """Depth-first flatten of the list_tag_tree() structure — used to look
     up a tag by slug from a query param without a dedicated db helper."""
@@ -115,8 +188,9 @@ def _to_content_public(row):
     """Public shape for a project-item card. Broader than _to_public: a
     project can contain backfilled youtube/document posts as well as real
     uploaded files, and those have no filename/stored_filename to build a
-    thumb or /image/ page from (see core/db.py's insert_content) — so this
-    links out to external_url instead when there's no local file.
+    thumb from (see core/db.py's insert_content) — but every row, regardless
+    of media_type, now gets its own local /object/<slug> detail page, so
+    cards always link locally instead of bouncing straight to external_url.
     """
     is_file = bool(row.get("filename"))
     return {
@@ -125,7 +199,7 @@ def _to_content_public(row):
         "media_type": row.get("media_type") or "image",
         "is_file": is_file,
         "thumb_url": f"/f/{row['slug']}/thumb" if is_file and not row.get("redacted") else None,
-        "link": f"/image/{row['slug']}" if is_file else (row.get("external_url") or f"/image/{row['slug']}"),
+        "link": f"/object/{row['slug']}",
         "external": not is_file,
         "tags": row["tags"],
         "content_date": row.get("content_date"),
@@ -251,19 +325,33 @@ def user_gallery_page(request: Request, uploader: str):
     )
 
 
-@app.get("/image/{slug}", response_class=HTMLResponse)
-def image_detail_page(request: Request, slug: str):
+@app.get("/object/{slug}", response_class=HTMLResponse)
+def object_detail_page(request: Request, slug: str):
+    """Generic detail page for any capture_events row, regardless of
+    media_type — image, youtube, document, or anything else. Canonical route
+    for what used to be the image-only /image/<slug> page (see the redirect
+    below); the template branches on item.media_type/is_file to render the
+    right preview (uploaded image, embedded YouTube player, or plain text
+    content) instead of assuming every row has an uploaded file.
+    """
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
-    item = _to_public(row)
-    item["uploaded_at_display"] = datetime.fromtimestamp(item["uploaded_at"]).strftime("%b %-d, %Y at %-I:%M %p")
-    full_url = str(request.base_url).rstrip("/") + item["url"]
-    related = [_to_public(r) for r in db.list_related(slug)]
+    item = _to_object_detail(row)
+    full_url = str(request.base_url).rstrip("/") + item["url"] if item["is_file"] else None
+    full_object_url = str(request.base_url).rstrip("/") + f"/object/{slug}"
+    related = [_to_public(r) for r in db.list_related(slug)] if item["is_file"] else []
     return templates.TemplateResponse(
-        request, "image_detail.html",
-        {"item": item, "full_url": full_url, "related": related},
+        request, "object_detail.html",
+        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related},
     )
+
+
+@app.get("/image/{slug}")
+def image_detail_redirect(slug: str):
+    # /image/<slug> was the original imagerepo-era canonical route (image-only).
+    # /object/<slug> replaced it so any bookmarked/hotlinked old URLs still resolve.
+    return RedirectResponse(f"/object/{slug}", status_code=308)
 
 
 @app.get("/account", response_class=HTMLResponse)
@@ -294,7 +382,7 @@ async def api_upload(
         dupe_date = datetime.fromtimestamp(dupe["timestamp"]).strftime("%b %-d, %Y at %-I:%M %p")
         raise HTTPException(
             status_code=409,
-            detail=f"Already uploaded by {dupe['tech']} on {dupe_date} — see /image/{dupe['slug']}",
+            detail=f"Already uploaded by {dupe['tech']} on {dupe_date} — see /object/{dupe['slug']}",
         )
     try:
         slug, stored_filename = storage.save_file(file.filename, content)
@@ -337,6 +425,8 @@ def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks
         raise HTTPException(status_code=404, detail="not found")
     if row["redacted"]:
         raise HTTPException(status_code=400, detail="File was redacted — there's no image left to OCR")
+    if not row.get("filename"):
+        raise HTTPException(status_code=400, detail="This row has no uploaded file — OCR isn't available for it")
     if Path(row["filename"]).suffix.lower() not in storage.IMAGE_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"OCR isn't available for {Path(row['filename']).suffix} files")
     db.set_ocr_status(slug, "pending")
@@ -370,6 +460,8 @@ def api_redact_image(request: Request, slug: str):
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    if not row.get("stored_filename"):
+        raise HTTPException(status_code=400, detail="This row has no uploaded file to redact")
     storage.delete_files(slug, row["stored_filename"])
     updated = db.mark_redacted(slug)
     return JSONResponse(_to_public(updated))
@@ -381,7 +473,8 @@ def api_delete_image(request: Request, slug: str):
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
-    storage.delete_files(slug, row["stored_filename"])
+    if row.get("stored_filename"):
+        storage.delete_files(slug, row["stored_filename"])
     db.delete_upload(slug)
     return JSONResponse({"deleted": True})
 

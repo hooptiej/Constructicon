@@ -25,6 +25,13 @@ from core import db, ocr, similarity, storage
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+# Brand assets (logo, wordmarks, favicons) live at the repo root in
+# assets/brand/, independent of web/static/ — see README's "Retained art
+# assets" section. Mounted separately rather than copied into web/static so
+# there's a single source of truth for them.
+_BRAND_DIR = Path(__file__).resolve().parent.parent / "assets" / "brand"
+if _BRAND_DIR.is_dir():
+    app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 # Attribution text stored in capture_events.tech when a client doesn't supply
@@ -46,6 +53,11 @@ def _to_public(row):
         "url": f"/f/{row['slug']}",
         "thumb_url": f"/f/{row['slug']}/thumb",
         "filename": row["filename"],
+        # filename is None for content-only rows (youtube/document posts —
+        # see insert_content in core/db.py); the gallery cards need
+        # something readable to show in its place rather than the literal
+        # string "null".
+        "display_name": row["filename"] or row.get("content_description") or row["slug"],
         "description": row["description"],
         "tags": row["tags"],
         "ticket_id": row["ticket_id"],
@@ -58,6 +70,66 @@ def _to_public(row):
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
         "artifact_link": row["artifact_link"],
+    }
+
+
+def _flatten_tags(nodes):
+    """Depth-first flatten of the list_tag_tree() structure — used to look
+    up a tag by slug from a query param without a dedicated db helper."""
+    flat = []
+    for node in nodes:
+        flat.append(node)
+        flat.extend(_flatten_tags(node.get("children") or []))
+    return flat
+
+
+def _project_cover_url(cover_slug):
+    """cover_slug references a capture_events row (see projects.cover_slug
+    in core/db.py) — reuse the same thumb route the gallery uses for images.
+    Rows with no local file (a youtube/document post used as a cover) or a
+    missing/deleted slug fall back to None so the template can render a
+    placeholder instead of a broken image."""
+    if not cover_slug:
+        return None
+    row = db.get_by_slug(cover_slug)
+    if not row or not row.get("filename") or row.get("redacted"):
+        return None
+    return f"/f/{row['slug']}/thumb"
+
+
+def _to_project_card(project):
+    return {
+        "slug": project["slug"],
+        "title": project["title"],
+        "description": project["description"],
+        "status": project["status"],
+        "cover_url": _project_cover_url(project.get("cover_slug")),
+    }
+
+
+def _project_has_tag(project, member_slugs):
+    return any(item["slug"] in member_slugs for item in db.list_project_items(project["id"]))
+
+
+def _to_content_public(row):
+    """Public shape for a project-item card. Broader than _to_public: a
+    project can contain backfilled youtube/document posts as well as real
+    uploaded files, and those have no filename/stored_filename to build a
+    thumb or /image/ page from (see core/db.py's insert_content) — so this
+    links out to external_url instead when there's no local file.
+    """
+    is_file = bool(row.get("filename"))
+    return {
+        "slug": row["slug"],
+        "title": row.get("content_description") or row.get("description") or row.get("filename") or row["slug"],
+        "media_type": row.get("media_type") or "image",
+        "is_file": is_file,
+        "thumb_url": f"/f/{row['slug']}/thumb" if is_file and not row.get("redacted") else None,
+        "link": f"/image/{row['slug']}" if is_file else (row.get("external_url") or f"/image/{row['slug']}"),
+        "external": not is_file,
+        "tags": row["tags"],
+        "content_date": row.get("content_date"),
+        "timestamp": row.get("timestamp"),
     }
 
 
@@ -113,19 +185,60 @@ def healthz():
 # --- Pages ---
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    return RedirectResponse("/gallery", status_code=303)
+def home_page(request: Request, tag: str = ""):
+    """Home is the gallery itself (left third) plus a curated Projects
+    section (right two-thirds) — see README's Projects/tag-tree note for why
+    projects and blog_tags are separate concepts. ?tag=<slug> filters the
+    Projects section down to cards with at least one item under that tag or
+    one of its descendants; the gallery pane (client-side, /api/gallery) is
+    unaffected by it.
+    """
+    tag_tree = db.list_tag_tree()
+    selected_tag = None
+    if tag:
+        selected_tag = next((t for t in _flatten_tags(tag_tree) if t["slug"] == tag), None)
+    projects = db.list_projects()
+    if selected_tag:
+        member_slugs = {r["slug"] for r in db.list_posts_for_tag(selected_tag["id"], limit=10000)}
+        projects = [p for p in projects if _project_has_tag(p, member_slugs)]
+    return templates.TemplateResponse(
+        request, "home.html",
+        {
+            "active": "home",
+            "top_tags": tag_tree,
+            "selected_tag_slug": tag or None,
+            "projects": [_to_project_card(p) for p in projects],
+        },
+    )
 
 
 @app.get("/upload")
 def upload_page_redirect():
-    # Upload is now a pane on the gallery page, not its own screen.
-    return RedirectResponse("/gallery", status_code=308)
+    # Upload is now a pane on the home page, not its own screen.
+    return RedirectResponse("/", status_code=308)
 
 
 @app.get("/gallery", response_class=HTMLResponse)
-def gallery_page(request: Request):
-    return templates.TemplateResponse(request, "gallery.html", {"active": "gallery"})
+def gallery_page_redirect(request: Request):
+    # The gallery is now the home page itself — kept as an alias so old
+    # links/bookmarks still land somewhere sensible.
+    return RedirectResponse("/", status_code=308)
+
+
+@app.get("/project/{slug}", response_class=HTMLResponse)
+def project_detail_page(request: Request, slug: str):
+    project = db.get_project(slug)
+    if project is None:
+        raise HTTPException(status_code=404, detail="not found")
+    items = [_to_content_public(r) for r in db.list_project_items(project["id"])]
+    return templates.TemplateResponse(
+        request, "project_detail.html",
+        {
+            "project": project,
+            "cover_url": _project_cover_url(project.get("cover_slug")),
+            "items": items,
+        },
+    )
 
 
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)

@@ -44,29 +44,12 @@ CREATE TABLE IF NOT EXISTS client_domains (
     domain TEXT NOT NULL,
     PRIMARY KEY (client_name, domain)
 );
-CREATE TABLE IF NOT EXISTS users (
-    email TEXT PRIMARY KEY,
-    first_seen REAL NOT NULL,
-    display_name TEXT,
-    avatar_color TEXT,
-    avatar_image BLOB
-);
 CREATE TABLE IF NOT EXISTS capture_event_relations (
     slug_a TEXT NOT NULL,
     slug_b TEXT NOT NULL,
     created_at REAL NOT NULL,
     PRIMARY KEY (slug_a, slug_b)
 );
-CREATE TABLE IF NOT EXISTS api_tokens (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user TEXT NOT NULL,
-    label TEXT NOT NULL,
-    token_hash TEXT UNIQUE NOT NULL,
-    created_at REAL NOT NULL,
-    last_used_at REAL
-);
-CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
-CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user);
 CREATE TABLE IF NOT EXISTS blog_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -197,15 +180,6 @@ def init_db():
     for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
-    existing_user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
-    # avatar_icon (emoji-based avatars) replaced by avatar_image — dropped
-    # rather than left inert. Confirmed with Jason 2026-08-27: start anew,
-    # no migration of the old emoji value.
-    if "avatar_icon" in existing_user_columns:
-        conn.execute("ALTER TABLE users DROP COLUMN avatar_icon")
-    for column, ddl_type in (("display_name", "TEXT"), ("avatar_color", "TEXT"), ("avatar_image", "BLOB")):
-        if column not in existing_user_columns:
-            conn.execute(f"ALTER TABLE users ADD COLUMN {column} {ddl_type}")
     existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
     if "nickname" not in existing_client_columns:
         conn.execute("ALTER TABLE clients ADD COLUMN nickname TEXT")
@@ -419,104 +393,6 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50):
     return results
 
 
-def record_user(email):
-    """Track that this email has logged in — the source of truth for
-    'known users' shown in the presence indicator, independent of session
-    expiry or whether they've ever uploaded anything.
-    """
-    conn = get_conn()
-    conn.execute("INSERT OR IGNORE INTO users (email, first_seen) VALUES (?, ?)", (email, time.time()))
-    conn.commit()
-    conn.close()
-
-
-def list_users():
-    conn = get_conn()
-    rows = conn.execute("SELECT email FROM users ORDER BY email").fetchall()
-    conn.close()
-    return [r["email"] for r in rows]
-
-
-def get_profile(email):
-    """Profile metadata only — avatar_image is a BLOB fetched separately via
-    get_avatar_image() so callers that just need display_name/color don't
-    drag image bytes along."""
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT email, display_name, avatar_color, (avatar_image IS NOT NULL) AS has_avatar FROM users WHERE email = ?",
-        (email,),
-    ).fetchone()
-    conn.close()
-    if row is None:
-        return None
-    d = dict(row)
-    d["has_avatar"] = bool(d["has_avatar"])
-    return d
-
-
-def update_profile(email, display_name=None, avatar_color=None):
-    """Requires the user already have a row (created by record_user() on first
-    login) — there's nothing sensible to attach a profile to otherwise."""
-    conn = get_conn()
-    conn.execute(
-        "UPDATE users SET display_name = ?, avatar_color = ? WHERE email = ?",
-        (display_name or None, avatar_color or None, email),
-    )
-    conn.commit()
-    conn.close()
-    return get_profile(email)
-
-
-def list_profiles():
-    """All known users' profile info, keyed by email — fetched once per
-    request rather than per row so rendering a gallery page doesn't run one
-    lookup per item."""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT email, display_name, avatar_color, (avatar_image IS NOT NULL) AS has_avatar FROM users"
-    ).fetchall()
-    conn.close()
-    result = {}
-    for r in rows:
-        d = dict(r)
-        d["has_avatar"] = bool(d["has_avatar"])
-        result[d["email"]] = d
-    return result
-
-
-def set_avatar_image(email, png_bytes):
-    conn = get_conn()
-    conn.execute("UPDATE users SET avatar_image = ? WHERE email = ?", (png_bytes, email))
-    conn.commit()
-    conn.close()
-
-
-def clear_avatar_image(email):
-    conn = get_conn()
-    conn.execute("UPDATE users SET avatar_image = NULL WHERE email = ?", (email,))
-    conn.commit()
-    conn.close()
-
-
-def get_avatar_image(email):
-    conn = get_conn()
-    row = conn.execute("SELECT avatar_image FROM users WHERE email = ?", (email,)).fetchone()
-    conn.close()
-    return row["avatar_image"] if row and row["avatar_image"] is not None else None
-
-
-def backfill_users_from_uploads():
-    """One-time catch-up for logins that happened before the users table
-    existed — anyone who's ever captured something counts as a known user."""
-    conn = get_conn()
-    conn.execute(
-        "INSERT OR IGNORE INTO users (email, first_seen) "
-        "SELECT tech, MIN(timestamp) FROM capture_events WHERE tech LIKE '%@%' GROUP BY tech"
-    )
-    conn.commit()
-    conn.close()
-
-
 def set_extracted_text(slug, text):
     conn = get_conn()
     conn.execute("UPDATE capture_events SET extracted_text = ? WHERE slug = ?", (text, slug))
@@ -579,55 +455,6 @@ def list_related(slug):
     ).fetchall()
     conn.close()
     return [_row_to_dict(r) for r in rows]
-
-
-# --- API tokens (desktop app auth) ---
-# Only the hash is ever stored — the raw token is returned once, at creation,
-# and can't be recovered after that; losing it means generating a new one.
-
-def create_api_token(user, label, token_hash):
-    conn = get_conn()
-    created_at = time.time()
-    cur = conn.execute(
-        "INSERT INTO api_tokens (user, label, token_hash, created_at) VALUES (?, ?, ?, ?)",
-        (user, label, token_hash, created_at),
-    )
-    conn.commit()
-    token_id = cur.lastrowid
-    conn.close()
-    return {"id": token_id, "label": label, "created_at": created_at, "last_used_at": None}
-
-
-def list_api_tokens(user):
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT id, label, created_at, last_used_at FROM api_tokens WHERE user = ? ORDER BY created_at DESC",
-        (user,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def revoke_api_token(user, token_id):
-    """Scoped to `user` so a tech can only ever revoke their own tokens."""
-    conn = get_conn()
-    conn.execute("DELETE FROM api_tokens WHERE id = ? AND user = ?", (token_id, user))
-    conn.commit()
-    conn.close()
-
-
-def get_user_by_token_hash(token_hash):
-    conn = get_conn()
-    row = conn.execute("SELECT user FROM api_tokens WHERE token_hash = ?", (token_hash,)).fetchone()
-    conn.close()
-    return row["user"] if row else None
-
-
-def touch_api_token_last_used(token_hash):
-    conn = get_conn()
-    conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?", (time.time(), token_hash))
-    conn.commit()
-    conn.close()
 
 
 # --- Blog tags ---

@@ -40,7 +40,7 @@ fi
 
 echo
 echo "Done! Built: $(pwd)/dist/ImageRepo Uploader.app"
-echo "Drag it to /Applications, open it, then paste in your imagerepo API token when prompted."
+echo "Drag it to /Applications and open it."
 open dist/ 2>/dev/null
 
 read -n 1 -s -r -p "Press any key to close this window..."

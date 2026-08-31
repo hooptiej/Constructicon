@@ -37,8 +37,12 @@ pieces rather than writing a new backend:
   authoring will add).
 - `core/storage.py`, `core/ocr.py`, `core/similarity.py` carry over
   as-is for image handling, text extraction, and "related posts."
-- `core/auth.py` (OTP login, already de-scoped from the
-  `computercats.net` domain lock) carries over for the authoring side.
+- No login gate — Constructicon is a single-owner personal tool on a
+  LAN-only dev server (no port forward), so the network perimeter is
+  the security boundary, not an auth system. (imagerepo's original
+  multi-tech OTP login/session/presence machinery was stripped out;
+  see `capture_events.tech`, which is now just freeform attribution
+  text rather than a real user identity.)
 
 **Tag taxonomy — loose and nestable, not fixed columns.** Flat tags
 (imagerepo's original `tags TEXT` JSON array) aren't enough to

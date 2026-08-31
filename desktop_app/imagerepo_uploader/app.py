@@ -34,7 +34,6 @@ class ImageRepoUploaderApp(rumps.App):
     def __init__(self):
         super().__init__("imagerepo", title=STATUS_IDLE, quit_button=None)
         self.config = config.load_config()
-        self.token = config.get_token()
 
         self._upload_queue = queue.Queue()
         self._error_revert_timer = None
@@ -44,7 +43,6 @@ class ImageRepoUploaderApp(rumps.App):
         self.menu = [
             rumps.MenuItem("Show Drop Zone", callback=self._toggle_dropzone),
             None,
-            rumps.MenuItem("Set API Token…", callback=self._prompt_for_token),
             rumps.MenuItem("Change Watched Folder…", callback=self._prompt_for_watch_folder),
             rumps.MenuItem("Change Server URL…", callback=self._prompt_for_base_url),
             None,
@@ -57,9 +55,6 @@ class ImageRepoUploaderApp(rumps.App):
         self._start_watcher()
 
         threading.Thread(target=self._upload_worker, daemon=True).start()
-
-        if not self.token:
-            rumps.Timer(self._prompt_for_token_once, 1).start()
 
     # --- Watcher lifecycle ---
 
@@ -111,7 +106,7 @@ class ImageRepoUploaderApp(rumps.App):
             path, description = self._upload_queue.get()
             self._set_status(STATUS_UPLOADING)
             try:
-                api.upload_file(self.config["base_url"], self.token, str(path), description=description)
+                api.upload_file(self.config["base_url"], str(path), description=description)
             except api.DuplicateUploadError:
                 pass  # already in imagerepo — not an error, nothing to report
             except api.UploadError as e:
@@ -140,31 +135,6 @@ class ImageRepoUploaderApp(rumps.App):
 
     def _toggle_dropzone(self, _sender):
         self.dropzone.toggle()
-
-    def _prompt_for_token_once(self, timer):
-        timer.stop()
-        self._prompt_for_token(None)
-
-    def _prompt_for_token(self, _sender):
-        response = rumps.Window(
-            title="imagerepo API token",
-            message="Paste a token from your imagerepo account page (Account → Desktop uploader tokens).",
-            default_text=self.token or "",
-            ok="Save",
-            cancel="Cancel",
-            dimensions=(320, 40),
-        ).run()
-        if not response.clicked:
-            return
-        raw_token = response.text.strip()
-        if not raw_token:
-            return
-        if not api.validate_token(self.config["base_url"], raw_token):
-            rumps.alert("That token wasn't accepted", "Double-check you copied the whole thing, or generate a new one from imagerepo account settings.")
-            return
-        config.set_token(raw_token)
-        self.token = raw_token
-        rumps.notification("imagerepo", "Token saved", "This machine can now upload to imagerepo.")
 
     def _prompt_for_watch_folder(self, _sender):
         response = rumps.Window(

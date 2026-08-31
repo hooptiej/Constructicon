@@ -1,6 +1,6 @@
 """Thin client for the imagerepo upload API — the same POST /api/upload the
-web drawer and the MCP server use, authenticated with a Bearer API token
-instead of a browser session.
+web drawer and the MCP server use. No auth: imagerepo runs on a LAN-only
+dev server with no port forward, so anyone who can reach it can upload.
 """
 
 import os
@@ -19,11 +19,8 @@ class DuplicateUploadError(UploadError):
     already uploaded — not a failure, just nothing new to do."""
 
 
-def upload_file(base_url, token, path, description="", tags=None, ticket_id="", client=""):
-    if not token:
-        raise UploadError("No API token configured — set one from imagerepo account settings")
+def upload_file(base_url, path, description="", tags=None, ticket_id="", client=""):
     url = base_url.rstrip("/") + "/api/upload"
-    headers = {"Authorization": f"Bearer {token}"}
     data = {
         "description": description,
         "tags": _tags_json(tags or []),
@@ -34,32 +31,15 @@ def upload_file(base_url, token, path, description="", tags=None, ticket_id="", 
     with open(path, "rb") as f:
         files = {"file": (os.path.basename(path), f)}
         try:
-            resp = requests.post(url, headers=headers, data=data, files=files, timeout=REQUEST_TIMEOUT_SECONDS)
+            resp = requests.post(url, data=data, files=files, timeout=REQUEST_TIMEOUT_SECONDS)
         except requests.RequestException as e:
             raise UploadError(f"Couldn't reach {base_url}: {e}")
     if resp.status_code == 409:
         detail = _error_detail(resp)
         raise DuplicateUploadError(detail)
-    if resp.status_code == 401:
-        raise UploadError("Token rejected — it may have been revoked. Set a new one from imagerepo account settings.")
     if not resp.ok:
         raise UploadError(_error_detail(resp))
     return resp.json()
-
-
-def validate_token(base_url, token):
-    """True if this token is currently accepted — used right after a tech
-    pastes one in, so a typo or an already-revoked token is caught
-    immediately instead of surfacing as a mystery failure on the next
-    screenshot."""
-    if not token:
-        return False
-    url = base_url.rstrip("/") + "/api/account/tokens"
-    try:
-        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=REQUEST_TIMEOUT_SECONDS)
-    except requests.RequestException:
-        return False
-    return resp.ok
 
 
 def _tags_json(tags):

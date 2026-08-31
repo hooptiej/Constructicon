@@ -24,11 +24,14 @@ python setup.py py2app
 
 ## First run
 
-1. Get an API token: imagerepo → Account → Desktop uploader tokens → **+ New token**.
-2. Launch the app. It'll prompt for the token on first run (menu bar icon →
-   **Set API Token…** if you need to do it again later).
-3. Menu bar icon shows status: 🟢 idle, 🟡 uploading, 🔴 last upload failed
+1. Launch the app. It defaults to watching your Desktop and pointing at the
+   imagerepo dev server — change either from the menu bar icon
+   (**Change Watched Folder…** / **Change Server URL…**) if needed.
+2. Menu bar icon shows status: 🟢 idle, 🟡 uploading, 🔴 last upload failed
    (check Notification Center for the actual error).
+
+No sign-in step — imagerepo has no auth (LAN-only dev server), so uploads
+just go straight through.
 
 ## Known gap
 

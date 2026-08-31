@@ -78,7 +78,7 @@ const FILE_ICON = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none">
 function cardHtml(item) {
   const isImage = imgExt.test(item.filename);
   return `
-    <a href="/image/${item.slug}" class="gallery-card">
+    <a href="/object/${item.slug}" class="gallery-card">
       <div class="gallery-thumb${item.redacted ? ' redacted-thumb' : ''}">
         ${item.redacted ? LOCK_ICON : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON)}
       </div>
@@ -128,7 +128,7 @@ function render(groups) {
 const recentBanner = document.getElementById('recent-banner');
 function recentThumbHtml(item) {
   const isImage = imgExt.test(item.filename);
-  return `<a class="recent-thumb${item.redacted ? ' redacted-thumb' : ''}" href="/image/${item.slug}" title="${escapeHtml(item.display_name + ' — ' + item.uploaded_by_display + (item.redacted ? ' (redacted)' : ''))}">
+  return `<a class="recent-thumb${item.redacted ? ' redacted-thumb' : ''}" href="/object/${item.slug}" title="${escapeHtml(item.display_name + ' — ' + item.uploaded_by_display + (item.redacted ? ' (redacted)' : ''))}">
     ${item.redacted ? LOCK_ICON.replace('width="22" height="22"', 'width="16" height="16"') : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON.replace('width="26" height="26"', 'width="16" height="16"'))}
   </a>`;
 }

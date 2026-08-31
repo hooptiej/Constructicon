@@ -26,7 +26,7 @@
   {% if items %}
   <div class="project-item-grid">
     {% for item in items %}
-    <a class="project-item-card" href="{{ item.link }}" {% if item.external %}target="_blank" rel="noopener"{% endif %}>
+    <a class="project-item-card" href="{{ item.link }}">
       <div class="project-item-thumb">
         {% if item.thumb_url %}
           <img src="{{ item.thumb_url }}" loading="lazy" alt="">
@@ -36,7 +36,7 @@
       </div>
       <div class="project-item-body">
         <div class="project-item-title">{{ item.title }}</div>
-        <div class="project-item-meta">{{ item.media_type }}{% if item.external %} · opens externally{% endif %}</div>
+        <div class="project-item-meta">{{ item.media_type }}</div>
       </div>
     </a>
     {% endfor %}

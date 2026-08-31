@@ -35,6 +35,19 @@ pieces rather than writing a new backend:
   has description, tags, timestamp, extracted text, related-item links —
   everything a blog post needs except a title/body split, which post
   authoring will add).
+- `capture_events` isn't image-only: `media_type` (`'image' | 'video' |
+  'youtube' | 'document' | 'any'`, deliberately no CHECK constraint — a
+  loose classifier, not a rigid enum) says what kind of content the row
+  actually is, independent of `source` (upload-pipeline metadata like
+  `'screenshot'`). Rows for content that lives elsewhere rather than an
+  uploaded file (e.g. a YouTube video) use `external_url` instead of
+  `filename`/`stored_filename`, `content_description` for the content's
+  own description (distinct from `description`, which is
+  uploader/tagging metadata), and `content_date` for the content's own
+  real-world date (distinct from `timestamp`, which is capture/upload
+  time). `db.insert_content()` creates this kind of row without
+  requiring an uploaded file; `db.insert_upload()` still handles the
+  file-upload path and defaults `media_type` to `'image'`.
 - `core/storage.py`, `core/ocr.py`, `core/similarity.py` carry over
   as-is for image handling, text extraction, and "related posts."
 - No login gate — Constructicon is a single-owner personal tool on a

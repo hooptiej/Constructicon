@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import db, object_types, ocr, storage
+from core import db, object_types, ocr, storage, thumbnails
 
 BASE_URL = os.environ.get("IMAGEREPO_BASE_URL", "http://10.12.5.98:8000")
 
@@ -75,6 +75,12 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
                       ocr_status="pending" if spec.ocr_capable else None)
     if spec.ocr_capable:
         ocr.run_ocr(slug)
+    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
+        # No OCR pass to piggyback a thumbnail render onto for a
+        # CAPTURE-sourced, non-OCR-capable type (STL) — see the matching
+        # comment on web/app.py's _ensure_capture_thumbnail. Synchronous
+        # here since this MCP tool call has no background-task mechanism.
+        thumbnails.ensure_thumbnail(db.get_by_slug(slug))
     return {**_to_public(db.get_by_slug(slug)), "duplicate": False}
 
 

@@ -272,6 +272,23 @@ def _refire_ocr(slug):
     threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
 
 
+def _ensure_capture_thumbnail(slug):
+    """For a CAPTURE-sourced type that ISN'T ocr_capable (STL today — a
+    binary mesh format with no text worth OCR'ing), there's no OCR
+    background task to piggyback a thumbnail render onto the way PDF's is
+    (see core/ocr.py's _ocr_source_path, which calls
+    thumbnails.ensure_thumbnail as a side effect of preparing an OCR
+    source). Without this, get_thumbnail's own lazy-generate fallback below
+    only fires for content-only rows (stored_filename is None), so a
+    file-backed CAPTURE type would silently serve the raw original file
+    instead of a real thumbnail on every request until someone happened to
+    run backfill_thumbnails.py. Scheduled as its own background task,
+    same spirit as OCR, so it doesn't block the upload response."""
+    row = db.get_by_slug(slug)
+    if row is not None:
+        thumbnails.ensure_thumbnail(row)
+
+
 async def _ocr_watchdog():
     while True:
         await asyncio.sleep(OCR_WATCHDOG_INTERVAL_SECONDS)
@@ -538,6 +555,11 @@ async def api_upload(
     # polls GET /api/image/{slug} to see ocr_status flip from "pending".
     if spec.ocr_capable:
         background_tasks.add_task(ocr.run_ocr, slug)
+    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
+        # A CAPTURE-sourced type with no OCR pass to piggyback a thumbnail
+        # render onto (STL today) still needs one generated somewhere —
+        # see _ensure_capture_thumbnail above.
+        background_tasks.add_task(_ensure_capture_thumbnail, slug)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 
@@ -586,6 +608,8 @@ async def api_create_content(
     row = db.get_by_slug(slug)
     if spec.ocr_capable and row["ocr_status"] == "pending":
         background_tasks.add_task(ocr.run_ocr, slug)
+    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
+        background_tasks.add_task(_ensure_capture_thumbnail, slug)
     return JSONResponse(_to_public(row))
 
 

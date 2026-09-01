@@ -9,6 +9,42 @@
       Upload
     </button>
     <a class="btn-ms" href="/account" style="width:auto;padding:8px 14px">Desktop uploader</a>
+    <button type="button" class="btn-ms" id="backup-now-btn" style="width:auto;padding:8px 14px"
+            title="Zips the current DB and storage files to a timestamped archive on the share. Independent of any delete action.">
+      Back up now
+    </button>
+    <span id="backup-status" class="backup-status"></span>
   </div>
 </div>
 <div class="hazard-stripe app-header-stripe"></div>
+<script>
+(function () {
+  const btn = document.getElementById('backup-now-btn');
+  const status = document.getElementById('backup-status');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = 'Backing up…';
+    status.textContent = '';
+    status.className = 'backup-status';
+    try {
+      const res = await fetch('/api/backup', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || `Backup failed (${res.status})`);
+      }
+      const sizeMb = (data.size / (1024 * 1024)).toFixed(1);
+      status.textContent = `Saved ${data.filename} (${sizeMb} MB)`;
+      status.className = 'backup-status backup-status-ok';
+    } catch (err) {
+      status.textContent = err.message || 'Backup failed';
+      status.className = 'backup-status backup-status-error';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+      setTimeout(() => { status.textContent = ''; status.className = 'backup-status'; }, 8000);
+    }
+  });
+})();
+</script>

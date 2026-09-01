@@ -30,11 +30,16 @@ def thumb_path_for(slug):
     return STORAGE_DIR / f"{slug}_thumb.jpg"
 
 
-def make_thumbnail(slug, content, ext):
-    if ext not in IMAGE_EXTENSIONS:
-        return
+def save_thumbnail_from_bytes(slug, image_bytes):
+    """Given raw bytes that decode as an image, generate and save the
+    standard downscaled JPEG thumbnail for `slug`. This is the shared
+    primitive behind every object type's thumbnail: an uploaded image file
+    (make_thumbnail, below) and a fetched/captured representative image for
+    non-file types (see core/thumbnails.py) both funnel through here so
+    there's exactly one place that resizes/flattens/encodes a thumbnail.
+    """
     try:
-        img = Image.open(BytesIO(content))
+        img = Image.open(BytesIO(image_bytes))
         img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM))
         if img.mode in ("RGBA", "LA", "P"):
             flattened = Image.new("RGB", img.size, THUMB_BG)
@@ -47,6 +52,12 @@ def make_thumbnail(slug, content, ext):
         # Not fatal — thumb_path_or_original() falls back to the full image —
         # but print so a systematic failure (e.g. a corrupt-image edge case) is traceable.
         print(f"thumbnail generation failed for {slug}: {e!r}")
+
+
+def make_thumbnail(slug, content, ext):
+    if ext not in IMAGE_EXTENSIONS:
+        return
+    save_thumbnail_from_bytes(slug, content)
 
 
 def save_file(filename, content):
@@ -69,8 +80,14 @@ def path_for(stored_filename):
 
 
 def thumb_path_or_original(slug, stored_filename):
+    """Falls back to the original file only when there is one — content-only
+    rows (media_type='youtube' and friends, see core/db.py's insert_content)
+    have stored_filename=None and only ever have a thumbnail, never an
+    original stored locally."""
     thumb = thumb_path_for(slug)
-    return thumb if thumb.exists() else STORAGE_DIR / stored_filename
+    if thumb.exists():
+        return thumb
+    return STORAGE_DIR / stored_filename if stored_filename else thumb
 
 
 AVATAR_SIZE = 256

@@ -354,6 +354,26 @@ def api_delete_all():
     return JSONResponse({"deleted": len(rows)})
 
 
+@app.post("/api/delete")
+def api_delete_selected(slugs: list[str] = Form(...)):
+    """Selective delete (#19) — remove just the given objects, any mix of
+    sources (uploaded images, youtube rows, etc.), without touching tags
+    or projects. That global wipe is specific to /api/delete-all's
+    full-reset button; this is the day-to-day 'clear this test content'
+    path, driven by gallery checkboxes or a single object's detail page.
+    Reuses the same per-row deletion primitives as /api/delete-all."""
+    deleted = 0
+    for slug in slugs:
+        row = db.get_by_slug(slug)
+        if row is None:
+            continue
+        if row.get("stored_filename"):
+            storage.delete_files(row["slug"], row["stored_filename"])
+        db.delete_upload(row["slug"])
+        deleted += 1
+    return JSONResponse({"deleted": deleted})
+
+
 @app.get("/upload")
 def upload_page_redirect():
     # Upload is now a pane on the home page, not its own screen.

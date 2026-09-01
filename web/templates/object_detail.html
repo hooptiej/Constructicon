@@ -60,7 +60,6 @@
       <div class="content-meta-panel">
         {% if item.content_description %}<p class="content-meta-desc">{{ item.content_description }}</p>{% endif %}
         <div class="detail-meta">
-          {% if item.youtube_author_name %}<span>By {{ item.youtube_author_name }}</span>{% endif %}
           {% if item.content_date_display %}<span>Published {{ item.content_date_display }}</span>{% endif %}
           {% if item.external_url %}
           <a class="external-link-btn" href="{{ item.external_url }}" target="_blank" rel="noopener">

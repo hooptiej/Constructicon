@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from core import backup, db, object_types, ocr, similarity, storage, thumbnails, youtube
+from core import backup, db, object_types, ocr, similarity, storage, thumbnails
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -191,10 +191,6 @@ def _to_object_detail(row):
         "youtube_embed_url": _youtube_embed_url(row.get("external_url")) if media_type == "youtube" else None,
         "content_description": row.get("content_description"),
         "content_date_display": _friendly_date(row.get("content_date")),
-        # #44: only present when oEmbed returned a channel name that isn't
-        # the site's own (core/youtube.py) — never set at all for the
-        # common case of a hooptiej-uploaded video.
-        "youtube_author_name": (row.get("type_metadata") or {}).get("youtube_author_name"),
         # See _to_public's matching comment — row["display_name"]/row["icon"]
         # (#11) are per-object overrides that win over the generic fallbacks.
         "display_name": row.get("display_name") or filename or row.get("content_description") or row["slug"],
@@ -658,18 +654,6 @@ async def api_create_content(
         tag_list = []
     content_date_epoch = float(content_date) if content_date else None
     slug = storage.make_slug()
-    # #44: for a YouTube link, fetch the public oEmbed endpoint (no API key
-    # needed) to fill in a real title when the caller didn't supply one
-    # (today's manual-add UI (#25) never does) and to pick up the channel
-    # name when it isn't the site's own — see core/youtube.py's docstring
-    # for exactly what oEmbed does and doesn't provide. Best-effort: a
-    # failed fetch just means no enrichment, never a failed upload.
-    type_metadata = None
-    if media_type == "youtube" and external_url:
-        oembed_title, oembed_metadata = youtube.youtube_metadata_for_content(external_url)
-        if not content_description and oembed_title:
-            content_description = oembed_title
-        type_metadata = oembed_metadata or None
     db.insert_content(
         slug, user, media_type,
         external_url=external_url or None,
@@ -677,7 +661,6 @@ async def api_create_content(
         content_date=content_date_epoch,
         description=description, tags=tag_list,
         ticket_id=ticket_id or None, client=client or None,
-        type_metadata=type_metadata,
     )
     row = db.get_by_slug(slug)
     if spec.ocr_capable and row["ocr_status"] == "pending":

@@ -42,6 +42,32 @@
       </div>
     </div>
     <div class="admin-pane-divider"></div>
+    <!-- API Keys (#55) — general secrets store for the app itself, starting
+         with a YouTube Data API key (real view/like/comment counts, full
+         descriptions, tags, duration — see #54) rather than wiring a key in
+         from outside the app via a docker-compose env var. Storage is a
+         generic key/value settings table (core/db.py's app_settings,
+         get_setting/has_setting/set_setting) and GET /api/settings only ever
+         reports presence, never the real value — so this input is always
+         left blank on load/save, same as a normal password field never
+         redisplaying what you last typed. Only one row exists because only
+         one integration needs a key right now; add another labeled row here
+         (and to web/app.py's KNOWN_SETTINGS) when a second one does. -->
+    <div class="admin-row admin-apikey-row">
+      <div class="admin-apikey-label-row">
+        <div>
+          <div class="admin-row-label">YouTube Data API Key</div>
+          <div class="admin-row-hint">Used for real view/like/comment counts (#54)</div>
+        </div>
+        <span id="admin-apikey-status-youtube_data_api_key" class="apikey-status">…</span>
+      </div>
+      <div class="admin-apikey-input-row">
+        <input type="password" class="input admin-apikey-input" id="admin-apikey-input-youtube_data_api_key"
+               placeholder="Enter to set" autocomplete="off">
+        <button type="button" class="btn-ms admin-apikey-save" data-key="youtube_data_api_key">Save</button>
+      </div>
+    </div>
+    <div class="admin-pane-divider"></div>
     <button type="button" class="btn-danger admin-full-btn" id="admin-delete-all-btn"
             title="Development convenience while content is still in flux">Delete all</button>
     <button type="button" class="btn-ms admin-full-btn" id="admin-backup-btn"
@@ -96,6 +122,63 @@
     } else {
       alert('Delete failed.');
     }
+  });
+
+  // API Keys (#55) — presence-only status, and a save that never echoes the
+  // real value back. KNOWN_SETTINGS is web/app.py's allowlist; this array is
+  // just the admin pane's UI-side list of which of those keys get a labeled
+  // row — add an entry here (plus the matching markup above) for a future
+  // second key.
+  const API_KEY_SETTINGS = ['youtube_data_api_key'];
+
+  function setApiKeyStatus(key, isSet) {
+    const status = document.getElementById(`admin-apikey-status-${key}`);
+    const input = document.getElementById(`admin-apikey-input-${key}`);
+    if (!status || !input) return;
+    status.textContent = isSet ? 'Set' : 'Not set';
+    status.className = 'apikey-status' + (isSet ? ' apikey-status-set' : '');
+    input.placeholder = isSet ? 'Enter to update' : 'Enter to set';
+    // Never pre-fill with the real value — GET /api/settings never returns
+    // it, so there's nothing to pre-fill with anyway. Clearing here also
+    // wipes whatever the user last typed once a save completes.
+    input.value = '';
+  }
+
+  async function loadApiKeyStatuses() {
+    try {
+      const res = await fetch('/api/settings');
+      if (!res.ok) return;
+      const statuses = await res.json();
+      API_KEY_SETTINGS.forEach((key) => setApiKeyStatus(key, !!statuses[key]));
+    } catch (err) {
+      // Leave the '…' placeholder status in place — a failed presence
+      // check shouldn't be misread as "not set".
+    }
+  }
+  loadApiKeyStatuses();
+
+  document.querySelectorAll('.admin-apikey-save').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.key;
+      const input = document.getElementById(`admin-apikey-input-${key}`);
+      const value = input.value;
+      if (!value) return; // nothing typed — no-op, same as a blank password field
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ key, value });
+        const res = await fetch('/api/settings', { method: 'POST', body });
+        if (!res.ok) throw new Error(`Save failed (${res.status})`);
+        const statuses = await res.json();
+        setApiKeyStatus(key, !!statuses[key]);
+      } catch (err) {
+        alert(err.message || 'Save failed.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    });
   });
 
   // "Back up now" — relocated from _header.html, same /api/backup call.

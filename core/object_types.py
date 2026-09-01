@@ -64,6 +64,17 @@ class ObjectTypeSpec:
     # that as "no thumbnail available" rather than an error, so registering
     # a CAPTURE-sourced type ahead of its capture routine existing is safe.
     capture_fn: object = None
+    # Issue #12: what the "file kind" badge shown on gallery tiles and the
+    # object detail page looks like for this type. badge_icon is a single
+    # glyph/emoji for the compact tile-corner badge; badge_text is a short
+    # (~3-6 char) uppercase label used on the detail page (and as the tile
+    # badge's title/tooltip). Both are plain strings so web/app.py can pass
+    # them straight through to templates — no per-media_type branching
+    # needed there or in the templates. A future type (PDF: #13, STL: #14)
+    # just fills these in alongside the rest of its ObjectTypeSpec and gets
+    # a badge for free.
+    badge_icon: str = "\U0001F4E6"  # package emoji — generic fallback
+    badge_text: str = "FILE"
 
 
 YOUTUBE_ID_RE = re.compile(r"(?:v=|/embed/|youtu\.be/)([A-Za-z0-9_-]{6,})")
@@ -97,6 +108,8 @@ OBJECT_TYPES = {
         label="Image",
         thumbnail_source=ThumbnailSource.UPLOADED_FILE,
         ocr_capable=True,
+        badge_icon="\U0001F5BC️",
+        badge_text="IMAGE",
     ),
     "youtube": ObjectTypeSpec(
         key="youtube",
@@ -104,12 +117,16 @@ OBJECT_TYPES = {
         thumbnail_source=ThumbnailSource.FETCH_URL,
         thumbnail_url_fn=youtube_thumbnail_url,
         ocr_capable=True,
+        badge_icon="▶️",
+        badge_text="YOUTUBE",
     ),
     "document": ObjectTypeSpec(
         key="document",
         label="Written post",
         thumbnail_source=ThumbnailSource.NONE,
         ocr_capable=False,
+        badge_icon="\U0001F4DD",
+        badge_text="POST",
     ),
     # Not reachable from the UI or any insert path yet — registered ahead of
     # time as a concrete example of the CAPTURE strategy (issue #15 calls
@@ -123,6 +140,8 @@ OBJECT_TYPES = {
         thumbnail_source=ThumbnailSource.CAPTURE,
         ocr_capable=True,
         capture_fn=None,  # TODO(future issue): grab a frame of the stream's OSD/wait-card
+        badge_icon="\U0001F4E1",
+        badge_text="STREAM",
     ),
     "url": ObjectTypeSpec(
         key="url",
@@ -130,6 +149,8 @@ OBJECT_TYPES = {
         thumbnail_source=ThumbnailSource.CAPTURE,
         ocr_capable=True,
         capture_fn=None,  # TODO(future issue): screenshot the page
+        badge_icon="\U0001F517",
+        badge_text="WEB",
     ),
 }
 
@@ -141,6 +162,8 @@ DEFAULT_SPEC = ObjectTypeSpec(
     label="Unknown",
     thumbnail_source=ThumbnailSource.NONE,
     ocr_capable=False,
+    badge_icon="❓",
+    badge_text="FILE",
 )
 
 

@@ -203,6 +203,16 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .chip button { background: none; border: none; color: var(--text-3); cursor: pointer; padding: 0; }
 .tag-add-input { border: none; background: transparent; outline: none; font-size: 12px; color: var(--text); flex: 1; min-width: 60px; }
 
+/* Manual YouTube add (#25) — the upload drawer's alternate "or paste a
+   link" row, next to its own OR divider (reuses .divider from Login). */
+.youtube-add-row { display: flex; gap: 8px; }
+.youtube-add-row .input { flex: 1; }
+.btn-secondary {
+  padding: 10px 14px; background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--text); cursor: pointer; flex-shrink: 0;
+}
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
 /* --- Gallery --- */
 .filter-row { display: flex; gap: 12px; flex-wrap: wrap; }
 .search-box { flex: 1; min-width: 200px; display: flex; align-items: center; gap: 10px; background: var(--card);

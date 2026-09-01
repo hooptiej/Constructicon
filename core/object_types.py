@@ -17,8 +17,8 @@ describes, per type:
 core/thumbnails.py and core/ocr.py both dispatch purely off the spec
 returned by get_object_type() — neither one should ever grow a literal
 `if media_type == "some_new_type"` branch. Adding a new object type (PDF:
-issue #13, STL: issue #14, and whatever comes after) means adding one
-ObjectTypeSpec below plus, if it needs one, a thumbnail_url_fn or
+issue #13, STL: issue #14, PSD: issue #27, and whatever comes after) means
+adding one ObjectTypeSpec below plus, if it needs one, a thumbnail_url_fn or
 capture_fn. Nothing else in the codebase should need to change.
 """
 
@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from . import pdf as _pdf
+from . import psd as _psd
 from . import stl as _stl
 
 
@@ -150,6 +151,15 @@ OBJECT_TYPES = {
         capture_fn=_stl.capture_thumbnail,
         badge_icon="\U0001F9CA",  # ice cube — closest built-in glyph to a 3D-printed block
         badge_text="STL",
+    ),
+    "psd": ObjectTypeSpec(
+        key="psd",
+        label="Photoshop document",
+        thumbnail_source=ThumbnailSource.CAPTURE,
+        ocr_capable=True,  # OCR runs against the composited preview — see core/psd.py
+        capture_fn=_psd.capture_thumbnail,
+        badge_icon="\U0001F3A8",  # artist palette
+        badge_text="PSD",
     ),
     "document": ObjectTypeSpec(
         key="document",

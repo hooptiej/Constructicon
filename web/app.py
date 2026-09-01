@@ -77,14 +77,19 @@ def _to_public(row):
         # see insert_content in core/db.py); the gallery cards need
         # something readable to show in its place rather than the literal
         # string "null".
-        "display_name": row["filename"] or row.get("content_description") or row["slug"],
+        # row["display_name"] (#11) is a per-object override — set via
+        # /api/image/<slug> or the imagerepo_rename MCP tool — that takes
+        # priority over the old filename/content_description/slug fallback
+        # chain when present.
+        "display_name": row.get("display_name") or row["filename"] or row.get("content_description") or row["slug"],
         # File-kind badge (issue #12) — driven entirely by the type's
         # ObjectTypeSpec (core/object_types.py) so gallery cards never need
         # an if/else on media_type; a new type registered there picks up a
-        # badge automatically.
+        # badge automatically. row["icon"] (#11) is a per-object override
+        # that takes priority over the type's generic badge_icon.
         "media_type": media_type,
         "type_label": spec.label,
-        "type_icon": spec.badge_icon,
+        "type_icon": row.get("icon") or spec.badge_icon,
         "type_badge": spec.badge_text,
         # Whether the gallery/home cards should render the actual thumbnail
         # image (thumb_url above) or a generic file icon — driven by the
@@ -176,7 +181,10 @@ def _to_object_detail(row):
         "youtube_embed_url": _youtube_embed_url(row.get("external_url")) if media_type == "youtube" else None,
         "content_description": row.get("content_description"),
         "content_date_display": _friendly_date(row.get("content_date")),
-        "display_name": filename or row.get("content_description") or row["slug"],
+        # See _to_public's matching comment — row["display_name"]/row["icon"]
+        # (#11) are per-object overrides that win over the generic fallbacks.
+        "display_name": row.get("display_name") or filename or row.get("content_description") or row["slug"],
+        "icon": row.get("icon") or spec.badge_icon,
         "description": row["description"],
         "tags": row["tags"],
         "ticket_id": row["ticket_id"],
@@ -660,6 +668,8 @@ def api_update_image(
     tags: str = Form("[]"),
     ticket_id: str = Form(""),
     client: str = Form(""),
+    display_name: str | None = Form(None),
+    icon: str | None = Form(None),
 ):
     try:
         tag_list = json.loads(tags) if tags else []
@@ -668,6 +678,12 @@ def api_update_image(
     row = db.update_tags(slug, description=description, tags=tag_list, ticket_id=ticket_id or None, client=client or None)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    # display_name/icon (#11) — no dedicated UI yet (see #24's "Coming soon
+    # (#11)" admin-pane stub), but the field/endpoint exists so a "rename"
+    # or "set icon" is at least possible by hand (a form POST here) and not
+    # only through the MCP tool — see imagerepo_rename in mcp_server/server.py.
+    if display_name is not None or icon is not None:
+        row = db.rename_object(slug, display_name=display_name, icon=icon)
     return JSONResponse(_to_public(row))
 
 

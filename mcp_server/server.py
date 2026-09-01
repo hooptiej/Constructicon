@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import db, object_types, ocr, storage, thumbnails
+from core import backup, db, object_types, ocr, storage, thumbnails
 
 BASE_URL = os.environ.get("IMAGEREPO_BASE_URL", "http://10.12.5.98:8000")
 
@@ -23,10 +23,17 @@ mcp = MCPServer(name="ccc-imagerepo-mcp")
 
 
 def _to_public(row):
+    spec = object_types.get_object_type(row.get("media_type"))
     return {
         "slug": row["slug"],
         "url": f"{BASE_URL}/f/{row['slug']}",
         "filename": row["filename"],
+        # display_name/icon (#11) — per-object overrides, falling back to
+        # the same filename/content_description/slug and spec.badge_icon
+        # chain the web app uses (see web/app.py's _to_public/_to_object_detail).
+        "display_name": row.get("display_name") or row["filename"] or row.get("content_description") or row["slug"],
+        "icon": row.get("icon") or spec.badge_icon,
+        "media_type": row.get("media_type") or "image",
         "description": row["description"],
         "tags": row["tags"],
         "ticket_id": row["ticket_id"],
@@ -36,6 +43,17 @@ def _to_public(row):
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
         "artifact_link": f"{BASE_URL}{row['artifact_link']}" if row["artifact_link"] else None,
+    }
+
+
+def _to_public_project(project):
+    return {
+        "id": project["id"],
+        "slug": project["slug"],
+        "title": project["title"],
+        "description": project["description"],
+        "status": project["status"],
+        "cover_slug": project.get("cover_slug"),
     }
 
 
@@ -128,6 +146,135 @@ def imagerepo_delete(slug: str) -> bool:
     storage.delete_files(slug, row["stored_filename"])
     db.delete_upload(slug)
     return True
+
+
+@mcp.tool()
+def imagerepo_delete_selected(slugs: list[str]) -> dict:
+    """Delete a specific set of objects (any mix of media types) by slug,
+    without touching tags or projects — the MCP equivalent of the web app's
+    selective-delete gallery checkboxes (POST /api/delete, #19). Irreversible.
+    Unknown slugs are silently skipped rather than erroring the whole batch."""
+    deleted = 0
+    for slug in slugs:
+        row = db.get_by_slug(slug)
+        if row is None:
+            continue
+        if row.get("stored_filename"):
+            storage.delete_files(slug, row["stored_filename"])
+        db.delete_upload(slug)
+        deleted += 1
+    return {"deleted": deleted}
+
+
+@mcp.tool()
+def imagerepo_delete_all() -> dict:
+    """Wipe every object (and its files), plus all tags and projects — a
+    full reset. The MCP equivalent of the web app's POST /api/delete-all.
+    Irreversible — call imagerepo_backup first if the current content is
+    worth keeping."""
+    rows = db.search(limit=100000)
+    for row in rows:
+        if row.get("stored_filename"):
+            storage.delete_files(row["slug"], row["stored_filename"])
+        db.delete_upload(row["slug"])
+    conn = db.get_conn()
+    conn.execute("DELETE FROM post_tags")
+    conn.execute("DELETE FROM project_items")
+    conn.execute("DELETE FROM projects")
+    conn.execute("DELETE FROM blog_tags")
+    conn.commit()
+    conn.close()
+    return {"deleted": len(rows)}
+
+
+@mcp.tool()
+def imagerepo_backup() -> dict:
+    """Zip the DB and every file in storage/ into a timestamped archive,
+    pruning down to the most recent retained backups — the MCP equivalent
+    of the web app's POST /api/backup (#20)."""
+    return backup.create_backup()
+
+
+@mcp.tool()
+def imagerepo_rename(slug: str, display_name: str | None = None, icon: str | None = None) -> dict | None:
+    """Set an object's display name and/or icon override (#11) — the two
+    still-missing pieces of "Objects - Move, delete, rename, nesting, set
+    Display name and Icon" from the original issue. Neither field existed
+    anywhere in the app before this; both are optional per-object overrides
+    that fall back to the existing filename/content_description/slug and
+    media-type badge_icon behavior when unset. Pass "" to clear a field back
+    to its fallback. The MCP equivalent of POST /api/image/<slug> with a
+    display_name and/or icon field.
+
+    Note: there's still no "move" (relocate into a folder/parent) or
+    "nesting" concept for objects anywhere in the app — see this issue's PR
+    description for why that's being left as a larger follow-up rather than
+    built here."""
+    row = db.rename_object(slug, display_name=display_name, icon=icon)
+    return _to_public(row) if row else None
+
+
+@mcp.tool()
+def imagerepo_list_projects() -> list[dict]:
+    """List every project, most-recently-updated first — the MCP equivalent
+    of GET /api/projects."""
+    return [_to_public_project(p) for p in db.list_projects()]
+
+
+@mcp.tool()
+def imagerepo_create_project(title: str) -> dict:
+    """Create a new project (and a same-named root tag it's linked to, so
+    objects tagged into it surface through ordinary tag browsing too) — the
+    MCP equivalent of POST /api/projects."""
+    title = title.strip()
+    if not title:
+        raise ValueError("Project name can't be empty")
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+    return _to_public_project(project)
+
+
+@mcp.tool()
+def imagerepo_add_content(media_type: str, external_url: str | None = None, content_description: str | None = None,
+                           description: str = "", tags: list[str] | None = None, ticket_id: str | None = None,
+                           client: str | None = None, uploaded_by: str = db.SOURCE_AUTHORED) -> dict:
+    """Create an object with no uploaded file — a YouTube link today, any
+    future URL/stream capture type — the MCP equivalent of POST /api/content.
+    Use imagerepo_upload instead for anything backed by an actual file."""
+    spec = object_types.get_object_type(media_type)
+    if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
+        raise ValueError(f"{spec.label} objects require a file upload — use imagerepo_upload")
+    slug = storage.make_slug()
+    db.insert_content(
+        slug, uploaded_by, media_type,
+        external_url=external_url, content_description=content_description,
+        description=description, tags=tags, ticket_id=ticket_id, client=client,
+    )
+    row = db.get_by_slug(slug)
+    if spec.ocr_capable and row["ocr_status"] == "pending":
+        ocr.run_ocr(slug)
+    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
+        thumbnails.ensure_thumbnail(row)
+    return _to_public(db.get_by_slug(slug))
+
+
+@mcp.tool()
+def imagerepo_relate(slug: str, related_slug: str) -> list[dict]:
+    """Link two objects as related (bidirectional) — also merges tags and
+    project membership both ways (see core/db.py's add_relation), the MCP
+    equivalent of POST /api/image/<slug>/related."""
+    if db.get_by_slug(slug) is None or db.get_by_slug(related_slug) is None:
+        raise ValueError("one or both slugs not found")
+    db.add_relation(slug, related_slug)
+    return [_to_public(r) for r in db.list_related(slug)]
+
+
+@mcp.tool()
+def imagerepo_unrelate(slug: str, related_slug: str) -> list[dict]:
+    """Remove a related-object link — the MCP equivalent of
+    POST /api/image/<slug>/related/remove."""
+    db.remove_relation(slug, related_slug)
+    return [_to_public(r) for r in db.list_related(slug)]
 
 
 if __name__ == "__main__":

@@ -23,6 +23,12 @@ running slowly — see the startup self-heal sweep in app.py/mcp_server, and
 the periodic watchdog in app.py that re-fires anything pending well past
 what even a fully-queued, timed-out attempt should ever take.
 
+OCR runs against whatever object_types.get_object_type(row["media_type"]) says is this
+row's representative image: an uploaded screenshot's own file for media_type='image', or the
+generated thumbnail (video thumbnail, stream OSD frame, URL screenshot) for any other
+OCR-capable type — see core/object_types.py and core/thumbnails.py. A type not marked
+ocr_capable there is skipped entirely, same as a non-image upload always was.
+
 Also auto-tags by matching the extracted text against known client names,
 nicknames, and domains (all synced from Hudu — the company's website plus
 any Cloudflare-managed zones) — fully automatic, no manual tag-mapping
@@ -51,7 +57,7 @@ from pathlib import Path
 import pytesseract
 from PIL import Image
 
-from . import db, similarity, storage
+from . import db, object_types, similarity, storage, thumbnails
 
 MIN_NICKNAME_LEN = 3
 OCR_TIMEOUT_SECONDS = 20  # a real screenshot should OCR in a few seconds; past 20s it's not worth the wait
@@ -75,15 +81,32 @@ def _match_client_tags(text):
     return matched
 
 
+def _ocr_source_path(row, spec):
+    """Path to the image OCR should run against for `row`, or None if there
+    isn't one (wrong type, or no thumbnail could be produced)."""
+    if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
+        filename = row.get("filename")
+        ext = Path(filename).suffix.lower() if filename else None
+        if ext not in storage.IMAGE_EXTENSIONS:
+            return None
+        return storage.path_for(row["stored_filename"])
+    # FETCH_URL / CAPTURE types: OCR runs on the generated thumbnail (video
+    # thumbnail, stream OSD frame, URL screenshot) — not on anything the
+    # caller uploaded directly, since there's nothing local to read yet.
+    thumbnails.ensure_thumbnail(row)
+    thumb = storage.thumb_path_for(row["slug"])
+    return thumb if thumb.exists() else None
+
+
 def run_ocr(slug):
     row = db.get_by_slug(slug)
     if row is None or row["redacted"]:
         return
-    ext = Path(row["filename"]).suffix.lower()
-    if ext not in storage.IMAGE_EXTENSIONS:
-        return  # not an image — ocr_status was never set to "pending" for this row
-    path = storage.path_for(row["stored_filename"])
-    if not path.exists():
+    spec = object_types.get_object_type(row.get("media_type"))
+    if not spec.ocr_capable:
+        return  # this type never gets ocr_status="pending" in the first place
+    path = _ocr_source_path(row, spec)
+    if path is None:
         db.set_ocr_status(slug, "failed")
         return
     with OCR_SEMAPHORE:

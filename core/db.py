@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS capture_events (
     media_type TEXT NOT NULL DEFAULT 'image',
     external_url TEXT,
     content_description TEXT,
-    content_date REAL
+    content_date REAL,
+    type_metadata TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_capture_events_source ON capture_events(source);
 CREATE INDEX IF NOT EXISTS idx_capture_events_client ON capture_events(client);
@@ -242,14 +243,24 @@ def init_db():
     for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
-    # media_type is a loose classifier ('image' | 'video' | 'youtube' | 'document' | 'any', or
-    # anything else a caller wants) — deliberately no CHECK constraint. Existing rows predate
-    # this column and are all screenshots, so they default to 'image' below.
+    # media_type is a loose classifier ('image' | 'youtube' | 'document', or anything else a
+    # caller wants) — deliberately no CHECK constraint. See core/object_types.py for the
+    # registry that gives each value a real spec (thumbnail strategy, OCR eligibility,
+    # per-type metadata fields); a media_type with no registered spec just falls back to
+    # object_types.DEFAULT_SPEC rather than erroring. Existing rows predate this column and
+    # are all screenshots, so they default to 'image' below.
     if "media_type" not in existing_columns:
         conn.execute("ALTER TABLE capture_events ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'")
     for column, ddl_type in (("external_url", "TEXT"), ("content_description", "TEXT"), ("content_date", "REAL")):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+    # type_metadata: a freeform JSON bag for per-object-type properties that
+    # don't fit the generic columns above (see core/object_types.py's
+    # MetadataField) — e.g. a future PDF's page count, an STL's dimensions.
+    # Deliberately one shared column rather than a new ALTER TABLE per type,
+    # so registering a new object type never requires a schema migration.
+    if "type_metadata" not in existing_columns:
+        conn.execute("ALTER TABLE capture_events ADD COLUMN type_metadata TEXT NOT NULL DEFAULT '{}'")
     existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
     if "nickname" not in existing_client_columns:
         conn.execute("ALTER TABLE clients ADD COLUMN nickname TEXT")
@@ -260,46 +271,68 @@ def init_db():
 def _row_to_dict(row):
     d = dict(row)
     d["tags"] = json.loads(d["tags"])
+    d["type_metadata"] = json.loads(d["type_metadata"]) if d.get("type_metadata") else {}
     return d
 
 
 def insert_upload(slug, filename, stored_filename, uploaded_by, description="", tags=None, ticket_id=None, client=None,
                    source="screenshot", file_size=None, source_modified_at=None, ocr_status=None,
-                   media_type="image", external_url=None, content_description=None, content_date=None):
+                   media_type="image", external_url=None, content_description=None, content_date=None,
+                   type_metadata=None):
     """Creates a capture_events row. filename/stored_filename are for uploaded files and can be
     None for content that lives elsewhere (media_type='youtube' + external_url, for example) —
     there's no requirement that a row correspond to an actual file on disk.
 
     media_type/external_url/content_description/content_date describe the content itself,
     separate from source/description which are about how/why the row was captured. See the
-    capture_events column comments in SCHEMA for the distinction.
+    capture_events column comments in SCHEMA for the distinction. type_metadata is a freeform
+    dict for whatever per-type properties don't fit those generic columns — see
+    core/object_types.py's MetadataField and set_type_metadata below.
     """
     conn = get_conn()
     now = time.time()
     conn.execute(
         "INSERT INTO capture_events (slug, source, client, ticket_id, timestamp, tech, description, "
         "extracted_text, artifact_link, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
-        "media_type, external_url, content_description, content_date) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "media_type, external_url, content_description, content_date, type_metadata) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (slug, source, client, ticket_id, now, uploaded_by, description,
          f"/f/{slug}", json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
          now if ocr_status == "pending" else None,
-         media_type, external_url, content_description, content_date),
+         media_type, external_url, content_description, content_date, json.dumps(type_metadata or {})),
     )
     conn.commit()
     conn.close()
 
 
 def insert_content(slug, uploaded_by, media_type, external_url=None, content_description=None, content_date=None,
-                    description="", tags=None, ticket_id=None, client=None, source="external"):
+                    description="", tags=None, ticket_id=None, client=None, source="external", type_metadata=None):
     """Thin wrapper around insert_upload for rows with no uploaded file — e.g. a YouTube video,
     where the content lives at external_url rather than in local storage. filename/stored_filename
-    are left None and OCR-related fields don't apply."""
+    are left None. ocr_status starts "pending" whenever the type is OCR-capable (see
+    core/object_types.py) — same convention as insert_upload's image path — so the background
+    OCR pass (against the type's fetched/captured thumbnail, not a local file) picks it up the
+    same way an uploaded screenshot does."""
+    from . import object_types  # local import: object_types never needs db, so no cycle, but
+    # keeping it out of the module-level imports keeps db.py's own dependency footprint (pure
+    # stdlib + sqlite3) obvious at a glance.
+    spec = object_types.get_object_type(media_type)
     insert_upload(
         slug, None, None, uploaded_by, description=description, tags=tags, ticket_id=ticket_id, client=client,
         source=source, media_type=media_type, external_url=external_url,
         content_description=content_description, content_date=content_date,
+        ocr_status="pending" if spec.ocr_capable else None,
+        type_metadata=type_metadata,
     )
+
+
+def set_type_metadata(slug, metadata):
+    """Replaces a row's type_metadata dict wholesale — callers that want to
+    merge should read get_by_slug(slug)["type_metadata"] first."""
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET type_metadata = ? WHERE slug = ?", (json.dumps(metadata or {}), slug))
+    conn.commit()
+    conn.close()
 
 
 def list_pending_ocr():

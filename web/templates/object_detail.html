@@ -26,6 +26,16 @@
           <div class="video-embed-wrap">
             <iframe src="{{ item.youtube_embed_url }}" title="{{ item.display_name }}" allowfullscreen loading="lazy"></iframe>
           </div>
+        {% elif item.is_audio_file %}
+          {# #28: audio has no visual frame to capture (thumbnail_source is
+             NONE — see core/object_types.py), so it gets its own explicit
+             branch rather than falling into the generic thumb_url one
+             below, same as the YouTube embed above needs its own branch
+             distinct from a generic CAPTURE thumbnail. #}
+          <div class="audio-preview">
+            <div class="audio-preview-icon">{{ item.icon }}</div>
+            <audio controls preload="metadata" src="{{ item.url }}"></audio>
+          </div>
         {% elif item.thumb_url %}
           {# Generic CAPTURE-sourced preview — a PDF's rendered first page
              today, a future stream/URL screenshot tomorrow (see

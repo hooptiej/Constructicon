@@ -54,13 +54,16 @@ DESKTOP_APP_BUILD_PATH = DESKTOP_APP_BUILD_DIR / "ImageRepo-Uploader.zip"
 
 def _has_thumbnail(row, spec=None):
     """Whether `row` should expose a /f/<slug>/thumb URL at all — true for
-    any uploaded file (the file itself is the source image) or any type
-    whose spec has a thumbnail strategy (see core/object_types.py), even if
-    the thumbnail hasn't actually been produced yet (get_thumbnail below
-    fetches/generates it lazily on first request). False only for types
-    with ThumbnailSource.NONE (e.g. a plain document post)."""
-    if row.get("filename"):
-        return True
+    any type whose spec has a thumbnail strategy (see core/object_types.py),
+    even if the thumbnail hasn't actually been produced yet (get_thumbnail
+    below fetches/generates it lazily on first request). False for types
+    with ThumbnailSource.NONE — a plain document post (no file at all) or,
+    since #28, an uploaded audio file (a real file, but no visual frame to
+    show as a thumbnail). Dispatches purely off the spec rather than
+    short-circuiting on "row has a filename", since that assumption (true
+    for image/pdf/stl/psd, whose uploaded-file types always have *some*
+    visual to show) no longer holds once a type can have a stored file with
+    nothing image-like to derive a thumbnail from."""
     spec = spec or object_types.get_object_type(row.get("media_type"))
     return spec.thumbnail_source != object_types.ThumbnailSource.NONE
 
@@ -175,6 +178,13 @@ def _to_object_detail(row):
         "filename": filename,
         "is_file": is_file,
         "is_image_file": is_file and Path(filename).suffix.lower() in IMAGE_SUFFIXES,
+        # #28: drives the <audio controls> mini player branch in
+        # object_detail.html. media_type-based rather than another
+        # extension-suffix check (unlike is_image_file, kept as-is above)
+        # since "audio" is registered ahead of _to_object_detail via
+        # core/object_types.py and nothing here needs to know its exact
+        # extensions.
+        "is_audio_file": is_file and media_type == "audio",
         "url": f"/f/{row['slug']}" if is_file else None,
         "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
         "external_url": row.get("external_url"),
@@ -558,6 +568,8 @@ async def api_upload(
         media_type = "stl"
     elif ext in storage.PSD_EXTENSIONS:
         media_type = "psd"
+    elif ext in storage.AUDIO_EXTENSIONS:
+        media_type = "audio"
     else:
         media_type = "image"
     spec = object_types.get_object_type(media_type)

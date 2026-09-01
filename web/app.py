@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from core import db, object_types, ocr, similarity, storage, thumbnails
+from core import backup, db, object_types, ocr, similarity, storage, thumbnails
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -372,6 +372,24 @@ def api_delete_selected(slugs: list[str] = Form(...)):
         db.delete_upload(row["slug"])
         deleted += 1
     return JSONResponse({"deleted": deleted})
+
+
+@app.post("/api/backup")
+def api_backup():
+    """Standalone backup safety net (#20) — zips the DB and every file in
+    storage/ into a timestamped archive under core.backup.BACKUP_DIR, then
+    prunes down to the most recent BACKUP_RETENTION_COUNT archives.
+
+    Deliberately its own button/endpoint, not called from /api/delete-all or
+    /api/delete: a backup that only ran as a side effect of a delete could
+    be mistaken for "already backed up" when it wasn't (see #19's history).
+    Triggered on demand only — no scheduled job here, see #20's discussion
+    for that as separate future work."""
+    try:
+        info = backup.create_backup()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
+    return JSONResponse(info)
 
 
 @app.get("/upload")

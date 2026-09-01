@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from core import backup, db, object_types, ocr, similarity, storage, thumbnails
+from core import backup, db, object_types, ocr, similarity, storage, thumbnails, youtube
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -191,6 +191,10 @@ def _to_object_detail(row):
         "youtube_embed_url": _youtube_embed_url(row.get("external_url")) if media_type == "youtube" else None,
         "content_description": row.get("content_description"),
         "content_date_display": _friendly_date(row.get("content_date")),
+        # #44: only present when oEmbed returned a channel name that isn't
+        # the site's own (core/youtube.py) — never set at all for the
+        # common case of a hooptiej-uploaded video.
+        "youtube_author_name": (row.get("type_metadata") or {}).get("youtube_author_name"),
         # See _to_public's matching comment — row["display_name"]/row["icon"]
         # (#11) are per-object overrides that win over the generic fallbacks.
         "display_name": row.get("display_name") or filename or row.get("content_description") or row["slug"],
@@ -199,6 +203,12 @@ def _to_object_detail(row):
         "tags": row["tags"],
         "ticket_id": row["ticket_id"],
         "client": row["client"],
+        # #47: current project membership — a project selector needs to
+        # show what's already attached, not just a blank picker, and (per
+        # #51's backfill) an object can now belong to a project it was
+        # never uploaded with. _to_project_option is the same slim shape
+        # the upload drawer's dropdown already uses.
+        "projects": [_to_project_option(p) for p in db.list_projects_for_post(row["slug"])],
         "uploaded_at": row["timestamp"],
         "uploaded_at_display": _friendly_datetime(row["timestamp"]),
         # Full Source string, unshortened — this is the one place it's meant
@@ -504,7 +514,14 @@ def object_detail_page(request: Request, slug: str):
     item = _to_object_detail(row)
     full_url = str(request.base_url).rstrip("/") + item["url"] if item["is_file"] else None
     full_object_url = str(request.base_url).rstrip("/") + f"/object/{slug}"
-    related = [_to_public(r) for r in db.list_related(slug)] if item["is_file"] else []
+    # #52: relations (core/db.py's add_relation/remove_relation, #16) are
+    # type-agnostic — a plain slug-to-slug link with no media_type or
+    # is_file check on the backend — so this used to gate the Related panel
+    # on item["is_file"] was a leftover from before the object-type registry
+    # existed (predating #15) that accidentally hid "Add related" for every
+    # content-only row (youtube, document posts), not just non-file types.
+    # Always computed now so every object type gets the same panel.
+    related = [_to_public(r) for r in db.list_related(slug)]
     return templates.TemplateResponse(
         request, "object_detail.html",
         {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related},
@@ -641,6 +658,18 @@ async def api_create_content(
         tag_list = []
     content_date_epoch = float(content_date) if content_date else None
     slug = storage.make_slug()
+    # #44: for a YouTube link, fetch the public oEmbed endpoint (no API key
+    # needed) to fill in a real title when the caller didn't supply one
+    # (today's manual-add UI (#25) never does) and to pick up the channel
+    # name when it isn't the site's own — see core/youtube.py's docstring
+    # for exactly what oEmbed does and doesn't provide. Best-effort: a
+    # failed fetch just means no enrichment, never a failed upload.
+    type_metadata = None
+    if media_type == "youtube" and external_url:
+        oembed_title, oembed_metadata = youtube.youtube_metadata_for_content(external_url)
+        if not content_description and oembed_title:
+            content_description = oembed_title
+        type_metadata = oembed_metadata or None
     db.insert_content(
         slug, user, media_type,
         external_url=external_url or None,
@@ -648,6 +677,7 @@ async def api_create_content(
         content_date=content_date_epoch,
         description=description, tags=tag_list,
         ticket_id=ticket_id or None, client=client or None,
+        type_metadata=type_metadata,
     )
     row = db.get_by_slug(slug)
     if spec.ocr_capable and row["ocr_status"] == "pending":
@@ -750,6 +780,38 @@ def api_add_related(request: Request, slug: str, related_slug: str = Form(...)):
 def api_remove_related(request: Request, slug: str, related_slug: str = Form(...)):
     db.remove_relation(slug, related_slug)
     return JSONResponse([_to_public(r) for r in db.list_related(slug)])
+
+
+@app.post("/api/image/{slug}/project")
+def api_add_object_to_project(request: Request, slug: str, project_id: str = Form(...)):
+    """#47: the object detail page's project editor — same membership
+    primitive as an upload-time project pick (_attach_to_project, #1), just
+    reachable after the fact instead of only at upload time. Unlike
+    _attach_to_project's silent-ignore-on-bad-id (fine for a stale value
+    riding along with an upload), a bad project_id here is a real error —
+    it's the only thing this request is trying to do."""
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if db.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    _attach_to_project(slug, project_id)
+    return JSONResponse([_to_project_option(p) for p in db.list_projects_for_post(slug)])
+
+
+@app.post("/api/image/{slug}/project/remove")
+def api_remove_object_from_project(request: Request, slug: str, project_id: str = Form(...)):
+    """Removes membership only — deliberately leaves the project's linked
+    tag (if any) alone, same as removing a manually-curated Related item
+    never untags anything either. The tag field is already separately
+    editable right above this on the detail page if the user wants it gone
+    too."""
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    project = db.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    db.remove_item_from_project(project["id"], slug)
+    return JSONResponse([_to_project_option(p) for p in db.list_projects_for_post(slug)])
 
 
 @app.get("/api/image/{slug}/similar")

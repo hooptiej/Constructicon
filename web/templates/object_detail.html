@@ -60,6 +60,7 @@
       <div class="content-meta-panel">
         {% if item.content_description %}<p class="content-meta-desc">{{ item.content_description }}</p>{% endif %}
         <div class="detail-meta">
+          {% if item.youtube_author_name %}<span>By {{ item.youtube_author_name }}</span>{% endif %}
           {% if item.content_date_display %}<span>Published {{ item.content_date_display }}</span>{% endif %}
           {% if item.external_url %}
           <a class="external-link-btn" href="{{ item.external_url }}" target="_blank" rel="noopener">
@@ -87,7 +88,11 @@
       </div>
       {% endif %}
 
-      {% if item.is_file %}
+      {# #52: relations are type-agnostic on the backend (core/db.py's
+         add_relation/remove_relation, #16) — this used to be gated on
+         item.is_file, which hid "Add related" for every content-only row
+         (youtube, document posts) with no functional reason to. Shown for
+         every object type now. #}
       <div class="related-panel">
         <div class="related-panel-header">
           <span class="related-panel-label">Related</span>
@@ -101,7 +106,6 @@
         </div>
         <div class="related-grid" id="similar-grid"></div>
       </div>
-      {% endif %}
     </div>
     <div class="detail-panel">
       <div>
@@ -144,10 +148,12 @@
           <input class="input mono" name="ticket_id" value="{{ item.ticket_id or '' }}" placeholder="e.g. 56942">
         </div>
         <div class="field" style="margin-top:15px">
-          <label>CLIENT <span class="optional">(optional)</span></label>
-          <select class="input" name="client" id="detail-client-select" data-current="{{ item.client or '' }}">
-            <option value="">Select a client...</option>
+          <label>PROJECTS <span class="optional">(optional)</span></label>
+          <div class="tag-input-box" id="project-chip-box"></div>
+          <select class="input" id="project-add-select" style="margin-top:6px">
+            <option value="">+ Add to project...</option>
           </select>
+          <input class="input mono" id="detail-new-project-input" placeholder="New project name" style="display:none;margin-top:6px">
         </div>
         <p class="error-text" id="save-error" style="display:none;margin-top:15px"></p>
         <p class="save-confirm" id="save-confirm" style="display:none;margin-top:15px">Saved.</p>
@@ -289,18 +295,113 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-async function loadClients() {
-  const res = await fetch('/api/clients');
-  const data = await res.json();
-  const select = document.getElementById('detail-client-select');
-  let html = '';
-  if (data.special.length) html += `<optgroup label="Special">${data.special.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}</optgroup>`;
-  if (data.clients.length) html += `<optgroup label="Clients">${data.clients.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}</optgroup>`;
-  if (data.test.length) html += `<optgroup label="Test data">${data.test.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}</optgroup>`;
-  select.insertAdjacentHTML('beforeend', html);
-  select.value = select.dataset.current;
+// --- Projects (#47) — replaces the old Client dropdown here too, same as
+// #1 did for the upload drawer. Unlike Client (single value, upload-time
+// only), project membership can be multiple and needs to be editable
+// after the fact, so this renders like the Tags chip box above (current
+// memberships as removable chips) plus a dropdown to add another —
+// mirroring the upload drawer's Project select, including its "+ New
+// project..." entry. Each change fires immediately against a dedicated
+// endpoint (same immediate-not-batched pattern as Related, below) rather
+// than waiting on "Save changes", since removal is a distinct action
+// (project_id) from anything the rest of that form submits.
+const projectChipBox = document.getElementById('project-chip-box');
+const projectAddSelect = document.getElementById('project-add-select');
+const newProjectInput = document.getElementById('detail-new-project-input');
+let currentProjects = {{ item.projects | tojson }};
+
+function renderProjectChips() {
+  projectChipBox.innerHTML = '';
+  if (!currentProjects.length) {
+    const note = document.createElement('span');
+    note.className = 'optional';
+    note.textContent = 'Not in any project.';
+    projectChipBox.appendChild(note);
+  }
+  currentProjects.forEach(p => {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = p.title;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '×';
+    btn.addEventListener('click', () => removeFromProject(p.id));
+    chip.appendChild(btn);
+    projectChipBox.appendChild(chip);
+  });
 }
-loadClients();
+
+async function loadProjectOptions() {
+  const res = await fetch('/api/projects');
+  const projects = await res.json();
+  projectAddSelect.querySelectorAll('option[data-project]').forEach(o => o.remove());
+  const currentIds = new Set(currentProjects.map(p => String(p.id)));
+  const html = projects
+    .filter(p => !currentIds.has(String(p.id)))
+    .map(p => `<option value="${p.id}" data-project>${escapeHtml(p.title)}</option>`).join('');
+  projectAddSelect.insertAdjacentHTML('beforeend', html + '<option value="__new__" data-project>+ New project…</option>');
+  projectAddSelect.value = '';
+}
+
+async function addToProject(projectId) {
+  const form = new FormData();
+  form.append('project_id', projectId);
+  const res = await fetch('/api/image/{{ item.slug }}/project', { method: 'POST', body: form });
+  if (res.ok) {
+    currentProjects = await res.json();
+    renderProjectChips();
+    loadProjectOptions();
+  } else {
+    const body = await res.json().catch(() => ({ detail: 'Failed to add to project' }));
+    alert(body.detail || 'Failed to add to project');
+  }
+}
+
+async function removeFromProject(projectId) {
+  const form = new FormData();
+  form.append('project_id', projectId);
+  const res = await fetch('/api/image/{{ item.slug }}/project/remove', { method: 'POST', body: form });
+  if (res.ok) {
+    currentProjects = await res.json();
+    renderProjectChips();
+    loadProjectOptions();
+  }
+}
+
+projectAddSelect.addEventListener('change', () => {
+  const val = projectAddSelect.value;
+  if (!val) return;
+  if (val === '__new__') {
+    newProjectInput.style.display = 'block';
+    newProjectInput.focus();
+    projectAddSelect.value = '';
+    return;
+  }
+  addToProject(val);
+});
+
+newProjectInput.addEventListener('keydown', async (e) => {
+  if (e.key === 'Enter' && newProjectInput.value.trim()) {
+    e.preventDefault();
+    const title = newProjectInput.value.trim();
+    try {
+      const res = await fetch('/api/projects', { method: 'POST', body: new URLSearchParams({ title }) });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: 'Failed to create project' }));
+        throw new Error(body.detail || 'Failed to create project');
+      }
+      const project = await res.json();
+      newProjectInput.style.display = 'none';
+      newProjectInput.value = '';
+      await addToProject(project.id);
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+});
+
+renderProjectChips();
+loadProjectOptions();
 
 tagAddInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && tagAddInput.value.trim()) {
@@ -360,7 +461,10 @@ document.getElementById('detail-form').addEventListener('submit', async (e) => {
   form.append('description', e.target.description.value);
   form.append('tags', JSON.stringify(tags));
   form.append('ticket_id', e.target.ticket_id.value);
-  form.append('client', e.target.client.value);
+  // #47: Client is no longer editable here (replaced by the Projects
+  // editor above) — client/GET /api/clients/sync_clients.py are left
+  // alone per #1's decision, this just stops the detail page's save form
+  // from touching that field at all.
   const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
   if (res.ok) {
     saveConfirm.style.display = 'block';
@@ -375,8 +479,10 @@ document.addEventListener('imagerepo:upload-complete', (e) => {
   if (!e.detail.failures.length) location.reload();
 });
 
-// --- Related / Similar: only meaningful for rows with a real uploaded file ---
-if (IS_FILE) {
+// --- Related / Similar: available on every object type (#52) — the
+// backend relation mechanism (core/db.py's add_relation/remove_relation,
+// #16) has never been file-type-specific; only the UI used to be.
+{
   const relatedGrid = document.getElementById('related-grid');
   let relatedItems = {{ related | tojson }};
 

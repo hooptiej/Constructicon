@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, db, object_types, ocr, storage, thumbnails
+from core import backup, db, object_types, ocr, storage, thumbnails, youtube
 
 BASE_URL = os.environ.get("IMAGEREPO_BASE_URL", "http://10.12.5.98:8000")
 
@@ -251,10 +251,19 @@ def imagerepo_add_content(media_type: str, external_url: str | None = None, cont
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
         raise ValueError(f"{spec.label} objects require a file upload — use imagerepo_upload")
     slug = storage.make_slug()
+    # #44: same oEmbed-based enrichment as web/app.py's POST /api/content —
+    # see core/youtube.py for exactly what's fetched/kept and why.
+    type_metadata = None
+    if media_type == "youtube" and external_url:
+        oembed_title, oembed_metadata = youtube.youtube_metadata_for_content(external_url)
+        if not content_description and oembed_title:
+            content_description = oembed_title
+        type_metadata = oembed_metadata or None
     db.insert_content(
         slug, uploaded_by, media_type,
         external_url=external_url, content_description=content_description,
         description=description, tags=tags, ticket_id=ticket_id, client=client,
+        type_metadata=type_metadata,
     )
     row = db.get_by_slug(slug)
     if spec.ocr_capable and row["ocr_status"] == "pending":

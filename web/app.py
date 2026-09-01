@@ -66,6 +66,8 @@ def _has_thumbnail(row, spec=None):
 
 
 def _to_public(row):
+    media_type = row.get("media_type") or "image"
+    spec = object_types.get_object_type(media_type)
     return {
         "slug": row["slug"],
         "url": f"/f/{row['slug']}",
@@ -76,6 +78,14 @@ def _to_public(row):
         # something readable to show in its place rather than the literal
         # string "null".
         "display_name": row["filename"] or row.get("content_description") or row["slug"],
+        # File-kind badge (issue #12) — driven entirely by the type's
+        # ObjectTypeSpec (core/object_types.py) so gallery cards never need
+        # an if/else on media_type; a new type registered there picks up a
+        # badge automatically.
+        "media_type": media_type,
+        "type_label": spec.label,
+        "type_icon": spec.badge_icon,
+        "type_badge": spec.badge_text,
         "description": row["description"],
         "tags": row["tags"],
         "ticket_id": row["ticket_id"],
@@ -146,6 +156,8 @@ def _to_object_detail(row):
         "slug": row["slug"],
         "media_type": media_type,
         "type_label": spec.label,
+        "type_icon": spec.badge_icon,
+        "type_badge": spec.badge_text,
         "ocr_capable": spec.ocr_capable,
         "filename": filename,
         "is_file": is_file,
@@ -221,11 +233,14 @@ def _to_content_public(row):
     """
     is_file = bool(row.get("filename"))
     media_type = row.get("media_type") or "image"
+    spec = object_types.get_object_type(media_type)
     has_thumb = _has_thumbnail(row)
     return {
         "slug": row["slug"],
         "title": row.get("content_description") or row.get("description") or row.get("filename") or row["slug"],
         "media_type": media_type,
+        "type_icon": spec.badge_icon,
+        "type_badge": spec.badge_text,
         "is_file": is_file,
         "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb and not row.get("redacted") else None,
         "link": f"/object/{row['slug']}",

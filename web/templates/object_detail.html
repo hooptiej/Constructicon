@@ -52,7 +52,7 @@
       </div>
       {% endif %}
 
-      {% if item.is_image_file %}
+      {% if item.ocr_capable %}
       <div class="ocr-panel" id="ocr-panel" style="display:none">
         <div class="ocr-panel-header">
           <span class="ocr-lamp" id="ocr-lamp"></span>
@@ -166,7 +166,7 @@
   <img class="lightbox-img" id="lightbox-img" src="" alt="">
 </div>
 <script>
-const IS_IMAGE = {{ item.is_image_file | tojson }};
+const IS_OCR_CAPABLE = {{ item.ocr_capable | tojson }};
 const IS_FILE = {{ item.is_file | tojson }};
 let ocrStatus = {{ item.ocr_status | tojson }};
 let ocrText = {{ item.extracted_text | tojson }};
@@ -186,7 +186,7 @@ const ocrDisclosure = document.getElementById('ocr-disclosure');
 const ocrTextContent = document.getElementById('ocr-text-content');
 
 function renderOcrPanel() {
-  if (!IS_IMAGE || !ocrPanel) return;
+  if (!IS_OCR_CAPABLE || !ocrPanel) return;
   ocrPanel.style.display = 'flex';
   const meta = OCR_LAMP_META[ocrStatus || 'none'];
   ocrLamp.style.background = meta.color;

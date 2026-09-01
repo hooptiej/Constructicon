@@ -8,7 +8,6 @@ network perimeter is the security boundary, not a login gate.
 import asyncio
 import io
 import json
-import re
 import sys
 import threading
 import zipfile
@@ -22,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from core import db, ocr, similarity, storage
+from core import db, object_types, ocr, similarity, storage, thumbnails
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -51,6 +50,19 @@ DESKTOP_APP_DIR = Path(__file__).resolve().parent.parent / "desktop_app"
 # there's no versioning, just the current build.
 DESKTOP_APP_BUILD_DIR = Path(__file__).resolve().parent.parent / "desktop_app_build"
 DESKTOP_APP_BUILD_PATH = DESKTOP_APP_BUILD_DIR / "ImageRepo-Uploader.zip"
+
+
+def _has_thumbnail(row, spec=None):
+    """Whether `row` should expose a /f/<slug>/thumb URL at all — true for
+    any uploaded file (the file itself is the source image) or any type
+    whose spec has a thumbnail strategy (see core/object_types.py), even if
+    the thumbnail hasn't actually been produced yet (get_thumbnail below
+    fetches/generates it lazily on first request). False only for types
+    with ThumbnailSource.NONE (e.g. a plain document post)."""
+    if row.get("filename"):
+        return True
+    spec = spec or object_types.get_object_type(row.get("media_type"))
+    return spec.thumbnail_source != object_types.ThumbnailSource.NONE
 
 
 def _to_public(row):
@@ -85,19 +97,16 @@ def _to_public(row):
     }
 
 
-YOUTUBE_ID_RE = re.compile(r'(?:v=|/embed/|youtu\.be/)([A-Za-z0-9_-]{6,})')
-
-
 def _youtube_embed_url(external_url):
-    """Extracts the video ID from any of the URL shapes we might have stored
-    (watch?v=, youtu.be/, or an already-embed URL) and builds a canonical
-    embed URL. Returns None if external_url doesn't look like a YouTube link
-    at all — the template falls back to a plain external-link CTA in that
-    case rather than rendering a broken iframe."""
-    if not external_url:
-        return None
-    m = YOUTUBE_ID_RE.search(external_url)
-    return f"https://www.youtube.com/embed/{m.group(1)}" if m else None
+    """Builds a canonical embed URL from whatever YouTube URL shape is
+    stored in external_url. Returns None if it doesn't look like a YouTube
+    link at all — the template falls back to a plain external-link CTA in
+    that case rather than rendering a broken iframe. Video-ID extraction is
+    centralized in object_types.extract_youtube_id so this and the static
+    thumbnail URL (see core/object_types.py's youtube_thumbnail_url) can't
+    drift apart."""
+    video_id = object_types.extract_youtube_id(external_url)
+    return f"https://www.youtube.com/embed/{video_id}" if video_id else None
 
 
 def _friendly_date(epoch):
@@ -131,14 +140,18 @@ def _to_object_detail(row):
     filename = row.get("filename")
     is_file = bool(filename)
     media_type = row.get("media_type") or "image"
+    spec = object_types.get_object_type(media_type)
+    has_thumb = _has_thumbnail(row, spec)
     return {
         "slug": row["slug"],
         "media_type": media_type,
+        "type_label": spec.label,
+        "ocr_capable": spec.ocr_capable,
         "filename": filename,
         "is_file": is_file,
         "is_image_file": is_file and Path(filename).suffix.lower() in IMAGE_SUFFIXES,
         "url": f"/f/{row['slug']}" if is_file else None,
-        "thumb_url": f"/f/{row['slug']}/thumb" if is_file else None,
+        "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
         "external_url": row.get("external_url"),
         "youtube_embed_url": _youtube_embed_url(row.get("external_url")) if media_type == "youtube" else None,
         "content_description": row.get("content_description"),
@@ -173,13 +186,13 @@ def _flatten_tags(nodes):
 def _project_cover_url(cover_slug):
     """cover_slug references a capture_events row (see projects.cover_slug
     in core/db.py) — reuse the same thumb route the gallery uses for images.
-    Rows with no local file (a youtube/document post used as a cover) or a
-    missing/deleted slug fall back to None so the template can render a
-    placeholder instead of a broken image."""
+    A row whose type has no thumbnail concept (e.g. a plain document post),
+    or a missing/deleted/redacted slug, falls back to None so the template
+    can render a placeholder instead of a broken image."""
     if not cover_slug:
         return None
     row = db.get_by_slug(cover_slug)
-    if not row or not row.get("filename") or row.get("redacted"):
+    if not row or row.get("redacted") or not _has_thumbnail(row):
         return None
     return f"/f/{row['slug']}/thumb"
 
@@ -207,12 +220,14 @@ def _to_content_public(row):
     cards always link locally instead of bouncing straight to external_url.
     """
     is_file = bool(row.get("filename"))
+    media_type = row.get("media_type") or "image"
+    has_thumb = _has_thumbnail(row)
     return {
         "slug": row["slug"],
         "title": row.get("content_description") or row.get("description") or row.get("filename") or row["slug"],
-        "media_type": row.get("media_type") or "image",
+        "media_type": media_type,
         "is_file": is_file,
-        "thumb_url": f"/f/{row['slug']}/thumb" if is_file and not row.get("redacted") else None,
+        "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb and not row.get("redacted") else None,
         "link": f"/object/{row['slug']}",
         "external": not is_file,
         "tags": row["tags"],
@@ -452,6 +467,54 @@ async def api_upload(
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 
+@app.post("/api/content")
+async def api_create_content(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    media_type: str = Form(...),
+    external_url: str = Form(""),
+    content_description: str = Form(""),
+    content_date: str = Form(""),
+    description: str = Form(""),
+    tags: str = Form("[]"),
+    ticket_id: str = Form(""),
+    client: str = Form(""),
+):
+    """Creates a capture_events row for content with no uploaded file — a
+    YouTube link today, a stream/URL capture once a future issue wires up
+    its capture_fn (see core/object_types.py). Distinct from /api/upload,
+    which is for actual uploaded files and stays UPLOADED_FILE-only.
+
+    Mirrors /api/upload's OCR handling: db.insert_content already stamps
+    ocr_status="pending" for any OCR-capable type (see core/db.py), and this
+    schedules the same background ocr.run_ocr — which fetches/generates the
+    type's thumbnail before running OCR against it (see core/ocr.py).
+    """
+    spec = object_types.get_object_type(media_type)
+    if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
+        raise HTTPException(status_code=400, detail=f"{spec.label} objects require a file upload — use /api/upload")
+    is_desktop_app = request.headers.get(DESKTOP_APP_CLIENT_HEADER) == DESKTOP_APP_CLIENT_VALUE
+    user = db.SOURCE_AUTOMATED_UPLOAD if is_desktop_app else db.SOURCE_MANUAL_UPLOAD
+    try:
+        tag_list = json.loads(tags) if tags else []
+    except json.JSONDecodeError:
+        tag_list = []
+    content_date_epoch = float(content_date) if content_date else None
+    slug = storage.make_slug()
+    db.insert_content(
+        slug, user, media_type,
+        external_url=external_url or None,
+        content_description=content_description or None,
+        content_date=content_date_epoch,
+        description=description, tags=tag_list,
+        ticket_id=ticket_id or None, client=client or None,
+    )
+    row = db.get_by_slug(slug)
+    if spec.ocr_capable and row["ocr_status"] == "pending":
+        background_tasks.add_task(ocr.run_ocr, slug)
+    return JSONResponse(_to_public(row))
+
+
 @app.get("/api/image/{slug}")
 def api_get_image(request: Request, slug: str):
     row = db.get_by_slug(slug)
@@ -469,10 +532,9 @@ def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks
         raise HTTPException(status_code=404, detail="not found")
     if row["redacted"]:
         raise HTTPException(status_code=400, detail="File was redacted — there's no image left to OCR")
-    if not row.get("filename"):
-        raise HTTPException(status_code=400, detail="This row has no uploaded file — OCR isn't available for it")
-    if Path(row["filename"]).suffix.lower() not in storage.IMAGE_EXTENSIONS:
-        raise HTTPException(status_code=400, detail=f"OCR isn't available for {Path(row['filename']).suffix} files")
+    spec = object_types.get_object_type(row.get("media_type"))
+    if not spec.ocr_capable:
+        raise HTTPException(status_code=400, detail=f"OCR isn't available for {spec.label} content")
     db.set_ocr_status(slug, "pending")
     background_tasks.add_task(ocr.run_ocr, slug)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
@@ -675,6 +737,13 @@ def get_thumbnail(slug: str):
         raise HTTPException(status_code=404, detail="not found")
     if row["redacted"]:
         raise HTTPException(status_code=410, detail="file was redacted (sensitive content)")
+    if not storage.thumb_path_for(slug).exists() and not row.get("stored_filename"):
+        # Content-only row (youtube and friends — see core/db.py's
+        # insert_content) whose thumbnail hasn't been fetched/captured yet,
+        # e.g. the background OCR pass hasn't run or its fetch failed
+        # transiently. Try once, synchronously, so a first page load isn't
+        # stuck with a permanently broken thumbnail just because of timing.
+        thumbnails.ensure_thumbnail(row)
     path = storage.thumb_path_or_original(slug, row["stored_filename"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="file missing on disk")

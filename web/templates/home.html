@@ -37,6 +37,12 @@
         </div>
       </div>
 
+      <div class="selection-bar" id="selection-bar">
+        <span class="selection-count" id="selection-count"></span>
+        <button type="button" class="ocr-retry-btn" id="clear-selection-btn">Clear</button>
+        <button type="button" class="btn-danger" id="delete-selected-btn">Delete selected</button>
+      </div>
+
       <div id="sections" class="home-gallery-sections"></div>
       <p class="empty-state" id="empty-state" style="display:none">No uploads match your search.</p>
     </div>
@@ -131,6 +137,19 @@ const FILE_ICON = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none">
   <path d="M3 16L8.5 11.5L13 15L16.5 12L21 16" stroke="#3F4530" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
+const selectedSlugs = new Set();
+function toggleCardSelect(cb) {
+  if (cb.checked) selectedSlugs.add(cb.dataset.slug);
+  else selectedSlugs.delete(cb.dataset.slug);
+  updateSelectionBar();
+}
+function updateSelectionBar() {
+  const bar = document.getElementById('selection-bar');
+  const count = selectedSlugs.size;
+  bar.style.display = count ? 'flex' : 'none';
+  document.getElementById('selection-count').textContent = `${count} selected`;
+}
+
 function cardHtml(item) {
   const isImage = imgExt.test(item.filename);
   return `
@@ -138,6 +157,8 @@ function cardHtml(item) {
       <div class="gallery-thumb${item.redacted ? ' redacted-thumb' : ''}">
         ${item.redacted ? LOCK_ICON : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON)}
         ${item.type_icon ? `<span class="type-badge-corner" title="${escapeHtml(item.type_label || item.type_badge || '')}">${item.type_icon}</span>` : ''}
+        <input type="checkbox" class="card-select" data-slug="${item.slug}" title="Select for deletion"
+          onclick="event.stopPropagation()" onchange="toggleCardSelect(this)" ${selectedSlugs.has(item.slug) ? 'checked' : ''}>
       </div>
       <div class="gallery-body">
         <div>
@@ -239,6 +260,29 @@ document.getElementById('search-input').addEventListener('input', () => {
 document.addEventListener('imagerepo:upload-complete', () => {
   load();
   loadRecent();
+});
+
+document.getElementById('clear-selection-btn').addEventListener('click', () => {
+  selectedSlugs.clear();
+  document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);
+  updateSelectionBar();
+});
+
+document.getElementById('delete-selected-btn').addEventListener('click', async () => {
+  const slugs = [...selectedSlugs];
+  if (!slugs.length) return;
+  if (!confirm(`Delete ${slugs.length} selected item${slugs.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+  const fd = new FormData();
+  slugs.forEach(s => fd.append('slugs', s));
+  const res = await fetch('/api/delete', { method: 'POST', body: fd });
+  if (res.ok) {
+    selectedSlugs.clear();
+    updateSelectionBar();
+    load();
+    loadRecent();
+  } else {
+    alert('Delete failed.');
+  }
 });
 
 load();

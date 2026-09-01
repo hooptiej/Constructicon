@@ -228,6 +228,18 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   background: rgba(20,23,15,0.72); border: 1px solid rgba(226,214,150,0.14);
   font-size: 12px; line-height: 1; cursor: default;
 }
+/* Selective delete (#19) — checkbox lives in the corner opposite the
+   type badge above, so the two never collide on the same tile. */
+.card-select {
+  position: absolute; top: 6px; right: 6px; z-index: 1;
+  width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: var(--accent);
+}
+.selection-bar {
+  display: none; align-items: center; gap: 12px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
+}
+.selection-bar .selection-count { font-size: 13px; color: var(--text-2); flex: 1; }
+.selection-bar .btn-danger { width: auto; padding: 8px 14px; }
 .type-badge {
   display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px;
   font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 500;

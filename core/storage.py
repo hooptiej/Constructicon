@@ -17,6 +17,7 @@ STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+PDF_EXTENSIONS = {".pdf"}
 MAX_BYTES = 25 * 1024 * 1024
 THUMB_MAX_DIM = 400
 THUMB_BG = (20, 23, 15)  # matches the app's dark page background, for flattened transparency

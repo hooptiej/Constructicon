@@ -26,6 +26,8 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+from . import pdf as _pdf
+
 
 class ThumbnailSource(Enum):
     """How a type's representative thumbnail image is obtained."""
@@ -64,6 +66,15 @@ class ObjectTypeSpec:
     # that as "no thumbnail available" rather than an error, so registering
     # a CAPTURE-sourced type ahead of its capture routine existing is safe.
     capture_fn: object = None
+    # (row: dict) -> extracted text str, or None/"" if this row has no usable
+    # embedded text layer. core/ocr.py tries this FIRST, before ever running
+    # OCR — a text-layer PDF (issue #13) is the first type to use this, but
+    # it's generic: any future type with its own text layer (e.g. a .docx)
+    # registers one here instead of ocr.py growing a per-type branch. Only
+    # meaningful when ocr_capable=True; leave None for types that have no
+    # text layer to try (an uploaded screenshot goes straight to OCR, same
+    # as always).
+    text_extract_fn: object = None
     # Issue #12: what the "file kind" badge shown on gallery tiles and the
     # object detail page looks like for this type. badge_icon is a single
     # glyph/emoji for the compact tile-corner badge; badge_text is a short
@@ -119,6 +130,16 @@ OBJECT_TYPES = {
         ocr_capable=True,
         badge_icon="▶️",
         badge_text="YOUTUBE",
+    ),
+    "pdf": ObjectTypeSpec(
+        key="pdf",
+        label="PDF document",
+        thumbnail_source=ThumbnailSource.CAPTURE,
+        ocr_capable=True,
+        capture_fn=_pdf.capture_thumbnail,
+        text_extract_fn=_pdf.extract_text_for_row,
+        badge_icon="\U0001F4C4",
+        badge_text="PDF",
     ),
     "document": ObjectTypeSpec(
         key="document",

@@ -2,21 +2,57 @@
 real content on hooptiej.github.io (the live hooptiej.com static site).
 
 This is a ONE-SHOT data migration, not a sync job. It's meant to run exactly
-once against a fresh/empty Constructicon DB (a clone of the site's HTML is
-the source of truth; nothing here reaches out to the network). It does not
-try to diff against a previously-migrated DB or handle partial re-runs
-gracefully — capture_events.slug is UNIQUE, so re-running it against a DB it
-already populated will fail loudly on a slug collision rather than silently
-duplicating rows. If you need to re-run it, start from a fresh DB.
+once against a fresh/empty Constructicon instance (a clone of the site's
+HTML is the source of truth; the only network traffic this script makes is
+to the Constructicon instance itself, given via --base-url — it never
+reaches out to hooptiej.com or anywhere else).
 
-Deliberately out of scope (see Constructicon's README / Phase 4 notes):
+Issue #21: content rows (capture_events) are now created by POSTing to the
+target instance's own POST /api/content — the same endpoint the upload
+drawer's "add a link" flow and any other real caller use — instead of
+calling core.db.insert_content directly in-process. That matters because
+/api/content is what actually schedules the post-#15 object-type dispatch
+(core/object_types.py): it looks up the media_type's ObjectTypeSpec,
+schedules background_tasks.add_task(ocr.run_ocr, ...) for anything
+ocr_capable (which fetches/generates the type's thumbnail as a side effect
+of preparing an OCR source — see core/ocr.py), and schedules a capture-only
+thumbnail job for a CAPTURE-sourced type that isn't OCR-capable. Calling
+core.db.insert_content directly skips all of that scheduling — the row
+would sit at ocr_status='pending' with no thumbnail until something else
+(an app restart's pending-OCR self-heal, or the 10-minute stale-OCR
+watchdog — see web/app.py) happened to notice it. Going through the real
+endpoint means thumbnails/OCR run the same way they would for anything a
+human actually clicked "add" on.
+
+The `projects`/`project_items` tables and blog_tags/post_tags tag tree have
+no HTTP equivalent (no web route creates/attaches a tag) and are pure
+metadata bookkeeping with no thumbnail/OCR/dispatch behavior riding on
+them, so those two calls (db.get_or_create_tag / db.attach_tags) still go
+straight to the database — the same database file the target instance
+itself reads and writes, so run this against the SAME instance/DB pair
+--base-url points at (see Usage below).
+
+Safety-semantics note (changed by the #21 rework): the old direct-db-write
+version relied on deterministic slugs (a blog post's own filename stem,
+"yt-<video id>") plus capture_events.slug's UNIQUE constraint to fail
+loudly on a re-run against an already-populated DB. POST /api/content lets
+the server mint each row's slug (core/storage.make_slug — a random token),
+so a second run no longer collides — it silently creates a full second copy
+of every row instead. The "one-shot against a fresh DB" contract is
+unchanged; only the failure mode if that contract is violated is (loud
+error -> silent duplication). Still no in-script protection against a
+partial re-run; start from a fresh DB/instance if something goes wrong
+partway through.
+
+Deliberately out of scope (see Constructicon's README / Phase 4 notes, and
+issue #21's own guidance not to re-litigate #10's project groupings here):
   - The `projects` / `project_items` tables are NOT touched. There's an
     unresolved naming/design question between those curated-collection
     tables and this script's blog_tags tag tree (the README's planned
     "Projects" nav page is actually the auto-generated tag-tree table of
     contents, a different thing from the `projects` tables). Until the
     owner decides how the two relate, this script only ever writes to
-    capture_events / blog_tags / post_tags.
+    capture_events (via the API) / blog_tags / post_tags (direct db calls).
   - No web routes or templates. No auth. No schema changes.
 
 What it does:
@@ -24,8 +60,7 @@ What it does:
      posts (title, date, excerpt), and each post's own HTML file to tell
      whether it's a plain written post (media_type='document') or a post
      that's really a wrapper around an embedded YouTube video
-     (media_type='youtube') -- inserted via db.insert_upload /
-     db.insert_content.
+     (media_type='youtube') -- created via POST /api/content.
   2. Reads projects/index.html for the five top-level categories (title +
      description) and creates one root blog_tag per category via
      db.get_or_create_tag.
@@ -48,12 +83,27 @@ What it does:
      sanity-check the counts against the site.
 
 Usage:
-    python scripts/backfill_from_hooptiej_site.py /path/to/hooptiej-site-clone
+    python scripts/backfill_from_hooptiej_site.py /path/to/hooptiej-site-clone \\
+        --base-url http://localhost:8000
+
+    --base-url must point at the SAME running Constructicon instance whose
+    database this process can also see at core.db.DB_PATH (the default,
+    repo-relative imagerepo.db) — e.g. run this from inside the app's own
+    container (`docker exec <container> python3 scripts/backfill_from_hooptiej_site.py ...
+    --base-url http://localhost:80`, matching whatever port/host the app's
+    own `uvicorn` command binds), not from an unrelated machine pointed at
+    the instance over the network, since the tag-tree calls bypass HTTP
+    entirely and write to that file directly.
 """
 
+import argparse
 import html
+import json
 import re
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from calendar import timegm
 from datetime import datetime
 from pathlib import Path
@@ -107,16 +157,44 @@ def parse_date(text):
     return timegm(dt.timetuple())
 
 
-def video_slug(video_id):
-    return f"yt-{video_id}"
-
-
 def read(path):
     return path.read_text(encoding="utf-8")
 
 
+def create_content_row(base_url, **fields):
+    """POSTs to the target instance's real POST /api/content — see this
+    module's docstring for why that (not core.db.insert_content) is what
+    actually gets thumbnail/OCR dispatch scheduled. Returns the created
+    row's public JSON (as returned by web/app.py's _to_public), including
+    the server-minted `slug` callers need for any follow-up db.attach_tags
+    call. None-valued fields are dropped rather than sent as the literal
+    string "None", relying on api_create_content's own Form(...) defaults.
+    """
+    payload = {k: v for k, v in fields.items() if v is not None}
+    data = urllib.parse.urlencode(payload).encode("utf-8")
+    url = f"{base_url.rstrip('/')}/api/content"
+    req = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"POST {url} failed ({e.code}): {body}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Couldn't reach {url} ({e.reason}) — is the target instance running and --base-url correct?"
+        ) from e
+
+
 def parse_blog_index(site_dir):
-    """Returns an ordered list of dicts: slug, title, date_epoch, excerpt, href."""
+    """Returns an ordered list of dicts: slug, title, date_epoch, excerpt, href.
+    `slug` here is only this script's own logical key for wiring up tags
+    later (see blog_slug_to_real_slug in main()) -- it is NOT the slug the
+    created capture_events row ends up with, which the server mints fresh
+    per create_content_row's docstring."""
     text = read(site_dir / "blog" / "index.html")
     posts = []
     for m in BLOG_LI_RE.finditer(text):
@@ -132,34 +210,35 @@ def parse_blog_index(site_dir):
     return posts
 
 
-def classify_and_insert_post(site_dir, post):
+def classify_and_insert_post(site_dir, post, base_url):
     """Reads the post's own HTML file to decide document vs youtube, then
-    inserts the capture_events row. Returns 'document' or 'youtube'."""
+    creates the capture_events row via POST /api/content. Returns
+    (kind, real_slug) where kind is 'document' or 'youtube' and real_slug is
+    the slug the server actually assigned the new row."""
     post_path = site_dir / "blog" / post["href"]
     post_html = read(post_path)
+    content_date = str(post["date_epoch"]) if post["date_epoch"] is not None else None
     iframe_match = IFRAME_RE.search(post_html)
     if iframe_match:
         video_id = iframe_match.group(1)
-        db.insert_content(
-            post["slug"],
-            UPLOADED_BY,
+        row = create_content_row(
+            base_url,
             media_type="youtube",
             external_url=f"https://www.youtube.com/watch?v={video_id}",
             content_description=post["excerpt"],
-            content_date=post["date_epoch"],
+            content_date=content_date,
             description=CAPTURE_NOTE,
         )
-        return "youtube"
-    db.insert_content(
-        post["slug"],
-        UPLOADED_BY,
+        return "youtube", row["slug"]
+    row = create_content_row(
+        base_url,
         media_type="document",
         external_url=f"{SITE_ROOT}/blog/{post['href']}",
         content_description=post["excerpt"],
-        content_date=post["date_epoch"],
+        content_date=content_date,
         description=CAPTURE_NOTE,
     )
-    return "document"
+    return "document", row["slug"]
 
 
 def parse_category_title(site_dir, filename):
@@ -168,7 +247,8 @@ def parse_category_title(site_dir, filename):
     return clean(m.group(1)) if m else filename
 
 
-def process_category_page(site_dir, filename, category_tag_id, blog_slugs, created_video_slugs, stats):
+def process_category_page(site_dir, filename, category_tag_id, blog_slug_to_real_slug,
+                           video_id_to_real_slug, stats, base_url):
     text = read(site_dir / "projects" / filename)
     for section_match in SECTION_RE.finditer(text):
         section = section_match.group(1)
@@ -184,21 +264,18 @@ def process_category_page(site_dir, filename, category_tag_id, blog_slugs, creat
         iframe_match = IFRAME_RE.search(section)
         if iframe_match:
             video_id, title = iframe_match.groups()
-            slug = video_slug(video_id)
-            if slug not in created_video_slugs:
+            if video_id not in video_id_to_real_slug:
                 excerpt_match = EXCERPT_RE.search(section)
-                db.insert_content(
-                    slug,
-                    UPLOADED_BY,
+                row = create_content_row(
+                    base_url,
                     media_type="youtube",
                     external_url=f"https://www.youtube.com/watch?v={video_id}",
                     content_description=clean(excerpt_match.group(1)) if excerpt_match else None,
-                    content_date=None,
                     description=CAPTURE_NOTE,
                 )
-                created_video_slugs.add(slug)
+                video_id_to_real_slug[video_id] = row["slug"]
                 stats["videos_created"] += 1
-            db.attach_tags(slug, [tag_id])
+            db.attach_tags(video_id_to_real_slug[video_id], [tag_id])
             stats["tag_attachments"] += 1
 
         # Every <li> in the section -- either a link back to a blog post
@@ -212,35 +289,38 @@ def process_category_page(site_dir, filename, category_tag_id, blog_slugs, creat
             watch_match = WATCH_ID_RE.search(href)
             if watch_match:
                 video_id = watch_match.group(1)
-                slug = video_slug(video_id)
-                if slug not in created_video_slugs:
-                    db.insert_content(
-                        slug,
-                        UPLOADED_BY,
+                if video_id not in video_id_to_real_slug:
+                    row = create_content_row(
+                        base_url,
                         media_type="youtube",
                         external_url=f"https://www.youtube.com/watch?v={video_id}",
-                        content_description=None,
-                        content_date=None,
                         description=CAPTURE_NOTE,
                     )
-                    created_video_slugs.add(slug)
+                    video_id_to_real_slug[video_id] = row["slug"]
                     stats["videos_created"] += 1
-                db.attach_tags(slug, [tag_id])
+                db.attach_tags(video_id_to_real_slug[video_id], [tag_id])
                 stats["tag_attachments"] += 1
             elif "../blog/" in href:
                 post_slug = Path(href).stem
-                if post_slug in blog_slugs:
-                    db.attach_tags(post_slug, [tag_id])
+                if post_slug in blog_slug_to_real_slug:
+                    db.attach_tags(blog_slug_to_real_slug[post_slug], [tag_id])
                     stats["tag_attachments"] += 1
             # else: a plain external reference link (Thingiverse, the raw
             # YouTube channel URL, etc.) -- not archived content, skip.
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: python {Path(__file__).name} /path/to/hooptiej-site-clone")
-        sys.exit(1)
-    site_dir = Path(sys.argv[1]).resolve()
+    parser = argparse.ArgumentParser(
+        description="Backfill Constructicon from a local hooptiej.github.io site clone."
+    )
+    parser.add_argument("site_dir", help="Path to a local clone of hooptiej.github.io")
+    parser.add_argument(
+        "--base-url", required=True,
+        help="Base URL of the running Constructicon instance to POST /api/content against "
+             "(must share a database with this process — see module docstring)",
+    )
+    args = parser.parse_args()
+    site_dir = Path(args.site_dir).resolve()
     if not (site_dir / "blog" / "index.html").exists():
         print(f"Doesn't look like a hooptiej.github.io clone: {site_dir}")
         sys.exit(1)
@@ -251,11 +331,11 @@ def main():
 
     # --- Blog posts ---
     posts = parse_blog_index(site_dir)
-    blog_slugs = set()
+    blog_slug_to_real_slug = {}
     doc_count = video_from_blog_count = 0
     for post in posts:
-        kind = classify_and_insert_post(site_dir, post)
-        blog_slugs.add(post["slug"])
+        kind, real_slug = classify_and_insert_post(site_dir, post, args.base_url)
+        blog_slug_to_real_slug[post["slug"]] = real_slug
         if kind == "document":
             doc_count += 1
         else:
@@ -269,10 +349,11 @@ def main():
         category_tag_ids[filename] = tag["id"]
 
     # --- Per-category sub-tags, video rows, and tagging ---
-    created_video_slugs = set()
+    video_id_to_real_slug = {}
     for filename in CATEGORY_FILES:
         process_category_page(
-            site_dir, filename, category_tag_ids[filename], blog_slugs, created_video_slugs, stats
+            site_dir, filename, category_tag_ids[filename], blog_slug_to_real_slug,
+            video_id_to_real_slug, stats, args.base_url,
         )
 
     total_tags = len(category_tag_ids) + len(stats["subtags_created"])
@@ -285,7 +366,7 @@ def main():
     print(f"  Standalone videos inserted: {stats['videos_created']}")
     print(f"  Total capture_events rows:  {len(posts) + stats['videos_created']}")
     print(f"  Tag attachments made:    {stats['tag_attachments']}")
-    print("  projects / project_items: left untouched (owner decision pending)")
+    print("  projects / project_items: left untouched (owner decision pending, see issue #10)")
     print("=" * 60)
 
 

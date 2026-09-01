@@ -344,6 +344,12 @@ def home_page(request: Request, tag: str = ""):
     if selected_tag:
         member_slugs = {r["slug"] for r in db.list_posts_for_tag(selected_tag["id"], limit=10000)}
         projects = [p for p in projects if _project_has_tag(p, member_slugs)]
+    # Owner name/initials for the combined gallery+upload pop-out's tab
+    # (#17) — SOURCE_GROUPS[0] is the site's single-owner display label
+    # (e.g. "Hooptie J (me)"); strip the "(me)" qualifier for the tab's
+    # name text and derive initials from what's left ("Hooptie J" -> "HJ").
+    _owner_label = db.SOURCE_GROUPS[0].split(" (")[0]
+    _owner_initials = "".join(w[0] for w in _owner_label.split()[:2]).upper()
     return templates.TemplateResponse(
         request, "home.html",
         {
@@ -351,6 +357,8 @@ def home_page(request: Request, tag: str = ""):
             "top_tags": tag_tree,
             "selected_tag_slug": tag or None,
             "projects": [_to_project_card(p) for p in projects],
+            "owner_name": _owner_label,
+            "owner_initials": _owner_initials,
         },
     )
 

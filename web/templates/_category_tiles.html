@@ -1,0 +1,13 @@
+<!-- Category (top-level tag) chip row, extracted out of home.html for #17
+     Part B alongside _project_tile.html — the other half of "projects and
+     category tiles" the issue asks to widgetize. Expects `top_tags` and
+     `selected_tag_slug` in scope (passed through automatically by Jinja's
+     include context-sharing, same as _project_tile.html). -->
+{% if top_tags %}
+<div class="tag-chip-row">
+  <a class="tag-chip{% if not selected_tag_slug %} active{% endif %}" href="/">All</a>
+  {% for t in top_tags %}
+  <a class="tag-chip{% if selected_tag_slug == t.slug %} active{% endif %}" href="/?tag={{ t.slug }}">{{ t.name }}</a>
+  {% endfor %}
+</div>
+{% endif %}

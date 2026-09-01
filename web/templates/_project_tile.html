@@ -1,0 +1,24 @@
+<!-- One project card, extracted out of home.html for #17 Part B: the home
+     page's main area is now laid out as a row of self-contained "widgets"
+     (see _category_tiles.html and home.html's .home-widgets wrapper), and a
+     project card is the unit that gets repeated/reordered inside the
+     "projects" widget. Expects `p` (a _to_project_card() dict from
+     web/app.py) in scope — included from a for-loop over projects in
+     home.html, so Jinja's default context-sharing behavior on include
+     passes it through with no explicit "with" needed. -->
+<a class="project-card" href="/project/{{ p.slug }}">
+  <div class="project-cover">
+    {% if p.cover_url %}
+      <img src="{{ p.cover_url }}" loading="lazy" alt="">
+    {% else %}
+      <div class="project-cover-placeholder"></div>
+    {% endif %}
+  </div>
+  <div class="project-body">
+    <div class="project-title">{{ p.title }}</div>
+    {% if p.description %}<div class="project-desc">{{ p.description }}</div>{% endif %}
+    <div class="project-meta-row">
+      <span class="project-status-pill{% if p.status == 'archived' %} archived{% endif %}">{{ p.status }}</span>
+    </div>
+  </div>
+</a>

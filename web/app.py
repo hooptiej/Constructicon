@@ -199,6 +199,12 @@ def _to_object_detail(row):
         "tags": row["tags"],
         "ticket_id": row["ticket_id"],
         "client": row["client"],
+        # #47: current project membership — a project selector needs to
+        # show what's already attached, not just a blank picker, and (per
+        # #51's backfill) an object can now belong to a project it was
+        # never uploaded with. _to_project_option is the same slim shape
+        # the upload drawer's dropdown already uses.
+        "projects": [_to_project_option(p) for p in db.list_projects_for_post(row["slug"])],
         "uploaded_at": row["timestamp"],
         "uploaded_at_display": _friendly_datetime(row["timestamp"]),
         # Full Source string, unshortened — this is the one place it's meant
@@ -504,7 +510,14 @@ def object_detail_page(request: Request, slug: str):
     item = _to_object_detail(row)
     full_url = str(request.base_url).rstrip("/") + item["url"] if item["is_file"] else None
     full_object_url = str(request.base_url).rstrip("/") + f"/object/{slug}"
-    related = [_to_public(r) for r in db.list_related(slug)] if item["is_file"] else []
+    # #52: relations (core/db.py's add_relation/remove_relation, #16) are
+    # type-agnostic — a plain slug-to-slug link with no media_type or
+    # is_file check on the backend — so this used to gate the Related panel
+    # on item["is_file"] was a leftover from before the object-type registry
+    # existed (predating #15) that accidentally hid "Add related" for every
+    # content-only row (youtube, document posts), not just non-file types.
+    # Always computed now so every object type gets the same panel.
+    related = [_to_public(r) for r in db.list_related(slug)]
     return templates.TemplateResponse(
         request, "object_detail.html",
         {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related},
@@ -750,6 +763,38 @@ def api_add_related(request: Request, slug: str, related_slug: str = Form(...)):
 def api_remove_related(request: Request, slug: str, related_slug: str = Form(...)):
     db.remove_relation(slug, related_slug)
     return JSONResponse([_to_public(r) for r in db.list_related(slug)])
+
+
+@app.post("/api/image/{slug}/project")
+def api_add_object_to_project(request: Request, slug: str, project_id: str = Form(...)):
+    """#47: the object detail page's project editor — same membership
+    primitive as an upload-time project pick (_attach_to_project, #1), just
+    reachable after the fact instead of only at upload time. Unlike
+    _attach_to_project's silent-ignore-on-bad-id (fine for a stale value
+    riding along with an upload), a bad project_id here is a real error —
+    it's the only thing this request is trying to do."""
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if db.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    _attach_to_project(slug, project_id)
+    return JSONResponse([_to_project_option(p) for p in db.list_projects_for_post(slug)])
+
+
+@app.post("/api/image/{slug}/project/remove")
+def api_remove_object_from_project(request: Request, slug: str, project_id: str = Form(...)):
+    """Removes membership only — deliberately leaves the project's linked
+    tag (if any) alone, same as removing a manually-curated Related item
+    never untags anything either. The tag field is already separately
+    editable right above this on the detail page if the user wants it gone
+    too."""
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    project = db.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    db.remove_item_from_project(project["id"], slug)
+    return JSONResponse([_to_project_option(p) for p in db.list_projects_for_post(slug)])
 
 
 @app.get("/api/image/{slug}/similar")

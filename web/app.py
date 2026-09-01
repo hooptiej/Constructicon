@@ -539,6 +539,8 @@ async def api_upload(
         media_type = "pdf"
     elif ext in storage.STL_EXTENSIONS:
         media_type = "stl"
+    elif ext in storage.PSD_EXTENSIONS:
+        media_type = "psd"
     else:
         media_type = "image"
     spec = object_types.get_object_type(media_type)

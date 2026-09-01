@@ -974,3 +974,30 @@ def list_projects_for_post(post_slug):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def list_unfiled_items(limit=10000):
+    """capture_events rows with no project_items row at all — "unfiled"
+    uploads (#41). #17 moved the raw upload gallery into the home page's
+    hover/drag pop-out and left the main page showing only Project tiles;
+    with zero projects created (or an upload simply never tagged to one),
+    that made the home page look completely empty even though uploads
+    still existed, which was mistaken for real data loss and led directly
+    to an accidental production /api/delete-all. home_page renders this
+    list as an always-visible "Unfiled" section so that state can never
+    look like "everything is gone" again.
+
+    LEFT JOIN + IS NULL rather than NOT IN/NOT EXISTS — reads cleanest
+    given project_items' exact shape (a plain (project_id, post_slug)
+    membership row per project.py's PRIMARY KEY, no post_slug uniqueness
+    across projects), and is symmetric with list_project_items' own
+    JOIN-based style just below.
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
+        "WHERE pi.post_slug IS NULL ORDER BY ce.timestamp DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [_row_to_dict(r) for r in rows]

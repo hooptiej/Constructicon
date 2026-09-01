@@ -368,6 +368,12 @@ def home_page(request: Request, tag: str = ""):
     # name text and derive initials from what's left ("Hooptie J" -> "HJ").
     _owner_label = db.SOURCE_GROUPS[0].split(" (")[0]
     _owner_initials = "".join(w[0] for w in _owner_label.split()[:2]).upper()
+    # #41: uploads with no project membership at all — always shown on the
+    # home page (not just in the hover pop-out) so the page never looks
+    # empty/broken just because no projects exist yet or an upload wasn't
+    # filed into one. See db.list_unfiled_items's docstring for the incident
+    # this fixes.
+    unfiled_items = [_to_public(r) for r in db.list_unfiled_items()]
     return templates.TemplateResponse(
         request, "home.html",
         {
@@ -377,6 +383,7 @@ def home_page(request: Request, tag: str = ""):
             "projects": [_to_project_card(p) for p in projects],
             "owner_name": _owner_label,
             "owner_initials": _owner_initials,
+            "unfiled_items": unfiled_items,
         },
     )
 

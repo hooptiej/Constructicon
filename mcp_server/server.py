@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import db, ocr, storage
+from core import db, object_types, ocr, storage
 
 BASE_URL = os.environ.get("IMAGEREPO_BASE_URL", "http://10.12.5.98:8000")
 
@@ -60,12 +60,15 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
     dupe = db.find_duplicate(filename, len(content), source_modified_at)
     if dupe is not None:
         return {**_to_public(dupe), "duplicate": True}
-    is_image = Path(filename).suffix.lower() in storage.IMAGE_EXTENSIONS
+    ext = Path(filename).suffix.lower()
+    media_type = "pdf" if ext in storage.PDF_EXTENSIONS else "image"
+    spec = object_types.get_object_type(media_type)
     slug, stored_filename = storage.save_file(filename, content)
     db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags, ticket_id, client,
                       file_size=len(content), source_modified_at=source_modified_at,
-                      ocr_status="pending" if is_image else None)
-    if is_image:
+                      media_type=media_type,
+                      ocr_status="pending" if spec.ocr_capable else None)
+    if spec.ocr_capable:
         ocr.run_ocr(slug)
     return {**_to_public(db.get_by_slug(slug)), "duplicate": False}
 

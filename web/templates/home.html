@@ -108,7 +108,6 @@ function colorFor(client) {
 }
 const sectionsEl = document.getElementById('sections');
 const emptyState = document.getElementById('empty-state');
-const imgExt = /\.(png|jpe?g)$/i;
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -121,7 +120,7 @@ const OCR_LAMP_META = {
   none:    { color: '#E24B4A', title: 'OCR not run yet' },
 };
 function ocrLampHtml(item) {
-  if (!imgExt.test(item.filename)) return '';
+  if (item.ocr_status == null) return ''; // type isn't OCR-capable — see core/object_types.py
   const meta = OCR_LAMP_META[item.ocr_status || 'none'];
   const title = item.ocr_status === 'done' ? (item.extracted_text || 'OCR found no text') : meta.title;
   return `<span class="ocr-lamp" style="background:${meta.color}" title="${escapeHtml(title)}"></span>`;
@@ -151,7 +150,7 @@ function updateSelectionBar() {
 }
 
 function cardHtml(item) {
-  const isImage = imgExt.test(item.filename);
+  const isImage = item.has_thumbnail;
   return `
     <a href="/object/${item.slug}" class="gallery-card">
       <div class="gallery-thumb${item.redacted ? ' redacted-thumb' : ''}">
@@ -201,7 +200,7 @@ function render(groups) {
 
 const recentBanner = document.getElementById('recent-banner');
 function recentThumbHtml(item) {
-  const isImage = imgExt.test(item.filename);
+  const isImage = item.has_thumbnail;
   return `<a class="recent-thumb${item.redacted ? ' redacted-thumb' : ''}" href="/object/${item.slug}" title="${escapeHtml(item.display_name + ' — ' + item.uploaded_by_display + (item.redacted ? ' (redacted)' : ''))}">
     ${item.redacted ? LOCK_ICON.replace('width="22" height="22"', 'width="16" height="16"') : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON.replace('width="26" height="26"', 'width="16" height="16"'))}
   </a>`;

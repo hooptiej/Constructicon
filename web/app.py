@@ -86,6 +86,14 @@ def _to_public(row):
         "type_label": spec.label,
         "type_icon": spec.badge_icon,
         "type_badge": spec.badge_text,
+        # Whether the gallery/home cards should render the actual thumbnail
+        # image (thumb_url above) or a generic file icon — driven by the
+        # type's spec (same _has_thumbnail used server-side for the detail
+        # page and project covers), not a hardcoded filename-extension
+        # check, so a type with a generated thumbnail (a PDF's rendered
+        # first page, once a stream/URL capture is wired up) picks this up
+        # for free instead of always falling back to the file icon.
+        "has_thumbnail": _has_thumbnail(row, spec),
         "description": row["description"],
         "tags": row["tags"],
         "ticket_id": row["ticket_id"],
@@ -504,18 +512,26 @@ async def api_upload(
         tag_list = json.loads(tags) if tags else []
     except json.JSONDecodeError:
         tag_list = []
-    is_image = Path(file.filename).suffix.lower() in storage.IMAGE_EXTENSIONS
+    # media_type from the uploaded file's extension — the only place this
+    # decision has to be extension-based, since that's all /api/upload has
+    # to go on. Everything downstream (thumbnail, OCR, badge, delete,
+    # backup) dispatches off this media_type via core/object_types.py's
+    # registry, not off the extension again.
+    ext = Path(file.filename).suffix.lower()
+    media_type = "pdf" if ext in storage.PDF_EXTENSIONS else "image"
+    spec = object_types.get_object_type(media_type)
     db.insert_upload(
         slug, file.filename, stored_filename, user,
         description=description, tags=tag_list,
         ticket_id=ticket_id or None, client=client or None,
         file_size=file_size, source_modified_at=source_modified_at,
-        ocr_status="pending" if is_image else None,
+        media_type=media_type,
+        ocr_status="pending" if spec.ocr_capable else None,
     )
     # Runs after this response is sent — OCR happens once the upload/tag step
     # is actually done, not as part of what the user is waiting on. The client
     # polls GET /api/image/{slug} to see ocr_status flip from "pending".
-    if is_image:
+    if spec.ocr_capable:
         background_tasks.add_task(ocr.run_ocr, slug)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 

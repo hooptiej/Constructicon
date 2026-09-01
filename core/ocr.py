@@ -98,6 +98,25 @@ def _ocr_source_path(row, spec):
     return thumb if thumb.exists() else None
 
 
+def _compute_similarity_signals(slug, image_path, text):
+    """Perceptual hash + text embedding — see module docstring for why both
+    live here, under the same OCR_SEMAPHORE slot as whatever CPU-bound step
+    produced `text` (tesseract, or nothing at all for a text-layer PDF).
+    Best-effort, same as OCR itself: a failure here never fails the row's
+    extracted_text/ocr_status, it just leaves that row without a similarity
+    signal."""
+    try:
+        db.set_perceptual_hash(slug, similarity.compute_perceptual_hash(image_path))
+    except Exception as e:
+        print(f"Perceptual hash failed for {slug}: {e!r}")
+    try:
+        embedding = similarity.compute_embedding(text)
+        if embedding is not None:
+            db.set_embedding(slug, embedding)
+    except Exception as e:
+        print(f"Embedding failed for {slug}: {e!r}")
+
+
 def run_ocr(slug):
     row = db.get_by_slug(slug)
     if row is None or row["redacted"]:
@@ -105,30 +124,47 @@ def run_ocr(slug):
     spec = object_types.get_object_type(row.get("media_type"))
     if not spec.ocr_capable:
         return  # this type never gets ocr_status="pending" in the first place
-    path = _ocr_source_path(row, spec)
-    if path is None:
-        db.set_ocr_status(slug, "failed")
-        return
-    with OCR_SEMAPHORE:
+
+    # A type with its own embedded text layer (a text-layer PDF today — see
+    # core/pdf.py — any future document-ish type tomorrow) gets its text
+    # straight from that layer, no tesseract involved: cheaper, and more
+    # accurate than re-deriving the same text by OCR'ing a rendered image of
+    # it. text_extract_fn returning falsy (no layer — an image-only/scanned
+    # PDF — or the file's missing) is exactly the signal to fall back to OCR
+    # below, same as a type with no text_extract_fn registered at all (a
+    # plain uploaded screenshot always goes straight to OCR).
+    text = None
+    if spec.text_extract_fn is not None:
         try:
-            text = pytesseract.image_to_string(Image.open(path), timeout=OCR_TIMEOUT_SECONDS)
+            text = spec.text_extract_fn(row) or None
         except Exception as e:
-            # Best-effort — OCR quality issues, a corrupt image, or a timeout
-            # shouldn't ever surface as an upload failure, but print so a
-            # systematic failure (e.g. tesseract missing) is traceable.
-            print(f"OCR failed for {slug}: {e!r}")
+            print(f"text-layer extraction failed for {slug}: {e!r}")
+
+    # Thumbnail is needed either way — as the OCR fallback's source image,
+    # and independently for perceptual hashing / just being a thing the
+    # detail page and gallery show.
+    image_path = _ocr_source_path(row, spec)
+
+    if text is None:
+        if image_path is None:
             db.set_ocr_status(slug, "failed")
             return
-        try:
-            db.set_perceptual_hash(slug, similarity.compute_perceptual_hash(path))
-        except Exception as e:
-            print(f"Perceptual hash failed for {slug}: {e!r}")
-        try:
-            embedding = similarity.compute_embedding(text)
-            if embedding is not None:
-                db.set_embedding(slug, embedding)
-        except Exception as e:
-            print(f"Embedding failed for {slug}: {e!r}")
+        with OCR_SEMAPHORE:
+            try:
+                text = pytesseract.image_to_string(Image.open(image_path), timeout=OCR_TIMEOUT_SECONDS)
+            except Exception as e:
+                # Best-effort — OCR quality issues, a corrupt image, or a
+                # timeout shouldn't ever surface as an upload failure, but
+                # print so a systematic failure (e.g. tesseract missing) is
+                # traceable.
+                print(f"OCR failed for {slug}: {e!r}")
+                db.set_ocr_status(slug, "failed")
+                return
+            _compute_similarity_signals(slug, image_path, text)
+    elif image_path is not None:
+        with OCR_SEMAPHORE:
+            _compute_similarity_signals(slug, image_path, text)
+
     text = text.strip()
     db.set_extracted_text(slug, text)
     matched_clients = _match_client_tags(text)

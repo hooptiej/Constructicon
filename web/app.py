@@ -501,6 +501,7 @@ async def api_upload(
     tags: str = Form("[]"),
     ticket_id: str = Form(""),
     client: str = Form(""),
+    project_id: str = Form(""),
     modified_at: str = Form(""),
 ):
     # Which Source string a browser upload gets is decided server-side, not
@@ -562,6 +563,7 @@ async def api_upload(
         # render onto (STL today) still needs one generated somewhere —
         # see _ensure_capture_thumbnail above.
         background_tasks.add_task(_ensure_capture_thumbnail, slug)
+    _attach_to_project(slug, project_id or None)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 
@@ -577,6 +579,7 @@ async def api_create_content(
     tags: str = Form("[]"),
     ticket_id: str = Form(""),
     client: str = Form(""),
+    project_id: str = Form(""),
 ):
     """Creates a capture_events row for content with no uploaded file — a
     YouTube link today, a stream/URL capture once a future issue wires up
@@ -612,7 +615,8 @@ async def api_create_content(
         background_tasks.add_task(ocr.run_ocr, slug)
     elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
         background_tasks.add_task(_ensure_capture_thumbnail, slug)
-    return JSONResponse(_to_public(row))
+    _attach_to_project(slug, project_id or None)
+    return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 
 @app.get("/api/image/{slug}")
@@ -806,6 +810,60 @@ def download_desktop_app_build(request: Request):
 @app.get("/api/clients")
 def api_clients(request: Request):
     return JSONResponse(db.list_clients())
+
+
+def _to_project_option(project):
+    """Slim shape for the upload drawer's Project dropdown — just enough to
+    populate a <select> and let the client hand project_id back on upload."""
+    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"]}
+
+
+@app.get("/api/projects")
+def api_projects(request: Request):
+    """Populates the upload drawer's Project dropdown (#1) — every project,
+    most-recently-updated first, same ordering list_projects() already uses
+    for the home page's Projects column."""
+    return JSONResponse([_to_project_option(p) for p in db.list_projects()])
+
+
+@app.post("/api/projects")
+def api_create_project(request: Request, title: str = Form(...)):
+    """Creates a project from the upload drawer's "+ New project..." flow
+    (#1) — distinct from scripts/seed_example_projects.py's one-off seeding,
+    this is the first real UI-driven way to make a project.
+
+    Also creates (or reuses) a root-level blog_tags row with the same name
+    and links it via projects.tag_id, so every object later tagged to this
+    project also becomes reachable through the ordinary tag-based browsing
+    the rest of the site already has (see core/db.py's create_project
+    docstring and README's "tied to the site tags" note) — not a parallel
+    system, just handing the existing tag tree a project-shaped entry point.
+    """
+    title = title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Project name can't be empty")
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+    return JSONResponse(_to_project_option(project))
+
+
+def _attach_to_project(slug, project_id):
+    """Shared by /api/upload and /api/content: adds the new row to the given
+    project's curated item list (so it shows up on the project's own detail
+    page) and, if that project has a linked tag (see api_create_project /
+    core/db.py's create_project), also tags the row with it — the "tied to
+    the site tags" half of #1, so the object surfaces through tag-based
+    browsing too, not just the project page. A project_id that doesn't
+    resolve to a real project (bad/stale value) is silently ignored rather
+    than failing the whole upload over a cosmetic mismatch."""
+    if not project_id:
+        return
+    project = db.get_project(project_id)
+    if project is None:
+        return
+    db.add_item_to_project(project["id"], slug)
+    if project.get("tag_id"):
+        db.attach_tags(slug, [project["tag_id"]])
 
 
 @app.get("/api/search")

@@ -42,10 +42,11 @@
         <input class="input mono" name="ticket_id" placeholder="e.g. 56942">
       </div>
       <div class="field">
-        <label>CLIENT <span class="optional">(optional)</span></label>
-        <select class="input" name="client" id="upload-client-select">
-          <option value="">Select a client...</option>
+        <label>PROJECT <span class="optional">(optional)</span></label>
+        <select class="input" id="upload-project-select">
+          <option value="">No project</option>
         </select>
+        <input class="input mono" id="upload-new-project-input" placeholder="New project name" style="display:none;margin-top:6px">
       </div>
       <p class="error-text" id="upload-error" style="display:none"></p>
       <button class="btn-primary" type="submit" id="submit-btn" style="margin-top:4px" disabled>Upload to repo</button>
@@ -76,6 +77,8 @@
   const submitBtn = document.getElementById('submit-btn');
   const youtubeUrlInput = document.getElementById('youtube-url-input');
   const youtubeAddBtn = document.getElementById('youtube-add-btn');
+  const projectSelect = document.getElementById('upload-project-select');
+  const newProjectInput = document.getElementById('upload-new-project-input');
   let tags = [];
   // stagedFiles holds a mix of real File objects (from the dropzone) and
   // plain {__isYoutube: true, name, url} placeholders (from the YouTube
@@ -300,14 +303,14 @@
     return 'timeout';
   }
 
-  async function uploadAndTrack(file, i, description, tagList, ticketId, client) {
+  async function uploadAndTrack(file, i, description, tagList, ticketId, projectId) {
     updateFileStatus(i, 'uploading');
     const form = new FormData();
     form.append('file', file);
     form.append('description', description);
     form.append('tags', JSON.stringify(tagList));
     form.append('ticket_id', ticketId);
-    form.append('client', client);
+    form.append('project_id', projectId || '');
     form.append('modified_at', file.lastModified);
 
     let res;
@@ -336,7 +339,7 @@
     return { ok: true };
   }
 
-  async function addContentAndTrack(url, i, description, tagList, ticketId, client) {
+  async function addContentAndTrack(url, i, description, tagList, ticketId, projectId) {
     // Content-only counterpart to uploadAndTrack above — POSTs to
     // /api/content instead of /api/upload (see web/app.py's
     // api_create_content), passing the raw URL through as external_url:
@@ -349,7 +352,7 @@
     form.append('description', description);
     form.append('tags', JSON.stringify(tagList));
     form.append('ticket_id', ticketId);
-    form.append('client', client);
+    form.append('project_id', projectId || '');
 
     let res;
     try {
@@ -405,7 +408,40 @@
     const description = e.target.description.value;
     const tagList = tags.slice();
     const ticketId = e.target.ticket_id.value;
-    const client = e.target.client.value;
+
+    // Resolve the Project selection once per submit (not once per staged
+    // file) — picking "+ New project..." should create exactly one project
+    // that every staged item in this batch attaches to, not a separate
+    // project per file (#1).
+    let projectId = projectSelect.value;
+    if (projectId === '__new__') {
+      const newTitle = newProjectInput.value.trim();
+      if (!newTitle) {
+        isUploading = false;
+        submitBtn.disabled = false;
+        updateSubmitButton();
+        uploadError.textContent = 'Enter a name for the new project, or choose "No project".';
+        uploadError.style.display = 'block';
+        return;
+      }
+      try {
+        const res = await fetch('/api/projects', { method: 'POST', body: new URLSearchParams({ title: newTitle }) });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ detail: 'Failed to create project' }));
+          throw new Error(body.detail || 'Failed to create project');
+        }
+        const project = await res.json();
+        projectId = project.id;
+        await loadProjects(project.id); // so a second batch in this session can reuse it from the dropdown
+      } catch (err) {
+        isUploading = false;
+        submitBtn.disabled = false;
+        updateSubmitButton();
+        uploadError.textContent = `Couldn't create project: ${err.message}`;
+        uploadError.style.display = 'block';
+        return;
+      }
+    }
 
     fileStates = stagedFiles.map(() => ({ status: 'queued', message: STATUS_META.queued.label }));
     renderStaged();
@@ -417,13 +453,14 @@
     // that contention rather than just papering over it with a bigger cap.
     const results = await runWithConcurrency(stagedFiles, 1, (file, i) =>
       file.__isYoutube
-        ? addContentAndTrack(file.url, i, description, tagList, ticketId, client)
-        : uploadAndTrack(file, i, description, tagList, ticketId, client)
+        ? addContentAndTrack(file.url, i, description, tagList, ticketId, projectId)
+        : uploadAndTrack(file, i, description, tagList, ticketId, projectId)
     );
 
     tags = [];
     renderTags();
     e.target.reset();
+    resetProjectSelect();
     isUploading = false;
 
     const failures = results.filter(r => !r.ok).map(r => r.message);
@@ -453,21 +490,33 @@
     return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  async function loadClients() {
-    const res = await fetch('/api/clients');
-    const data = await res.json();
-    let html = '';
-    if (data.special.length) {
-      html += `<optgroup label="Special">${data.special.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}</optgroup>`;
-    }
-    if (data.clients.length) {
-      html += `<optgroup label="Clients">${data.clients.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}</optgroup>`;
-    }
-    if (data.test.length) {
-      html += `<optgroup label="Test data">${data.test.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}</optgroup>`;
-    }
-    document.getElementById('upload-client-select').insertAdjacentHTML('beforeend', html);
+  // Project dropdown (#1) — replaces the old Client select. Populated from
+  // GET /api/projects (every known project, same list the home page's
+  // Projects column shows), plus a permanent "+ New project..." option at
+  // the bottom that reveals a text input instead of immediately posting —
+  // the actual project only gets created on submit (see the form submit
+  // handler), so opening the drawer and closing it again without uploading
+  // anything never litters the site with an empty project.
+  async function loadProjects(selectId) {
+    const res = await fetch('/api/projects');
+    const projects = await res.json();
+    projectSelect.querySelectorAll('option[data-project]').forEach(o => o.remove());
+    const newOption = projectSelect.querySelector('option[value="__new__"]');
+    const html = projects.map(p => `<option value="${p.id}" data-project>${escapeHtml(p.title)}</option>`).join('');
+    if (newOption) newOption.insertAdjacentHTML('beforebegin', html);
+    else projectSelect.insertAdjacentHTML('beforeend', html + '<option value="__new__">+ New project…</option>');
+    if (selectId !== undefined) projectSelect.value = String(selectId);
   }
-  loadClients();
+  function resetProjectSelect() {
+    projectSelect.value = '';
+    newProjectInput.style.display = 'none';
+    newProjectInput.value = '';
+  }
+  projectSelect.addEventListener('change', () => {
+    const isNew = projectSelect.value === '__new__';
+    newProjectInput.style.display = isNew ? 'block' : 'none';
+    if (isNew) newProjectInput.focus();
+  });
+  loadProjects();
 })();
 </script>

@@ -1,6 +1,14 @@
 FROM python:3.14-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr \
+# libcairo2: SVG thumbnail rasterization (core/svg.py, issue #30) — cairosvg
+# is a pure-Python *package* but dynamically loads a real libcairo.so.2 at
+# runtime, confirmed to fail without it. Small (~1.4MB), same category as
+# tesseract-ocr below.
+# ghostscript: EPS thumbnail rasterization (core/eps.py, issue #30) — EPS is
+# PostScript, so an actual PostScript interpreter is unavoidable; confirmed
+# installing cleanly (no build-from-source, no exotic packages) at ~47MB,
+# mostly URW base-35 fonts pulled in for text layout.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libcairo2 ghostscript \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -17,19 +17,21 @@ describes, per type:
 core/thumbnails.py and core/ocr.py both dispatch purely off the spec
 returned by get_object_type() — neither one should ever grow a literal
 `if media_type == "some_new_type"` branch. Adding a new object type (PDF:
-issue #13, STL: issue #14, PSD: issue #27, audio: issue #28, and whatever
-comes after) means adding one ObjectTypeSpec below plus, if it needs one, a
-thumbnail_url_fn or capture_fn. Nothing else in the codebase should need to
-change.
+issue #13, STL: issue #14, PSD: issue #27, audio: issue #28, SVG/EPS: issue
+#30, and whatever comes after) means adding one ObjectTypeSpec below plus,
+if it needs one, a thumbnail_url_fn or capture_fn. Nothing else in the
+codebase should need to change.
 """
 
 import re
 from dataclasses import dataclass
 from enum import Enum
 
+from . import eps as _eps
 from . import pdf as _pdf
 from . import psd as _psd
 from . import stl as _stl
+from . import svg as _svg
 
 
 class ThumbnailSource(Enum):
@@ -161,6 +163,35 @@ OBJECT_TYPES = {
         capture_fn=_psd.capture_thumbnail,
         badge_icon="\U0001F3A8",  # artist palette
         badge_text="PSD",
+    ),
+    "svg": ObjectTypeSpec(
+        key="svg",
+        label="Vector graphic (SVG)",
+        # A browser can display an SVG directly, but the gallery/detail
+        # thumbnail pipeline still rasterizes it server-side (core/svg.py)
+        # for tile consistency with every other type and so OCR has a
+        # raster fallback — see that module's docstring for why cairosvg
+        # (not "pure Python" as first hoped — needs system libcairo2, a
+        # small apt dependency) was picked.
+        thumbnail_source=ThumbnailSource.CAPTURE,
+        ocr_capable=True,
+        capture_fn=_svg.capture_thumbnail,
+        text_extract_fn=_svg.extract_text_for_row,  # <text> elements read directly, no OCR needed when present
+        badge_icon="\U0001F4D0",  # triangular ruler
+        badge_text="SVG",
+    ),
+    "eps": ObjectTypeSpec(
+        key="eps",
+        label="Vector graphic (EPS)",
+        # Ghostscript-rendered raster (core/eps.py) — a real system binary,
+        # investigated and found to be a small, standard apt dependency
+        # rather than the kind of GPU/display-dependent tooling STL (#14)
+        # had to route around.
+        thumbnail_source=ThumbnailSource.CAPTURE,
+        ocr_capable=True,  # OCR runs against the rendered raster; no text layer to extract directly (see core/eps.py)
+        capture_fn=_eps.capture_thumbnail,
+        badge_icon="\U0001F5A8️",  # printer — PostScript's original target device
+        badge_text="EPS",
     ),
     "document": ObjectTypeSpec(
         key="document",

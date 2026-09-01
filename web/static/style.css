@@ -338,6 +338,15 @@ body.delete-mode-on .card-select { display: block; }
 .admin-toggle input:checked + .admin-toggle-track { background: var(--accent); border-color: var(--accent); }
 .admin-toggle input:checked + .admin-toggle-track .admin-toggle-thumb { transform: translateX(16px); background: #fff; }
 
+/* API Keys row (#55) */
+.admin-apikey-row { flex-direction: column; align-items: stretch; gap: 8px; }
+.admin-apikey-label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.admin-apikey-input-row { display: flex; gap: 8px; }
+.admin-apikey-input { flex: 1; padding: 8px 10px; font-size: 12px; }
+.admin-apikey-save { width: auto; padding: 8px 14px; font-size: 12px; flex-shrink: 0; }
+.apikey-status { font-size: 11px; color: var(--text-3); flex-shrink: 0; }
+.apikey-status-set { color: var(--accent); }
+
 /* --- Combined gallery + upload pop-out (#17) — home page only.
    Sibling to the admin pane above: same fixed-trigger + CSS-transition
    panel family (transform/opacity transition, similar duration/easing —

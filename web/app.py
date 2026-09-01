@@ -456,6 +456,41 @@ def api_backup():
     return JSONResponse(info)
 
 
+# API Keys (#55) — the admin pane's allowlist of settings keys it knows how
+# to display/accept. A secret's storage/endpoints (below, and
+# core.db.get_setting/has_setting/set_setting) are generic key/value, so a
+# future second key (or any other app-level setting) only needs an entry
+# here plus a labeled row in _admin_pane.html, not a schema change.
+KNOWN_SETTINGS = {
+    "youtube_data_api_key": "YouTube Data API Key",
+}
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    """Presence-only view of every known setting — never the actual value.
+    {"youtube_data_api_key": true} means a key is stored, not what it is.
+    This is deliberately the only way the admin pane's UI learns whether a
+    setting exists; the real value is never sent to the browser, on this
+    route or any other, after it's been saved (see api_set_setting)."""
+    return JSONResponse({key: db.has_setting(key) for key in KNOWN_SETTINGS})
+
+
+@app.post("/api/settings")
+def api_set_setting(key: str = Form(...), value: str = Form("")):
+    """Saves one named setting (or, given an empty value, clears it). `key`
+    must be one of KNOWN_SETTINGS above — the storage layer is generic, but
+    this endpoint only accepts keys the app actually knows how to use, so it
+    can't become an arbitrary junk-drawer for an unauthenticated LAN app.
+    Deliberately returns only the same presence flag GET /api/settings
+    reports, never the value it was just given, so the browser can't get the
+    real value echoed back to it after a save."""
+    if key not in KNOWN_SETTINGS:
+        raise HTTPException(status_code=400, detail=f"Unknown setting key: {key!r}")
+    db.set_setting(key, value)
+    return JSONResponse({key: db.has_setting(key)})
+
+
 @app.get("/upload")
 def upload_page_redirect():
     # Upload is now a pane on the home page, not its own screen.

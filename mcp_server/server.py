@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import db, object_types, ocr, storage
+from core import db, object_types, ocr, storage, thumbnails
 
 BASE_URL = os.environ.get("IMAGEREPO_BASE_URL", "http://10.12.5.98:8000")
 
@@ -45,7 +45,7 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
                       source_modified_at: float | None = None) -> dict:
     """Upload an image or document to the repo and get back a stable hotlink URL.
 
-    filename: original filename, used only to determine the extension (.png/.jpg/.jpeg/.pdf).
+    filename: original filename, used only to determine the extension (.png/.jpg/.jpeg/.pdf/.stl).
     content_base64: raw file bytes, base64-encoded.
     uploaded_by: the Source string to record (capture_events.tech) — defaults to
       "Claude — authored" (this tool call created the content directly). Pass
@@ -61,7 +61,12 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
     if dupe is not None:
         return {**_to_public(dupe), "duplicate": True}
     ext = Path(filename).suffix.lower()
-    media_type = "pdf" if ext in storage.PDF_EXTENSIONS else "image"
+    if ext in storage.PDF_EXTENSIONS:
+        media_type = "pdf"
+    elif ext in storage.STL_EXTENSIONS:
+        media_type = "stl"
+    else:
+        media_type = "image"
     spec = object_types.get_object_type(media_type)
     slug, stored_filename = storage.save_file(filename, content)
     db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags, ticket_id, client,
@@ -70,6 +75,12 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
                       ocr_status="pending" if spec.ocr_capable else None)
     if spec.ocr_capable:
         ocr.run_ocr(slug)
+    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
+        # No OCR pass to piggyback a thumbnail render onto for a
+        # CAPTURE-sourced, non-OCR-capable type (STL) — see the matching
+        # comment on web/app.py's _ensure_capture_thumbnail. Synchronous
+        # here since this MCP tool call has no background-task mechanism.
+        thumbnails.ensure_thumbnail(db.get_by_slug(slug))
     return {**_to_public(db.get_by_slug(slug)), "duplicate": False}
 
 

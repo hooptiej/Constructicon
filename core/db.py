@@ -561,17 +561,48 @@ def mark_redacted(slug):
 
 def delete_upload(slug):
     """Full delete — removes the metadata row entirely. Caller is responsible
-    for deleting the actual file(s) from storage first."""
+    for deleting the actual file(s) from storage first.
+
+    Also cleans up every row elsewhere in the schema that references this
+    slug — capture_event_relations (already handled here before #16),
+    plus project_items and post_tags (#16 — flagged by #1's PR review as a
+    pre-existing gap: deleting a slug left its curated-project membership
+    and tag links behind as orphans, invisible but never cleaned up since
+    nothing ever queries project_items/post_tags for a slug that no longer
+    has a capture_events row)."""
     conn = get_conn()
     conn.execute("DELETE FROM capture_events WHERE slug = ?", (slug,))
     conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? OR slug_b = ?", (slug, slug))
+    conn.execute("DELETE FROM project_items WHERE post_slug = ?", (slug,))
+    conn.execute("DELETE FROM post_tags WHERE post_slug = ?", (slug,))
     conn.commit()
     conn.close()
 
 
 def add_relation(slug_a, slug_b):
     """Symmetric — stored both directions so listing either side's related
-    items is a single indexed lookup, not an OR query."""
+    items is a single indexed lookup, not an OR query.
+
+    #16: a "related to" link used to be purely descriptive — it connected
+    two slugs but did nothing about either side's categorization. That let
+    a related item carry zero tags and zero project membership, which made
+    it invisible everywhere tag/project browsing is the only way in (the
+    home page's Projects column, any /?tag= filter, a project's own detail
+    page) — it would only ever surface again via a direct /object/<slug>
+    link or the raw uploader-grouped Gallery pane on the left of the home
+    page, which lists every row unfiltered regardless of tags (see
+    home_page's docstring). That raw pane is the "hidden gallery" the issue
+    means: it's where an uncategorized item quietly piles up, permanently
+    absent from the actual curated browsing surface.
+
+    The fix: relating two items now merges their categorization both ways
+    — each side picks up whatever tags and project memberships the other
+    side already has (see _sync_relation_categorization below), so as long
+    as *either* side already has a tag or project, both sides end up
+    visible. If neither side has any tag or project yet, there's nothing to
+    inherit and the pair stays uncategorized — this doesn't force tagging
+    out of thin air, it just stops "related to" from being a way to silently
+    orphan an otherwise-categorized item's new companion."""
     if slug_a == slug_b:
         return
     conn = get_conn()
@@ -586,6 +617,32 @@ def add_relation(slug_a, slug_b):
     )
     conn.commit()
     conn.close()
+    _sync_relation_categorization(slug_a, slug_b)
+
+
+def _sync_relation_categorization(slug_a, slug_b):
+    """Propagates tags and project membership both ways between two newly
+    related slugs — see add_relation's docstring (#16) for why. Runs after
+    add_relation's own transaction commits, using the existing
+    attach_tags/add_item_to_project primitives (both already idempotent via
+    INSERT OR IGNORE) rather than a bespoke bulk query, so this stays
+    consistent with how tags/project membership are written everywhere
+    else."""
+    tags_a = {t["id"] for t in list_tags_for_post(slug_a)}
+    tags_b = {t["id"] for t in list_tags_for_post(slug_b)}
+    missing_for_a = tags_b - tags_a
+    missing_for_b = tags_a - tags_b
+    if missing_for_a:
+        attach_tags(slug_a, list(missing_for_a))
+    if missing_for_b:
+        attach_tags(slug_b, list(missing_for_b))
+
+    projects_a = {p["id"] for p in list_projects_for_post(slug_a)}
+    projects_b = {p["id"] for p in list_projects_for_post(slug_b)}
+    for project_id in projects_b - projects_a:
+        add_item_to_project(project_id, slug_a)
+    for project_id in projects_a - projects_b:
+        add_item_to_project(project_id, slug_b)
 
 
 def remove_relation(slug_a, slug_b):

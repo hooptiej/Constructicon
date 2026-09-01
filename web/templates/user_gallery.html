@@ -3,6 +3,7 @@
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
+{% include "_admin_pane.html" %}
 <div class="app-main">
   <a class="back-link" href="/gallery">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -13,7 +14,6 @@
       <h1 class="page-title">{{ uploader_display }}</h1>
       <p class="page-subtitle">{{ items | length }} upload{{ 's' if items|length != 1 else '' }}</p>
     </div>
-    <button type="button" class="btn-danger" id="delete-all-btn" title="Development convenience while content is still in flux">Delete all</button>
   </div>
   <div class="selection-bar" id="selection-bar">
     <span class="selection-count" id="selection-count"></span>
@@ -68,8 +68,9 @@ function toggleCardSelect(cb) {
 }
 function updateSelectionBar() {
   const bar = document.getElementById('selection-bar');
+  const deleteModeOn = document.body.classList.contains('delete-mode-on');
   const count = selectedSlugs.size;
-  bar.style.display = count ? 'flex' : 'none';
+  bar.style.display = (deleteModeOn && count) ? 'flex' : 'none';
   document.getElementById('selection-count').textContent = `${count} selected`;
 }
 
@@ -107,21 +108,20 @@ document.addEventListener('imagerepo:upload-complete', (e) => {
   if (!e.detail.failures.length) location.reload();
 });
 
-document.getElementById('delete-all-btn').addEventListener('click', async () => {
-  if (!confirm('Delete EVERYTHING — every upload, tag, and project? This cannot be undone.')) return;
-  const res = await fetch('/api/delete-all', { method: 'POST' });
-  if (res.ok) {
-    const body = await res.json();
-    alert(`Deleted ${body.deleted} item${body.deleted === 1 ? '' : 's'}.`);
-    window.location.href = '/';
-  } else {
-    alert('Delete failed.');
-  }
-});
-
 document.getElementById('clear-selection-btn').addEventListener('click', () => {
   selectedSlugs.clear();
   document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);
+  updateSelectionBar();
+});
+
+// "Delete mode" now lives in the admin pane (#24) rather than always-on
+// checkboxes — when it's switched off, drop any in-flight selection so it
+// can't linger invisibly and reappear stale next time delete mode is on.
+document.addEventListener('imagerepo:delete-mode-change', (e) => {
+  if (!e.detail.enabled) {
+    selectedSlugs.clear();
+    document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);
+  }
   updateSelectionBar();
 });
 

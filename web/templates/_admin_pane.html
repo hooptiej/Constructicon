@@ -1,0 +1,129 @@
+<!-- Admin pane (#24) — pop-out surface for admin/destructive/meta actions
+     that used to live as loose buttons scattered across the gallery chrome
+     and header ("Delete mode" checkboxes from #19, "Delete all" from
+     user_gallery.html, "Back up now" from _header.html). Included wherever
+     _upload_drawer.html is, matching the app's existing pattern for a
+     shared always-available pop-out control.
+
+     No drag-hover/tab pattern exists yet to copy — #17 (gallery-widget-
+     replace) hasn't been built. This is a deliberately simple fixed trigger
+     + CSS-transition panel; if #17 lands a shared pop-out interaction later,
+     this is a candidate to unify with it rather than the other way around. -->
+<button type="button" class="admin-pane-trigger" id="admin-pane-trigger" title="Admin functions" aria-label="Admin functions">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+    <path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="#ECE8DA" stroke-width="1.6"/>
+    <path d="M19.4 13.5a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V19.5a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H4.5a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H10a1.65 1.65 0 001-1.51V4.5a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V10a1.65 1.65 0 001.51 1h.09a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="#ECE8DA" stroke-width="1.3"/>
+  </svg>
+</button>
+<div class="admin-pane" id="admin-pane">
+  <div class="admin-pane-header">
+    <h2>Admin</h2>
+    <button type="button" class="modal-close" id="admin-pane-close">&times;</button>
+  </div>
+  <div class="admin-pane-body">
+    <div class="admin-row">
+      <div>
+        <div class="admin-row-label">Delete mode</div>
+        <div class="admin-row-hint">Show selection checkboxes on gallery tiles</div>
+      </div>
+      <label class="admin-toggle">
+        <input type="checkbox" id="admin-delete-mode-toggle">
+        <span class="admin-toggle-track"><span class="admin-toggle-thumb"></span></span>
+      </label>
+    </div>
+    <!-- Stub for the "set display name and icon" popup referenced in #11
+         (MCP tools parity) — that editing UI doesn't exist anywhere yet, so
+         this is just a placeholder row anticipating where it belongs once
+         it's built, not a functional control. -->
+    <div class="admin-row admin-row-stub" title="Not built yet — see issue #11">
+      <div>
+        <div class="admin-row-label">Display name &amp; icon</div>
+        <div class="admin-row-hint">Coming soon (#11)</div>
+      </div>
+    </div>
+    <div class="admin-pane-divider"></div>
+    <button type="button" class="btn-danger admin-full-btn" id="admin-delete-all-btn"
+            title="Development convenience while content is still in flux">Delete all</button>
+    <button type="button" class="btn-ms admin-full-btn" id="admin-backup-btn"
+            title="Zips the current DB and storage files to a timestamped archive on the share. Independent of any delete action.">
+      Back up now
+    </button>
+    <span id="admin-backup-status" class="backup-status"></span>
+  </div>
+</div>
+<script>
+(function () {
+  const trigger = document.getElementById('admin-pane-trigger');
+  const pane = document.getElementById('admin-pane');
+  const closeBtn = document.getElementById('admin-pane-close');
+
+  function openPane() { pane.classList.add('open'); trigger.classList.add('active'); }
+  function closePane() { pane.classList.remove('open'); trigger.classList.remove('active'); }
+  trigger.addEventListener('click', () => {
+    pane.classList.contains('open') ? closePane() : openPane();
+  });
+  closeBtn.addEventListener('click', closePane);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePane(); });
+  document.addEventListener('click', (e) => {
+    if (!pane.classList.contains('open')) return;
+    if (pane.contains(e.target) || trigger.contains(e.target)) return;
+    closePane();
+  });
+
+  // "Delete mode" toggle — replaces the always-on selective-delete
+  // checkboxes/action-bar from #19. Pages that render those (gallery.html,
+  // user_gallery.html) listen for this event and toggle a body class that
+  // the CSS uses to show/hide `.card-select` checkboxes; toggling off also
+  // clears any in-progress selection so it can't linger invisibly.
+  const deleteModeToggle = document.getElementById('admin-delete-mode-toggle');
+  deleteModeToggle.addEventListener('change', () => {
+    const enabled = deleteModeToggle.checked;
+    document.body.classList.toggle('delete-mode-on', enabled);
+    document.dispatchEvent(new CustomEvent('imagerepo:delete-mode-change', { detail: { enabled } }));
+  });
+
+  // "Delete all" — relocated from user_gallery.html. The endpoint deletes
+  // every upload/tag/project regardless of which page you're on, so it
+  // being available globally from the admin pane (rather than only from a
+  // single user's gallery view) matches what it actually does.
+  document.getElementById('admin-delete-all-btn').addEventListener('click', async () => {
+    if (!confirm('Delete EVERYTHING — every upload, tag, and project? This cannot be undone.')) return;
+    const res = await fetch('/api/delete-all', { method: 'POST' });
+    if (res.ok) {
+      const body = await res.json();
+      alert(`Deleted ${body.deleted} item${body.deleted === 1 ? '' : 's'}.`);
+      window.location.href = '/';
+    } else {
+      alert('Delete failed.');
+    }
+  });
+
+  // "Back up now" — relocated from _header.html, same /api/backup call.
+  const backupBtn = document.getElementById('admin-backup-btn');
+  const backupStatus = document.getElementById('admin-backup-status');
+  backupBtn.addEventListener('click', async () => {
+    backupBtn.disabled = true;
+    const originalText = backupBtn.textContent;
+    backupBtn.textContent = 'Backing up…';
+    backupStatus.textContent = '';
+    backupStatus.className = 'backup-status';
+    try {
+      const res = await fetch('/api/backup', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || `Backup failed (${res.status})`);
+      }
+      const sizeMb = (data.size / (1024 * 1024)).toFixed(1);
+      backupStatus.textContent = `Saved ${data.filename} (${sizeMb} MB)`;
+      backupStatus.className = 'backup-status backup-status-ok';
+    } catch (err) {
+      backupStatus.textContent = err.message || 'Backup failed';
+      backupStatus.className = 'backup-status backup-status-error';
+    } finally {
+      backupBtn.disabled = false;
+      backupBtn.textContent = originalText;
+      setTimeout(() => { backupStatus.textContent = ''; backupStatus.className = 'backup-status'; }, 8000);
+    }
+  });
+})();
+</script>

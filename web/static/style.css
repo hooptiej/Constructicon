@@ -239,11 +239,15 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   font-size: 12px; line-height: 1; cursor: default;
 }
 /* Selective delete (#19) — checkbox lives in the corner opposite the
-   type badge above, so the two never collide on the same tile. */
+   type badge above, so the two never collide on the same tile. Hidden
+   unless the admin pane's "Delete mode" toggle (#24) is on — see
+   body.delete-mode-on below, set/cleared by _admin_pane.html. */
 .card-select {
   position: absolute; top: 6px; right: 6px; z-index: 1;
   width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: var(--accent);
+  display: none;
 }
+body.delete-mode-on .card-select { display: block; }
 .selection-bar {
   display: none; align-items: center; gap: 12px; background: var(--card);
   border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
@@ -293,6 +297,46 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .upload-drawer-header h2 { font-size: 16px; font-weight: 500; margin: 0; }
 .upload-drawer .dropzone { padding: 28px 16px; }
 .upload-drawer .meta-form { width: 100%; background: none; border: none; padding: 0; margin-top: 18px; }
+
+/* --- Admin pane (#24) — fixed corner trigger + small pop-out panel for
+   admin/destructive/meta actions (delete mode, delete all, backup). No
+   drag-hover pattern to match yet — see _admin_pane.html for context. */
+.admin-pane-trigger {
+  position: fixed; right: 20px; bottom: 20px; z-index: 47; width: 44px; height: 44px;
+  border-radius: 50%; background: var(--purple); border: 1px solid var(--border-stronger);
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.4); transition: background 0.15s ease;
+}
+.admin-pane-trigger:hover, .admin-pane-trigger.active { background: var(--purple-hover); }
+.admin-pane {
+  position: fixed; right: 20px; bottom: 76px; z-index: 47; width: 320px; max-width: 90vw;
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px; box-sizing: border-box; box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  transform: translateY(12px) scale(0.98); opacity: 0; pointer-events: none;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.admin-pane.open { transform: translateY(0) scale(1); opacity: 1; pointer-events: auto; }
+.admin-pane-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.admin-pane-header h2 { font-size: 15px; font-weight: 500; margin: 0; }
+.admin-pane-body { display: flex; flex-direction: column; gap: 14px; }
+.admin-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.admin-row-label { font-size: 13px; color: var(--text); }
+.admin-row-hint { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.admin-row-stub { opacity: 0.55; }
+.admin-pane-divider { height: 1px; background: var(--border); margin: 2px 0; }
+.admin-full-btn { width: 100%; }
+.admin-toggle { position: relative; display: inline-block; width: 38px; height: 22px; flex-shrink: 0; cursor: pointer; }
+.admin-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.admin-toggle-track {
+  position: absolute; inset: 0; background: var(--surface); border: 1px solid var(--border-stronger);
+  border-radius: 22px; transition: background 0.15s ease, border-color 0.15s ease;
+}
+.admin-toggle-thumb {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--text-2); transition: transform 0.15s ease, background 0.15s ease;
+}
+.admin-toggle input:checked + .admin-toggle-track { background: var(--accent); border-color: var(--accent); }
+.admin-toggle input:checked + .admin-toggle-track .admin-toggle-thumb { transform: translateX(16px); background: #fff; }
 
 /* --- Recent uploads carousel --- */
 .recent-carousel {

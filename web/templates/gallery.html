@@ -3,6 +3,7 @@
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
+{% include "_admin_pane.html" %}
 
 <div class="app-main">
   <div>
@@ -88,8 +89,9 @@ function toggleCardSelect(cb) {
 }
 function updateSelectionBar() {
   const bar = document.getElementById('selection-bar');
+  const deleteModeOn = document.body.classList.contains('delete-mode-on');
   const count = selectedSlugs.size;
-  bar.style.display = count ? 'flex' : 'none';
+  bar.style.display = (deleteModeOn && count) ? 'flex' : 'none';
   document.getElementById('selection-count').textContent = `${count} selected`;
 }
 
@@ -220,6 +222,17 @@ document.addEventListener('imagerepo:upload-complete', () => {
 document.getElementById('clear-selection-btn').addEventListener('click', () => {
   selectedSlugs.clear();
   document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);
+  updateSelectionBar();
+});
+
+// "Delete mode" now lives in the admin pane (#24) rather than always-on
+// checkboxes — when it's switched off, drop any in-flight selection so it
+// can't linger invisibly and reappear stale next time delete mode is on.
+document.addEventListener('imagerepo:delete-mode-change', (e) => {
+  if (!e.detail.enabled) {
+    selectedSlugs.clear();
+    document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);
+  }
   updateSelectionBar();
 });
 

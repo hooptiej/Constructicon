@@ -87,7 +87,10 @@
     </div>
     <div class="detail-panel">
       <div>
-        <div class="mono" style="font-size:14px">{{ item.display_name }}</div>
+        <div class="mono" style="font-size:14px">
+          {{ item.display_name }}
+          {% if item.type_badge %}<span class="type-badge" title="{{ item.type_label }}">{{ item.type_icon }} {{ item.type_badge }}</span>{% endif %}
+        </div>
         <div class="detail-meta" style="margin-top:8px">
           <span>Source: {{ item.source_display }}</span>
           <span>{{ item.uploaded_at_display }}</span>

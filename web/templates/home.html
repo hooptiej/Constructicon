@@ -137,6 +137,7 @@ function cardHtml(item) {
     <a href="/object/${item.slug}" class="gallery-card">
       <div class="gallery-thumb${item.redacted ? ' redacted-thumb' : ''}">
         ${item.redacted ? LOCK_ICON : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON)}
+        ${item.type_icon ? `<span class="type-badge-corner" title="${escapeHtml(item.type_label || item.type_badge || '')}">${item.type_icon}</span>` : ''}
       </div>
       <div class="gallery-body">
         <div>

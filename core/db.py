@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS capture_events (
     external_url TEXT,
     content_description TEXT,
     content_date REAL,
-    type_metadata TEXT NOT NULL DEFAULT '{}'
+    type_metadata TEXT NOT NULL DEFAULT '{}',
+    display_name TEXT,
+    icon TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_capture_events_source ON capture_events(source);
 CREATE INDEX IF NOT EXISTS idx_capture_events_client ON capture_events(client);
@@ -276,6 +278,16 @@ def init_db():
     existing_project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
     if "tag_id" not in existing_project_columns:
         conn.execute("ALTER TABLE projects ADD COLUMN tag_id INTEGER REFERENCES blog_tags(id)")
+    # display_name/icon (#11): an optional per-object override so an object
+    # can be given a human-friendly label and a custom emoji independent of
+    # its filename and its media_type's generic badge_icon (see
+    # core/object_types.py). NULL for every existing row — _to_public/
+    # _to_object_detail in web/app.py fall back to the pre-existing
+    # filename/content_description/slug and spec.badge_icon behavior when
+    # unset, so this is purely additive.
+    for column, ddl_type in (("display_name", "TEXT"), ("icon", "TEXT")):
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
     conn.commit()
     conn.close()
 
@@ -448,6 +460,31 @@ def update_tags(slug, description=None, tags=None, ticket_id=None, client=None):
             json.dumps(tags) if tags is not None else json.dumps(existing["tags"]),
             ticket_id if ticket_id is not None else existing["ticket_id"],
             client if client is not None else existing["client"],
+            slug,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return get_by_slug(slug)
+
+
+def rename_object(slug, display_name=None, icon=None):
+    """Sets an object's display_name and/or icon override (#11). Partial
+    update, same pattern as update_tags/update_project — pass only the
+    field(s) you want to change. Passing an empty string clears the field
+    back to the default fallback (filename/content_description/slug for
+    display_name, the media_type's spec.badge_icon for icon) rather than
+    leaving the previous override in place, since "" is never a meaningful
+    display name or icon glyph on its own."""
+    existing = get_by_slug(slug)
+    if existing is None:
+        return None
+    conn = get_conn()
+    conn.execute(
+        "UPDATE capture_events SET display_name = ?, icon = ? WHERE slug = ?",
+        (
+            (display_name or None) if display_name is not None else existing.get("display_name"),
+            (icon or None) if icon is not None else existing.get("icon"),
             slug,
         ),
     )

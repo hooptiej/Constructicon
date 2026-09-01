@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS projects (
     cover_slug TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     created_at REAL NOT NULL,
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    tag_id INTEGER REFERENCES blog_tags(id)
 );
 CREATE TABLE IF NOT EXISTS project_items (
     project_id INTEGER NOT NULL REFERENCES projects(id),
@@ -264,6 +265,17 @@ def init_db():
     existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
     if "nickname" not in existing_client_columns:
         conn.execute("ALTER TABLE clients ADD COLUMN nickname TEXT")
+    # tag_id: links a project to a root-level blog_tags row of the same name
+    # (see create_project's tag_id param) so tagging an object with a project
+    # also surfaces it through the site's ordinary tag-based browsing (the
+    # home page's ?tag=<slug> filter over the Projects column, and any future
+    # consumer of list_posts_for_tag). Existing pre-#1 projects (e.g. the ones
+    # from scripts/seed_example_projects.py) predate this and simply have
+    # tag_id = NULL — they still work everywhere, they just aren't reachable
+    # via a tag filter until someone links one up by hand.
+    existing_project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+    if "tag_id" not in existing_project_columns:
+        conn.execute("ALTER TABLE projects ADD COLUMN tag_id INTEGER REFERENCES blog_tags(id)")
     conn.commit()
     conn.close()
 
@@ -730,9 +742,15 @@ def list_recent_posts(limit=10):
 # (title, description, optional cover image) and a hand-ordered set of
 # member posts, rather than being derived from tag membership.
 
-def create_project(title, description="", cover_slug=None, status="active"):
+def create_project(title, description="", cover_slug=None, status="active", tag_id=None):
     """Auto-generates a unique slug from title, same dedup-with-numeric-
-    suffix pattern as get_or_create_tag."""
+    suffix pattern as get_or_create_tag.
+
+    tag_id optionally links this project to a blog_tags row (see #1 —
+    "tied to the site tags") — callers that want a project reachable via the
+    home page's tag filter should pass get_or_create_tag(title)["id"]
+    themselves rather than this function inventing the tag on its own, since
+    not every project needs (or predates) a tag link."""
     conn = get_conn()
     slug = _slugify(title)
     base_slug = slug
@@ -742,9 +760,9 @@ def create_project(title, description="", cover_slug=None, status="active"):
         n += 1
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (slug, title, description, cover_slug, status, now, now),
+        "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at, tag_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (slug, title, description, cover_slug, status, now, now, tag_id),
     )
     conn.commit()
     project_id = cur.lastrowid
@@ -758,6 +776,7 @@ def create_project(title, description="", cover_slug=None, status="active"):
         "status": status,
         "created_at": now,
         "updated_at": now,
+        "tag_id": tag_id,
     }
 
 

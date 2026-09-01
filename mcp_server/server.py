@@ -45,7 +45,7 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
                       source_modified_at: float | None = None) -> dict:
     """Upload an image or document to the repo and get back a stable hotlink URL.
 
-    filename: original filename, used only to determine the extension (.png/.jpg/.jpeg/.pdf).
+    filename: original filename, used only to determine the extension (.png/.jpg/.jpeg/.pdf/.stl).
     content_base64: raw file bytes, base64-encoded.
     uploaded_by: the Source string to record (capture_events.tech) — defaults to
       "Claude — authored" (this tool call created the content directly). Pass
@@ -61,7 +61,12 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
     if dupe is not None:
         return {**_to_public(dupe), "duplicate": True}
     ext = Path(filename).suffix.lower()
-    media_type = "pdf" if ext in storage.PDF_EXTENSIONS else "image"
+    if ext in storage.PDF_EXTENSIONS:
+        media_type = "pdf"
+    elif ext in storage.STL_EXTENSIONS:
+        media_type = "stl"
+    else:
+        media_type = "image"
     spec = object_types.get_object_type(media_type)
     slug, stored_filename = storage.save_file(filename, content)
     db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags, ticket_id, client,

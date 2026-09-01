@@ -518,7 +518,12 @@ async def api_upload(
     # backup) dispatches off this media_type via core/object_types.py's
     # registry, not off the extension again.
     ext = Path(file.filename).suffix.lower()
-    media_type = "pdf" if ext in storage.PDF_EXTENSIONS else "image"
+    if ext in storage.PDF_EXTENSIONS:
+        media_type = "pdf"
+    elif ext in storage.STL_EXTENSIONS:
+        media_type = "stl"
+    else:
+        media_type = "image"
     spec = object_types.get_object_type(media_type)
     db.insert_upload(
         slug, file.filename, stored_filename, user,

@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from . import pdf as _pdf
+from . import stl as _stl
 
 
 class ThumbnailSource(Enum):
@@ -140,6 +141,15 @@ OBJECT_TYPES = {
         text_extract_fn=_pdf.extract_text_for_row,
         badge_icon="\U0001F4C4",
         badge_text="PDF",
+    ),
+    "stl": ObjectTypeSpec(
+        key="stl",
+        label="3D printing file",
+        thumbnail_source=ThumbnailSource.CAPTURE,
+        ocr_capable=False,  # binary mesh format, no meaningful text to extract
+        capture_fn=_stl.capture_thumbnail,
+        badge_icon="\U0001F9CA",  # ice cube — closest built-in glyph to a 3D-printed block
+        badge_text="STL",
     ),
     "document": ObjectTypeSpec(
         key="document",

@@ -63,7 +63,7 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
                       source_modified_at: float | None = None) -> dict:
     """Upload an image or document to the repo and get back a stable hotlink URL.
 
-    filename: original filename, used only to determine the extension (.png/.jpg/.jpeg/.pdf/.stl/.psd/.mp3/.m4a/.ogg/.wav).
+    filename: original filename, used only to determine the extension (.png/.jpg/.jpeg/.pdf/.stl/.psd/.svg/.eps/.mp3/.m4a/.ogg/.wav).
     content_base64: raw file bytes, base64-encoded.
     uploaded_by: the Source string to record (capture_events.tech) — defaults to
       "Claude — authored" (this tool call created the content directly). Pass
@@ -87,6 +87,10 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
         media_type = "psd"
     elif ext in storage.AUDIO_EXTENSIONS:
         media_type = "audio"
+    elif ext in storage.SVG_EXTENSIONS:
+        media_type = "svg"
+    elif ext in storage.EPS_EXTENSIONS:
+        media_type = "eps"
     else:
         media_type = "image"
     spec = object_types.get_object_type(media_type)

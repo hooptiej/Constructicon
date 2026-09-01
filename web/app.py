@@ -61,9 +61,9 @@ def _has_thumbnail(row, spec=None):
     since #28, an uploaded audio file (a real file, but no visual frame to
     show as a thumbnail). Dispatches purely off the spec rather than
     short-circuiting on "row has a filename", since that assumption (true
-    for image/pdf/stl/psd, whose uploaded-file types always have *some*
-    visual to show) no longer holds once a type can have a stored file with
-    nothing image-like to derive a thumbnail from."""
+    for image/pdf/stl/psd/svg/eps, whose uploaded-file types always have
+    *some* visual to show) no longer holds once a type can have a stored
+    file with nothing image-like to derive a thumbnail from."""
     spec = spec or object_types.get_object_type(row.get("media_type"))
     return spec.thumbnail_source != object_types.ThumbnailSource.NONE
 
@@ -570,6 +570,10 @@ async def api_upload(
         media_type = "psd"
     elif ext in storage.AUDIO_EXTENSIONS:
         media_type = "audio"
+    elif ext in storage.SVG_EXTENSIONS:
+        media_type = "svg"
+    elif ext in storage.EPS_EXTENSIONS:
+        media_type = "eps"
     else:
         media_type = "image"
     spec = object_types.get_object_type(media_type)

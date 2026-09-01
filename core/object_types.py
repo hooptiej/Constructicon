@@ -17,9 +17,10 @@ describes, per type:
 core/thumbnails.py and core/ocr.py both dispatch purely off the spec
 returned by get_object_type() — neither one should ever grow a literal
 `if media_type == "some_new_type"` branch. Adding a new object type (PDF:
-issue #13, STL: issue #14, PSD: issue #27, and whatever comes after) means
-adding one ObjectTypeSpec below plus, if it needs one, a thumbnail_url_fn or
-capture_fn. Nothing else in the codebase should need to change.
+issue #13, STL: issue #14, PSD: issue #27, audio: issue #28, and whatever
+comes after) means adding one ObjectTypeSpec below plus, if it needs one, a
+thumbnail_url_fn or capture_fn. Nothing else in the codebase should need to
+change.
 """
 
 import re
@@ -168,6 +169,22 @@ OBJECT_TYPES = {
         ocr_capable=False,
         badge_icon="\U0001F4DD",
         badge_text="POST",
+    ),
+    "audio": ObjectTypeSpec(
+        key="audio",
+        label="Audio file",
+        # Unlike PDF/STL/PSD there's no visual frame to grab — a waveform
+        # render is a plausible future nice-to-have but not required for a
+        # first pass (issue #28), so this is NONE rather than CAPTURE. The
+        # object detail page renders a <audio controls> mini player instead
+        # of a thumbnail image (see web/app.py's is_audio_file and
+        # object_detail.html) and gallery tiles fall back to the generic
+        # file icon with this type's badge overlaid, same as any other
+        # NONE-thumbnail type.
+        thumbnail_source=ThumbnailSource.NONE,
+        ocr_capable=False,  # no visual/text layer to run OCR against
+        badge_icon="\U0001F3B5",  # musical note
+        badge_text="AUDIO",
     ),
     # Not reachable from the UI or any insert path yet — registered ahead of
     # time as a concrete example of the CAPTURE strategy (issue #15 calls

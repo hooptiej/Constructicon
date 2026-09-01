@@ -15,7 +15,8 @@ from PIL import Image
 
 STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 
-ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf", ".stl", ".psd"}
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".ogg", ".wav"}
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf", ".stl", ".psd"} | AUDIO_EXTENSIONS
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 PDF_EXTENSIONS = {".pdf"}
 STL_EXTENSIONS = {".stl"}

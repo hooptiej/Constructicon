@@ -25,7 +25,6 @@ codebase should need to change.
 
 import importlib
 import pkgutil
-import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -97,31 +96,6 @@ class ObjectTypeSpec:
     badge_text: str = "FILE"
 
 
-YOUTUBE_ID_RE = re.compile(r"(?:v=|/embed/|youtu\.be/)([A-Za-z0-9_-]{6,})")
-
-
-def extract_youtube_id(url):
-    """Video ID out of any of the URL shapes we might have stored in
-    external_url (watch?v=, youtu.be/, or an already-embed URL). Returns
-    None if `url` doesn't look like a YouTube link at all. Centralized here
-    so both the embed-player URL (web/app.py) and the static-thumbnail URL
-    below are built from the same extraction, instead of two regexes that
-    could drift apart."""
-    if not url:
-        return None
-    m = YOUTUBE_ID_RE.search(url)
-    return m.group(1) if m else None
-
-
-def youtube_thumbnail_url(external_url):
-    """YouTube serves a static thumbnail for any video at a predictable,
-    unauthenticated URL — no API key, no extra request to look one up.
-    hqdefault is available for effectively every video (maxresdefault isn't,
-    for older/lower-res uploads)."""
-    video_id = extract_youtube_id(external_url)
-    return f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else None
-
-
 OBJECT_TYPES = {}
 
 
@@ -153,39 +127,16 @@ def classify_url(url):
     (to avoid misclassifying youtu.be/youtube links as generic URLs), then
     defaults to 'url' as a fallback. Returns a media_type key suitable for
     passing to db.insert_content()."""
-    if extract_youtube_id(url):
+    from . import youtube
+    if youtube.matches(url):
         return "youtube"
     return "url"
 
 
 # Registered after auto-discovery to ensure all modules have been imported.
-# This is just youtube, document, pdf, stl, psd, svg, eps, stream, url
-# for now; image is registered separately via core/object_types/image.py.
-_youtube_spec = register(ObjectTypeSpec(
-    key="youtube",
-    label="YouTube video",
-    thumbnail_source=ThumbnailSource.FETCH_URL,
-    thumbnail_url_fn=youtube_thumbnail_url,
-    ocr_capable=True,
-    # #54: populated by scripts/full_youtube_channel_sync.py from the
-    # real YouTube Data API v3 (videos.list's snippet.description and
-    # statistics.*) — see that script's module docstring for why these
-    # four keys specifically, and web/app.py's update_content_metadata
-    # usage for how a row's content_description (the video's title) and
-    # this type_metadata get corrected/populated together. `author` is
-    # only ever set when the uploading channel ISN'T hooptiej's own —
-    # the sync script deliberately omits it otherwise so every single
-    # video doesn't carry a redundant "author: hooptiej".
-    metadata_fields=(
-        MetadataField("view_count", "View count"),
-        MetadataField("like_count", "Like count"),
-        MetadataField("comment_count", "Comment count"),
-        MetadataField("description", "Full description (from the YouTube Data API)"),
-        MetadataField("author", "Uploading channel — only set when it isn't the owner's own channel"),
-    ),
-    badge_icon="▶️",
-    badge_text="YOUTUBE",
-))
+# youtube is registered separately via core/object_types/youtube.py.
+# This is just document, pdf, stl, psd, svg, eps, stream, url for now;
+# image is registered separately via core/object_types/image.py.
 
 _pdf_spec = register(ObjectTypeSpec(
     key="pdf",
@@ -317,3 +268,11 @@ DEFAULT_SPEC = ObjectTypeSpec(
 
 def get_object_type(media_type):
     return OBJECT_TYPES.get(media_type, DEFAULT_SPEC)
+
+
+# Re-export extract_youtube_id for backward compatibility with existing callers
+# (web/app.py, scripts/* that reference object_types.extract_youtube_id).
+# The function has moved to core/object_types/youtube.py as part of the
+# object-type plugin architecture refactor.
+from . import youtube
+extract_youtube_id = youtube.extract_youtube_id

@@ -30,11 +30,11 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from . import eps as _eps
-from . import pdf as _pdf
-from . import psd as _psd
-from . import stl as _stl
-from . import svg as _svg
+from .. import eps as _eps
+from .. import pdf as _pdf
+from .. import psd as _psd
+from .. import stl as _stl
+from .. import svg as _svg
 
 
 class ThumbnailSource(Enum):

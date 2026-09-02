@@ -11,41 +11,116 @@
     <p class="page-subtitle">Curated projects below — gallery and upload live behind the tab on the right (hover, or drag a file over it).</p>
   </div>
 
-  <!-- Main space (#17 Part B): the gallery/upload column that used to sit
-       here moved into _gallery_drawer.html's pop-out, freeing this whole
-       area for the home page's content widgets. Each widget below is a
-       self-contained template partial (_category_tiles.html,
-       _project_tile.html) dropped into a simple flex/grid wrapper —
-       reordering or adding another widget (the issue's "more decepticons
-       for our devastator") is just editing this list, not a layout
-       rewrite. Deliberately NOT a drag-to-reorder builder — see the PR
-       description for why that's scoped out as a future follow-up. -->
+  <!-- #56 front-page makeover: Projects is now the visually dominant widget
+       (bigger heading/grid via .home-widget-primary) and the tag/category
+       chips (_category_tiles.html) sit directly above its grid instead of
+       living in their own disconnected widget up top — they only ever
+       filter Projects, so this is where they read as connected to what they
+       filter. Unfiled (#41) moved below Projects and shrunk into a compact,
+       clearly-secondary widget (.home-widget-compact, reusing the
+       .home-gallery-grid row layout + a capped scroll height) — it still
+       shows whenever non-empty (so the #41 incident this fixed can't
+       recur) and still hides entirely when empty, just without the
+       full-section visual weight it had before. Both widgets get a small
+       client-side sort control (#56 item 4): project/unfiled data is
+       embedded as JSON (same pattern #41 already used for Unfiled) and
+       rendered/re-rendered by a small script, so switching sort order is a
+       pure re-render with no new backend endpoint. -->
   <div class="home-widgets">
-    <div class="home-widget" data-widget="category-tiles">
+    <div class="home-widget home-widget-primary" data-widget="projects">
+      <div class="home-col-header">
+        <h2>Projects</h2>
+        {% if projects %}
+        <div class="sort-control">
+          <label for="projects-sort" class="sort-label">Sort</label>
+          <select class="filter-select" id="projects-sort">
+            <option value="newest">Newest</option>
+            <option value="oldest">Oldest</option>
+            <option value="az">A–Z</option>
+          </select>
+        </div>
+        {% endif %}
+      </div>
+      <div class="hazard-stripe" style="width:64px"></div>
+
       {% include "_category_tiles.html" %}
+
+      {% if projects %}
+      <div class="project-grid" id="projects-grid"></div>
+      <script>
+      (function () {
+        function escapeHtml(str) {
+          return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+        function projectCardHtml(p) {
+          return `
+            <a class="project-card" href="/project/${p.slug}">
+              <div class="project-cover">
+                ${p.cover_url ? `<img src="${p.cover_url}" loading="lazy" alt="">` : `<div class="project-cover-placeholder"></div>`}
+              </div>
+              <div class="project-body">
+                <div class="project-title">${escapeHtml(p.title)}</div>
+                ${p.description ? `<div class="project-desc">${escapeHtml(p.description)}</div>` : ''}
+                <div class="project-meta-row">
+                  <span class="project-status-pill${p.status === 'archived' ? ' archived' : ''}">${escapeHtml(p.status)}</span>
+                </div>
+              </div>
+            </a>`;
+        }
+        const projects = {{ projects | tojson }};
+        const grid = document.getElementById('projects-grid');
+        const sortSelect = document.getElementById('projects-sort');
+        const SORTERS = {
+          newest: (a, b) => b.created_at - a.created_at,
+          oldest: (a, b) => a.created_at - b.created_at,
+          az: (a, b) => a.title.localeCompare(b.title),
+        };
+        function render() {
+          const sorted = projects.slice().sort(SORTERS[sortSelect.value]);
+          grid.innerHTML = sorted.map(projectCardHtml).join('');
+        }
+        sortSelect.addEventListener('change', render);
+        render();
+      })();
+      </script>
+      {% else %}
+      <p class="empty-state">
+        {% if selected_tag_slug %}No projects tagged under this category yet.{% else %}No projects yet.{% endif %}
+      </p>
+      {% endif %}
     </div>
 
     <!-- #41: uploads with no project membership — always visible here (not
          just behind the gallery pop-out) so the home page never looks
          empty/broken just because no projects have been created yet or an
          upload wasn't filed into one. See db.list_unfiled_items and
-         home_page's docstring for the incident this fixes. Deliberately its
-         own widget with a distinct "Unfiled" heading, not folded into the
-         Projects widget below, so it never reads as another project — and
-         hidden entirely once every upload has a home, rather than showing
-         an empty "Unfiled" section forever. Reuses the exact gallery-card
-         markup/JS (cardHtml, OCR lamp, client badge, type badge) that
-         user_gallery.html and _gallery_drawer.html already use, rather than
-         a stripped-down tile layout, so PDF/STL/PSD/audio/svg/eps badges
-         render here identically to everywhere else. -->
+         home_page's docstring for the incident this fixes. #56 shrank this
+         from a full-width section into this compact widget (smaller
+         uppercase heading, .home-gallery-grid's compact row cards instead
+         of the full gallery-card grid, capped height with its own scroll)
+         now that real Unfiled content exists and was crowding out Projects
+         — still its own widget with a distinct "Unfiled" heading so it
+         never reads as another project, and still hidden entirely once
+         every upload has a home. Reuses the exact gallery-card markup/JS
+         (cardHtml, OCR lamp, client badge, type badge) that user_gallery.html
+         and _gallery_drawer.html already use, rather than a stripped-down
+         tile layout, so PDF/STL/PSD/audio/svg/eps badges render here
+         identically to everywhere else. -->
     {% if unfiled_items %}
-    <div class="home-widget" data-widget="unfiled">
+    <div class="home-widget home-widget-compact" data-widget="unfiled">
       <div class="home-col-header">
         <h2>Unfiled</h2>
+        <div class="sort-control">
+          <label for="unfiled-sort" class="sort-label">Sort</label>
+          <select class="filter-select" id="unfiled-sort">
+            <option value="newest">Newest</option>
+            <option value="oldest">Oldest</option>
+            <option value="az">A–Z</option>
+          </select>
+        </div>
       </div>
-      <div class="hazard-stripe" style="width:64px"></div>
       <p class="page-subtitle">{{ unfiled_items | length }} upload{{ 's' if unfiled_items|length != 1 else '' }} not yet added to a project.</p>
-      <div class="gallery-grid" id="unfiled-grid"></div>
+      <div class="home-gallery-grid unfiled-scroll" id="unfiled-grid"></div>
     </div>
     <script>
     (function () {
@@ -107,7 +182,19 @@
           </a>`;
       }
       const unfiledItems = {{ unfiled_items | tojson }};
-      document.getElementById('unfiled-grid').innerHTML = unfiledItems.map(cardHtml).join('');
+      const unfiledGrid = document.getElementById('unfiled-grid');
+      const unfiledSort = document.getElementById('unfiled-sort');
+      const UNFILED_SORTERS = {
+        newest: (a, b) => b.uploaded_at - a.uploaded_at,
+        oldest: (a, b) => a.uploaded_at - b.uploaded_at,
+        az: (a, b) => a.display_name.localeCompare(b.display_name),
+      };
+      function render() {
+        const sorted = unfiledItems.slice().sort(UNFILED_SORTERS[unfiledSort.value]);
+        unfiledGrid.innerHTML = sorted.map(cardHtml).join('');
+      }
+      unfiledSort.addEventListener('change', render);
+      render();
       // A file uploaded (and, since it's brand new, always unfiled) while
       // this page is open should show up here immediately, same as it does
       // in the pop-out's own gallery — reload is simplest and matches how
@@ -118,25 +205,6 @@
     })();
     </script>
     {% endif %}
-
-    <div class="home-widget" data-widget="projects">
-      <div class="home-col-header">
-        <h2>Projects</h2>
-      </div>
-      <div class="hazard-stripe" style="width:64px"></div>
-
-      {% if projects %}
-      <div class="project-grid">
-        {% for p in projects %}
-          {% include "_project_tile.html" %}
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="empty-state">
-        {% if selected_tag_slug %}No projects tagged under this category yet.{% else %}No projects yet.{% endif %}
-      </p>
-      {% endif %}
-    </div>
   </div>
 </div>
 {% endblock %}

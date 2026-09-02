@@ -79,17 +79,8 @@
 
   <div>
     <h2 class="gallery-drawer-section-title">Gallery</h2>
-    <div class="recent-carousel">
-      <button type="button" class="carousel-arrow" id="recent-prev" aria-label="Scroll left">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <div class="recent-banner" id="recent-banner"></div>
-      <button type="button" class="carousel-arrow" id="recent-next" aria-label="Scroll right">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-    </div>
 
-    <div class="filter-row" style="margin-top:14px">
+    <div class="filter-row">
       <div class="search-box">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex-shrink:0">
           <circle cx="11" cy="11" r="7" stroke="#6E6B57" stroke-width="1.6"/>
@@ -97,6 +88,11 @@
         </svg>
         <input id="search-input" placeholder="Search description, tags, filename...">
       </div>
+      <select class="filter-select" id="gallery-sort" title="Sort">
+        <option value="newest">Newest</option>
+        <option value="oldest">Oldest</option>
+        <option value="az">A–Z</option>
+      </select>
     </div>
 
     <div class="selection-bar" id="selection-bar">
@@ -674,14 +670,31 @@
 
   const PANE_LIMIT = 4;
 
+  // Sort control (#56 item 4) — items already arrive newest-first per group
+  // (see /api/gallery), so "Newest" is a no-op sort and the others just
+  // re-order the already-fetched data client-side; no new endpoint/params
+  // needed. Re-sorting happens within each uploader's group rather than
+  // flattening groups together, so the "grouped by uploader" structure this
+  // pane is built around is unaffected by the chosen order.
+  const gallerySort = document.getElementById('gallery-sort');
+  const GALLERY_SORTERS = {
+    newest: (a, b) => b.uploaded_at - a.uploaded_at,
+    oldest: (a, b) => a.uploaded_at - b.uploaded_at,
+    az: (a, b) => a.display_name.localeCompare(b.display_name),
+  };
+  let lastGroups = [];
+
   function render(groups) {
+    lastGroups = groups;
     sectionsEl.innerHTML = '';
     emptyState.style.display = groups.length ? 'none' : 'block';
 
+    const sorter = GALLERY_SORTERS[gallerySort.value];
     for (const group of groups) {
       const countLabel = group.total > PANE_LIMIT
         ? `${PANE_LIMIT} most recent of ${group.total}`
         : `${group.total} upload${group.total > 1 ? 's' : ''}`;
+      const items = group.items.slice().sort(sorter);
       const pane = document.createElement('div');
       pane.className = 'user-pane';
       pane.innerHTML = `
@@ -689,54 +702,10 @@
           <span class="gallery-section-title">${group.uploaded_by_display}</span>
           <span class="gallery-section-count">${countLabel}</span>
         </a>
-        <div class="gallery-grid">${group.items.map(cardHtml).join('')}</div>`;
+        <div class="gallery-grid">${items.map(cardHtml).join('')}</div>`;
       sectionsEl.appendChild(pane);
     }
   }
-
-  const recentBanner = document.getElementById('recent-banner');
-  function recentThumbHtml(item) {
-    const isImage = item.has_thumbnail;
-    return `<a class="recent-thumb${item.redacted ? ' redacted-thumb' : ''}" href="/object/${item.slug}" title="${escapeHtml(item.display_name + ' — ' + item.uploaded_by_display + (item.redacted ? ' (redacted)' : ''))}">
-      ${item.redacted ? LOCK_ICON.replace('width="22" height="22"', 'width="16" height="16"') : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON.replace('width="26" height="26"', 'width="16" height="16"'))}
-    </a>`;
-  }
-
-  let recentSetWidth = 0;
-  function renderRecentBanner(items) {
-    const shown = items.slice(0, 16);
-    if (!shown.length) {
-      recentBanner.innerHTML = '';
-      recentSetWidth = 0;
-      return;
-    }
-    recentBanner.innerHTML = shown.map(recentThumbHtml).join('') + shown.map(recentThumbHtml).join('');
-    requestAnimationFrame(() => { recentSetWidth = recentBanner.scrollWidth / 2; });
-  }
-
-  async function loadRecent() {
-    const res = await fetch('/api/search');
-    renderRecentBanner(await res.json());
-  }
-
-  const CAROUSEL_STEP = 3;
-  const CAROUSEL_THUMB_STEP = 60 + 10;
-
-  document.getElementById('recent-prev').addEventListener('click', () => {
-    if (recentSetWidth && recentBanner.scrollLeft < CAROUSEL_THUMB_STEP * CAROUSEL_STEP) {
-      recentBanner.scrollLeft += recentSetWidth;
-    }
-    recentBanner.scrollBy({ left: -CAROUSEL_THUMB_STEP * CAROUSEL_STEP, behavior: 'smooth' });
-  });
-  document.getElementById('recent-next').addEventListener('click', () => {
-    recentBanner.scrollBy({ left: CAROUSEL_THUMB_STEP * CAROUSEL_STEP, behavior: 'smooth' });
-  });
-
-  recentBanner.addEventListener('scroll', () => {
-    if (recentSetWidth && recentBanner.scrollLeft >= recentSetWidth) {
-      recentBanner.scrollLeft -= recentSetWidth;
-    }
-  });
 
   async function load() {
     const q = document.getElementById('search-input').value;
@@ -751,10 +720,10 @@
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(load, 200);
   });
+  gallerySort.addEventListener('change', () => render(lastGroups));
 
   document.addEventListener('imagerepo:upload-complete', () => {
     load();
-    loadRecent();
   });
 
   // Same "delete mode" convention gallery.html/user_gallery.html use — see
@@ -785,13 +754,11 @@
       selectedSlugs.clear();
       updateSelectionBar();
       load();
-      loadRecent();
     } else {
       alert('Delete failed.');
     }
   });
 
   load();
-  loadRecent();
 })();
 </script>

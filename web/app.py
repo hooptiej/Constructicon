@@ -255,6 +255,10 @@ def _to_project_card(project):
         "description": project["description"],
         "status": project["status"],
         "cover_url": _project_cover_url(project.get("cover_slug")),
+        # #56: front-page sort control needs a date to sort "Newest"/"Oldest"
+        # by — created_at was already stored on every project row, just never
+        # exposed to this card shape before.
+        "created_at": project["created_at"],
     }
 
 

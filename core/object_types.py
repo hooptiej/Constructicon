@@ -133,6 +133,22 @@ OBJECT_TYPES = {
         thumbnail_source=ThumbnailSource.FETCH_URL,
         thumbnail_url_fn=youtube_thumbnail_url,
         ocr_capable=True,
+        # #54: populated by scripts/full_youtube_channel_sync.py from the
+        # real YouTube Data API v3 (videos.list's snippet.description and
+        # statistics.*) — see that script's module docstring for why these
+        # four keys specifically, and web/app.py's update_content_metadata
+        # usage for how a row's content_description (the video's title) and
+        # this type_metadata get corrected/populated together. `author` is
+        # only ever set when the uploading channel ISN'T hooptiej's own —
+        # the sync script deliberately omits it otherwise so every single
+        # video doesn't carry a redundant "author: hooptiej".
+        metadata_fields=(
+            MetadataField("view_count", "View count"),
+            MetadataField("like_count", "Like count"),
+            MetadataField("comment_count", "Comment count"),
+            MetadataField("description", "Full description (from the YouTube Data API)"),
+            MetadataField("author", "Uploading channel — only set when it isn't the owner's own channel"),
+        ),
         badge_icon="▶️",
         badge_text="YOUTUBE",
     ),

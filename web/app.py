@@ -191,6 +191,13 @@ def _to_object_detail(row):
         "youtube_embed_url": _youtube_embed_url(row.get("external_url")) if media_type == "youtube" else None,
         "content_description": row.get("content_description"),
         "content_date_display": _friendly_date(row.get("content_date")),
+        # #54: freeform per-type metadata (view/like/comment counts, full
+        # description, uploading channel if not the owner's own — see
+        # core/object_types.py's "youtube" metadata_fields and
+        # scripts/full_youtube_channel_sync.py). {} for every row nothing
+        # has ever written type_metadata for, same "always a dict, never
+        # missing" contract as row["tags"].
+        "type_metadata": row.get("type_metadata") or {},
         # See _to_public's matching comment — row["display_name"]/row["icon"]
         # (#11) are per-object overrides that win over the generic fallbacks.
         "display_name": row.get("display_name") or filename or row.get("content_description") or row["slug"],
@@ -667,6 +674,7 @@ async def api_create_content(
     ticket_id: str = Form(""),
     client: str = Form(""),
     project_id: str = Form(""),
+    type_metadata: str | None = Form(None),
 ):
     """Creates a capture_events row for content with no uploaded file — a
     YouTube link today, a stream/URL capture once a future issue wires up
@@ -677,6 +685,15 @@ async def api_create_content(
     ocr_status="pending" for any OCR-capable type (see core/db.py), and this
     schedules the same background ocr.run_ocr — which fetches/generates the
     type's thumbnail before running OCR against it (see core/ocr.py).
+
+    type_metadata (#54): an optional JSON object of freeform per-type
+    properties (view/like/comment counts, full description, uploading
+    channel — see core/object_types.py's "youtube" metadata_fields) to set
+    at creation time, so a caller that already has this data (e.g.
+    scripts/full_youtube_channel_sync.py, which fetches it from the YouTube
+    Data API in the same pass it decides to create the row) doesn't need a
+    separate follow-up call the way api_update_image's equivalent field
+    does for correcting an EXISTING row.
     """
     spec = object_types.get_object_type(media_type)
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
@@ -687,6 +704,10 @@ async def api_create_content(
         tag_list = json.loads(tags) if tags else []
     except json.JSONDecodeError:
         tag_list = []
+    try:
+        parsed_type_metadata = json.loads(type_metadata) if type_metadata else None
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="type_metadata must be valid JSON")
     content_date_epoch = float(content_date) if content_date else None
     slug = storage.make_slug()
     db.insert_content(
@@ -696,6 +717,7 @@ async def api_create_content(
         content_date=content_date_epoch,
         description=description, tags=tag_list,
         ticket_id=ticket_id or None, client=client or None,
+        type_metadata=parsed_type_metadata,
     )
     row = db.get_by_slug(slug)
     if spec.ocr_capable and row["ocr_status"] == "pending":
@@ -741,6 +763,8 @@ def api_update_image(
     client: str = Form(""),
     display_name: str | None = Form(None),
     icon: str | None = Form(None),
+    content_description: str | None = Form(None),
+    type_metadata: str | None = Form(None),
 ):
     try:
         tag_list = json.loads(tags) if tags else []
@@ -755,6 +779,23 @@ def api_update_image(
     # only through the MCP tool — see imagerepo_rename in mcp_server/server.py.
     if display_name is not None or icon is not None:
         row = db.rename_object(slug, display_name=display_name, icon=icon)
+    # content_description/type_metadata (#54): lets a caller correct a
+    # row's title-ish blurb and/or per-type metadata after creation — added
+    # for scripts/full_youtube_channel_sync.py's correction pass (site-
+    # scraped titles overwritten with the real YouTube Data API title, plus
+    # view/like/comment counts and, when applicable, the uploading channel).
+    # type_metadata is a JSON object string, MERGED into whatever the row
+    # already has (see db.update_content_metadata) rather than replacing it
+    # wholesale, so this can't be used to accidentally wipe out a field some
+    # other future writer already set.
+    if content_description is not None or type_metadata is not None:
+        parsed_metadata = None
+        if type_metadata is not None:
+            try:
+                parsed_metadata = json.loads(type_metadata) if type_metadata else {}
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="type_metadata must be valid JSON")
+        row = db.update_content_metadata(slug, content_description=content_description, type_metadata=parsed_metadata)
     return JSONResponse(_to_public(row))
 
 

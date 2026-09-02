@@ -363,6 +363,51 @@ def set_type_metadata(slug, metadata):
     conn.close()
 
 
+def update_content_metadata(slug, content_description=None, type_metadata=None):
+    """Partial update for the two content-description-shaped fields that
+    neither update_tags (description/tags/ticket_id/client — see
+    api_update_image in web/app.py) nor rename_object (display_name/icon,
+    #11) cover: content_description itself, and type_metadata.
+
+    Added for #54's full YouTube channel sync: correcting a row's
+    site-scraped content_description (used as the video's title — see
+    core/db.py's insert_content docstring and object_detail.html) with the
+    real title from the YouTube Data API, while also recording
+    view/like/comment counts (and, when it isn't the channel owner's own
+    upload, the uploading channel's name) in type_metadata.
+
+    Unlike set_type_metadata (wholesale replace — the caller is expected to
+    read-modify-write itself if it wants to merge), this MERGES the given
+    type_metadata into whatever is already stored, keying on top-level dict
+    keys. A correction pass re-writing the same fields with the same values
+    is what makes re-running #54's sync script a safe no-op; a merge (not a
+    plain replace) also means this can be called by more than one future
+    writer for the same row (e.g. a stats-only refresh later) without one
+    call's fields clobbering another's.
+
+    content_description=None leaves the existing value alone (same
+    None-means-"don't touch" convention as update_tags/rename_object);
+    passing "" clears it, same as those two.
+    """
+    existing = get_by_slug(slug)
+    if existing is None:
+        return None
+    new_content_description = content_description if content_description is not None else existing["content_description"]
+    if type_metadata:
+        merged = dict(existing.get("type_metadata") or {})
+        merged.update(type_metadata)
+    else:
+        merged = existing.get("type_metadata") or {}
+    conn = get_conn()
+    conn.execute(
+        "UPDATE capture_events SET content_description = ?, type_metadata = ? WHERE slug = ?",
+        (new_content_description, json.dumps(merged), slug),
+    )
+    conn.commit()
+    conn.close()
+    return get_by_slug(slug)
+
+
 def list_pending_ocr():
     """Rows whose OCR never finished — normally just a brief in-flight window,
     but a process restart while a background OCR task was queued or running

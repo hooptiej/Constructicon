@@ -67,6 +67,29 @@
           </a>
           {% endif %}
         </div>
+        {# #54: real YouTube Data API stats/metadata — see
+           core/object_types.py's "youtube" metadata_fields and
+           scripts/full_youtube_channel_sync.py, which is what populates
+           type_metadata for youtube rows. item.type_metadata is always a
+           dict (possibly empty — e.g. a row the sync script hasn't reached
+           yet), so this whole block simply doesn't render until it has. #}
+        {% if item.media_type == 'youtube' and item.type_metadata %}
+        <div class="detail-meta" style="margin-top:6px">
+          {% if item.type_metadata.view_count is not none %}<span>{{ "{:,}".format(item.type_metadata.view_count) }} views</span>{% endif %}
+          {% if item.type_metadata.like_count is not none %}<span>{{ "{:,}".format(item.type_metadata.like_count) }} likes</span>{% endif %}
+          {% if item.type_metadata.comment_count is not none %}<span>{{ "{:,}".format(item.type_metadata.comment_count) }} comments</span>{% endif %}
+          {% if item.type_metadata.author %}<span>By {{ item.type_metadata.author }}</span>{% endif %}
+        </div>
+        {% if item.type_metadata.description %}
+        <details class="ocr-disclosure" style="display:block;margin-top:6px">
+          <summary>
+            <svg class="disclosure-caret" width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Full description
+          </summary>
+          <pre class="ocr-text mono">{{ item.type_metadata.description }}</pre>
+        </details>
+        {% endif %}
+        {% endif %}
       </div>
       {% endif %}
 

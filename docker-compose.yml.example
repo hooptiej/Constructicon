@@ -1,0 +1,51 @@
+version: "3.8"
+
+services:
+  constructicon-web:
+    build: .
+    container_name: constructicon-web
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./core:/app/core
+      - ./web:/app/web
+      - ./mcp_server:/app/mcp_server
+      - ./storage:/app/storage
+      - ./imagerepo.db:/app/imagerepo.db
+    environment:
+      - IMAGEREPO_BASE_URL=http://10.0.1.78:8000
+    command: uvicorn web.app:app --host 0.0.0.0 --port 8000
+
+  constructicon-mcp:
+    build: .
+    container_name: constructicon-mcp
+    volumes:
+      - ./core:/app/core
+      - ./web:/app/web
+      - ./mcp_server:/app/mcp_server
+      - ./storage:/app/storage
+      - ./imagerepo.db:/app/imagerepo.db
+    environment:
+      - CONSTRUCTICON_BASE_URL=http://constructicon-web:8000
+    command: python -m mcp_server.server
+    depends_on:
+      - constructicon-web
+    network_mode: bridge
+
+  # Test instance: isolated DB/storage for testing schema changes, migration
+  # scripts, etc. before touching production
+  constructicon-test:
+    build: .
+    container_name: constructicon-test
+    ports:
+      - "8001:8000"
+      - "8101:8100"
+    volumes:
+      - ./core:/app/core
+      - ./web:/app/web
+      - ./mcp_server:/app/mcp_server
+      - ./storage-test:/app/storage
+      - ./imagerepo-test.db:/app/imagerepo.db
+    environment:
+      - IMAGEREPO_BASE_URL=http://10.0.1.78:8001
+    command: uvicorn web.app:app --host 0.0.0.0 --port 8000

@@ -14,6 +14,14 @@
       <h1 class="page-title">{{ uploader_display }}</h1>
       <p class="page-subtitle">{{ items | length }} upload{{ 's' if items|length != 1 else '' }}</p>
     </div>
+    <div class="sort-control">
+      <label for="gallery-sort" class="sort-label">Sort</label>
+      <select class="filter-select" id="gallery-sort">
+        <option value="newest">Newest</option>
+        <option value="oldest">Oldest</option>
+        <option value="az">A–Z</option>
+      </select>
+    </div>
   </div>
   <div class="selection-bar" id="selection-bar">
     <span class="selection-count" id="selection-count"></span>
@@ -102,7 +110,19 @@ function cardHtml(item) {
 }
 
 const items = {{ items | tojson }};
-document.getElementById('user-gallery-grid').innerHTML = items.map(cardHtml).join('');
+const userGalleryGrid = document.getElementById('user-gallery-grid');
+const gallerySort = document.getElementById('gallery-sort');
+const GALLERY_SORTERS = {
+  newest: (a, b) => b.uploaded_at - a.uploaded_at,
+  oldest: (a, b) => a.uploaded_at - b.uploaded_at,
+  az: (a, b) => a.display_name.localeCompare(b.display_name),
+};
+function renderGallery() {
+  const sorted = items.slice().sort(GALLERY_SORTERS[gallerySort.value]);
+  userGalleryGrid.innerHTML = sorted.map(cardHtml).join('');
+}
+gallerySort.addEventListener('change', renderGallery);
+renderGallery();
 
 document.addEventListener('imagerepo:upload-complete', (e) => {
   if (!e.detail.failures.length) location.reload();

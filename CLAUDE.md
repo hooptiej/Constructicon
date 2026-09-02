@@ -229,6 +229,51 @@ Two containers run side by side on that box:
   same discipline for any script that writes data or hits a real external
   API (YouTube, etc.) — default to testing against `constructicon-test`
   first, never assume production is the right target.
+  **Checkout may be ahead of `main`, deliberately**: `constructicon-test`'s
+  bind-mounted checkout can be left on a feature branch between sessions
+  when that branch is the one the *next* piece of work builds on (e.g. as
+  of 2026-09-02 it's on `feat/object-types-scaffold-image-67` — the #67
+  object-type-plugin pilot — so the follow-on migration issues #75-#82 have
+  a live container to test against). Check `git -C
+  "/mnt/Storage Pool/home/hoop/hoop/constructicon-test" log -1` (or just
+  read its `core/`/`web/` files) before assuming this container reflects
+  `main` — don't silently reset it to `main` without checking whether it's
+  intentionally parked on something else first.
+
+### Live-testing a branch against `constructicon-test`
+
+Real, live verification beats trusting a self-reported "py_compile passed"
+or "code review looks fine" claim — see the #67 scaffold PR's actual
+history: an agent's own compile/review-only check missed a real circular-
+relative-import bug (`from . import eps` needed to become `from .. import
+eps` once `core/object_types.py` became a package) that only surfaced when
+the module was actually imported with real dependencies.
+
+1. `git worktree add /tmp/verify-<branch> origin/<branch>` locally (or fetch
+   + checkout) to get the branch's files without disturbing your main
+   checkout.
+2. `scp -i ~/.ssh/id_ed25519_truenas -r <changed-dir> hoop@10.0.1.78:"/mnt/Storage Pool/home/hoop/hoop/constructicon-test/<changed-dir>/"`
+   — back up the target directory first (`cp -r`) if you'll need to restore
+   it afterward; if this container is meant to keep running the branch for
+   the *next* round of work, don't restore it, and update the breadcrumb
+   above instead.
+3. `sudo docker restart constructicon-test`, then `sudo docker logs
+   constructicon-test --tail 20` — look for `Application startup complete`
+   with no traceback.
+4. There's no `curl` inside the app image — verify with `sudo docker exec
+   constructicon-test python3 -c "import urllib.request; ..."` against
+   `http://localhost:80/...` (the container's *internal* port; check
+   `docker logs` for the actual `Uvicorn running on http://0.0.0.0:PORT`
+   line rather than assuming it matches the externally-mapped port).
+   Hit `/`, `/api/gallery`, `/api/settings`, `/api/projects`, and a real
+   `/object/<slug>` + `/f/<slug>/thumb` for an existing row to confirm the
+   object-type/thumbnail dispatch path actually works end to end, not just
+   that the process boots.
+5. Root-owned `__pycache__` dirs can appear under a bind-mounted `core/`
+   (written by the container's own process) — plain `rm -rf` from the
+   `hoop` user will hit `Permission denied` on those. Clean them from
+   *inside* the container instead: `sudo docker exec constructicon-test
+   find /app/core -name __pycache__ -exec rm -rf {} +`.
 - The Dockerfile comments confirm `core/`, `web/`, and `mcp_server/` are
   **bind-mounted at run time, not baked into the image** — an ordinary code
   deploy is a `git pull` + container restart, not a rebuild. Only changes

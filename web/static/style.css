@@ -585,7 +585,12 @@ body.delete-mode-on .card-select { display: block; }
 .home-col-header h2 { font-size: 15px; font-weight: 500; margin: 0; }
 .home-col-header .see-all { font-size: 12px; color: var(--text-2); }
 .home-gallery-grid { display: flex; flex-direction: column; gap: 12px; }
-.home-gallery-grid .gallery-card { flex-direction: row; align-items: center; }
+/* flex-shrink:0 matters once this sits inside a height-capped, scrollable
+   container (.unfiled-scroll below) — without it, a flex column with more
+   content than its max-height lets its items shrink to fit instead of
+   actually overflowing into the scrollbar, collapsing every card to a
+   sliver rather than showing a properly-sized list you can scroll. */
+.home-gallery-grid .gallery-card { flex-direction: row; align-items: center; flex-shrink: 0; }
 .home-gallery-grid .gallery-thumb { width: 72px; height: 72px; flex-shrink: 0; border-bottom: none; border-right: 1px solid rgba(226,214,150,0.06); }
 .home-gallery-grid .gallery-body { padding: 10px 12px; gap: 5px; }
 

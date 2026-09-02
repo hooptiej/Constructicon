@@ -468,8 +468,14 @@ def api_backup():
 # core.db.get_setting/has_setting/set_setting) are generic key/value, so a
 # future second key (or any other app-level setting) only needs an entry
 # here plus a labeled row in _admin_pane.html, not a schema change.
+# thingiverse_app_token (#62): read-only Thingiverse API access token for
+# pulling the owner's own public models — no user-auth flow needed on
+# Thingiverse's side, so this is exactly the same "paste one static secret"
+# shape as youtube_data_api_key. No storage/endpoint changes required; this
+# confirms #55/#59's genericness holds for a second key.
 KNOWN_SETTINGS = {
     "youtube_data_api_key": "YouTube Data API Key",
+    "thingiverse_app_token": "Thingiverse App Token",
 }
 
 

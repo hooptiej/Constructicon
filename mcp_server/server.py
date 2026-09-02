@@ -319,7 +319,7 @@ def constructicon_create_project(title: str, description: str = "", cover_slug: 
 
 
 @mcp.tool()
-def constructicon_update_project(project_id: str, title: str | None = None,
+def constructicon_update_project(project_id: str | int, title: str | None = None,
                                  description: str | None = None, cover_slug: str | None = None,
                                  status: str | None = None) -> dict | None:
     """Update a project's metadata.
@@ -332,7 +332,7 @@ def constructicon_update_project(project_id: str, title: str | None = None,
 
 
 @mcp.tool()
-def constructicon_add_to_project(slug: str, project_id: str) -> list[dict]:
+def constructicon_add_to_project(slug: str, project_id: str | int) -> list[dict]:
     """Add an object to a project.
 
     If the project has a linked tag, the object is also tagged with it.
@@ -350,7 +350,7 @@ def constructicon_add_to_project(slug: str, project_id: str) -> list[dict]:
 
 
 @mcp.tool()
-def constructicon_remove_from_project(slug: str, project_id: str) -> list[dict]:
+def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[dict]:
     """Remove an object from a project (does not untag it).
 
     Returns the object's updated project list.

@@ -1,4 +1,4 @@
-"""Image Repo web app: upload, gallery, and the public /f/{slug} hotlink
+"""Constructicon web app: upload, gallery, and the public /f/{slug} hotlink
 route.
 
 No auth — this runs on a LAN-only dev server with no port forward, so the
@@ -41,7 +41,7 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 # single-owner site, not a multi-tech tool) — the server tells them apart by
 # the desktop app's identifying request header (see api_upload below) and
 # stamps the right Source string itself rather than trusting a client field.
-DESKTOP_APP_CLIENT_HEADER = "X-Imagerepo-Client"
+DESKTOP_APP_CLIENT_HEADER = "X-Constructicon-Client"
 DESKTOP_APP_CLIENT_VALUE = "desktop-app"
 
 DESKTOP_APP_DIR = Path(__file__).resolve().parent.parent / "desktop_app"
@@ -49,7 +49,7 @@ DESKTOP_APP_DIR = Path(__file__).resolve().parent.parent / "desktop_app"
 # files) on purpose — this is neither. One file, whoever uploads last wins;
 # there's no versioning, just the current build.
 DESKTOP_APP_BUILD_DIR = Path(__file__).resolve().parent.parent / "desktop_app_build"
-DESKTOP_APP_BUILD_PATH = DESKTOP_APP_BUILD_DIR / "ImageRepo-Uploader.zip"
+DESKTOP_APP_BUILD_PATH = DESKTOP_APP_BUILD_DIR / "Constructicon-Uploader.zip"
 
 
 def _has_thumbnail(row, spec=None):
@@ -81,7 +81,7 @@ def _to_public(row):
         # something readable to show in its place rather than the literal
         # string "null".
         # row["display_name"] (#11) is a per-object override — set via
-        # /api/image/<slug> or the imagerepo_rename MCP tool — that takes
+        # /api/image/<slug> or the constructicon_rename MCP tool — that takes
         # priority over the old filename/content_description/slug fallback
         # chain when present.
         "display_name": row.get("display_name") or row["filename"] or row.get("content_description") or row["slug"],

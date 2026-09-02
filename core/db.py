@@ -1,4 +1,4 @@
-"""SQLite index for the image repo. One row per upload."""
+"""SQLite index for Constructicon. One row per upload."""
 
 import json
 import re
@@ -97,10 +97,10 @@ CREATE TABLE IF NOT EXISTS app_settings (
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
 
 # --- Source (capture_events.tech) ---
-# `tech` used to record which technician uploaded a screenshot, back when
-# imagerepo was a real multi-tech tool gated behind auth. Auth is gone
-# (Phase 1) and this is a single-owner site now, so the column has been
-# repurposed as a "Source" label: who or what actually added the row, and
+# `tech` used to record which technician uploaded a screenshot in imagerepo
+# (the original project), when it was a real multi-tech tool gated behind auth.
+# Auth is gone (Phase 1) and this is a single-owner site now, so the column has
+# been repurposed as a "Source" label: who or what actually added the row, and
 # how. Every value written into `tech` should be one of these four exact
 # strings (SOURCE_MIGRATED is a template — fill in `<source>`):
 SOURCE_MANUAL_UPLOAD = "Hooptie J (me) — manual upload"

@@ -1,5 +1,5 @@
-"""Thin client for the imagerepo upload API — the same POST /api/upload the
-web drawer and the MCP server use. No auth: imagerepo runs on a LAN-only
+"""Thin client for the Constructicon upload API — the same POST /api/upload the
+web drawer and the MCP server use. No auth: Constructicon runs on a LAN-only
 dev server with no port forward, so anyone who can reach it can upload.
 """
 
@@ -15,7 +15,7 @@ REQUEST_TIMEOUT_SECONDS = 30
 # through the web UI's own upload drawer. The server (web/app.py's
 # api_upload) uses this to pick the right Source string for capture_events.tech
 # — see core/db.py's SOURCE_AUTOMATED_UPLOAD/SOURCE_MANUAL_UPLOAD.
-CLIENT_IDENTITY_HEADERS = {"X-Imagerepo-Client": "desktop-app"}
+CLIENT_IDENTITY_HEADERS = {"X-Constructicon-Client": "desktop-app"}
 
 
 class UploadError(Exception):

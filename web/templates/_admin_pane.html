@@ -66,6 +66,7 @@
                placeholder="Enter to set" autocomplete="off">
         <button type="button" class="btn-ms admin-apikey-save" data-key="youtube_data_api_key">Save</button>
       </div>
+      <span id="admin-apikey-msg-youtube_data_api_key" class="backup-status"></span>
     </div>
     <div class="admin-pane-divider"></div>
     <button type="button" class="btn-danger admin-full-btn" id="admin-delete-all-btn"
@@ -157,6 +158,18 @@
   }
   loadApiKeyStatuses();
 
+  // Per-key transient save confirmation (#59) — same element/class/timing
+  // pattern as "Back up now" below (.backup-status / -ok / -error, cleared
+  // after 8s in `finally`), just scoped to each key's own row instead of
+  // one shared span. This is a one-time action confirmation, distinct from
+  // setApiKeyStatus's persistent "Set"/"Not set" label above it.
+  function setApiKeyMessage(key, text, ok) {
+    const msg = document.getElementById(`admin-apikey-msg-${key}`);
+    if (!msg) return;
+    msg.textContent = text;
+    msg.className = 'backup-status' + (ok === true ? ' backup-status-ok' : ok === false ? ' backup-status-error' : '');
+  }
+
   document.querySelectorAll('.admin-apikey-save').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const key = btn.dataset.key;
@@ -166,17 +179,20 @@
       const originalText = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Saving…';
+      setApiKeyMessage(key, '');
       try {
         const body = new URLSearchParams({ key, value });
         const res = await fetch('/api/settings', { method: 'POST', body });
-        if (!res.ok) throw new Error(`Save failed (${res.status})`);
-        const statuses = await res.json();
+        const statuses = await res.json().catch(() => null);
+        if (!res.ok || !statuses) throw new Error(`Save failed (${res.status})`);
         setApiKeyStatus(key, !!statuses[key]);
+        setApiKeyMessage(key, statuses[key] ? 'Key saved' : 'Key cleared', true);
       } catch (err) {
-        alert(err.message || 'Save failed.');
+        setApiKeyMessage(key, err.message || 'Save failed', false);
       } finally {
         btn.disabled = false;
         btn.textContent = originalText;
+        setTimeout(() => setApiKeyMessage(key, ''), 8000);
       }
     });
   });

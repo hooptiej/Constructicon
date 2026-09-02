@@ -50,9 +50,10 @@
          get_setting/has_setting/set_setting) and GET /api/settings only ever
          reports presence, never the real value — so this input is always
          left blank on load/save, same as a normal password field never
-         redisplaying what you last typed. Only one row exists because only
-         one integration needs a key right now; add another labeled row here
-         (and to web/app.py's KNOWN_SETTINGS) when a second one does. -->
+         redisplaying what you last typed. Add another labeled row here (and
+         to web/app.py's KNOWN_SETTINGS, and the JS API_KEY_SETTINGS array
+         below) for each additional integration that needs a key — see the
+         thingiverse_app_token row (#62) for the second one. -->
     <div class="admin-row admin-apikey-row">
       <div class="admin-apikey-label-row">
         <div>
@@ -67,6 +68,27 @@
         <button type="button" class="btn-ms admin-apikey-save" data-key="youtube_data_api_key">Save</button>
       </div>
       <span id="admin-apikey-msg-youtube_data_api_key" class="backup-status"></span>
+    </div>
+    <!-- Thingiverse App Token (#62) — read-only Thingiverse API access for
+         pulling the owner's own public models (account: hooptieJ), no user
+         auth flow needed on Thingiverse's side. Same shape/markup as the
+         YouTube row above; the label spells out "App Token" (not just
+         "Thingiverse") so it isn't ambiguous with a future Client ID/Secret
+         pair if Thingiverse's OAuth app credentials ever get stored too. -->
+    <div class="admin-row admin-apikey-row">
+      <div class="admin-apikey-label-row">
+        <div>
+          <div class="admin-row-label">Thingiverse App Token</div>
+          <div class="admin-row-hint">Read-only access to the owner's own Thingiverse models</div>
+        </div>
+        <span id="admin-apikey-status-thingiverse_app_token" class="apikey-status">…</span>
+      </div>
+      <div class="admin-apikey-input-row">
+        <input type="password" class="input admin-apikey-input" id="admin-apikey-input-thingiverse_app_token"
+               placeholder="Enter to set" autocomplete="off">
+        <button type="button" class="btn-ms admin-apikey-save" data-key="thingiverse_app_token">Save</button>
+      </div>
+      <span id="admin-apikey-msg-thingiverse_app_token" class="backup-status"></span>
     </div>
     <div class="admin-pane-divider"></div>
     <button type="button" class="btn-danger admin-full-btn" id="admin-delete-all-btn"
@@ -130,7 +152,7 @@
   // just the admin pane's UI-side list of which of those keys get a labeled
   // row — add an entry here (plus the matching markup above) for a future
   // second key.
-  const API_KEY_SETTINGS = ['youtube_data_api_key'];
+  const API_KEY_SETTINGS = ['youtube_data_api_key', 'thingiverse_app_token'];
 
   function setApiKeyStatus(key, isSet) {
     const status = document.getElementById(`admin-apikey-status-${key}`);

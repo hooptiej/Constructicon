@@ -138,10 +138,15 @@ def constructicon_get(slug: str) -> dict | None:
 @mcp.tool()
 def constructicon_update(slug: str, description: str | None = None, tags: list[str] | None = None,
                    display_name: str | None = None, icon: str | None = None,
-                   content_description: str | None = None, type_metadata: dict | None = None) -> dict | None:
+                   type_metadata: dict | None = None) -> dict | None:
     """Update an object's metadata: description, tags, display name, icon, and/or type-specific fields.
 
-    Pass None for any field you don't want to change. Returns the updated object, or None if not found.
+    Pass None for any field you don't want to change. type_metadata is replaced wholesale, not
+    merged — read the object's current type_metadata first if you only want to change one key.
+    There is no way to change content_description after creation (e.g. a YouTube video's title) —
+    the database has no update path for that column, only insert-time.
+
+    Returns the updated object, or None if not found.
     """
     row = db.get_by_slug(slug)
     if row is None:
@@ -150,8 +155,9 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
         row = db.update_tags(slug, description=description, tags=tags, ticket_id=None, client=None)
     if display_name is not None or icon is not None:
         row = db.rename_object(slug, display_name=display_name, icon=icon)
-    if content_description is not None or type_metadata is not None:
-        row = db.update_content_metadata(slug, content_description=content_description, type_metadata=type_metadata)
+    if type_metadata is not None:
+        db.set_type_metadata(slug, type_metadata)
+        row = db.get_by_slug(slug)
     return _to_public(row) if row else None
 
 

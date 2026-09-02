@@ -1,11 +1,15 @@
-"""ccc-imagerepo-mcp — MCP server for the Computer Cats image/document repo.
+"""constructicon-mcp — MCP server for the Constructicon media gallery.
 
-Sandbox build on CCC-SV-Dev1. Uses the mcp package's v2 MCPServer API
+Uses the mcp package's v2 MCPServer API
 (FastMCP was renamed/restructured in mcp 2.x — see the SDK migration guide).
 Streamable-HTTP transport, host/port/stateless_http passed to run().
+
+Exposes MCP tools for uploading, managing, tagging, and organizing media
+in a Constructicon instance. Runs as a sidecar alongside constructicon-web.
 """
 
 import base64
+import json
 import os
 import sys
 import threading
@@ -17,9 +21,9 @@ from mcp.server.mcpserver import MCPServer
 
 from core import backup, db, object_types, ocr, storage, thumbnails
 
-BASE_URL = os.environ.get("IMAGEREPO_BASE_URL", "http://10.12.5.98:8000")
+BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
-mcp = MCPServer(name="ccc-imagerepo-mcp")
+mcp = MCPServer(name="constructicon-mcp")
 
 
 def _to_public(row):
@@ -58,21 +62,26 @@ def _to_public_project(project):
 
 
 @mcp.tool()
-def imagerepo_upload(filename: str, content_base64: str, description: str = "", tags: list[str] | None = None,
-                      ticket_id: str | None = None, client: str | None = None, uploaded_by: str = db.SOURCE_AUTHORED,
+def constructicon_upload(filename: str, content_base64: str, description: str = "", tags: list[str] | None = None,
+                      uploaded_by: str = db.SOURCE_AUTHORED,
                       source_modified_at: float | None = None) -> dict:
-    """Upload an image or document to the repo and get back a stable hotlink URL.
+    """Upload an image, document, or other file to Constructicon.
 
-    filename: original filename, used only to determine the extension (.png/.jpg/.jpeg/.pdf/.stl/.psd/.svg/.eps/.mp3/.m4a/.ogg/.wav).
+    Returns a JSON object with the new object's metadata, including a stable hotlink URL.
+
+    filename: original filename; extension (.png/.jpg/.pdf/.stl/.psd/.svg/.eps/.mp3/.wav, etc.)
+      determines the media type.
     content_base64: raw file bytes, base64-encoded.
-    uploaded_by: the Source string to record (capture_events.tech) — defaults to
-      "Claude — authored" (this tool call created the content directly). Pass
-      db.source_migrated_from("<source>") instead when the content is being brought
-      in from somewhere else rather than authored fresh.
-    source_modified_at: the source file's own last-modified time (unix seconds), if known —
-      used to detect re-uploads of the exact same file. If omitted, duplicate detection is skipped.
-    If filename, file size, and source_modified_at all match an existing entry, no new row is
-    created — the existing entry is returned instead with "duplicate": true.
+    tags: optional list of tag names to attach to the object.
+    description: optional metadata description for the object.
+    uploaded_by: the Source string to record (capture_events.tech). Defaults to
+      "Claude — authored" (this tool call created the content). For content migrated from
+      an external source, pass db.source_migrated_from("<source>") instead.
+    source_modified_at: the source file's own last-modified time (unix seconds), if known.
+      Used for duplicate detection; omit to skip checking for re-uploads of the same file.
+
+    If filename, file size, and source_modified_at all match an existing upload, returns
+    the existing object instead with "duplicate": true.
     """
     content = base64.b64decode(content_base64)
     dupe = db.find_duplicate(filename, len(content), source_modified_at)
@@ -95,71 +104,98 @@ def imagerepo_upload(filename: str, content_base64: str, description: str = "", 
         media_type = "image"
     spec = object_types.get_object_type(media_type)
     slug, stored_filename = storage.save_file(filename, content)
-    db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags, ticket_id, client,
+    db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags, None, None,
                       file_size=len(content), source_modified_at=source_modified_at,
                       media_type=media_type,
                       ocr_status="pending" if spec.ocr_capable else None)
     if spec.ocr_capable:
         ocr.run_ocr(slug)
     elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
-        # No OCR pass to piggyback a thumbnail render onto for a
-        # CAPTURE-sourced, non-OCR-capable type (STL) — see the matching
-        # comment on web/app.py's _ensure_capture_thumbnail. Synchronous
-        # here since this MCP tool call has no background-task mechanism.
         thumbnails.ensure_thumbnail(db.get_by_slug(slug))
     return {**_to_public(db.get_by_slug(slug)), "duplicate": False}
 
 
 @mcp.tool()
-def imagerepo_search(query: str | None = None, tags: list[str] | None = None, client: str | None = None) -> list[dict]:
-    """Search uploaded images/documents by description/filename text, tags, or client name."""
-    return [_to_public(r) for r in db.search(query=query, tags=tags, client=client)]
+def constructicon_search(query: str | None = None, tags: list[str] | None = None) -> list[dict]:
+    """Search objects by description, filename, or tags.
+
+    Returns a JSON list of matching objects. If both query and tags are
+    provided, filters by both (AND logic).
+    """
+    return [_to_public(r) for r in db.search(query=query, tags=tags, client=None)]
 
 
 @mcp.tool()
-def imagerepo_get(slug: str) -> dict | None:
-    """Get one upload's metadata and hotlink URL by its slug."""
+def constructicon_get(slug: str) -> dict | None:
+    """Get one object's metadata and hotlink URL by its slug.
+
+    Returns None if the object is not found.
+    """
     row = db.get_by_slug(slug)
     return _to_public(row) if row else None
 
 
 @mcp.tool()
-def imagerepo_tag(slug: str, description: str | None = None, tags: list[str] | None = None,
-                   ticket_id: str | None = None, client: str | None = None) -> dict | None:
-    """Update an existing upload's description, tags, linked ticket, or client."""
-    row = db.update_tags(slug, description=description, tags=tags, ticket_id=ticket_id, client=client)
-    return _to_public(row) if row else None
+def constructicon_update(slug: str, description: str | None = None, tags: list[str] | None = None,
+                   display_name: str | None = None, icon: str | None = None,
+                   type_metadata: dict | None = None) -> dict | None:
+    """Update an object's metadata: description, tags, display name, icon, and/or type-specific fields.
 
+    Pass None for any field you don't want to change. type_metadata is replaced wholesale, not
+    merged — read the object's current type_metadata first if you only want to change one key.
+    There is no way to change content_description after creation (e.g. a YouTube video's title) —
+    the database has no update path for that column, only insert-time.
 
-@mcp.tool()
-def imagerepo_redact(slug: str) -> dict | None:
-    """Delete just the file (e.g. it has a visible password or other sensitive
-    content) while keeping the description/tags/ticket/client metadata for
-    future correlation. Irreversible — the file itself cannot be recovered."""
+    Returns the updated object, or None if not found.
+    """
     row = db.get_by_slug(slug)
     if row is None:
         return None
+    if description is not None or tags is not None:
+        row = db.update_tags(slug, description=description, tags=tags, ticket_id=None, client=None)
+    if display_name is not None or icon is not None:
+        row = db.rename_object(slug, display_name=display_name, icon=icon)
+    if type_metadata is not None:
+        db.set_type_metadata(slug, type_metadata)
+        row = db.get_by_slug(slug)
+    return _to_public(row) if row else None
+
+
+@mcp.tool()
+def constructicon_redact(slug: str) -> dict | None:
+    """Delete a file while keeping its metadata (for sensitive content cleanup).
+
+    Irreversible — the file itself cannot be recovered. Metadata (description,
+    tags, etc.) is preserved.
+    """
+    row = db.get_by_slug(slug)
+    if row is None:
+        return None
+    if not row.get("stored_filename"):
+        raise ValueError("This object has no uploaded file to redact")
     storage.delete_files(slug, row["stored_filename"])
     return _to_public(db.mark_redacted(slug))
 
 
 @mcp.tool()
-def imagerepo_delete(slug: str) -> bool:
-    """Fully delete an upload — file and all metadata. Irreversible."""
+def constructicon_delete(slug: str) -> bool:
+    """Fully delete an object — file and all metadata. Irreversible."""
     row = db.get_by_slug(slug)
     if row is None:
         return False
-    storage.delete_files(slug, row["stored_filename"])
+    if row.get("stored_filename"):
+        storage.delete_files(slug, row["stored_filename"])
     db.delete_upload(slug)
     return True
 
 
 @mcp.tool()
-def imagerepo_delete_selected(slugs: list[str]) -> dict:
-    """Delete a specific set of objects (any mix of media types) by slug,
-    without touching tags or projects — the MCP equivalent of the web app's
-    selective-delete gallery checkboxes (POST /api/delete, #19). Irreversible.
-    Unknown slugs are silently skipped rather than erroring the whole batch."""
+def constructicon_delete_multiple(slugs: list[str]) -> dict:
+    """Delete multiple objects by slug without touching tags or projects.
+
+    Returns {"deleted": count}. Unknown slugs are silently skipped.
+    Irreversible.
+    """
     deleted = 0
     for slug in slugs:
         row = db.get_by_slug(slug)
@@ -173,11 +209,11 @@ def imagerepo_delete_selected(slugs: list[str]) -> dict:
 
 
 @mcp.tool()
-def imagerepo_delete_all() -> dict:
-    """Wipe every object (and its files), plus all tags and projects — a
-    full reset. The MCP equivalent of the web app's POST /api/delete-all.
-    Irreversible — call imagerepo_backup first if the current content is
-    worth keeping."""
+def constructicon_delete_all() -> dict:
+    """Wipe every object, tag, and project — a full reset. Irreversible.
+
+    Call constructicon_backup first if you want to preserve the current content.
+    """
     rows = db.search(limit=100000)
     for row in rows:
         if row.get("stored_filename"):
@@ -194,67 +230,30 @@ def imagerepo_delete_all() -> dict:
 
 
 @mcp.tool()
-def imagerepo_backup() -> dict:
-    """Zip the DB and every file in storage/ into a timestamped archive,
-    pruning down to the most recent retained backups — the MCP equivalent
-    of the web app's POST /api/backup (#20)."""
+def constructicon_backup() -> dict:
+    """Create a timestamped backup of the entire database and storage.
+
+    Returns {"backup_path": "...","size": ...}.
+    """
     return backup.create_backup()
 
 
 @mcp.tool()
-def imagerepo_rename(slug: str, display_name: str | None = None, icon: str | None = None) -> dict | None:
-    """Set an object's display name and/or icon override (#11) — the two
-    still-missing pieces of "Objects - Move, delete, rename, nesting, set
-    Display name and Icon" from the original issue. Neither field existed
-    anywhere in the app before this; both are optional per-object overrides
-    that fall back to the existing filename/content_description/slug and
-    media-type badge_icon behavior when unset. Pass "" to clear a field back
-    to its fallback. The MCP equivalent of POST /api/image/<slug> with a
-    display_name and/or icon field.
+def constructicon_add_content(media_type: str, external_url: str | None = None, content_description: str | None = None,
+                           description: str = "", tags: list[str] | None = None,
+                           uploaded_by: str = db.SOURCE_AUTHORED) -> dict:
+    """Create an object with no uploaded file (e.g., a YouTube link or external document).
 
-    Note: there's still no "move" (relocate into a folder/parent) or
-    "nesting" concept for objects anywhere in the app — see this issue's PR
-    description for why that's being left as a larger follow-up rather than
-    built here."""
-    row = db.rename_object(slug, display_name=display_name, icon=icon)
-    return _to_public(row) if row else None
-
-
-@mcp.tool()
-def imagerepo_list_projects() -> list[dict]:
-    """List every project, most-recently-updated first — the MCP equivalent
-    of GET /api/projects."""
-    return [_to_public_project(p) for p in db.list_projects()]
-
-
-@mcp.tool()
-def imagerepo_create_project(title: str) -> dict:
-    """Create a new project (and a same-named root tag it's linked to, so
-    objects tagged into it surface through ordinary tag browsing too) — the
-    MCP equivalent of POST /api/projects."""
-    title = title.strip()
-    if not title:
-        raise ValueError("Project name can't be empty")
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"])
-    return _to_public_project(project)
-
-
-@mcp.tool()
-def imagerepo_add_content(media_type: str, external_url: str | None = None, content_description: str | None = None,
-                           description: str = "", tags: list[str] | None = None, ticket_id: str | None = None,
-                           client: str | None = None, uploaded_by: str = db.SOURCE_AUTHORED) -> dict:
-    """Create an object with no uploaded file — a YouTube link today, any
-    future URL/stream capture type — the MCP equivalent of POST /api/content.
-    Use imagerepo_upload instead for anything backed by an actual file."""
+    Use constructicon_upload instead for file-backed content.
+    """
     spec = object_types.get_object_type(media_type)
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
-        raise ValueError(f"{spec.label} objects require a file upload — use imagerepo_upload")
+        raise ValueError(f"{spec.label} objects require a file upload — use constructicon_upload")
     slug = storage.make_slug()
     db.insert_content(
         slug, uploaded_by, media_type,
         external_url=external_url, content_description=content_description,
-        description=description, tags=tags, ticket_id=ticket_id, client=client,
+        description=description, tags=tags, ticket_id=None, client=None,
     )
     row = db.get_by_slug(slug)
     if spec.ocr_capable and row["ocr_status"] == "pending":
@@ -265,10 +264,12 @@ def imagerepo_add_content(media_type: str, external_url: str | None = None, cont
 
 
 @mcp.tool()
-def imagerepo_relate(slug: str, related_slug: str) -> list[dict]:
-    """Link two objects as related (bidirectional) — also merges tags and
-    project membership both ways (see core/db.py's add_relation), the MCP
-    equivalent of POST /api/image/<slug>/related."""
+def constructicon_add_related(slug: str, related_slug: str) -> list[dict]:
+    """Link two objects as related (bidirectional).
+
+    Also merges tags and project membership between the two.
+    Returns the updated list of related objects.
+    """
     if db.get_by_slug(slug) is None or db.get_by_slug(related_slug) is None:
         raise ValueError("one or both slugs not found")
     db.add_relation(slug, related_slug)
@@ -276,11 +277,177 @@ def imagerepo_relate(slug: str, related_slug: str) -> list[dict]:
 
 
 @mcp.tool()
-def imagerepo_unrelate(slug: str, related_slug: str) -> list[dict]:
-    """Remove a related-object link — the MCP equivalent of
-    POST /api/image/<slug>/related/remove."""
+def constructicon_remove_related(slug: str, related_slug: str) -> list[dict]:
+    """Remove a related-object link.
+
+    Returns the updated list of related objects.
+    """
     db.remove_relation(slug, related_slug)
     return [_to_public(r) for r in db.list_related(slug)]
+
+
+@mcp.tool()
+def constructicon_get_related(slug: str) -> list[dict]:
+    """Get all objects related to this one.
+
+    Returns a list of related objects, both manually linked and auto-detected.
+    """
+    if db.get_by_slug(slug) is None:
+        raise ValueError("slug not found")
+    return [_to_public(r) for r in db.list_related(slug)]
+
+
+@mcp.tool()
+def constructicon_list_projects() -> list[dict]:
+    """List all projects, most-recently-updated first."""
+    return [_to_public_project(p) for p in db.list_projects()]
+
+
+@mcp.tool()
+def constructicon_create_project(title: str, description: str = "", cover_slug: str | None = None) -> dict:
+    """Create a new project.
+
+    Also creates a root-level tag with the same name and links it, so tagged
+    objects surface through both project and tag browsing.
+    """
+    title = title.strip()
+    if not title:
+        raise ValueError("Project name can't be empty")
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, description=description, cover_slug=cover_slug, tag_id=tag["id"])
+    return _to_public_project(project)
+
+
+@mcp.tool()
+def constructicon_update_project(project_id: str | int, title: str | None = None,
+                                 description: str | None = None, cover_slug: str | None = None,
+                                 status: str | None = None) -> dict | None:
+    """Update a project's metadata.
+
+    Returns the updated project, or None if not found.
+    """
+    project = db.update_project(project_id, title=title, description=description,
+                                cover_slug=cover_slug, status=status)
+    return _to_public_project(project) if project else None
+
+
+@mcp.tool()
+def constructicon_add_to_project(slug: str, project_id: str | int) -> list[dict]:
+    """Add an object to a project.
+
+    If the project has a linked tag, the object is also tagged with it.
+    Returns the object's updated project list.
+    """
+    if db.get_by_slug(slug) is None:
+        raise ValueError("slug not found")
+    if db.get_project(project_id) is None:
+        raise ValueError("project not found")
+    project = db.get_project(project_id)
+    db.add_item_to_project(project["id"], slug)
+    if project.get("tag_id"):
+        db.attach_tags(slug, [project["tag_id"]])
+    return [_to_public_project(p) for p in db.list_projects_for_post(slug)]
+
+
+@mcp.tool()
+def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[dict]:
+    """Remove an object from a project (does not untag it).
+
+    Returns the object's updated project list.
+    """
+    if db.get_by_slug(slug) is None:
+        raise ValueError("slug not found")
+    project = db.get_project(project_id)
+    if project is None:
+        raise ValueError("project not found")
+    db.remove_item_from_project(project["id"], slug)
+    return [_to_public_project(p) for p in db.list_projects_for_post(slug)]
+
+
+@mcp.tool()
+def constructicon_list_tags() -> list[dict]:
+    """Get the complete tag tree (hierarchical).
+
+    Returns the root-level tags, each with a nested children array.
+    """
+    return db.list_tag_tree()
+
+
+@mcp.tool()
+def constructicon_create_tag(name: str, parent_name: str | None = None) -> dict:
+    """Create a tag or return the existing one if it already exists under the parent.
+
+    Returns the tag metadata.
+    """
+    parent_id = None
+    if parent_name:
+        parent = db.get_or_create_tag(parent_name, parent_id=None)
+        parent_id = parent["id"]
+    tag = db.get_or_create_tag(name, parent_id=parent_id)
+    return tag
+
+
+@mcp.tool()
+def constructicon_get_posts_for_tag(tag_name: str) -> list[dict]:
+    """Get all objects tagged with a specific tag (including all descendant tags).
+
+    Returns a list of objects.
+    """
+    tag = db.get_or_create_tag(tag_name, parent_id=None)
+    rows = db.list_posts_for_tag(tag["id"], limit=10000)
+    return [_to_public(r) for r in rows]
+
+
+@mcp.tool()
+def constructicon_attach_tags(slug: str, tag_names: list[str]) -> dict | None:
+    """Add tags to an object.
+
+    Returns the updated object, or None if not found.
+    """
+    row = db.get_by_slug(slug)
+    if row is None:
+        return None
+    tag_ids = []
+    for name in tag_names:
+        tag = db.get_or_create_tag(name, parent_id=None)
+        tag_ids.append(tag["id"])
+    if tag_ids:
+        db.attach_tags(slug, tag_ids)
+    return _to_public(db.get_by_slug(slug))
+
+
+@mcp.tool()
+def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
+    """Remove a tag from an object.
+
+    Returns the updated object, or None if not found.
+    """
+    row = db.get_by_slug(slug)
+    if row is None:
+        return None
+    tag = db.get_or_create_tag(tag_name, parent_id=None)
+    db.detach_tag(slug, tag["id"])
+    return _to_public(db.get_by_slug(slug))
+
+
+@mcp.tool()
+def constructicon_retry_ocr(slug: str) -> dict | None:
+    """Force OCR to run (or re-run) on an object.
+
+    Returns the updated object, or None if not found. Raises an error if
+    the object is redacted or doesn't support OCR.
+    """
+    row = db.get_by_slug(slug)
+    if row is None:
+        return None
+    if row["redacted"]:
+        raise ValueError("File was redacted — there's no content left to OCR")
+    spec = object_types.get_object_type(row.get("media_type"))
+    if not spec.ocr_capable:
+        raise ValueError(f"OCR isn't available for {spec.label} content")
+    db.set_ocr_status(slug, "pending")
+    threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
+    return _to_public(db.get_by_slug(slug))
 
 
 if __name__ == "__main__":

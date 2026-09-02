@@ -25,7 +25,6 @@ codebase should need to change.
 
 import importlib
 import pkgutil
-import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path

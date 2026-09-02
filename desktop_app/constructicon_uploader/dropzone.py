@@ -76,7 +76,7 @@ class DropZoneWindow:
             AppKit.NSBackingStoreBuffered,
             False,
         )
-        self.window.setTitle_("imagerepo")
+        self.window.setTitle_("Constructicon")
         self.window.setLevel_(AppKit.NSFloatingWindowLevel)
         self.window.setReleasedWhenClosed_(False)
         self.view = _DropView.alloc().initWithFrame_(rect)

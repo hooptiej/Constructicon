@@ -30,9 +30,9 @@ STATUS_ERROR = "🔴"
 ERROR_DISPLAY_SECONDS = 8
 
 
-class ImageRepoUploaderApp(rumps.App):
+class ConstructiconUploaderApp(rumps.App):
     def __init__(self):
-        super().__init__("imagerepo", title=STATUS_IDLE, quit_button=None)
+        super().__init__("Constructicon", title=STATUS_IDLE, quit_button=None)
         self.config = config.load_config()
 
         self._upload_queue = queue.Queue()
@@ -46,7 +46,7 @@ class ImageRepoUploaderApp(rumps.App):
             rumps.MenuItem("Change Watched Folder…", callback=self._prompt_for_watch_folder),
             rumps.MenuItem("Change Server URL…", callback=self._prompt_for_base_url),
             None,
-            rumps.MenuItem("Open imagerepo", callback=self._open_web_app),
+            rumps.MenuItem("Open Constructicon", callback=self._open_web_app),
             None,
             rumps.MenuItem("Quit", callback=rumps.quit_application),
         ]
@@ -63,7 +63,7 @@ class ImageRepoUploaderApp(rumps.App):
             self.watcher.stop()
         folder = Path(self.config["watch_folder"]).expanduser()
         if not folder.is_dir():
-            rumps.notification("imagerepo", "Watched folder not found", str(folder))
+            rumps.notification("Constructicon", "Watched folder not found", str(folder))
             return
         self.watcher = DesktopWatcher(folder, self._enqueue_screenshot, self._enqueue_ambiguous_image)
         self.watcher.start()
@@ -89,7 +89,7 @@ class ImageRepoUploaderApp(rumps.App):
 
     def _ask_then_enqueue_main(self, path):
         response = rumps.Window(
-            title="Upload to imagerepo?",
+            title="Upload to Constructicon?",
             message=path.name,
             default_text="",
             ok="Upload",
@@ -108,9 +108,9 @@ class ImageRepoUploaderApp(rumps.App):
             try:
                 api.upload_file(self.config["base_url"], str(path), description=description)
             except api.DuplicateUploadError:
-                pass  # already in imagerepo — not an error, nothing to report
+                pass  # already in Constructicon — not an error, nothing to report
             except api.UploadError as e:
-                rumps.notification("imagerepo upload failed", path.name, str(e))
+                rumps.notification("Constructicon upload failed", path.name, str(e))
                 self._flash_error()
             else:
                 self._set_status(STATUS_IDLE)
@@ -153,8 +153,8 @@ class ImageRepoUploaderApp(rumps.App):
 
     def _prompt_for_base_url(self, _sender):
         response = rumps.Window(
-            title="imagerepo server URL",
-            message="Base URL of the imagerepo server:",
+            title="Constructicon server URL",
+            message="Base URL of the Constructicon server:",
             default_text=self.config["base_url"],
             ok="Save",
             cancel="Cancel",

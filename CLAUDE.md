@@ -232,9 +232,10 @@ Two containers run side by side on that box:
   **Checkout may be ahead of `main`, deliberately**: `constructicon-test`'s
   bind-mounted checkout can be left on a feature branch between sessions
   when that branch is the one the *next* piece of work builds on. As of
-  2026-09-02, it's on `feat/object-types-youtube-75` (the #75 YouTube
-  object-type migration, which builds on the #67 scaffold) — so follow-on
-  migration issues #76+ have a live container to test against. Check `git -C
+  2026-09-02, it's on `feat/object-types-document-audio-76` (the #76
+  document/audio object-type migration, which builds on the #75 YouTube
+  migration) — so follow-on migration issues #77+ have a live container
+  to test against. Check `git -C
   "/mnt/Storage Pool/home/hoop/hoop/constructicon-test" log -1` (or just
   read its `core/`/`web/` files) before assuming this container reflects
   `main` — don't silently reset it to `main` without checking whether it's

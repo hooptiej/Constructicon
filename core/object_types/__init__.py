@@ -30,7 +30,6 @@ from enum import Enum
 from pathlib import Path
 
 from .. import eps as _eps
-from .. import pdf as _pdf
 from .. import psd as _psd
 from .. import stl as _stl
 from .. import svg as _svg
@@ -137,17 +136,6 @@ def classify_url(url):
 # image, youtube, document, and audio are registered separately via their own
 # core/object_types/ modules. This section registers the remaining types:
 # pdf, stl, psd, svg, eps, stream, url, and the DEFAULT_SPEC fallback.
-
-_pdf_spec = register(ObjectTypeSpec(
-    key="pdf",
-    label="PDF document",
-    thumbnail_source=ThumbnailSource.CAPTURE,
-    ocr_capable=True,
-    capture_fn=_pdf.capture_thumbnail,
-    text_extract_fn=_pdf.extract_text_for_row,
-    badge_icon="\U0001F4C4",
-    badge_text="PDF",
-))
 
 _stl_spec = register(ObjectTypeSpec(
     key="stl",

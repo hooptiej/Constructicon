@@ -126,6 +126,33 @@ def constructicon_get(slug: str) -> dict | None:
 
 
 @mcp.tool()
+def constructicon_download(slug: str) -> dict | None:
+    """Download a file's actual bytes from Constructicon.
+
+    Takes a slug and returns the file's content base64-encoded, along with
+    filename and media_type for round-trip upload/download cycles.
+
+    Returns None if the object is not found, or an error dict if the object
+    has no uploaded file (e.g., a YouTube link or other content-only object).
+    """
+    row = db.get_by_slug(slug)
+    if row is None:
+        return None
+    if not row.get("stored_filename"):
+        return {"error": "This object has no uploaded file to download"}
+    path = storage.path_for(row["stored_filename"])
+    if not path.exists():
+        return {"error": "File missing on disk"}
+    content = path.read_bytes()
+    return {
+        "slug": row["slug"],
+        "filename": row["filename"],
+        "media_type": row.get("media_type") or "image",
+        "content_base64": base64.b64encode(content).decode("utf-8"),
+    }
+
+
+@mcp.tool()
 def constructicon_update(slug: str, description: str | None = None, tags: list[str] | None = None,
                    display_name: str | None = None, icon: str | None = None,
                    type_metadata: dict | None = None) -> dict | None:

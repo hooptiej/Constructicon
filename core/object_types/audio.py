@@ -14,7 +14,7 @@ register(ObjectTypeSpec(
     label="Audio file",
     thumbnail_source=ThumbnailSource.NONE,
     ocr_capable=False,
-    extensions=storage.AUDIO_EXTENSIONS,
+    extensions=frozenset(storage.AUDIO_EXTENSIONS),
     badge_icon="\U0001F3B5",
     badge_text="AUDIO",
 ))

@@ -1071,6 +1071,34 @@ def _attach_to_project(slug, project_id):
         db.update_project(project["id"], cover_slug=slug)
 
 
+@app.get("/api/tags")
+def api_tags(request: Request):
+    """Return the tag tree flattened with breadcrumb paths for autocomplete.
+    Each tag includes its full path from root (e.g. "Parent > Child > Leaf")
+    for display in suggestions."""
+    def flatten_with_paths(nodes, path=""):
+        """Recursively flatten tree nodes with breadcrumb paths."""
+        flat = []
+        for node in nodes:
+            # Build the breadcrumb path for this node
+            node_path = f"{path} > {node['name']}" if path else node['name']
+            flat.append({
+                "id": node["id"],
+                "name": node["name"],
+                "slug": node["slug"],
+                "path": node_path,  # Full breadcrumb for display
+                "parent_id": node["parent_id"],
+            })
+            # Recursively add children
+            if node.get("children"):
+                flat.extend(flatten_with_paths(node["children"], node_path))
+        return flat
+
+    tag_tree = db.list_tag_tree()
+    flat_tags = flatten_with_paths(tag_tree)
+    return JSONResponse(flat_tags)
+
+
 @app.get("/api/search")
 def api_search(request: Request, query: str = "", tags: str = "", client: str = ""):
     tag_list = [t for t in tags.split(",") if t] or None

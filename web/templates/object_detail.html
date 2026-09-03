@@ -237,6 +237,28 @@ const ocrRetryBtn = document.getElementById('ocr-retry-btn');
 const ocrDisclosure = document.getElementById('ocr-disclosure');
 const ocrTextContent = document.getElementById('ocr-text-content');
 
+function extractUrlsFromText(text) {
+  if (!text) return [];
+  // Match http(s):// URLs and www. URLs
+  const urlRegex = /https?:\/\/[^\s]+|www\.[^\s]+/gi;
+  const matches = text.match(urlRegex) || [];
+  // Dedupe and ensure valid URLs (add http:// to www. URLs if needed)
+  const seen = new Set();
+  return matches
+    .map(url => {
+      // Add http:// to www. URLs if they don't have a protocol
+      if (url.startsWith('www.') && !url.startsWith('http')) {
+        url = 'http://' + url;
+      }
+      return url;
+    })
+    .filter(url => {
+      if (seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    });
+}
+
 function renderOcrPanel() {
   if (!IS_OCR_CAPABLE || !ocrPanel) return;
   ocrPanel.style.display = 'flex';
@@ -249,8 +271,64 @@ function renderOcrPanel() {
   if (ocrText) {
     ocrTextContent.textContent = ocrText;
     ocrDisclosure.style.display = 'block';
+
+    // Issue #90: Extract and display URLs from OCR text
+    const urls = extractUrlsFromText(ocrText);
+    const linksContainer = document.getElementById('ocr-links-container');
+    if (urls.length > 0) {
+      if (!linksContainer) {
+        const newLinksContainer = document.createElement('details');
+        newLinksContainer.id = 'ocr-links-container';
+        newLinksContainer.className = 'ocr-disclosure';
+        newLinksContainer.style.display = 'block';
+        newLinksContainer.style.marginTop = '8px';
+        const summary = document.createElement('summary');
+        summary.innerHTML = '<svg class="disclosure-caret" width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Links found';
+        newLinksContainer.appendChild(summary);
+        const linksList = document.createElement('div');
+        linksList.style.marginTop = '8px';
+        linksList.id = 'ocr-links-list';
+        urls.forEach(url => {
+          const link = document.createElement('a');
+          link.href = url;
+          link.textContent = url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          link.style.display = 'block';
+          link.style.wordBreak = 'break-all';
+          link.style.marginBottom = '4px';
+          linksList.appendChild(link);
+        });
+        newLinksContainer.appendChild(linksList);
+        ocrDisclosure.parentNode.insertBefore(newLinksContainer, ocrDisclosure.nextSibling);
+      } else {
+        const linksList = document.getElementById('ocr-links-list');
+        linksList.innerHTML = '';
+        urls.forEach(url => {
+          const link = document.createElement('a');
+          link.href = url;
+          link.textContent = url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          link.style.display = 'block';
+          link.style.wordBreak = 'break-all';
+          link.style.marginBottom = '4px';
+          linksList.appendChild(link);
+        });
+        linksContainer.style.display = 'block';
+      }
+    } else {
+      const linksContainer = document.getElementById('ocr-links-container');
+      if (linksContainer) {
+        linksContainer.style.display = 'none';
+      }
+    }
   } else {
     ocrDisclosure.style.display = 'none';
+    const linksContainer = document.getElementById('ocr-links-container');
+    if (linksContainer) {
+      linksContainer.style.display = 'none';
+    }
   }
 }
 renderOcrPanel();
@@ -315,6 +393,43 @@ function renderTags() {
   });
 }
 renderTags();
+
+// Issue #88: Tag autocomplete from existing tags
+let allTags = [];
+async function loadTagsForAutocomplete() {
+  try {
+    const res = await fetch('/api/tags');
+    if (res.ok) {
+      allTags = await res.json();
+    }
+  } catch (e) {
+    // Silently fail if tag loading doesn't work — autocomplete is a convenience, not required
+  }
+}
+loadTagsForAutocomplete();
+
+function updateTagSuggestions() {
+  const inputValue = tagAddInput.value.trim().toLowerCase();
+  if (!inputValue) {
+    tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter');
+    return;
+  }
+
+  // Filter tags that match the input (match against both name and full path)
+  const matches = allTags
+    .filter(tag => tag.name.toLowerCase().includes(inputValue) || tag.path.toLowerCase().includes(inputValue))
+    .slice(0, 10);  // Limit to 10 suggestions
+
+  // Show suggestions via datalist or as help text
+  if (matches.length > 0) {
+    const suggestionTexts = matches.map(t => `${t.path}`);
+    tagAddInput.setAttribute('placeholder', `+ Add tag, press Enter (suggestions: ${suggestionTexts.join(', ')})`);
+  } else {
+    tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter (no matches in existing tags)');
+  }
+}
+
+tagAddInput.addEventListener('input', updateTagSuggestions);
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

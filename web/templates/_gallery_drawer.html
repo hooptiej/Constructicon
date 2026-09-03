@@ -360,11 +360,50 @@
       tagBox.insertBefore(chip, tagAddInput);
     });
   }
+
+  // Issue #88: Tag autocomplete from existing tags
+  let allGalleryTags = [];
+  async function loadGalleryTagsForAutocomplete() {
+    try {
+      const res = await fetch('/api/tags');
+      if (res.ok) {
+        allGalleryTags = await res.json();
+      }
+    } catch (e) {
+      // Silently fail if tag loading doesn't work — autocomplete is a convenience, not required
+    }
+  }
+  loadGalleryTagsForAutocomplete();
+
+  function updateGalleryTagSuggestions() {
+    const inputValue = tagAddInput.value.trim().toLowerCase();
+    if (!inputValue) {
+      tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter');
+      return;
+    }
+
+    // Filter tags that match the input (match against both name and full path)
+    const matches = allGalleryTags
+      .filter(tag => tag.name.toLowerCase().includes(inputValue) || tag.path.toLowerCase().includes(inputValue))
+      .slice(0, 10);  // Limit to 10 suggestions
+
+    // Show suggestions via placeholder text
+    if (matches.length > 0) {
+      const suggestionTexts = matches.map(t => `${t.path}`);
+      tagAddInput.setAttribute('placeholder', `+ Add tag, press Enter (suggestions: ${suggestionTexts.join(', ')})`);
+    } else {
+      tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter (no matches in existing tags)');
+    }
+  }
+
+  tagAddInput.addEventListener('input', updateGalleryTagSuggestions);
+
   tagAddInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && tagAddInput.value.trim()) {
       e.preventDefault();
       tags.push(tagAddInput.value.trim());
       tagAddInput.value = '';
+      tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter');
       renderTags();
     }
   });

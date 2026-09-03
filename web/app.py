@@ -1018,6 +1018,33 @@ def api_create_project(request: Request, title: str = Form(...)):
     return JSONResponse(_to_project_option(project))
 
 
+@app.post("/api/projects/{project_id}")
+def api_update_project(
+    request: Request,
+    project_id: str,
+    title: str = Form(None),
+    description: str = Form(None),
+    cover_slug: str = Form(None),
+    status: str = Form(None),
+):
+    """Updates a project's properties (issue #103). Allows setting any
+    combination of title, description, cover_slug (slug of an attached item
+    to use as the cover image), and status. Only overwrites fields that were
+    passed; omitted fields are left unchanged. Returns the updated project
+    in _to_project_option shape (same as the list endpoint)."""
+    project = db.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    updated = db.update_project(
+        project_id,
+        title=title,
+        description=description,
+        cover_slug=cover_slug,
+        status=status,
+    )
+    return JSONResponse(updated or {})
+
+
 def _attach_to_project(slug, project_id):
     """Shared by /api/upload and /api/content: adds the new row to the given
     project's curated item list (so it shows up on the project's own detail
@@ -1026,7 +1053,11 @@ def _attach_to_project(slug, project_id):
     the site tags" half of #1, so the object surfaces through tag-based
     browsing too, not just the project page. A project_id that doesn't
     resolve to a real project (bad/stale value) is silently ignored rather
-    than failing the whole upload over a cosmetic mismatch."""
+    than failing the whole upload over a cosmetic mismatch.
+
+    Also auto-sets the project's cover_slug to this item's slug if the
+    project currently has no cover (issue #103) — fires only once per
+    project, on the first item it receives."""
     if not project_id:
         return
     project = db.get_project(project_id)
@@ -1035,6 +1066,9 @@ def _attach_to_project(slug, project_id):
     db.add_item_to_project(project["id"], slug)
     if project.get("tag_id"):
         db.attach_tags(slug, [project["tag_id"]])
+    # Auto-set cover to first item if project has no cover yet
+    if not project.get("cover_slug"):
+        db.update_project(project["id"], cover_slug=slug)
 
 
 @app.get("/api/search")

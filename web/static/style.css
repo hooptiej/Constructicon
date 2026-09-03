@@ -665,6 +665,7 @@ body.delete-mode-on .card-select { display: block; }
 /* --- Project detail page --- */
 .project-detail-header { display: flex; flex-direction: column; gap: 10px; }
 .project-item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.project-item-card-wrapper { position: relative; }
 .project-item-card {
   background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
   display: flex; flex-direction: column; color: inherit; text-decoration: none;
@@ -675,6 +676,24 @@ body.delete-mode-on .card-select { display: block; }
 .project-item-body { padding: 11px; display: flex; flex-direction: column; gap: 5px; }
 .project-item-title { font-size: 12.5px; font-weight: 500; }
 .project-item-meta { font-size: 10.5px; color: var(--text-3); }
+.project-cover-selector {
+  position: absolute; top: 8px; right: 8px;
+  width: 22px; height: 22px; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+  background: var(--card); border: 2px solid var(--border-strong); border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s ease;
+}
+.project-cover-selector:hover {
+  border-color: var(--purple-bright); background: var(--surface);
+}
+.project-cover-selector:checked {
+  background: var(--purple-bright); border-color: var(--purple-bright);
+  box-shadow: 0 0 8px rgba(138, 79, 174, 0.4);
+}
+.project-cover-selector:checked::after {
+  content: '✓'; color: white; font-weight: bold; font-size: 14px;
+}
 .media-type-pill {
   font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.3px; padding: 1px 7px; border-radius: 100px;
   background: var(--hazard-yellow); color: var(--hazard-black); font-weight: 600; display: inline-block;

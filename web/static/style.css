@@ -615,6 +615,21 @@ body.delete-mode-on .card-select { display: block; }
    further down the page. */
 .unfiled-scroll { max-height: 300px; overflow-y: auto; padding-right: 4px; }
 
+/* Files widget tabs (#69 part 1) — type-scoped filtering for recent uploads.
+   Tabs are built from the actual media types present in the data, with an
+   "All" tab for unfiltered view. Only types that have recent items get tabs
+   (no empty tabs). */
+.file-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.file-tab {
+  font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px;
+  color: var(--text-3); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; cursor: pointer; flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.file-tab:hover { color: var(--text-2); border-color: var(--border-stronger); }
+.file-tab.active { color: var(--text); background: var(--card); border-color: var(--border-strong); font-weight: 600; }
+.files-scroll { max-height: 300px; overflow-y: auto; padding-right: 4px; }
+
 /* --- Projects (curated cards) --- */
 .tag-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .tag-chip {

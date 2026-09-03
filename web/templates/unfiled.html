@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+{% block title %}Unfiled — Constructicon{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+{% include "_admin_pane.html" %}
+<div class="app-main">
+  <a class="back-link" href="/">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Back
+  </a>
+
+  <div>
+    <h1 class="page-title">Unfiled</h1>
+    <p class="page-subtitle" id="unfiled-count-label">{{ unfiled_items | length }} upload{{ 's' if unfiled_items|length != 1 else '' }} not yet added to a project.</p>
+  </div>
+
+  <div class="selection-bar" id="selection-bar" style="display:flex">
+    <span class="selection-count" id="selection-count"></span>
+    <button type="button" class="ocr-retry-btn" id="clear-selection-btn">Clear</button>
+
+    <select class="filter-select" id="bulk-project-select" title="Add selection to project">
+      <option value="">Add to project…</option>
+    </select>
+
+    <div class="tag-input-box" id="bulk-tag-box" style="width:220px">
+      <input class="tag-add-input" id="bulk-tag-input" placeholder="+ Tag, press Enter" autocomplete="off">
+      <div class="tag-suggestions" id="bulk-tag-suggestions" style="display:none"></div>
+    </div>
+    <button type="button" class="btn-secondary" id="apply-tags-btn" title="Apply pending tags to the selection" style="display:none">Apply tags</button>
+
+    <button type="button" class="btn-secondary" id="create-project-btn">Turn into project…</button>
+    <button type="button" class="btn-danger" id="delete-selected-btn">Delete selected</button>
+  </div>
+
+  <div id="pending-tags-row" class="tag-chip-row" style="display:none;margin-top:-6px"></div>
+
+  <div id="from-selection-followup" class="selection-bar" style="display:none">
+    <span class="selection-count">Tags applied — also create a project from these items?</span>
+    <input class="input mono" id="followup-project-title" placeholder="New project name" style="width:220px">
+    <button type="button" class="btn-secondary" id="followup-create-btn">Create project</button>
+    <button type="button" class="ocr-retry-btn" id="followup-dismiss-btn">No thanks</button>
+  </div>
+
+  <div class="home-gallery-grid" id="unfiled-grid"></div>
+  <p class="empty-state" id="empty-state" style="display:none">No unfiled items — everything's been filed.</p>
+</div>
+
+<script>
+(function () {
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  const CLIENT_COLORS = {};
+  const PALETTE = ["#B98B5E", "#8B7355", "#C9A66B", "#7FA37C", "#9CAD5E"];
+  function colorFor(client) {
+    if (!client) return "#6E6B57";
+    if (!CLIENT_COLORS[client]) {
+      CLIENT_COLORS[client] = PALETTE[Object.keys(CLIENT_COLORS).length % PALETTE.length];
+    }
+    return CLIENT_COLORS[client];
+  }
+  const OCR_LAMP_META = {
+    pending: { color: '#BA7517', title: 'OCR in progress…' },
+    done:    { color: '#7FA37C', title: null },
+    failed:  { color: '#E24B4A', title: 'OCR failed' },
+    none:    { color: '#E24B4A', title: 'OCR not run yet' },
+  };
+  function ocrLampHtml(item) {
+    if (item.ocr_status == null) return '';
+    const meta = OCR_LAMP_META[item.ocr_status || 'none'];
+    const title = item.ocr_status === 'done' ? (item.extracted_text || 'OCR found no text') : meta.title;
+    return `<span class="ocr-lamp" style="background:${meta.color}" title="${escapeHtml(title)}"></span>`;
+  }
+  const LOCK_ICON = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+    <rect x="5" y="11" width="14" height="9" rx="2" stroke="#6E6B57" stroke-width="1.4"/>
+    <path d="M8 11V8C8 5.79086 9.79086 4 12 4C14.2091 4 16 5.79086 16 8V11" stroke="#6E6B57" stroke-width="1.4"/>
+  </svg>`;
+  const FILE_ICON = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+    <rect x="3" y="4" width="18" height="16" rx="2" stroke="#3F4530" stroke-width="1.4"/>
+    <circle cx="8" cy="9" r="1.6" stroke="#3F4530" stroke-width="1.4"/>
+    <path d="M3 16L8.5 11.5L13 15L16.5 12L21 16" stroke="#3F4530" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+
+  const selectedSlugs = new Set();
+  window.toggleCardSelect = function (cb) {
+    if (cb.checked) selectedSlugs.add(cb.dataset.slug);
+    else selectedSlugs.delete(cb.dataset.slug);
+    updateSelectionBar();
+  };
+  function updateSelectionBar() {
+    const count = selectedSlugs.size;
+    document.getElementById('selection-count').textContent = `${count} selected`;
+    document.getElementById('selection-bar').style.opacity = count ? '1' : '0.4';
+    document.getElementById('bulk-project-select').disabled = !count;
+    document.getElementById('bulk-tag-input').disabled = !count;
+    document.getElementById('create-project-btn').disabled = !count;
+    document.getElementById('delete-selected-btn').disabled = !count;
+  }
+
+  function cardHtml(item) {
+    const isImage = item.has_thumbnail;
+    return `
+      <a href="/object/${item.slug}" class="gallery-card">
+        <div class="gallery-thumb${item.redacted ? ' redacted-thumb' : ''}">
+          ${item.redacted ? LOCK_ICON : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON)}
+          ${item.type_icon ? `<span class="type-badge-corner" title="${escapeHtml(item.type_label || item.type_badge || '')}">${item.type_icon}</span>` : ''}
+          <input type="checkbox" class="card-select" data-slug="${item.slug}" title="Select"
+            onclick="event.stopPropagation()" onchange="toggleCardSelect(this)" ${selectedSlugs.has(item.slug) ? 'checked' : ''}>
+        </div>
+        <div class="gallery-body">
+          <div>
+            <span class="gallery-filename mono">${escapeHtml(item.display_name)}</span> ${ocrLampHtml(item)}
+            <div class="gallery-date">${new Date(item.uploaded_at * 1000).toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'})} · <span class="uploader-label">${item.uploaded_by_display}</span></div>
+          </div>
+          <div class="gallery-tags">${item.tags.map(t => `<span class="chip">${escapeHtml(t)}</span>`).join('')}</div>
+          <div class="gallery-meta-row">
+            <span class="client-badge">
+              <span class="client-dot" style="background:${colorFor(item.client)}"></span>
+              <span class="client-name">${item.client || 'No project yet'}</span>
+            </span>
+          </div>
+        </div>
+      </a>`;
+  }
+
+  let items = {{ unfiled_items | tojson }};
+  const grid = document.getElementById('unfiled-grid');
+  const emptyState = document.getElementById('empty-state');
+  function render() {
+    grid.innerHTML = items.map(cardHtml).join('');
+    emptyState.style.display = items.length ? 'none' : 'block';
+    document.getElementById('unfiled-count-label').textContent =
+      `${items.length} upload${items.length === 1 ? '' : 's'} not yet added to a project.`;
+  }
+
+  function reload() {
+    // Whatever a bulk action just changed (an item filed, tagged, or
+    // deleted) needs a fresh unfiled_items list from the server — there's
+    // no separate JSON endpoint for just that list (only the full page
+    // render), so a full reload is simplest and matches how the compact
+    // widget already handles its own upload-complete refresh.
+    location.reload();
+  }
+
+  document.getElementById('clear-selection-btn').addEventListener('click', () => {
+    selectedSlugs.clear();
+    document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);
+    updateSelectionBar();
+  });
+
+  document.getElementById('delete-selected-btn').addEventListener('click', async () => {
+    const slugs = [...selectedSlugs];
+    if (!slugs.length) return;
+    if (!confirm(`Delete ${slugs.length} selected item${slugs.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    const fd = new FormData();
+    slugs.forEach(s => fd.append('slugs', s));
+    const res = await fetch('/api/delete', { method: 'POST', body: fd });
+    if (res.ok) reload();
+    else alert('Delete failed.');
+  });
+
+  // --- Add to project (existing project, via dropdown — GET /api/projects,
+  // same populate pattern _upload_drawer.html's project select already uses) ---
+  const projectSelect = document.getElementById('bulk-project-select');
+  async function loadProjects() {
+    const res = await fetch('/api/projects');
+    const projects = await res.json();
+    projectSelect.querySelectorAll('option[data-project]').forEach(o => o.remove());
+    projectSelect.insertAdjacentHTML('beforeend', projects.map(p => `<option value="${p.id}" data-project>${escapeHtml(p.title)}</option>`).join(''));
+  }
+  projectSelect.addEventListener('change', async () => {
+    const projectId = projectSelect.value;
+    if (!projectId) return;
+    const slugs = [...selectedSlugs];
+    if (!slugs.length) { projectSelect.value = ''; return; }
+    const fd = new FormData();
+    slugs.forEach(s => fd.append('slugs', s));
+    fd.append('project_id', projectId);
+    const res = await fetch('/api/bulk/add-to-project', { method: 'POST', body: fd });
+    projectSelect.value = '';
+    if (res.ok) reload();
+    else alert('Failed to add to project.');
+  });
+
+  // --- Bulk tag: build a pending chip list (same add/remove chip pattern
+  // used everywhere else in this app), then apply to the whole selection at
+  // once with a real "Apply tags" action rather than tagging on every
+  // keystroke. ---
+  const pendingTags = [];
+  const bulkTagInput = document.getElementById('bulk-tag-input');
+  const bulkTagSuggestions = document.getElementById('bulk-tag-suggestions');
+  const pendingTagsRow = document.getElementById('pending-tags-row');
+  const applyTagsBtn = document.getElementById('apply-tags-btn');
+  let allTags = [];
+  fetch('/api/tags').then(res => res.ok ? res.json() : []).then(data => { allTags = data; }).catch(() => {});
+  let bulkTagMatches = [];
+  let bulkTagActiveIndex = -1;
+
+  function renderPendingTags() {
+    pendingTagsRow.innerHTML = pendingTags.map((t, i) => `
+      <span class="chip">${escapeHtml(t)} <button type="button" data-i="${i}" class="pending-tag-remove" style="background:none;border:none;color:inherit;cursor:pointer">×</button></span>
+    `).join('');
+    pendingTagsRow.style.display = pendingTags.length ? 'flex' : 'none';
+    applyTagsBtn.style.display = pendingTags.length ? 'inline-block' : 'none';
+    pendingTagsRow.querySelectorAll('.pending-tag-remove').forEach(btn => {
+      btn.addEventListener('click', () => { pendingTags.splice(+btn.dataset.i, 1); renderPendingTags(); });
+    });
+  }
+  function addPendingTag(value) {
+    const trimmed = value.trim();
+    if (!trimmed || pendingTags.includes(trimmed)) return;
+    pendingTags.push(trimmed);
+    bulkTagInput.value = '';
+    hideBulkTagSuggestions();
+    renderPendingTags();
+  }
+  function hideBulkTagSuggestions() {
+    bulkTagSuggestions.style.display = 'none';
+    bulkTagSuggestions.innerHTML = '';
+    bulkTagMatches = [];
+    bulkTagActiveIndex = -1;
+  }
+  function renderBulkTagSuggestions() {
+    bulkTagSuggestions.innerHTML = bulkTagMatches.map((tag, i) =>
+      `<div class="tag-suggestion-item${i === bulkTagActiveIndex ? ' active' : ''}" data-name="${escapeHtml(tag.name)}">${escapeHtml(tag.path)}</div>`
+    ).join('') || `<div class="tag-suggestion-empty">No matching tags</div>`;
+    bulkTagSuggestions.querySelectorAll('.tag-suggestion-item').forEach(el => {
+      el.addEventListener('mousedown', (e) => { e.preventDefault(); addPendingTag(el.dataset.name); });
+    });
+    bulkTagSuggestions.style.display = 'block';
+  }
+  bulkTagInput.addEventListener('input', () => {
+    const v = bulkTagInput.value.trim().toLowerCase();
+    if (!v) { hideBulkTagSuggestions(); return; }
+    bulkTagMatches = allTags.filter(t => t.name.toLowerCase().includes(v) || t.path.toLowerCase().includes(v)).slice(0, 10);
+    bulkTagActiveIndex = -1;
+    renderBulkTagSuggestions();
+  });
+  bulkTagInput.addEventListener('blur', hideBulkTagSuggestions);
+  bulkTagInput.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' && bulkTagMatches.length) { e.preventDefault(); bulkTagActiveIndex = Math.min(bulkTagActiveIndex + 1, bulkTagMatches.length - 1); renderBulkTagSuggestions(); }
+    else if (e.key === 'ArrowUp' && bulkTagMatches.length) { e.preventDefault(); bulkTagActiveIndex = Math.max(bulkTagActiveIndex - 1, 0); renderBulkTagSuggestions(); }
+    else if (e.key === 'Enter' && bulkTagInput.value.trim()) {
+      e.preventDefault();
+      if (bulkTagActiveIndex >= 0 && bulkTagMatches[bulkTagActiveIndex]) addPendingTag(bulkTagMatches[bulkTagActiveIndex].name);
+      else addPendingTag(bulkTagInput.value);
+    } else if (e.key === 'Escape') hideBulkTagSuggestions();
+  });
+
+  const followup = document.getElementById('from-selection-followup');
+  let lastTaggedSlugs = [];
+  applyTagsBtn.addEventListener('click', async () => {
+    const slugs = [...selectedSlugs];
+    if (!slugs.length || !pendingTags.length) return;
+    const fd = new FormData();
+    slugs.forEach(s => fd.append('slugs', s));
+    pendingTags.forEach(t => fd.append('tag_names', t));
+    const res = await fetch('/api/bulk/attach-tags', { method: 'POST', body: fd });
+    if (res.ok) {
+      lastTaggedSlugs = slugs;
+      pendingTags.length = 0;
+      renderPendingTags();
+      followup.style.display = 'flex';
+    } else {
+      alert('Failed to apply tags.');
+    }
+  });
+  document.getElementById('followup-dismiss-btn').addEventListener('click', () => { followup.style.display = 'none'; reload(); });
+  document.getElementById('followup-create-btn').addEventListener('click', async () => {
+    const title = document.getElementById('followup-project-title').value.trim();
+    if (!title || !lastTaggedSlugs.length) return;
+    const fd = new FormData();
+    lastTaggedSlugs.forEach(s => fd.append('slugs', s));
+    fd.append('title', title);
+    const res = await fetch('/api/projects/from-selection', { method: 'POST', body: fd });
+    if (res.ok) reload();
+    else alert('Failed to create project.');
+  });
+
+  // --- Turn selection directly into a new project (no tagging step) ---
+  document.getElementById('create-project-btn').addEventListener('click', async () => {
+    const slugs = [...selectedSlugs];
+    if (!slugs.length) return;
+    const title = prompt('New project name:');
+    if (!title || !title.trim()) return;
+    const fd = new FormData();
+    slugs.forEach(s => fd.append('slugs', s));
+    fd.append('title', title.trim());
+    const res = await fetch('/api/projects/from-selection', { method: 'POST', body: fd });
+    if (res.ok) reload();
+    else alert('Failed to create project.');
+  });
+
+  document.addEventListener('constructicon:upload-complete', (e) => {
+    if (!e.detail.failures.length) location.reload();
+  });
+
+  // .card-select is display:none by default app-wide, only shown via
+  // body.delete-mode-on (see web/static/style.css) — normally toggled by
+  // _admin_pane.html's "Delete mode" checkbox. This page's whole purpose is
+  // bulk selection, so it's always "on" here rather than needing its own
+  // toggle; reusing the existing CSS gate rather than adding a parallel one.
+  document.body.classList.add('delete-mode-on');
+
+  loadProjects();
+  render();
+  updateSelectionBar();
+})();
+</script>
+{% endblock %}

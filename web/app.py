@@ -550,6 +550,19 @@ def project_detail_page(request: Request, slug: str):
     )
 
 
+@app.get("/unfiled", response_class=HTMLResponse)
+def unfiled_page(request: Request):
+    """Issue #98: full-page version of home.html's compact Unfiled widget,
+    with bulk selection/filing tools the widget has no room for. Reuses the
+    exact same db.list_unfiled_items()/_to_public() data shape the widget
+    already uses, so the gallery-card markup is identical everywhere."""
+    unfiled_items = [_to_public(r) for r in db.list_unfiled_items()]
+    return templates.TemplateResponse(
+        request, "unfiled.html",
+        {"unfiled_items": unfiled_items},
+    )
+
+
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str):
     rows = db.search(uploaded_by=uploader, limit=1000)
@@ -1073,6 +1086,81 @@ def _attach_to_project(slug, project_id):
     # Auto-set cover to first item if project has no cover yet
     if not project.get("cover_slug"):
         db.update_project(project["id"], cover_slug=slug)
+
+
+@app.post("/api/bulk/add-to-project")
+def api_bulk_add_to_project(slugs: list[str] = Form(...), project_id: str = Form(...)):
+    """Issue #98: the Unfiled page's bulk "add to project" action. Same
+    per-slug primitive as a single upload's project pick (_attach_to_project)
+    — a bad/stale project_id is silently a no-op for every slug, same as the
+    single-object path, rather than partially failing the batch."""
+    count = 0
+    for slug in slugs:
+        if db.get_by_slug(slug) is not None:
+            _attach_to_project(slug, project_id)
+            count += 1
+    return JSONResponse({"count": count})
+
+
+@app.post("/api/bulk/attach-tags")
+def api_bulk_attach_tags(slugs: list[str] = Form(...), tag_names: list[str] = Form(...)):
+    """Issue #98: the Unfiled page's bulk tagging action. db.update_tags
+    fully replaces a row's tags/description/client with whatever's passed —
+    the single-object edit form gets away with this because it always
+    resends the complete current description+tags together. A bulk action
+    can't do that: it must read each row first and merge, or it would wipe
+    out every selected item's existing tags and description. tag_names are
+    unioned onto each row's own existing tags (deduped); description/client
+    are passed back unchanged from the row itself."""
+    tag_names = [t.strip() for t in tag_names if t.strip()]
+    if not tag_names:
+        return JSONResponse({"count": 0})
+    count = 0
+    for slug in slugs:
+        row = db.get_by_slug(slug)
+        if row is None:
+            continue
+        merged_tags = sorted(set(row["tags"]) | set(tag_names))
+        db.update_tags(slug, description=row["description"], tags=merged_tags, client=row.get("client"))
+        count += 1
+    return JSONResponse({"count": count})
+
+
+@app.post("/api/projects/from-selection")
+def api_create_project_from_selection(slugs: list[str] = Form(...), title: str = Form(...)):
+    """Issue #98: "turn this selection into a project" — the Unfiled page's
+    bulk-tag follow-up prompt, and usable standalone. Deliberately operates
+    on the exact slugs passed in, not a tag-name lookup: this app has two
+    separate, unlinked tag systems (the flat per-object `tags` array bulk
+    tagging above writes to, vs. the hierarchical blog_tags/post_tags tree
+    /api/tags and list_posts_for_tag walk) — a tag-name lookup here would
+    silently miss items that were only ever bulk-tagged the flat way."""
+    title = title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Project name can't be empty")
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+    for slug in slugs:
+        if db.get_by_slug(slug) is not None:
+            _attach_to_project(slug, project["id"])
+    return JSONResponse(_to_project_option(project))
+
+
+@app.post("/api/projects/from-related")
+def api_create_project_from_related(slug: str = Form(...), title: str = Form(...)):
+    """Issue #98: "turn this object + its related items into a project" —
+    surfaced on the object detail page's Related panel."""
+    title = title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Project name can't be empty")
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+    _attach_to_project(slug, project["id"])
+    for related in db.list_related(slug):
+        _attach_to_project(related["slug"], project["id"])
+    return JSONResponse(_to_project_option(project))
 
 
 @app.get("/api/tags")

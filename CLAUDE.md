@@ -275,6 +275,23 @@ the module was actually imported with real dependencies.
    `hoop` user will hit `Permission denied` on those. Clean them from
    *inside* the container instead: `sudo docker exec constructicon-test
    find /app/core -name __pycache__ -exec rm -rf {} +`.
+6. **Prefer real files over synthetic ones for upload/render-path tests.**
+   Before hand-building a test file (a minimal STL triangle, a hand-crafted
+   PSD header, etc.), check whether `constructicon-web` (production) already
+   has a real upload of that `media_type` — its DB is a separate SQLite file
+   from `constructicon-test`'s, reachable read-only via `sudo docker exec
+   constructicon-web python3 -c "import sqlite3; ..."` (see the ticket_id
+   data-check pattern used for #84 as an example query shape). If a real row
+   exists, its stored file lives under production's storage bind mount
+   (`/mnt/Storage Pool/Media/constructicon/storage/` — check
+   `constructicon-web`'s actual mount source with `docker inspect`, don't
+   assume the path) and can be `scp`'d down and re-uploaded to
+   `constructicon-test` for a more representative test than a synthetic
+   minimal file. As of 2026-09-02, production had at least one real upload
+   for every registered type except `svg` — if a type has zero real
+   production uploads when you need one, ask the owner to upload a real
+   example rather than only ever testing against synthetic data for that
+   type.
 - The Dockerfile comments confirm `core/`, `web/`, and `mcp_server/` are
   **bind-mounted at run time, not baked into the image** — an ordinary code
   deploy is a `git pull` + container restart, not a rebuild. Only changes

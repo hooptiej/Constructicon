@@ -1032,6 +1032,67 @@ def api_create_project(request: Request, title: str = Form(...)):
     return JSONResponse(_to_project_option(project))
 
 
+@app.post("/api/projects/from-selection")
+def api_projects_from_selection(slugs: list[str] = Form(...), title: str = Form(...)):
+    """Create a new project from selected items. Creates the project, links it
+    to a blog_tag of the same name (so it's discoverable via tag browsing),
+    then adds each selected item to it using _attach_to_project for consistency."""
+    if not slugs or not title.strip():
+        raise HTTPException(status_code=400, detail="slugs and title required")
+
+    title = title.strip()
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+
+    count = 0
+    for slug in slugs:
+        row = db.get_by_slug(slug)
+        if row is not None:
+            _attach_to_project(slug, project["id"])
+            count += 1
+
+    return JSONResponse({
+        "id": project["id"],
+        "slug": project["slug"],
+        "title": project["title"],
+        "item_count": count
+    })
+
+
+@app.post("/api/projects/from-related")
+def api_projects_from_related(slug: str = Form(...), title: str = Form(...)):
+    """Create a project from an item and its related items. Adds the source
+    object plus everything returned by db.list_related(slug). Useful for
+    "turn this into a project" workflows from the object detail page."""
+    if not slug or not title.strip():
+        raise HTTPException(status_code=400, detail="slug and title required")
+
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Source object not found")
+
+    title = title.strip()
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+
+    # Add the source object
+    _attach_to_project(slug, project["id"])
+    count = 1
+
+    # Add all related items
+    related = db.list_related(slug)
+    for rel_row in related:
+        _attach_to_project(rel_row["slug"], project["id"])
+        count += 1
+
+    return JSONResponse({
+        "id": project["id"],
+        "slug": project["slug"],
+        "title": project["title"],
+        "item_count": count
+    })
+
+
 @app.post("/api/projects/{project_id}")
 def api_update_project(
     request: Request,
@@ -1136,67 +1197,6 @@ def api_bulk_attach_tags(slugs: list[str] = Form(...), tag_names: list[str] = Fo
             count += 1
 
     return JSONResponse({"count": count})
-
-
-@app.post("/api/projects/from-selection")
-def api_projects_from_selection(slugs: list[str] = Form(...), title: str = Form(...)):
-    """Create a new project from selected items. Creates the project, links it
-    to a blog_tag of the same name (so it's discoverable via tag browsing),
-    then adds each selected item to it using _attach_to_project for consistency."""
-    if not slugs or not title.strip():
-        raise HTTPException(status_code=400, detail="slugs and title required")
-
-    title = title.strip()
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"])
-
-    count = 0
-    for slug in slugs:
-        row = db.get_by_slug(slug)
-        if row is not None:
-            _attach_to_project(slug, project["id"])
-            count += 1
-
-    return JSONResponse({
-        "id": project["id"],
-        "slug": project["slug"],
-        "title": project["title"],
-        "item_count": count
-    })
-
-
-@app.post("/api/projects/from-related")
-def api_projects_from_related(slug: str = Form(...), title: str = Form(...)):
-    """Create a project from an item and its related items. Adds the source
-    object plus everything returned by db.list_related(slug). Useful for
-    "turn this into a project" workflows from the object detail page."""
-    if not slug or not title.strip():
-        raise HTTPException(status_code=400, detail="slug and title required")
-
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Source object not found")
-
-    title = title.strip()
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"])
-
-    # Add the source object
-    _attach_to_project(slug, project["id"])
-    count = 1
-
-    # Add all related items
-    related = db.list_related(slug)
-    for rel_row in related:
-        _attach_to_project(rel_row["slug"], project["id"])
-        count += 1
-
-    return JSONResponse({
-        "id": project["id"],
-        "slug": project["slug"],
-        "title": project["title"],
-        "item_count": count
-    })
 
 
 @app.get("/api/tags")

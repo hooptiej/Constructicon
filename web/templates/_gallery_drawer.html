@@ -55,7 +55,8 @@
         <div class="field">
           <label>TAGS</label>
           <div class="tag-input-box" id="upload-tag-box">
-            <input class="tag-add-input" id="upload-tag-add-input" placeholder="+ Add tag, press Enter">
+            <input class="tag-add-input" id="upload-tag-add-input" placeholder="+ Add tag, press Enter" autocomplete="off">
+            <div class="tag-suggestions" id="upload-tag-suggestions" style="display:none"></div>
           </div>
         </div>
         <div class="field">
@@ -361,50 +362,82 @@
     });
   }
 
-  // Issue #88: Tag autocomplete from existing tags
+  // Issue #88: Tag autocomplete from existing tags — a real dropdown, not
+  // placeholder text (placeholder is invisible the moment the input has any
+  // value, i.e. exactly when suggestions would need to show).
   let allGalleryTags = [];
-  async function loadGalleryTagsForAutocomplete() {
-    try {
-      const res = await fetch('/api/tags');
-      if (res.ok) {
-        allGalleryTags = await res.json();
-      }
-    } catch (e) {
-      // Silently fail if tag loading doesn't work — autocomplete is a convenience, not required
-    }
+  fetch('/api/tags').then(res => res.ok ? res.json() : []).then(data => { allGalleryTags = data; }).catch(() => {});
+
+  const tagSuggestions = document.getElementById('upload-tag-suggestions');
+  let galleryTagMatches = [];
+  let galleryTagActiveIndex = -1;
+
+  function addGalleryTag(value) {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    tags.push(trimmed);
+    tagAddInput.value = '';
+    renderTags();
+    hideGalleryTagSuggestions();
   }
-  loadGalleryTagsForAutocomplete();
+
+  function hideGalleryTagSuggestions() {
+    tagSuggestions.style.display = 'none';
+    tagSuggestions.innerHTML = '';
+    galleryTagMatches = [];
+    galleryTagActiveIndex = -1;
+  }
+
+  function renderGalleryTagSuggestions() {
+    tagSuggestions.innerHTML = '';
+    if (galleryTagMatches.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'tag-suggestion-empty';
+      empty.textContent = 'No matching tags';
+      tagSuggestions.appendChild(empty);
+    } else {
+      galleryTagMatches.forEach((tag, i) => {
+        const item = document.createElement('div');
+        item.className = 'tag-suggestion-item' + (i === galleryTagActiveIndex ? ' active' : '');
+        item.textContent = tag.path;
+        item.addEventListener('mousedown', (e) => { e.preventDefault(); addGalleryTag(tag.name); });
+        tagSuggestions.appendChild(item);
+      });
+    }
+    tagSuggestions.style.display = 'block';
+  }
 
   function updateGalleryTagSuggestions() {
     const inputValue = tagAddInput.value.trim().toLowerCase();
-    if (!inputValue) {
-      tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter');
-      return;
-    }
-
-    // Filter tags that match the input (match against both name and full path)
-    const matches = allGalleryTags
+    if (!inputValue) { hideGalleryTagSuggestions(); return; }
+    galleryTagMatches = allGalleryTags
       .filter(tag => tag.name.toLowerCase().includes(inputValue) || tag.path.toLowerCase().includes(inputValue))
-      .slice(0, 10);  // Limit to 10 suggestions
-
-    // Show suggestions via placeholder text
-    if (matches.length > 0) {
-      const suggestionTexts = matches.map(t => `${t.path}`);
-      tagAddInput.setAttribute('placeholder', `+ Add tag, press Enter (suggestions: ${suggestionTexts.join(', ')})`);
-    } else {
-      tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter (no matches in existing tags)');
-    }
+      .slice(0, 10);
+    galleryTagActiveIndex = -1;
+    renderGalleryTagSuggestions();
   }
 
   tagAddInput.addEventListener('input', updateGalleryTagSuggestions);
+  tagAddInput.addEventListener('blur', hideGalleryTagSuggestions);
 
   tagAddInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && tagAddInput.value.trim()) {
+    if (e.key === 'ArrowDown' && galleryTagMatches.length > 0) {
       e.preventDefault();
-      tags.push(tagAddInput.value.trim());
-      tagAddInput.value = '';
-      tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter');
-      renderTags();
+      galleryTagActiveIndex = Math.min(galleryTagActiveIndex + 1, galleryTagMatches.length - 1);
+      renderGalleryTagSuggestions();
+    } else if (e.key === 'ArrowUp' && galleryTagMatches.length > 0) {
+      e.preventDefault();
+      galleryTagActiveIndex = Math.max(galleryTagActiveIndex - 1, 0);
+      renderGalleryTagSuggestions();
+    } else if (e.key === 'Enter' && tagAddInput.value.trim()) {
+      e.preventDefault();
+      if (galleryTagActiveIndex >= 0 && galleryTagMatches[galleryTagActiveIndex]) {
+        addGalleryTag(galleryTagMatches[galleryTagActiveIndex].name);
+      } else {
+        addGalleryTag(tagAddInput.value);
+      }
+    } else if (e.key === 'Escape') {
+      hideGalleryTagSuggestions();
     }
   });
 

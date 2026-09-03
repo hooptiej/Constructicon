@@ -169,7 +169,8 @@
         <div class="field" style="margin-top:15px">
           <label>TAGS</label>
           <div class="tag-input-box" id="tag-box">
-            <input class="tag-add-input" id="tag-add-input" placeholder="+ Add tag, press Enter">
+            <input class="tag-add-input" id="tag-add-input" placeholder="+ Add tag, press Enter" autocomplete="off">
+            <div class="tag-suggestions" id="tag-suggestions" style="display:none"></div>
           </div>
         </div>
         <div class="field" style="margin-top:15px">
@@ -394,42 +395,63 @@ function renderTags() {
 }
 renderTags();
 
-// Issue #88: Tag autocomplete from existing tags
+// Issue #88: Tag autocomplete from existing tags — a real dropdown, not
+// placeholder text (placeholder is invisible the moment the input has any
+// value, i.e. exactly when suggestions would need to show).
 let allTags = [];
-async function loadTagsForAutocomplete() {
-  try {
-    const res = await fetch('/api/tags');
-    if (res.ok) {
-      allTags = await res.json();
-    }
-  } catch (e) {
-    // Silently fail if tag loading doesn't work — autocomplete is a convenience, not required
-  }
+fetch('/api/tags').then(res => res.ok ? res.json() : []).then(data => { allTags = data; }).catch(() => {});
+
+const tagSuggestions = document.getElementById('tag-suggestions');
+let objectTagMatches = [];
+let objectTagActiveIndex = -1;
+
+function addObjectTag(value) {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  tags.push(trimmed);
+  tagAddInput.value = '';
+  renderTags();
+  hideObjectTagSuggestions();
 }
-loadTagsForAutocomplete();
+
+function hideObjectTagSuggestions() {
+  tagSuggestions.style.display = 'none';
+  tagSuggestions.innerHTML = '';
+  objectTagMatches = [];
+  objectTagActiveIndex = -1;
+}
+
+function renderObjectTagSuggestions() {
+  tagSuggestions.innerHTML = '';
+  if (objectTagMatches.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'tag-suggestion-empty';
+    empty.textContent = 'No matching tags';
+    tagSuggestions.appendChild(empty);
+  } else {
+    objectTagMatches.forEach((tag, i) => {
+      const item = document.createElement('div');
+      item.className = 'tag-suggestion-item' + (i === objectTagActiveIndex ? ' active' : '');
+      item.textContent = tag.path;
+      item.addEventListener('mousedown', (e) => { e.preventDefault(); addObjectTag(tag.name); });
+      tagSuggestions.appendChild(item);
+    });
+  }
+  tagSuggestions.style.display = 'block';
+}
 
 function updateTagSuggestions() {
   const inputValue = tagAddInput.value.trim().toLowerCase();
-  if (!inputValue) {
-    tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter');
-    return;
-  }
-
-  // Filter tags that match the input (match against both name and full path)
-  const matches = allTags
+  if (!inputValue) { hideObjectTagSuggestions(); return; }
+  objectTagMatches = allTags
     .filter(tag => tag.name.toLowerCase().includes(inputValue) || tag.path.toLowerCase().includes(inputValue))
-    .slice(0, 10);  // Limit to 10 suggestions
-
-  // Show suggestions via datalist or as help text
-  if (matches.length > 0) {
-    const suggestionTexts = matches.map(t => `${t.path}`);
-    tagAddInput.setAttribute('placeholder', `+ Add tag, press Enter (suggestions: ${suggestionTexts.join(', ')})`);
-  } else {
-    tagAddInput.setAttribute('placeholder', '+ Add tag, press Enter (no matches in existing tags)');
-  }
+    .slice(0, 10);
+  objectTagActiveIndex = -1;
+  renderObjectTagSuggestions();
 }
 
 tagAddInput.addEventListener('input', updateTagSuggestions);
+tagAddInput.addEventListener('blur', hideObjectTagSuggestions);
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -544,11 +566,23 @@ renderProjectChips();
 loadProjectOptions();
 
 tagAddInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && tagAddInput.value.trim()) {
+  if (e.key === 'ArrowDown' && objectTagMatches.length > 0) {
     e.preventDefault();
-    tags.push(tagAddInput.value.trim());
-    tagAddInput.value = '';
-    renderTags();
+    objectTagActiveIndex = Math.min(objectTagActiveIndex + 1, objectTagMatches.length - 1);
+    renderObjectTagSuggestions();
+  } else if (e.key === 'ArrowUp' && objectTagMatches.length > 0) {
+    e.preventDefault();
+    objectTagActiveIndex = Math.max(objectTagActiveIndex - 1, 0);
+    renderObjectTagSuggestions();
+  } else if (e.key === 'Enter' && tagAddInput.value.trim()) {
+    e.preventDefault();
+    if (objectTagActiveIndex >= 0 && objectTagMatches[objectTagActiveIndex]) {
+      addObjectTag(objectTagMatches[objectTagActiveIndex].name);
+    } else {
+      addObjectTag(tagAddInput.value);
+    }
+  } else if (e.key === 'Escape') {
+    hideObjectTagSuggestions();
   }
 });
 

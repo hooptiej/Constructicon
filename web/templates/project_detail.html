@@ -27,23 +27,65 @@
   {% if items %}
   <div class="project-item-grid">
     {% for item in items %}
-    <a class="project-item-card" href="{{ item.link }}">
-      <div class="project-item-thumb">
-        {% if item.thumb_url %}
-          <img src="{{ item.thumb_url }}" loading="lazy" alt="">
-        {% else %}
-          <span class="media-type-pill">{{ item.media_type }}</span>
-        {% endif %}
-      </div>
-      <div class="project-item-body">
-        <div class="project-item-title">{{ item.title }}</div>
-        <div class="project-item-meta">{{ item.media_type }}</div>
-      </div>
-    </a>
+    <div class="project-item-card-wrapper" data-slug="{{ item.slug }}">
+      <a class="project-item-card" href="{{ item.link }}">
+        <div class="project-item-thumb">
+          {% if item.thumb_url %}
+            <img src="{{ item.thumb_url }}" loading="lazy" alt="">
+          {% else %}
+            <span class="media-type-pill">{{ item.media_type }}</span>
+          {% endif %}
+        </div>
+        <div class="project-item-body">
+          <div class="project-item-title">{{ item.title }}</div>
+          <div class="project-item-meta">{{ item.media_type }}</div>
+        </div>
+      </a>
+      <input type="radio" class="project-cover-selector" name="cover" data-slug="{{ item.slug }}" title="Set as project cover" {% if item.slug == project.cover_slug %}checked{% endif %}>
+    </div>
     {% endfor %}
   </div>
   {% else %}
   <p class="empty-state">This project has no items yet.</p>
   {% endif %}
 </div>
+
+<script>
+let currentCoverSlug = {{ project.cover_slug | tojson }};
+
+function revertCoverSelection(failedRadio) {
+  failedRadio.checked = false;
+  if (currentCoverSlug) {
+    const previous = document.querySelector(
+      `.project-cover-selector[data-slug="${CSS.escape(currentCoverSlug)}"]`
+    );
+    if (previous) previous.checked = true;
+  }
+}
+
+document.querySelectorAll('.project-cover-selector').forEach(radio => {
+  radio.addEventListener('change', async function() {
+    if (!this.checked) return;
+    const slug = this.dataset.slug;
+    const projectId = '{{ project.id }}';
+    try {
+      const response = await fetch(`/api/projects/${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `cover_slug=${encodeURIComponent(slug)}`
+      });
+      if (response.ok) {
+        currentCoverSlug = slug;
+      } else {
+        console.error('Failed to update cover:', response.status);
+        revertCoverSelection(this);
+      }
+    } catch (error) {
+      console.error('Error updating cover:', error);
+      revertCoverSelection(this);
+    }
+  });
+});
+</script>
+
 {% endblock %}

@@ -1096,31 +1096,6 @@ def list_unfiled_items(limit=10000):
     return [_row_to_dict(r) for r in rows]
 
 
-def list_recent_items(media_type=None, limit=20):
-    """Most recent capture_events rows across the whole gallery (no project
-    scoping), ordered by upload timestamp descending. Optionally filtered to
-    a single media_type. Used to populate the Files home widget (#69), which
-    shows recent uploads organized by type tabs.
-
-    Limit defaults to 20 — a compact widget's reasonable row count for the
-    home page; see home_page's use of this via the template context and
-    home.html's .home-widget-compact sizing.
-    """
-    conn = get_conn()
-    if media_type:
-        rows = conn.execute(
-            "SELECT * FROM capture_events WHERE media_type = ? ORDER BY timestamp DESC LIMIT ?",
-            (media_type, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM capture_events ORDER BY timestamp DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    conn.close()
-    return [_row_to_dict(r) for r in rows]
-
-
 def list_recent_items_by_type(limit_per_type=10):
     """Most recent capture_events rows, independently fetched per media_type.
     Each type gets its own N most recent items, rather than competing within

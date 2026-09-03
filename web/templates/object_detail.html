@@ -134,6 +134,7 @@
         <div class="related-panel-header">
           <span class="related-panel-label">Related</span>
           <button type="button" class="ocr-retry-btn" id="add-related-btn">+ Add related</button>
+          <button type="button" class="ocr-retry-btn" id="related-to-project-btn" title="Create a new project from this item and everything related to it">Turn into project</button>
         </div>
         <div class="related-grid" id="related-grid"></div>
       </div>
@@ -725,6 +726,25 @@ document.addEventListener('constructicon:upload-complete', (e) => {
   });
   document.getElementById('related-modal-close').addEventListener('click', () => relatedModalBackdrop.classList.remove('active'));
   relatedModalBackdrop.addEventListener('click', (e) => { if (e.target === relatedModalBackdrop) relatedModalBackdrop.classList.remove('active'); });
+
+  // #98: "Turn into project" — creates a new project from this object plus
+  // everything in its Related list (core/db.py's list_related, the manually
+  // curated set above — not the auto-detected Similar panel below).
+  document.getElementById('related-to-project-btn').addEventListener('click', async () => {
+    const title = prompt('New project name:');
+    if (!title || !title.trim()) return;
+    const form = new FormData();
+    form.append('slug', '{{ item.slug }}');
+    form.append('title', title.trim());
+    const res = await fetch('/api/projects/from-related', { method: 'POST', body: form });
+    if (res.ok) {
+      const project = await res.json();
+      window.location.href = `/project/${project.slug}`;
+    } else {
+      const body = await res.json().catch(() => ({ detail: 'Failed to create project' }));
+      alert(body.detail || 'Failed to create project');
+    }
+  });
 
   let relatedSearchTimer;
   relatedSearchInput.addEventListener('input', () => {

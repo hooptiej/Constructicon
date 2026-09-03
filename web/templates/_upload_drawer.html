@@ -34,7 +34,8 @@
       <div class="field">
         <label>TAGS</label>
         <div class="tag-input-box" id="upload-tag-box">
-          <input class="tag-add-input" id="upload-tag-add-input" placeholder="+ Add tag, press Enter">
+          <input class="tag-add-input" id="upload-tag-add-input" placeholder="+ Add tag, press Enter" autocomplete="off">
+          <div class="tag-suggestions" id="upload-tag-suggestions" style="display:none"></div>
         </div>
       </div>
       <div class="field">
@@ -241,12 +242,85 @@
       tagBox.insertBefore(chip, tagAddInput);
     });
   }
+
+  // Issue #88: Tag autocomplete from existing tags — a real dropdown, not
+  // placeholder text (placeholder is invisible the moment the input has any
+  // value, i.e. exactly when suggestions would need to show).
+  let allUploadTags = [];
+  fetch('/api/tags').then(res => res.ok ? res.json() : []).then(data => { allUploadTags = data; }).catch(() => {});
+
+  const tagSuggestions = document.getElementById('upload-tag-suggestions');
+  let uploadTagMatches = [];
+  let uploadTagActiveIndex = -1;
+
+  function addUploadTag(value) {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    tags.push(trimmed);
+    tagAddInput.value = '';
+    renderTags();
+    hideUploadTagSuggestions();
+  }
+
+  function hideUploadTagSuggestions() {
+    tagSuggestions.style.display = 'none';
+    tagSuggestions.innerHTML = '';
+    uploadTagMatches = [];
+    uploadTagActiveIndex = -1;
+  }
+
+  function renderUploadTagSuggestions() {
+    tagSuggestions.innerHTML = '';
+    if (uploadTagMatches.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'tag-suggestion-empty';
+      empty.textContent = 'No matching tags';
+      tagSuggestions.appendChild(empty);
+    } else {
+      uploadTagMatches.forEach((tag, i) => {
+        const item = document.createElement('div');
+        item.className = 'tag-suggestion-item' + (i === uploadTagActiveIndex ? ' active' : '');
+        item.textContent = tag.path;
+        // mousedown (not click) fires before the input's blur handler, so
+        // the dropdown doesn't get hidden out from under the click.
+        item.addEventListener('mousedown', (e) => { e.preventDefault(); addUploadTag(tag.name); });
+        tagSuggestions.appendChild(item);
+      });
+    }
+    tagSuggestions.style.display = 'block';
+  }
+
+  function updateUploadTagSuggestions() {
+    const inputValue = tagAddInput.value.trim().toLowerCase();
+    if (!inputValue) { hideUploadTagSuggestions(); return; }
+    uploadTagMatches = allUploadTags
+      .filter(tag => tag.name.toLowerCase().includes(inputValue) || tag.path.toLowerCase().includes(inputValue))
+      .slice(0, 10);
+    uploadTagActiveIndex = -1;
+    renderUploadTagSuggestions();
+  }
+
+  tagAddInput.addEventListener('input', updateUploadTagSuggestions);
+  tagAddInput.addEventListener('blur', hideUploadTagSuggestions);
+
   tagAddInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && tagAddInput.value.trim()) {
+    if (e.key === 'ArrowDown' && uploadTagMatches.length > 0) {
       e.preventDefault();
-      tags.push(tagAddInput.value.trim());
-      tagAddInput.value = '';
-      renderTags();
+      uploadTagActiveIndex = Math.min(uploadTagActiveIndex + 1, uploadTagMatches.length - 1);
+      renderUploadTagSuggestions();
+    } else if (e.key === 'ArrowUp' && uploadTagMatches.length > 0) {
+      e.preventDefault();
+      uploadTagActiveIndex = Math.max(uploadTagActiveIndex - 1, 0);
+      renderUploadTagSuggestions();
+    } else if (e.key === 'Enter' && tagAddInput.value.trim()) {
+      e.preventDefault();
+      if (uploadTagActiveIndex >= 0 && uploadTagMatches[uploadTagActiveIndex]) {
+        addUploadTag(uploadTagMatches[uploadTagActiveIndex].name);
+      } else {
+        addUploadTag(tagAddInput.value);
+      }
+    } else if (e.key === 'Escape') {
+      hideUploadTagSuggestions();
     }
   });
 

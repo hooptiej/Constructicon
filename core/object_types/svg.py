@@ -36,7 +36,7 @@ import xml.etree.ElementTree as ET
 
 import cairosvg
 
-from . import storage
+from .. import storage
 
 # SVGs are usually small/simple compared to a scanned page or a dense mesh,
 # so a single fixed render size (rather than PDF-style DPI zoom) is enough
@@ -112,3 +112,25 @@ def extract_text_for_row(row):
     core/ocr.py, which tries this before ever running OCR."""
     path = _stored_path(row)
     return extract_text(path) if path else ""
+
+
+# Registration: add this type to the object-type registry
+from . import register, ObjectTypeSpec, ThumbnailSource
+
+register(ObjectTypeSpec(
+    key="svg",
+    label="Vector graphic (SVG)",
+    # A browser can display an SVG directly, but the gallery/detail
+    # thumbnail pipeline still rasterizes it server-side (core/svg.py)
+    # for tile consistency with every other type and so OCR has a
+    # raster fallback — see that module's docstring for why cairosvg
+    # (not "pure Python" as first hoped — needs system libcairo2, a
+    # small apt dependency) was picked.
+    thumbnail_source=ThumbnailSource.CAPTURE,
+    ocr_capable=True,
+    extensions=frozenset(storage.SVG_EXTENSIONS),
+    capture_fn=capture_thumbnail,
+    text_extract_fn=extract_text_for_row,  # <text> elements read directly, no OCR needed when present
+    badge_icon="\U0001F4D0",  # triangular ruler
+    badge_text="SVG",
+))

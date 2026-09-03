@@ -36,7 +36,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import storage
+from .. import storage
 
 # Ghostscript's -r is a DPI, not a pixel count — EPS's %%BoundingBox is
 # defined in 72-DPI points, so this DPI gives a preview a few hundred pixels
@@ -92,3 +92,22 @@ def capture_thumbnail(row):
     being the file itself, the same reasoning as PDF/STL/PSD/SVG."""
     path = _stored_path(row)
     return render_raster(path) if path else None
+
+
+# Registration: add this type to the object-type registry
+from . import register, ObjectTypeSpec, ThumbnailSource
+
+register(ObjectTypeSpec(
+    key="eps",
+    label="Vector graphic (EPS)",
+    # Ghostscript-rendered raster (core/eps.py) — a real system binary,
+    # investigated and found to be a small, standard apt dependency
+    # rather than the kind of GPU/display-dependent tooling STL (#14)
+    # had to route around.
+    thumbnail_source=ThumbnailSource.CAPTURE,
+    ocr_capable=True,  # OCR runs against the rendered raster; no text layer to extract directly (see core/eps.py)
+    extensions=frozenset(storage.EPS_EXTENSIONS),
+    capture_fn=capture_thumbnail,
+    badge_icon="\U0001F5A8️",  # printer — PostScript's original target device
+    badge_text="EPS",
+))

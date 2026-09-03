@@ -29,9 +29,6 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from .. import eps as _eps
-from .. import svg as _svg
-
 
 class ThumbnailSource(Enum):
     """How a type's representative thumbnail image is obtained."""
@@ -131,40 +128,9 @@ def classify_url(url):
 
 
 # Registered after auto-discovery to ensure all modules have been imported.
-# image, youtube, document, audio, pdf, stl, and psd are registered separately
-# via their own core/object_types/ modules. This section registers the remaining
-# types: svg, eps, stream, url, and the DEFAULT_SPEC fallback.
-
-_svg_spec = register(ObjectTypeSpec(
-    key="svg",
-    label="Vector graphic (SVG)",
-    # A browser can display an SVG directly, but the gallery/detail
-    # thumbnail pipeline still rasterizes it server-side (core/svg.py)
-    # for tile consistency with every other type and so OCR has a
-    # raster fallback — see that module's docstring for why cairosvg
-    # (not "pure Python" as first hoped — needs system libcairo2, a
-    # small apt dependency) was picked.
-    thumbnail_source=ThumbnailSource.CAPTURE,
-    ocr_capable=True,
-    capture_fn=_svg.capture_thumbnail,
-    text_extract_fn=_svg.extract_text_for_row,  # <text> elements read directly, no OCR needed when present
-    badge_icon="\U0001F4D0",  # triangular ruler
-    badge_text="SVG",
-))
-
-_eps_spec = register(ObjectTypeSpec(
-    key="eps",
-    label="Vector graphic (EPS)",
-    # Ghostscript-rendered raster (core/eps.py) — a real system binary,
-    # investigated and found to be a small, standard apt dependency
-    # rather than the kind of GPU/display-dependent tooling STL (#14)
-    # had to route around.
-    thumbnail_source=ThumbnailSource.CAPTURE,
-    ocr_capable=True,  # OCR runs against the rendered raster; no text layer to extract directly (see core/eps.py)
-    capture_fn=_eps.capture_thumbnail,
-    badge_icon="\U0001F5A8️",  # printer — PostScript's original target device
-    badge_text="EPS",
-))
+# image, youtube, document, audio, pdf, stl, psd, svg, and eps are registered
+# separately via their own core/object_types/ modules. This section registers
+# the remaining types: stream, url, and the DEFAULT_SPEC fallback.
 
 # Not reachable from the UI or any insert path yet — registered ahead of
 # time as a concrete example of the CAPTURE strategy (issue #15 calls

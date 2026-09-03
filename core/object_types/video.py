@@ -17,42 +17,42 @@ from pathlib import Path
 from .. import storage
 
 
-def capture_frame(path):
-    """Extract the first frame of a video file at `path` as PNG bytes,
-    or None on any failure (corrupt/unreadable video, zero-duration,
-    ffmpeg missing or erroring, file not found).
+def _ffmpeg_frame_at(path, seek):
+    """One ffmpeg attempt at extracting a single PNG frame, seeking to
+    `seek` seconds first (0 for no seek). Returns PNG bytes, or None if
+    ffmpeg errored or produced no frame."""
+    cmd = ["ffmpeg"]
+    if seek:
+        cmd += ["-ss", str(seek)]
+    cmd += ["-i", str(path), "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"]
+    result = subprocess.run(cmd, capture_output=True, timeout=10)
+    if result.returncode != 0 or not result.stdout:
+        return None
+    return result.stdout
 
-    Captures at 00:00:01 (1 second) to skip over any black frames or
-    intros that might appear at the very start. If the video is shorter
-    than 1 second, ffmpeg will capture the nearest frame available.
+
+def capture_frame(path):
+    """Extract a representative frame of a video file at `path` as PNG
+    bytes, or None on any failure (corrupt/unreadable video, ffmpeg
+    missing or erroring, file not found).
+
+    Tries seeking to 1 second first, to skip any black frames/intros at
+    the very start. **`-ss` seeking to or past a video's actual duration
+    silently yields zero frames rather than clamping to the last frame**
+    (confirmed directly: a real 1.00s test video seeked to exactly
+    00:00:01 produced "Output file is empty" with returncode 0, no
+    error) — so any video 1 second or shorter would otherwise get no
+    thumbnail at all. Falls back to no seek (the very first frame) if
+    the 1-second attempt comes back empty.
     """
     if not path or not Path(path).exists():
         return None
 
     try:
-        # ffmpeg -i <input> -ss 00:00:01 -vframes 1 -f image2pipe -vcodec png -
-        # -i: input file
-        # -ss: seek to 1 second (1 second in, skip any leader frames)
-        # -vframes 1: capture exactly 1 frame
-        # -f image2pipe: output format is raw image data piped to stdout
-        # -vcodec png: encode as PNG
-        # - : write to stdout
-        result = subprocess.run(
-            ["ffmpeg", "-i", str(path), "-ss", "00:00:01", "-vframes", "1",
-             "-f", "image2pipe", "-vcodec", "png", "-"],
-            capture_output=True,
-            timeout=10,
-        )
-
-        if result.returncode != 0:
-            # ffmpeg errored (corrupt file, unsupported codec, etc.)
-            return None
-
-        if not result.stdout:
-            # No frame captured (shouldn't happen if returncode was 0, but be defensive)
-            return None
-
-        return result.stdout
+        frame = _ffmpeg_frame_at(path, seek=1)
+        if frame:
+            return frame
+        return _ffmpeg_frame_at(path, seek=0)
     except FileNotFoundError:
         # ffmpeg binary not found
         print(f"ffmpeg not found — video thumbnail skipped")

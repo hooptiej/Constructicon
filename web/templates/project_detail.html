@@ -51,8 +51,20 @@
 </div>
 
 <script>
-document.querySelectorAll('.project-cover-selector').forEach(checkbox => {
-  checkbox.addEventListener('change', async function() {
+let currentCoverSlug = {{ project.cover_slug | tojson }};
+
+function revertCoverSelection(failedRadio) {
+  failedRadio.checked = false;
+  if (currentCoverSlug) {
+    const previous = document.querySelector(
+      `.project-cover-selector[data-slug="${CSS.escape(currentCoverSlug)}"]`
+    );
+    if (previous) previous.checked = true;
+  }
+}
+
+document.querySelectorAll('.project-cover-selector').forEach(radio => {
+  radio.addEventListener('change', async function() {
     if (!this.checked) return;
     const slug = this.dataset.slug;
     const projectId = '{{ project.id }}';
@@ -62,15 +74,15 @@ document.querySelectorAll('.project-cover-selector').forEach(checkbox => {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `cover_slug=${encodeURIComponent(slug)}`
       });
-      if (!response.ok) {
+      if (response.ok) {
+        currentCoverSlug = slug;
+      } else {
         console.error('Failed to update cover:', response.status);
-        // Revert the check state on error
-        document.querySelector('.project-cover-selector:checked').checked = false;
+        revertCoverSelection(this);
       }
     } catch (error) {
       console.error('Error updating cover:', error);
-      // Revert the check state on error
-      this.checked = false;
+      revertCoverSelection(this);
     }
   });
 });

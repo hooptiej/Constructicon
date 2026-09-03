@@ -232,13 +232,24 @@ Two containers run side by side on that box:
   **Checkout may be ahead of `main`, deliberately**: `constructicon-test`'s
   bind-mounted checkout can be left on a feature branch between sessions
   when that branch is the one the *next* piece of work builds on. As of
-  2026-09-05, it's on `cleanup/halo-ticket-client-text-imagerepo-naming`
-  (#84/#91/#49 consolidated — ticket_id removal, and following that, client
-  field removal and imagerepo-era vocabulary cleanup). Check `git -C
+  2026-09-03, its served files were reset to a clean current-`main`
+  baseline (371e03e) ahead of the #103/#95/#88+#90/#92+#93 batch — the
+  previous breadcrumb here (`cleanup/halo-ticket-client-text-imagerepo-naming`)
+  is stale, that work has since merged to `main` via #109. Check `git -C
   "/mnt/Storage Pool/home/hoop/hoop/constructicon-test" log -1` (or just
   read its `core/`/`web/` files) before assuming this container reflects
   `main` — don't silently reset it to `main` without checking whether it's
   intentionally parked on something else first.
+  **`git` inside that checkout is broken** (its `origin` remote is an SSH
+  URL, `git@github.com:...`, and `git fetch` there fails with `Host key
+  verification failed` — no known_hosts entry / no key registered for that
+  remote on this box). This doesn't block the live-testing recipe below,
+  which only ever `scp`s files in from a properly-authenticated local
+  checkout and never needs this checkout's own git remote to work — but
+  don't assume `git pull`/`git fetch` will work *inside*
+  `constructicon-test` itself. Mirrors the same class of problem as #71
+  (`constructicon-web`'s missing git credentials), just not yet filed as
+  its own issue for the test container specifically.
 
 ### Live-testing a branch against `constructicon-test`
 
@@ -257,6 +268,16 @@ the module was actually imported with real dependencies.
    it afterward; if this container is meant to keep running the branch for
    the *next* round of work, don't restore it, and update the breadcrumb
    above instead.
+   **Seen 2026-09-03: a recursive `scp -r <dir> host:.../<dir>` can silently
+   no-op** — exit 0, no error, but the remote file's content and mtime don't
+   change — even though the destination path is correct (no nesting) and
+   the same file `scp`'d individually (no `-r`, explicit source and dest
+   file paths) lands every time. Root cause not identified (Windows
+   git-bash's `scp` + a remote directory that already exists is the
+   suspected trigger). If a live-test result doesn't reflect a change you
+   just made, don't just re-restart the container — check the remote
+   file's actual content/mtime first, and fall back to `scp`ing changed
+   files individually if the directory copy is suspect.
 3. `sudo docker restart constructicon-test`, then `sudo docker logs
    constructicon-test --tail 20` — look for `Application startup complete`
    with no traceback.

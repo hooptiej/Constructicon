@@ -1,6 +1,6 @@
 """STL support (issue #14): a rendered isometric preview image, wired into
 the object-type registry (core/object_types.py) as a CAPTURE-sourced type's
-capture_fn — same shape as PDF's core/pdf.py.
+capture_fn — same shape as PDF's core/object_types/pdf.py.
 
 Rendering a 2D preview of a 3D mesh is a genuinely different problem than
 PDF's "just rasterize a page": there's no equivalent of PyMuPDF that ships a
@@ -38,7 +38,7 @@ import numpy as np
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from stl import mesh as stl_mesh
 
-from . import storage
+from .. import storage
 
 # Preview render size in pixels (square) — same spirit as PDF's RENDER_ZOOM:
 # sharp enough to look good once storage.save_thumbnail_from_bytes downscales
@@ -127,3 +127,18 @@ def capture_thumbnail(row):
     itself."""
     path = _stored_path(row)
     return render_preview(path) if path else None
+
+
+# Registration: add this type to the object-type registry
+from . import register, ObjectTypeSpec, ThumbnailSource
+
+register(ObjectTypeSpec(
+    key="stl",
+    label="3D printing file",
+    thumbnail_source=ThumbnailSource.CAPTURE,
+    ocr_capable=False,  # binary mesh format, no meaningful text to extract
+    extensions=frozenset(storage.STL_EXTENSIONS),
+    capture_fn=capture_thumbnail,
+    badge_icon="\U0001F9CA",  # ice cube — closest built-in glyph to a 3D-printed block
+    badge_text="STL",
+))

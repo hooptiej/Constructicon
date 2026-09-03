@@ -293,6 +293,18 @@ the module was actually imported with real dependencies.
    production uploads when you need one, ask the owner to upload a real
    example rather than only ever testing against synthetic data for that
    type.
+7. **A container's bind mount can go stale after files change underneath it
+   while it's running** — seen twice (2026-09-02 on `constructicon-test-mcp`,
+   2026-09-03 on `constructicon-test` itself): `docker exec <container> ls
+   /app/web` (or `/app/core`) comes back empty even though the host
+   directory clearly has real files, and even a plain `python3 -c
+   "import os; os.listdir(...)"` agrees it's empty from inside. A restart
+   (`sudo docker restart <container>`) fixes it immediately. If a
+   verification step in this recipe reports an empty directory, missing
+   module, or import error that makes no sense given the host-side files,
+   restart the container before assuming the deploy itself is broken — don't
+   spend time debugging a deploy that's actually fine underneath a stale
+   mount snapshot.
 - The Dockerfile comments confirm `core/`, `web/`, and `mcp_server/` are
   **bind-mounted at run time, not baked into the image** — an ordinary code
   deploy is a `git pull` + container restart, not a rebuild. Only changes

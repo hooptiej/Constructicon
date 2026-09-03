@@ -1119,3 +1119,36 @@ def list_recent_items(media_type=None, limit=20):
         ).fetchall()
     conn.close()
     return [_row_to_dict(r) for r in rows]
+
+
+def list_recent_items_by_type(limit_per_type=10):
+    """Most recent capture_events rows, independently fetched per media_type.
+    Each type gets its own N most recent items, rather than competing within
+    a shared global pool. Returns a dict keyed by media_type, each value a
+    list of dicts, only including types that have at least one real row.
+
+    Used to populate the Files home widget (#107) — ensures every type that
+    has any uploads appears in the tabs, not just types that happen to fall
+    within the global top-N pool.
+
+    Limit defaults to 10 — smaller than the old global 20, since with up to
+    11 types each contributing 10, the embedded JSON payload is still compact
+    while ensuring diverse per-type coverage even when one type has a burst.
+    """
+    conn = get_conn()
+    # Fetch all distinct media_types that have at least one row
+    media_type_rows = conn.execute(
+        "SELECT DISTINCT media_type FROM capture_events"
+    ).fetchall()
+
+    result = {}
+    for (media_type,) in media_type_rows:
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE media_type = ? ORDER BY timestamp DESC LIMIT ?",
+            (media_type, limit_per_type),
+        ).fetchall()
+        if rows:
+            result[media_type] = [_row_to_dict(r) for r in rows]
+
+    conn.close()
+    return result

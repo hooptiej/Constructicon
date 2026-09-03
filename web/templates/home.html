@@ -288,14 +288,14 @@
             </div>
           </a>`;
       }
-      const recentItems = {{ recent_items | tojson }};
+      // Per-type dict, keyed by media_type; each value is an array of that type's most recent items
+      const recentByType = {{ recent_by_type | tojson }};
       const filesGrid = document.getElementById('files-grid');
       const filesSort = document.getElementById('files-sort');
       const filesTabs = document.getElementById('files-tabs');
 
-      // Build tabs from the actual media types in the data
-      const mediaTypeSet = new Set(recentItems.map(item => item.media_type));
-      const mediaTypes = Array.from(mediaTypeSet).sort();
+      // Build tabs from every type that has data, plus "All" for merged view
+      const mediaTypes = Object.keys(recentByType).sort();
       const tabs = ['all', ...mediaTypes];
       let activeTab = 'all';
 
@@ -324,10 +324,18 @@
       };
 
       function render() {
-        const filtered = activeTab === 'all'
-          ? recentItems
-          : recentItems.filter(item => item.media_type === activeTab);
-        const sorted = filtered.slice().sort(FILES_SORTERS[filesSort.value]);
+        let items;
+        if (activeTab === 'all') {
+          // Merge all types' items and sort by recency
+          items = [];
+          for (const type of mediaTypes) {
+            items = items.concat(recentByType[type]);
+          }
+        } else {
+          // Show only this type's items
+          items = recentByType[activeTab] || [];
+        }
+        const sorted = items.slice().sort(FILES_SORTERS[filesSort.value]);
         filesGrid.innerHTML = sorted.map(cardHtml).join('');
       }
 

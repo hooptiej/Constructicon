@@ -303,7 +303,7 @@ def _row_to_dict(row):
     return d
 
 
-def insert_upload(slug, filename, stored_filename, uploaded_by, description="", tags=None, ticket_id=None, client=None,
+def insert_upload(slug, filename, stored_filename, uploaded_by, description="", tags=None, client=None,
                    source="screenshot", file_size=None, source_modified_at=None, ocr_status=None,
                    media_type="image", external_url=None, content_description=None, content_date=None,
                    type_metadata=None):
@@ -320,11 +320,11 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
     conn = get_conn()
     now = time.time()
     conn.execute(
-        "INSERT INTO capture_events (slug, source, client, ticket_id, timestamp, tech, description, "
+        "INSERT INTO capture_events (slug, source, client, timestamp, tech, description, "
         "extracted_text, artifact_link, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
         "media_type, external_url, content_description, content_date, type_metadata) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (slug, source, client, ticket_id, now, uploaded_by, description,
+        "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (slug, source, client, now, uploaded_by, description,
          f"/f/{slug}", json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
          now if ocr_status == "pending" else None,
          media_type, external_url, content_description, content_date, json.dumps(type_metadata or {})),
@@ -334,7 +334,7 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
 
 
 def insert_content(slug, uploaded_by, media_type, external_url=None, content_description=None, content_date=None,
-                    description="", tags=None, ticket_id=None, client=None, source="external", type_metadata=None):
+                    description="", tags=None, client=None, source="external", type_metadata=None):
     """Thin wrapper around insert_upload for rows with no uploaded file — e.g. a YouTube video,
     where the content lives at external_url rather than in local storage. filename/stored_filename
     are left None. ocr_status starts "pending" whenever the type is OCR-capable (see
@@ -346,7 +346,7 @@ def insert_content(slug, uploaded_by, media_type, external_url=None, content_des
     # stdlib + sqlite3) obvious at a glance.
     spec = object_types.get_object_type(media_type)
     insert_upload(
-        slug, None, None, uploaded_by, description=description, tags=tags, ticket_id=ticket_id, client=client,
+        slug, None, None, uploaded_by, description=description, tags=tags, client=client,
         source=source, media_type=media_type, external_url=external_url,
         content_description=content_description, content_date=content_date,
         ocr_status="pending" if spec.ocr_capable else None,
@@ -365,7 +365,7 @@ def set_type_metadata(slug, metadata):
 
 def update_content_metadata(slug, content_description=None, type_metadata=None):
     """Partial update for the two content-description-shaped fields that
-    neither update_tags (description/tags/ticket_id/client — see
+    neither update_tags (description/tags/client — see
     api_update_image in web/app.py) nor rename_object (display_name/icon,
     #11) cover: content_description itself, and type_metadata.
 
@@ -497,17 +497,16 @@ def find_duplicate(filename, file_size, source_modified_at):
     return _row_to_dict(row) if row else None
 
 
-def update_tags(slug, description=None, tags=None, ticket_id=None, client=None):
+def update_tags(slug, description=None, tags=None, client=None):
     existing = get_by_slug(slug)
     if existing is None:
         return None
     conn = get_conn()
     conn.execute(
-        "UPDATE capture_events SET description = ?, tags = ?, ticket_id = ?, client = ? WHERE slug = ?",
+        "UPDATE capture_events SET description = ?, tags = ?, client = ? WHERE slug = ?",
         (
             description if description is not None else existing["description"],
             json.dumps(tags) if tags is not None else json.dumps(existing["tags"]),
-            ticket_id if ticket_id is not None else existing["ticket_id"],
             client if client is not None else existing["client"],
             slug,
         ),

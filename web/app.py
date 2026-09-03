@@ -104,7 +104,6 @@ def _to_public(row):
         "has_thumbnail": _has_thumbnail(row, spec),
         "description": row["description"],
         "tags": row["tags"],
-        "ticket_id": row["ticket_id"],
         "client": row["client"],
         "uploaded_at": row["timestamp"],
         # uploaded_by keeps the exact Source string (identity/filter key —
@@ -204,7 +203,6 @@ def _to_object_detail(row):
         "icon": row.get("icon") or spec.badge_icon,
         "description": row["description"],
         "tags": row["tags"],
-        "ticket_id": row["ticket_id"],
         "client": row["client"],
         # #47: current project membership — a project selector needs to
         # show what's already attached, not just a blank picker, and (per
@@ -608,14 +606,13 @@ async def api_upload(
     file: UploadFile = File(...),
     description: str = Form(""),
     tags: str = Form("[]"),
-    ticket_id: str = Form(""),
     client: str = Form(""),
     project_id: str = Form(""),
     modified_at: str = Form(""),
 ):
     # Which Source string a browser upload gets is decided server-side, not
     # by a client-supplied field — the desktop uploader app (see
-    # desktop_app/imagerepo_uploader/api.py) identifies itself with this
+    # desktop_app/constructicon_uploader/api.py) identifies itself with this
     # header on every request; the web upload drawer sends nothing extra, so
     # its absence is what marks a deliberate one-off drag-drop through the
     # browser UI.
@@ -651,7 +648,7 @@ async def api_upload(
     db.insert_upload(
         slug, file.filename, stored_filename, user,
         description=description, tags=tag_list,
-        ticket_id=ticket_id or None, client=client or None,
+        client=client or None,
         file_size=file_size, source_modified_at=source_modified_at,
         media_type=media_type,
         ocr_status="pending" if spec.ocr_capable else None,
@@ -680,7 +677,6 @@ async def api_create_content(
     content_date: str = Form(""),
     description: str = Form(""),
     tags: str = Form("[]"),
-    ticket_id: str = Form(""),
     client: str = Form(""),
     project_id: str = Form(""),
     type_metadata: str | None = Form(None),
@@ -725,7 +721,7 @@ async def api_create_content(
         content_description=content_description or None,
         content_date=content_date_epoch,
         description=description, tags=tag_list,
-        ticket_id=ticket_id or None, client=client or None,
+        client=client or None,
         type_metadata=parsed_type_metadata,
     )
     row = db.get_by_slug(slug)
@@ -768,7 +764,6 @@ def api_update_image(
     slug: str,
     description: str = Form(""),
     tags: str = Form("[]"),
-    ticket_id: str = Form(""),
     client: str = Form(""),
     display_name: str | None = Form(None),
     icon: str | None = Form(None),
@@ -779,13 +774,12 @@ def api_update_image(
         tag_list = json.loads(tags) if tags else []
     except json.JSONDecodeError:
         tag_list = []
-    row = db.update_tags(slug, description=description, tags=tag_list, ticket_id=ticket_id or None, client=client or None)
+    row = db.update_tags(slug, description=description, tags=tag_list, client=client or None)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
     # display_name/icon (#11) — no dedicated UI yet (see #24's "Coming soon
     # (#11)" admin-pane stub), but the field/endpoint exists so a "rename"
-    # or "set icon" is at least possible by hand (a form POST here) and not
-    # only through the MCP tool — see imagerepo_rename in mcp_server/server.py.
+    # or "set icon" is at least possible by hand (a form POST here).
     if display_name is not None or icon is not None:
         row = db.rename_object(slug, display_name=display_name, icon=icon)
     # content_description/type_metadata (#54): lets a caller correct a
@@ -926,7 +920,7 @@ def api_gallery(request: Request, query: str = "", client: str = "", per_user: i
     return JSONResponse(groups)
 
 
-@app.get("/downloads/imagerepo-uploader-source.zip")
+@app.get("/downloads/constructicon-uploader-source.zip")
 def download_desktop_app_source(request: Request):
     """Source only, not a built .app — py2app has to run on an actual Mac,
     which this server can't do (it's the same Linux/Docker box everything
@@ -938,12 +932,12 @@ def download_desktop_app_source(request: Request):
         for path in sorted(DESKTOP_APP_DIR.rglob("*")):
             if not path.is_file() or "__pycache__" in path.parts:
                 continue
-            arcname = Path("imagerepo-uploader-source") / path.relative_to(DESKTOP_APP_DIR)
+            arcname = Path("constructicon-uploader-source") / path.relative_to(DESKTOP_APP_DIR)
             zf.write(path, arcname=str(arcname))
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=imagerepo-uploader-source.zip"},
+        headers={"Content-Disposition": "attachment; filename=constructicon-uploader-source.zip"},
     )
 
 
@@ -973,7 +967,7 @@ async def api_upload_desktop_app_build(request: Request, file: UploadFile = File
     return JSONResponse({"exists": True, "size": stat.st_size, "uploaded_at": stat.st_mtime})
 
 
-@app.get("/downloads/imagerepo-uploader.zip")
+@app.get("/downloads/constructicon-uploader.zip")
 def download_desktop_app_build(request: Request):
     if not DESKTOP_APP_BUILD_PATH.exists():
         raise HTTPException(
@@ -981,7 +975,7 @@ def download_desktop_app_build(request: Request):
             detail="No built app has been uploaded yet — download the source zip and build it with Build.command, "
                    "or ask whoever last built one to upload it from account settings.",
         )
-    return FileResponse(DESKTOP_APP_BUILD_PATH, media_type="application/zip", filename="ImageRepo Uploader.zip")
+    return FileResponse(DESKTOP_APP_BUILD_PATH, media_type="application/zip", filename="Constructicon Uploader.zip")
 
 
 @app.get("/api/clients")

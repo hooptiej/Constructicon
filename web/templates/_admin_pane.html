@@ -128,7 +128,7 @@
   deleteModeToggle.addEventListener('change', () => {
     const enabled = deleteModeToggle.checked;
     document.body.classList.toggle('delete-mode-on', enabled);
-    document.dispatchEvent(new CustomEvent('imagerepo:delete-mode-change', { detail: { enabled } }));
+    document.dispatchEvent(new CustomEvent('constructicon:delete-mode-change', { detail: { enabled } }));
   });
 
   // "Delete all" — relocated from user_gallery.html. The endpoint deletes

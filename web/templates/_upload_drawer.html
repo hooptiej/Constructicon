@@ -38,10 +38,6 @@
         </div>
       </div>
       <div class="field">
-        <label>HALO TICKET # <span class="optional">(optional)</span></label>
-        <input class="input mono" name="ticket_id" placeholder="e.g. 56942">
-      </div>
-      <div class="field">
         <label>PROJECT <span class="optional">(optional)</span></label>
         <select class="input" id="upload-project-select">
           <option value="">No project</option>
@@ -55,7 +51,7 @@
 </div>
 <script>
 // --- Upload drawer: shared across every authenticated page. On success,
-// dispatches "imagerepo:upload-complete" on document ({detail:{failures}})
+// dispatches "constructicon:upload-complete" on document ({detail:{failures}})
 // so each page can refresh its own data however makes sense for it.
 (function () {
   const drawer = document.getElementById('upload-drawer');
@@ -303,13 +299,12 @@
     return 'timeout';
   }
 
-  async function uploadAndTrack(file, i, description, tagList, ticketId, projectId) {
+  async function uploadAndTrack(file, i, description, tagList, projectId) {
     updateFileStatus(i, 'uploading');
     const form = new FormData();
     form.append('file', file);
     form.append('description', description);
     form.append('tags', JSON.stringify(tagList));
-    form.append('ticket_id', ticketId);
     form.append('project_id', projectId || '');
     form.append('modified_at', file.lastModified);
 
@@ -339,7 +334,7 @@
     return { ok: true };
   }
 
-  async function addContentAndTrack(url, i, description, tagList, ticketId, projectId) {
+  async function addContentAndTrack(url, i, description, tagList, projectId) {
     // Content-only counterpart to uploadAndTrack above — POSTs to
     // /api/content instead of /api/upload (see web/app.py's
     // api_create_content), passing the raw URL through as external_url:
@@ -351,7 +346,6 @@
     form.append('external_url', url);
     form.append('description', description);
     form.append('tags', JSON.stringify(tagList));
-    form.append('ticket_id', ticketId);
     form.append('project_id', projectId || '');
 
     let res;
@@ -407,7 +401,6 @@
 
     const description = e.target.description.value;
     const tagList = tags.slice();
-    const ticketId = e.target.ticket_id.value;
 
     // Resolve the Project selection once per submit (not once per staged
     // file) — picking "+ New project..." should create exactly one project
@@ -453,8 +446,8 @@
     // that contention rather than just papering over it with a bigger cap.
     const results = await runWithConcurrency(stagedFiles, 1, (file, i) =>
       file.__isYoutube
-        ? addContentAndTrack(file.url, i, description, tagList, ticketId, projectId)
-        : uploadAndTrack(file, i, description, tagList, ticketId, projectId)
+        ? addContentAndTrack(file.url, i, description, tagList, projectId)
+        : uploadAndTrack(file, i, description, tagList, projectId)
     );
 
     tags = [];
@@ -464,7 +457,7 @@
     isUploading = false;
 
     const failures = results.filter(r => !r.ok).map(r => r.message);
-    document.dispatchEvent(new CustomEvent('imagerepo:upload-complete', { detail: { failures } }));
+    document.dispatchEvent(new CustomEvent('constructicon:upload-complete', { detail: { failures } }));
 
     if (failures.length === 0) {
       stagedFiles = [];

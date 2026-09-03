@@ -1,4 +1,4 @@
-# imagerepo desktop uploader
+# Constructicon desktop uploader
 
 Menu-bar app: silently uploads screenshots from a watched folder (Desktop
 by default), plus a drop zone for anything else. Source only — this needs
@@ -10,7 +10,7 @@ Double-click **`Build.command`** in this folder. It sets up a venv,
 installs dependencies, and runs the py2app build — the terminal window
 stays open with the result (or a specific error) until you press a key.
 
-Produces `dist/ImageRepo Uploader.app`. Move it to `/Applications` and
+Produces `dist/Constructicon Uploader.app`. Move it to `/Applications` and
 open it.
 
 Prefer to do it by hand instead:
@@ -25,12 +25,12 @@ python setup.py py2app
 ## First run
 
 1. Launch the app. It defaults to watching your Desktop and pointing at the
-   imagerepo dev server — change either from the menu bar icon
+   Constructicon dev server — change either from the menu bar icon
    (**Change Watched Folder…** / **Change Server URL…**) if needed.
 2. Menu bar icon shows status: 🟢 idle, 🟡 uploading, 🔴 last upload failed
    (check Notification Center for the actual error).
 
-No sign-in step — imagerepo has no auth (LAN-only dev server), so uploads
+No sign-in step — Constructicon has no auth (LAN-only dev server), so uploads
 just go straight through.
 
 ## Known gap

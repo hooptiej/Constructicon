@@ -174,9 +174,8 @@
               <div class="gallery-meta-row">
                 <span class="client-badge">
                   <span class="client-dot" style="background:${colorFor(item.client)}"></span>
-                  <span class="client-name">${item.client || 'Unknown client'}</span>
+                  <span class="client-name">${item.client || 'No project yet'}</span>
                 </span>
-                ${item.ticket_id ? `<span class="ticket-pill mono">#${item.ticket_id}</span>` : ''}
               </div>
             </div>
           </a>`;
@@ -199,7 +198,7 @@
       // this page is open should show up here immediately, same as it does
       // in the pop-out's own gallery — reload is simplest and matches how
       // user_gallery.html already handles this event.
-      document.addEventListener('imagerepo:upload-complete', (e) => {
+      document.addEventListener('constructicon:upload-complete', (e) => {
         if (!e.detail.failures.length) location.reload();
       });
     })();
@@ -281,9 +280,8 @@
               <div class="gallery-meta-row">
                 <span class="client-badge">
                   <span class="client-dot" style="background:${colorFor(item.client)}"></span>
-                  <span class="client-name">${item.client || 'Unknown client'}</span>
+                  <span class="client-name">${item.client || 'No project yet'}</span>
                 </span>
-                ${item.ticket_id ? `<span class="ticket-pill mono">#${item.ticket_id}</span>` : ''}
               </div>
             </div>
           </a>`;
@@ -344,7 +342,7 @@
       render();
 
       // Reload when a file is uploaded
-      document.addEventListener('imagerepo:upload-complete', (e) => {
+      document.addEventListener('constructicon:upload-complete', (e) => {
         if (!e.detail.failures.length) location.reload();
       });
     })();

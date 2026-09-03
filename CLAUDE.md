@@ -232,9 +232,9 @@ Two containers run side by side on that box:
   **Checkout may be ahead of `main`, deliberately**: `constructicon-test`'s
   bind-mounted checkout can be left on a feature branch between sessions
   when that branch is the one the *next* piece of work builds on. As of
-  2026-09-04, it's on `feat/files-widget-per-type-lists-107` (#107 —
-  per-type independent lists for Files widget tabs, ensuring all types with
-  uploads appear even if crowded out of a global top-N pool). Check `git -C
+  2026-09-05, it's on `cleanup/halo-ticket-client-text-imagerepo-naming`
+  (#84/#91/#49 consolidated — ticket_id removal, and following that, client
+  field removal and imagerepo-era vocabulary cleanup). Check `git -C
   "/mnt/Storage Pool/home/hoop/hoop/constructicon-test" log -1` (or just
   read its `core/`/`web/` files) before assuming this container reflects
   `main` — don't silently reset it to `main` without checking whether it's

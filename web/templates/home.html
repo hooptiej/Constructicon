@@ -293,26 +293,19 @@
       const filesSort = document.getElementById('files-sort');
       const filesTabs = document.getElementById('files-tabs');
 
-      console.log('Files widget: recentItems length:', recentItems.length);
-      console.log('Files widget: filesTabs element:', filesTabs);
-
       // Build tabs from the actual media types in the data
       const mediaTypeSet = new Set(recentItems.map(item => item.media_type));
       const mediaTypes = Array.from(mediaTypeSet).sort();
       const tabs = ['all', ...mediaTypes];
       let activeTab = 'all';
 
-      console.log('Files widget: tabs:', tabs);
-
       // Render tabs as buttons
       function renderTabs() {
-        console.log('renderTabs() called, filesTabs:', filesTabs, 'tabs:', tabs);
         filesTabs.innerHTML = tabs.map(tab => `
           <button class="file-tab ${tab === activeTab ? 'active' : ''}" data-tab="${tab}">
             ${tab === 'all' ? 'All' : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         `).join('');
-        console.log('renderTabs() done, innerHTML set to:', filesTabs.innerHTML);
 
         // Add event listeners to tab buttons
         filesTabs.querySelectorAll('.file-tab').forEach(btn => {

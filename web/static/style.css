@@ -581,7 +581,7 @@ body.delete-mode-on .card-select { display: block; }
    out (see PR description for the drag-to-reorder follow-up note). Replaces
    the old .home-columns 1fr/2fr gallery+projects split. */
 .home-widgets { display: flex; flex-direction: column; gap: 28px; }
-.home-widget { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.home-widget { display: flex; flex-direction: column; gap: 18px; min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
 .home-col-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .home-col-header h2 { font-size: 15px; font-weight: 500; margin: 0; }
 .home-col-header .see-all { font-size: 12px; color: var(--text-2); }

@@ -534,6 +534,16 @@ def gallery_page_redirect(request: Request):
     return RedirectResponse("/", status_code=308)
 
 
+@app.get("/unfiled", response_class=HTMLResponse)
+def unfiled_page(request: Request):
+    """Dedicated page showing all unfiled items with bulk filing tools."""
+    unfiled_items = [_to_public(r) for r in db.list_unfiled_items()]
+    return templates.TemplateResponse(
+        request, "unfiled.html",
+        {"unfiled_items": unfiled_items},
+    )
+
+
 @app.get("/project/{slug}", response_class=HTMLResponse)
 def project_detail_page(request: Request, slug: str):
     project = db.get_project(slug)
@@ -1073,6 +1083,120 @@ def _attach_to_project(slug, project_id):
     # Auto-set cover to first item if project has no cover yet
     if not project.get("cover_slug"):
         db.update_project(project["id"], cover_slug=slug)
+
+
+@app.post("/api/bulk/add-to-project")
+def api_bulk_add_to_project(slugs: list[str] = Form(...), project_id: str = Form(...)):
+    """Bulk add multiple items to a project. Uses the same _attach_to_project
+    logic as single-item uploads to ensure consistent behavior: adds items to
+    the project's item list, tags them with the project's tag if it has one,
+    and auto-sets cover if the project has no cover yet."""
+    if not slugs or not project_id:
+        raise HTTPException(status_code=400, detail="slugs and project_id required")
+
+    project = db.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    count = 0
+    for slug in slugs:
+        row = db.get_by_slug(slug)
+        if row is not None:
+            _attach_to_project(slug, project_id)
+            count += 1
+
+    return JSONResponse({"count": count})
+
+
+@app.post("/api/bulk/attach-tags")
+def api_bulk_attach_tags(slugs: list[str] = Form(...), tag_names: list[str] = Form(...)):
+    """Bulk add tags to multiple items. CRITICAL: Preserves existing tags and
+    descriptions for each item. For each slug: fetches the current row, merges
+    the new tag_names into its existing tags (deduped), then updates with the
+    merged set while explicitly passing the row's current description/client
+    back unchanged. This prevents accidentally wiping out an item's metadata."""
+    if not slugs or not tag_names:
+        raise HTTPException(status_code=400, detail="slugs and tag_names required")
+
+    count = 0
+    for slug in slugs:
+        row = db.get_by_slug(slug)
+        if row is not None:
+            # Existing tags (already a list after _row_to_dict JSON decode)
+            existing_tags = row.get("tags") or []
+            # Merge new tags, deduplicating
+            merged = list(set(existing_tags) | set(tag_names))
+            # Call update_tags, explicitly passing description/client unchanged
+            db.update_tags(
+                slug,
+                description=row["description"],
+                tags=merged,
+                client=row.get("client")
+            )
+            count += 1
+
+    return JSONResponse({"count": count})
+
+
+@app.post("/api/projects/from-selection")
+def api_projects_from_selection(slugs: list[str] = Form(...), title: str = Form(...)):
+    """Create a new project from selected items. Creates the project, links it
+    to a blog_tag of the same name (so it's discoverable via tag browsing),
+    then adds each selected item to it using _attach_to_project for consistency."""
+    if not slugs or not title.strip():
+        raise HTTPException(status_code=400, detail="slugs and title required")
+
+    title = title.strip()
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+
+    count = 0
+    for slug in slugs:
+        row = db.get_by_slug(slug)
+        if row is not None:
+            _attach_to_project(slug, project["id"])
+            count += 1
+
+    return JSONResponse({
+        "id": project["id"],
+        "slug": project["slug"],
+        "title": project["title"],
+        "item_count": count
+    })
+
+
+@app.post("/api/projects/from-related")
+def api_projects_from_related(slug: str = Form(...), title: str = Form(...)):
+    """Create a project from an item and its related items. Adds the source
+    object plus everything returned by db.list_related(slug). Useful for
+    "turn this into a project" workflows from the object detail page."""
+    if not slug or not title.strip():
+        raise HTTPException(status_code=400, detail="slug and title required")
+
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Source object not found")
+
+    title = title.strip()
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+
+    # Add the source object
+    _attach_to_project(slug, project["id"])
+    count = 1
+
+    # Add all related items
+    related = db.list_related(slug)
+    for rel_row in related:
+        _attach_to_project(rel_row["slug"], project["id"])
+        count += 1
+
+    return JSONResponse({
+        "id": project["id"],
+        "slug": project["slug"],
+        "title": project["title"],
+        "item_count": count
+    })
 
 
 @app.get("/api/tags")

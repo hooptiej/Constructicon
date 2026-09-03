@@ -133,7 +133,10 @@
       <div class="related-panel">
         <div class="related-panel-header">
           <span class="related-panel-label">Related</span>
-          <button type="button" class="ocr-retry-btn" id="add-related-btn">+ Add related</button>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="ocr-retry-btn" id="add-related-btn">+ Add related</button>
+            <button type="button" class="ocr-retry-btn" id="turn-into-project-btn" title="Create a project from this item and its related items">📁 Project</button>
+          </div>
         </div>
         <div class="related-grid" id="related-grid"></div>
       </div>
@@ -723,6 +726,28 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     relatedSearchInput.value = '';
     loadRelatedPicker('');
   });
+
+  // Turn this item and its related items into a project
+  document.getElementById('turn-into-project-btn').addEventListener('click', async () => {
+    const title = prompt('Project name:', '');
+    if (!title) return;
+    const form = new FormData();
+    form.append('slug', '{{ item.slug }}');
+    form.append('title', title);
+    try {
+      const res = await fetch('/api/projects/from-related', { method: 'POST', body: form });
+      if (res.ok) {
+        const result = await res.json();
+        alert(`Created project "${result.title}" with ${result.item_count} item${result.item_count === 1 ? '' : 's'}`);
+        window.location.href = `/project/${result.slug}`;
+      } else {
+        alert('Failed to create project');
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+    }
+  });
+
   document.getElementById('related-modal-close').addEventListener('click', () => relatedModalBackdrop.classList.remove('active'));
   relatedModalBackdrop.addEventListener('click', (e) => { if (e.target === relatedModalBackdrop) relatedModalBackdrop.classList.remove('active'); });
 

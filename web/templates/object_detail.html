@@ -42,7 +42,14 @@
              core/object_types.py/core/thumbnails.py). Anything with a
              thumbnail concept that isn't the uploaded file itself and isn't
              a YouTube embed lands here, with zero per-type branching. #}
-          <img id="preview-img" src="{{ item.thumb_url }}" alt="{{ item.display_name }}" title="Click to view full size">
+          <div class="capture-preview">
+            <img id="preview-img" src="{{ item.thumb_url }}" alt="{{ item.display_name }}" title="Click to view full size">
+            {% if item.url %}
+            <a href="{{ item.url }}" class="external-link-btn">
+              View original {{ item.type_label }}
+            </a>
+            {% endif %}
+          </div>
         {% elif item.is_file %}
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none">
             <rect x="3" y="4" width="18" height="16" rx="2" stroke="#3F4530" stroke-width="1.4"/>

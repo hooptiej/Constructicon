@@ -216,6 +216,26 @@ There is no `docker-compose.yml` committed to this repo; the compose file
 lives only on the TrueNAS box itself (outside this checkout), which is why
 you won't find one here.
 
+**`constructicon-web`'s own checkout can't `git pull`** (#71 — HTTPS remote,
+no credentials configured on the box, `git fetch` fails outright with
+"could not read Username"). Its git HEAD is stuck on an old commit with a
+pile of uncommitted drift underneath it — same shape as `constructicon-test`
+was before its 2026-09-03 reset (see above), just not yet reset itself.
+**Deploying here means overlaying known-good files from a real local
+`main` checkout, not `git pull`** — same discipline as the
+`constructicon-test` live-testing recipe below (tar-over-ssh, see the
+gotcha under step 2), but against production: take a real
+`data + code` backup first (`POST /api/backup` for DB+storage, `cp -r` the
+code directories to a `constructicon-prod-deploy-backup-<timestamp>-<issues>`
+sibling dir — see existing ones on the box for the naming convention),
+then `tar czf - core web mcp_server scripts assets | ssh ... 'cd
+.../constructicon && tar xzf -'`, rebuild if the Dockerfile changed,
+`docker compose up -d`, verify real endpoints. Confirmed working
+2026-09-03 deploying #103/#95/#88+#90/#92+#93 this way. Fixing #71 itself
+(real git credentials on this checkout) would let this go back to a normal
+`git pull` — not yet done, deprioritized behind actual feature work per
+the owner.
+
 Two containers run side by side on that box:
 
 - **`constructicon-web`** — the real production instance.
@@ -276,8 +296,15 @@ the module was actually imported with real dependencies.
    git-bash's `scp` + a remote directory that already exists is the
    suspected trigger). If a live-test result doesn't reflect a change you
    just made, don't just re-restart the container — check the remote
-   file's actual content/mtime first, and fall back to `scp`ing changed
-   files individually if the directory copy is suspect.
+   file's actual content/mtime first.
+   **Reliable fix found 2026-09-03, prefer this over per-file `scp` for
+   multi-directory deploys**: pipe a `tar` through `ssh` instead —
+   `tar czf - core web mcp_server scripts assets | ssh -i
+   ~/.ssh/id_ed25519_truenas hoop@10.0.1.78 'cd "<target-dir>" && tar xzf -'`
+   — a single stream, no per-directory `scp` semantics to hit the no-op
+   bug. Confirmed reliable deploying all of #103/#95/#88+#90/#92+#93's
+   changes to `constructicon-web` (production) in one shot, verified by
+   grepping the remote files afterward for content unique to each PR.
 3. `sudo docker restart constructicon-test`, then `sudo docker logs
    constructicon-test --tail 20` — look for `Application startup complete`
    with no traceback.

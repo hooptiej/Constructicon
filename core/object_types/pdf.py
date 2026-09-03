@@ -1,6 +1,6 @@
 """PDF support (issue #13): first-page thumbnail render + text-layer
-extraction, wired into the object-type registry (core/object_types.py) as a
-CAPTURE-sourced type's capture_fn/text_extract_fn.
+extraction, wired into the object-type registry as a CAPTURE-sourced type's
+capture_fn/text_extract_fn.
 
 PyMuPDF (import name `fitz`) does both jobs from one dependency with no
 extra system packages (no poppler/ghostscript install needed in the
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from . import storage
+from .. import storage
 
 # 2x zoom on PyMuPDF's default 72 DPI render gives a ~144 DPI page image —
 # plenty sharp once storage.save_thumbnail_from_bytes downscales it to the
@@ -100,3 +100,19 @@ def extract_text_for_row(row):
     core/ocr.py, which tries this before ever running OCR."""
     path = _stored_path(row)
     return extract_text(path) if path else ""
+
+
+# Registration: add this type to the object-type registry
+from . import register, ObjectTypeSpec, ThumbnailSource
+
+register(ObjectTypeSpec(
+    key="pdf",
+    label="PDF document",
+    thumbnail_source=ThumbnailSource.CAPTURE,
+    ocr_capable=True,
+    extensions=frozenset(storage.PDF_EXTENSIONS),
+    capture_fn=capture_thumbnail,
+    text_extract_fn=extract_text_for_row,
+    badge_icon="\U0001F4C4",
+    badge_text="PDF",
+))

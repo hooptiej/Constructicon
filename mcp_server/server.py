@@ -87,23 +87,14 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
     dupe = db.find_duplicate(filename, len(content), source_modified_at)
     if dupe is not None:
         return {**_to_public(dupe), "duplicate": True}
-    ext = Path(filename).suffix.lower()
-    if ext in storage.PDF_EXTENSIONS:
-        media_type = "pdf"
-    elif ext in storage.STL_EXTENSIONS:
-        media_type = "stl"
-    elif ext in storage.PSD_EXTENSIONS:
-        media_type = "psd"
-    elif ext in storage.AUDIO_EXTENSIONS:
-        media_type = "audio"
-    elif ext in storage.SVG_EXTENSIONS:
-        media_type = "svg"
-    elif ext in storage.EPS_EXTENSIONS:
-        media_type = "eps"
-    else:
-        media_type = "image"
+    media_type = object_types.detect_media_type(filename)
+    if media_type is None:
+        return {"error": f"Unsupported file type: {Path(filename).suffix}"}
     spec = object_types.get_object_type(media_type)
-    slug, stored_filename = storage.save_file(filename, content)
+    try:
+        slug, stored_filename = storage.save_file(filename, content)
+    except ValueError as e:
+        return {"error": str(e)}
     db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags, None, None,
                       file_size=len(content), source_modified_at=source_modified_at,
                       media_type=media_type,

@@ -15,14 +15,11 @@ from PIL import Image
 
 STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 
-AUDIO_EXTENSIONS = {".mp3", ".m4a", ".ogg", ".wav"}
-SVG_EXTENSIONS = {".svg"}
-EPS_EXTENSIONS = {".eps"}
-ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf", ".stl", ".psd"} | AUDIO_EXTENSIONS | SVG_EXTENSIONS | EPS_EXTENSIONS
+# Extension support has moved to core/object_types/ — each type module now
+# defines its own extensions frozenset. IMAGE_EXTENSIONS is kept here for
+# storage.make_thumbnail()'s use case: deciding whether a file IS an image
+# (and needs a thumbnail generated) vs. something else.
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
-PDF_EXTENSIONS = {".pdf"}
-STL_EXTENSIONS = {".stl"}
-PSD_EXTENSIONS = {".psd"}
 MAX_BYTES = 25 * 1024 * 1024
 THUMB_MAX_DIM = 400
 THUMB_BG = (20, 23, 15)  # matches the app's dark page background, for flattened transparency
@@ -67,12 +64,15 @@ def make_thumbnail(slug, content, ext):
 
 
 def save_file(filename, content):
-    ext = Path(filename).suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError(f"Unsupported file type: {ext}")
+    """Save a file to the storage directory and generate a thumbnail if it's
+    an image. Callers are responsible for validating the file extension
+    (via object_types.detect_media_type()) before calling this — this function
+    no longer validates extensions itself (that responsibility moved to the
+    call site in the plugin architecture redesign, issue #82)."""
     if len(content) > MAX_BYTES:
         raise ValueError(f"File exceeds {MAX_BYTES // (1024*1024)}MB limit")
 
+    ext = Path(filename).suffix.lower()
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     slug = make_slug()
     dest = STORAGE_DIR / f"{slug}{ext}"

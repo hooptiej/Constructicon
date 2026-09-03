@@ -137,7 +137,7 @@ register(ObjectTypeSpec(
     label="3D printing file",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=False,  # binary mesh format, no meaningful text to extract
-    extensions=frozenset(storage.STL_EXTENSIONS),
+    extensions=frozenset({".stl"}),
     capture_fn=capture_thumbnail,
     badge_icon="\U0001F9CA",  # ice cube — closest built-in glyph to a 3D-printed block
     badge_text="STL",

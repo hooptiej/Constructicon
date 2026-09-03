@@ -27,12 +27,11 @@ class DuplicateUploadError(UploadError):
     already uploaded — not a failure, just nothing new to do."""
 
 
-def upload_file(base_url, path, description="", tags=None, ticket_id="", client=""):
+def upload_file(base_url, path, description="", tags=None, client=""):
     url = base_url.rstrip("/") + "/api/upload"
     data = {
         "description": description,
         "tags": _tags_json(tags or []),
-        "ticket_id": ticket_id,
         "client": client,
         "modified_at": str(int(os.path.getmtime(path) * 1000)),
     }

@@ -104,7 +104,6 @@ def _to_public(row):
         "has_thumbnail": _has_thumbnail(row, spec),
         "description": row["description"],
         "tags": row["tags"],
-        "ticket_id": row["ticket_id"],
         "client": row["client"],
         "uploaded_at": row["timestamp"],
         # uploaded_by keeps the exact Source string (identity/filter key —
@@ -204,7 +203,6 @@ def _to_object_detail(row):
         "icon": row.get("icon") or spec.badge_icon,
         "description": row["description"],
         "tags": row["tags"],
-        "ticket_id": row["ticket_id"],
         "client": row["client"],
         # #47: current project membership — a project selector needs to
         # show what's already attached, not just a blank picker, and (per
@@ -608,7 +606,6 @@ async def api_upload(
     file: UploadFile = File(...),
     description: str = Form(""),
     tags: str = Form("[]"),
-    ticket_id: str = Form(""),
     client: str = Form(""),
     project_id: str = Form(""),
     modified_at: str = Form(""),
@@ -651,7 +648,7 @@ async def api_upload(
     db.insert_upload(
         slug, file.filename, stored_filename, user,
         description=description, tags=tag_list,
-        ticket_id=ticket_id or None, client=client or None,
+        client=client or None,
         file_size=file_size, source_modified_at=source_modified_at,
         media_type=media_type,
         ocr_status="pending" if spec.ocr_capable else None,
@@ -680,7 +677,6 @@ async def api_create_content(
     content_date: str = Form(""),
     description: str = Form(""),
     tags: str = Form("[]"),
-    ticket_id: str = Form(""),
     client: str = Form(""),
     project_id: str = Form(""),
     type_metadata: str | None = Form(None),
@@ -725,7 +721,7 @@ async def api_create_content(
         content_description=content_description or None,
         content_date=content_date_epoch,
         description=description, tags=tag_list,
-        ticket_id=ticket_id or None, client=client or None,
+        client=client or None,
         type_metadata=parsed_type_metadata,
     )
     row = db.get_by_slug(slug)
@@ -768,7 +764,6 @@ def api_update_image(
     slug: str,
     description: str = Form(""),
     tags: str = Form("[]"),
-    ticket_id: str = Form(""),
     client: str = Form(""),
     display_name: str | None = Form(None),
     icon: str | None = Form(None),
@@ -779,7 +774,7 @@ def api_update_image(
         tag_list = json.loads(tags) if tags else []
     except json.JSONDecodeError:
         tag_list = []
-    row = db.update_tags(slug, description=description, tags=tag_list, ticket_id=ticket_id or None, client=client or None)
+    row = db.update_tags(slug, description=description, tags=tag_list, client=client or None)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
     # display_name/icon (#11) — no dedicated UI yet (see #24's "Coming soon

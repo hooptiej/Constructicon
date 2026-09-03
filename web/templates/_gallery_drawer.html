@@ -59,10 +59,6 @@
           </div>
         </div>
         <div class="field">
-          <label>HALO TICKET # <span class="optional">(optional)</span></label>
-          <input class="input mono" name="ticket_id" placeholder="e.g. 56942">
-        </div>
-        <div class="field">
           <label>PROJECT <span class="optional">(optional)</span></label>
           <select class="input" id="upload-project-select">
             <option value="">No project</option>
@@ -401,13 +397,12 @@
     return 'timeout';
   }
 
-  async function uploadAndTrack(file, i, description, tagList, ticketId, projectId) {
+  async function uploadAndTrack(file, i, description, tagList, projectId) {
     updateFileStatus(i, 'uploading');
     const form = new FormData();
     form.append('file', file);
     form.append('description', description);
     form.append('tags', JSON.stringify(tagList));
-    form.append('ticket_id', ticketId);
     form.append('project_id', projectId || '');
     form.append('modified_at', file.lastModified);
 
@@ -437,14 +432,13 @@
     return { ok: true };
   }
 
-  async function addContentAndTrack(url, i, description, tagList, ticketId, projectId) {
+  async function addContentAndTrack(url, i, description, tagList, projectId) {
     updateFileStatus(i, 'uploading', 'Adding link…');
     const form = new FormData();
     form.append('media_type', 'youtube');
     form.append('external_url', url);
     form.append('description', description);
     form.append('tags', JSON.stringify(tagList));
-    form.append('ticket_id', ticketId);
     form.append('project_id', projectId || '');
 
     let res;
@@ -500,7 +494,6 @@
 
     const description = e.target.description.value;
     const tagList = tags.slice();
-    const ticketId = e.target.ticket_id.value;
 
     let projectId = projectSelect.value;
     if (projectId === '__new__') {
@@ -537,8 +530,8 @@
 
     const results = await runWithConcurrency(stagedFiles, 1, (file, i) =>
       file.__isYoutube
-        ? addContentAndTrack(file.url, i, description, tagList, ticketId, projectId)
-        : uploadAndTrack(file, i, description, tagList, ticketId, projectId)
+        ? addContentAndTrack(file.url, i, description, tagList, projectId)
+        : uploadAndTrack(file, i, description, tagList, projectId)
     );
 
     tags = [];
@@ -662,7 +655,6 @@
               <span class="client-dot" style="background:${colorFor(item.client)}"></span>
               <span class="client-name">${item.client || 'Unknown client'}</span>
             </span>
-            ${item.ticket_id ? `<span class="ticket-pill mono">#${item.ticket_id}</span>` : ''}
           </div>
         </div>
       </a>`;

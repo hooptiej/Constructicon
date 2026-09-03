@@ -16,18 +16,18 @@ TEST_PNG = base64.b64decode(
 )
 
 SEED = [
-    ("Bobby Testerson", "printer-offline.png", "Printer offline after reboot, checking spooler", ["hardware", "printer"], "57110", "Treeline Insurance"),
-    ("Bobby Testerson", "vpn-error.png", "NetBird peer stuck NeedsLogin on client laptop", ["vpn", "netbird"], None, "Accounting Pros"),
-    ("Wanda Sandbox", "license-warning.png", "M365 license about to expire for 3 users", ["licensing", "m365"], "58402", "K+S Family Law Group"),
-    ("Wanda Sandbox", "backup-fail.png", "Nightly backup job failed, disk space low", ["backup"], "58419", None),
-    ("Wanda Sandbox", "phishing-report.png", "User forwarded a suspicious invoice email", ["phishing-report", "security"], None, None),
-    ("Chip Placeholder", "server-cert.png", "SSL cert on internal portal expires next week", ["certs", "internal"], None, "Internal Infrastructure"),
-    ("Chip Placeholder", "switch-down.png", "Access switch unresponsive, ping timing out", ["network", "hardware"], "58471", "Treeline Insurance"),
+    ("Bobby Testerson", "printer-offline.png", "Printer offline after reboot, checking spooler", ["hardware", "printer"], "Treeline Insurance"),
+    ("Bobby Testerson", "vpn-error.png", "NetBird peer stuck NeedsLogin on client laptop", ["vpn", "netbird"], "Accounting Pros"),
+    ("Wanda Sandbox", "license-warning.png", "M365 license about to expire for 3 users", ["licensing", "m365"], "K+S Family Law Group"),
+    ("Wanda Sandbox", "backup-fail.png", "Nightly backup job failed, disk space low", ["backup"], None),
+    ("Wanda Sandbox", "phishing-report.png", "User forwarded a suspicious invoice email", ["phishing-report", "security"], None),
+    ("Chip Placeholder", "server-cert.png", "SSL cert on internal portal expires next week", ["certs", "internal"], "Internal Infrastructure"),
+    ("Chip Placeholder", "switch-down.png", "Access switch unresponsive, ping timing out", ["network", "hardware"], "Treeline Insurance"),
 ]
 
 db.init_db()
 db.ensure_special_clients()
-for uploaded_by, filename, description, tags, ticket_id, client in SEED:
+for uploaded_by, filename, description, tags, client in SEED:
     slug, stored_filename = storage.save_file(filename, TEST_PNG)
-    db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags, ticket_id, client)
+    db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags, client)
     print(f"seeded {filename} -> {slug} ({uploaded_by})")

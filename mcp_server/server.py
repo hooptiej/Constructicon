@@ -40,7 +40,6 @@ def _to_public(row):
         "media_type": row.get("media_type") or "image",
         "description": row["description"],
         "tags": row["tags"],
-        "ticket_id": row["ticket_id"],
         "client": row["client"],
         "redacted": bool(row["redacted"]),
         "source": row["source"],
@@ -95,7 +94,7 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
         slug, stored_filename = storage.save_file(filename, content)
     except ValueError as e:
         return {"error": str(e)}
-    db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags, None, None,
+    db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags,
                       file_size=len(content), source_modified_at=source_modified_at,
                       media_type=media_type,
                       ocr_status="pending" if spec.ocr_capable else None)
@@ -143,7 +142,7 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
     if row is None:
         return None
     if description is not None or tags is not None:
-        row = db.update_tags(slug, description=description, tags=tags, ticket_id=None, client=None)
+        row = db.update_tags(slug, description=description, tags=tags, client=None)
     if display_name is not None or icon is not None:
         row = db.rename_object(slug, display_name=display_name, icon=icon)
     if type_metadata is not None:
@@ -244,7 +243,7 @@ def constructicon_add_content(media_type: str, external_url: str | None = None, 
     db.insert_content(
         slug, uploaded_by, media_type,
         external_url=external_url, content_description=content_description,
-        description=description, tags=tags, ticket_id=None, client=None,
+        description=description, tags=tags, client=None,
     )
     row = db.get_by_slug(slug)
     if spec.ocr_capable and row["ocr_status"] == "pending":

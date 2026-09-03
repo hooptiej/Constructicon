@@ -128,35 +128,9 @@ def classify_url(url):
 
 
 # Registered after auto-discovery to ensure all modules have been imported.
-# image, youtube, document, audio, pdf, stl, psd, svg, and eps are registered
-# separately via their own core/object_types/ modules. This section registers
-# the remaining types: stream, url, and the DEFAULT_SPEC fallback.
-
-# Not reachable from the UI or any insert path yet — registered ahead of
-# time as a concrete example of the CAPTURE strategy (issue #15 calls
-# these out by name: "Stream -> an image grab", "URL -> a screen
-# capture"). Whichever future issue implements one fills in capture_fn
-# (and, if it has properties beyond the generic columns, metadata_fields)
-# and nothing outside this file changes.
-_stream_spec = register(ObjectTypeSpec(
-    key="stream",
-    label="Live stream",
-    thumbnail_source=ThumbnailSource.CAPTURE,
-    ocr_capable=True,
-    capture_fn=None,  # TODO(future issue): grab a frame of the stream's OSD/wait-card
-    badge_icon="\U0001F4E1",
-    badge_text="STREAM",
-))
-
-_url_spec = register(ObjectTypeSpec(
-    key="url",
-    label="Web page",
-    thumbnail_source=ThumbnailSource.CAPTURE,
-    ocr_capable=True,
-    capture_fn=None,  # TODO(future issue): screenshot the page
-    badge_icon="\U0001F517",
-    badge_text="WEB",
-))
+# All 11 types (image, youtube, document, audio, pdf, stl, psd, svg, eps,
+# stream, and url) are now registered separately via their own core/object_types/
+# modules. This section only defines the DEFAULT_SPEC fallback.
 
 
 # Anything not registered above (or media_type left unset) — never breaks

@@ -232,10 +232,10 @@ Two containers run side by side on that box:
   **Checkout may be ahead of `main`, deliberately**: `constructicon-test`'s
   bind-mounted checkout can be left on a feature branch between sessions
   when that branch is the one the *next* piece of work builds on. As of
-  2026-09-02, it's on `feat/object-types-svg-eps-80` (the #80 SVG/EPS
-  object-type migration, following #79 PSD, #78 STL, #77 PDF, #76 document/audio,
-  and #75 YouTube) — so follow-on migration issues #81+ (stream/url stubs) have
-  a live container to test against. Check `git -C
+  2026-09-02, it's on `feat/object-types-stream-url-81` (the #81 stream/url
+  object-type migration, following #80 SVG/EPS, #79 PSD, #78 STL, #77 PDF,
+  #76 document/audio, and #75 YouTube) — so follow-on migration issue #82
+  (wiring up callers + deleting old files) has a live container to test against. Check `git -C
   "/mnt/Storage Pool/home/hoop/hoop/constructicon-test" log -1` (or just
   read its `core/`/`web/` files) before assuming this container reflects
   `main` — don't silently reset it to `main` without checking whether it's

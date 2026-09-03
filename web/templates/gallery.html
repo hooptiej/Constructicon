@@ -213,7 +213,7 @@ document.getElementById('search-input').addEventListener('input', () => {
   debounceTimer = setTimeout(load, 200);
 });
 
-document.addEventListener('imagerepo:upload-complete', () => {
+document.addEventListener('constructicon:upload-complete', () => {
   load();
   loadRecent();
 });
@@ -227,7 +227,7 @@ document.getElementById('clear-selection-btn').addEventListener('click', () => {
 // "Delete mode" now lives in the admin pane (#24) rather than always-on
 // checkboxes — when it's switched off, drop any in-flight selection so it
 // can't linger invisibly and reappear stale next time delete mode is on.
-document.addEventListener('imagerepo:delete-mode-change', (e) => {
+document.addEventListener('constructicon:delete-mode-change', (e) => {
   if (!e.detail.enabled) {
     selectedSlugs.clear();
     document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);

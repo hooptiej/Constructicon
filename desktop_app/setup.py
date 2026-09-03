@@ -4,7 +4,7 @@ Build on an actual Mac (this needs Xcode command line tools):
     pip install -r requirements.txt
     python setup.py py2app
 
-Produces dist/ImageRepo Uploader.app.
+Produces dist/Constructicon Uploader.app.
 """
 
 from setuptools import setup
@@ -21,9 +21,9 @@ OPTIONS = {
         "_codecs_cn", "_codecs_hk", "_codecs_iso2022", "_codecs_jp", "_codecs_kr", "_codecs_tw", "_multibytecodec",
     ],
     "plist": {
-        "CFBundleName": "ImageRepo Uploader",
-        "CFBundleDisplayName": "ImageRepo Uploader",
-        "CFBundleIdentifier": "net.computercats.imagerepo-uploader",
+        "CFBundleName": "Constructicon Uploader",
+        "CFBundleDisplayName": "Constructicon Uploader",
+        "CFBundleIdentifier": "net.computercats.constructicon-uploader",
         "LSUIElement": True,  # menu-bar-only — no Dock icon, no app switcher entry
         "NSHumanReadableCopyright": "Computer Cats",
     },

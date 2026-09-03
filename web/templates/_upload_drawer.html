@@ -51,7 +51,7 @@
 </div>
 <script>
 // --- Upload drawer: shared across every authenticated page. On success,
-// dispatches "imagerepo:upload-complete" on document ({detail:{failures}})
+// dispatches "constructicon:upload-complete" on document ({detail:{failures}})
 // so each page can refresh its own data however makes sense for it.
 (function () {
   const drawer = document.getElementById('upload-drawer');
@@ -457,7 +457,7 @@
     isUploading = false;
 
     const failures = results.filter(r => !r.ok).map(r => r.message);
-    document.dispatchEvent(new CustomEvent('imagerepo:upload-complete', { detail: { failures } }));
+    document.dispatchEvent(new CustomEvent('constructicon:upload-complete', { detail: { failures } }));
 
     if (failures.length === 0) {
       stagedFiles = [];

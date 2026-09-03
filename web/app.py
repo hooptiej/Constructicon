@@ -612,7 +612,7 @@ async def api_upload(
 ):
     # Which Source string a browser upload gets is decided server-side, not
     # by a client-supplied field — the desktop uploader app (see
-    # desktop_app/imagerepo_uploader/api.py) identifies itself with this
+    # desktop_app/constructicon_uploader/api.py) identifies itself with this
     # header on every request; the web upload drawer sends nothing extra, so
     # its absence is what marks a deliberate one-off drag-drop through the
     # browser UI.
@@ -779,8 +779,7 @@ def api_update_image(
         raise HTTPException(status_code=404, detail="not found")
     # display_name/icon (#11) — no dedicated UI yet (see #24's "Coming soon
     # (#11)" admin-pane stub), but the field/endpoint exists so a "rename"
-    # or "set icon" is at least possible by hand (a form POST here) and not
-    # only through the MCP tool — see imagerepo_rename in mcp_server/server.py.
+    # or "set icon" is at least possible by hand (a form POST here).
     if display_name is not None or icon is not None:
         row = db.rename_object(slug, display_name=display_name, icon=icon)
     # content_description/type_metadata (#54): lets a caller correct a
@@ -921,7 +920,7 @@ def api_gallery(request: Request, query: str = "", client: str = "", per_user: i
     return JSONResponse(groups)
 
 
-@app.get("/downloads/imagerepo-uploader-source.zip")
+@app.get("/downloads/constructicon-uploader-source.zip")
 def download_desktop_app_source(request: Request):
     """Source only, not a built .app — py2app has to run on an actual Mac,
     which this server can't do (it's the same Linux/Docker box everything
@@ -933,12 +932,12 @@ def download_desktop_app_source(request: Request):
         for path in sorted(DESKTOP_APP_DIR.rglob("*")):
             if not path.is_file() or "__pycache__" in path.parts:
                 continue
-            arcname = Path("imagerepo-uploader-source") / path.relative_to(DESKTOP_APP_DIR)
+            arcname = Path("constructicon-uploader-source") / path.relative_to(DESKTOP_APP_DIR)
             zf.write(path, arcname=str(arcname))
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=imagerepo-uploader-source.zip"},
+        headers={"Content-Disposition": "attachment; filename=constructicon-uploader-source.zip"},
     )
 
 
@@ -968,7 +967,7 @@ async def api_upload_desktop_app_build(request: Request, file: UploadFile = File
     return JSONResponse({"exists": True, "size": stat.st_size, "uploaded_at": stat.st_mtime})
 
 
-@app.get("/downloads/imagerepo-uploader.zip")
+@app.get("/downloads/constructicon-uploader.zip")
 def download_desktop_app_build(request: Request):
     if not DESKTOP_APP_BUILD_PATH.exists():
         raise HTTPException(
@@ -976,7 +975,7 @@ def download_desktop_app_build(request: Request):
             detail="No built app has been uploaded yet — download the source zip and build it with Build.command, "
                    "or ask whoever last built one to upload it from account settings.",
         )
-    return FileResponse(DESKTOP_APP_BUILD_PATH, media_type="application/zip", filename="ImageRepo Uploader.zip")
+    return FileResponse(DESKTOP_APP_BUILD_PATH, media_type="application/zip", filename="Constructicon Uploader.zip")
 
 
 @app.get("/api/clients")

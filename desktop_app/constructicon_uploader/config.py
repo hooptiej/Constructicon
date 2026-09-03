@@ -5,7 +5,7 @@ auth token anymore, so there's nothing that needs the macOS Keychain.
 import json
 from pathlib import Path
 
-APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "ImageRepo Uploader"
+APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "Constructicon Uploader"
 CONFIG_PATH = APP_SUPPORT_DIR / "config.json"
 
 DEFAULTS = {

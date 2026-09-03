@@ -541,7 +541,7 @@
     isUploading = false;
 
     const failures = results.filter(r => !r.ok).map(r => r.message);
-    document.dispatchEvent(new CustomEvent('imagerepo:upload-complete', { detail: { failures } }));
+    document.dispatchEvent(new CustomEvent('constructicon:upload-complete', { detail: { failures } }));
 
     if (failures.length === 0) {
       stagedFiles = [];
@@ -714,14 +714,14 @@
   });
   gallerySort.addEventListener('change', () => render(lastGroups));
 
-  document.addEventListener('imagerepo:upload-complete', () => {
+  document.addEventListener('constructicon:upload-complete', () => {
     load();
   });
 
   // Same "delete mode" convention gallery.html/user_gallery.html use — see
   // _admin_pane.html — kept here too now that this condensed gallery is the
   // more visible everyday surface.
-  document.addEventListener('imagerepo:delete-mode-change', (e) => {
+  document.addEventListener('constructicon:delete-mode-change', (e) => {
     if (!e.detail.enabled) {
       selectedSlugs.clear();
       document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);

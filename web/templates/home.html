@@ -198,7 +198,7 @@
       // this page is open should show up here immediately, same as it does
       // in the pop-out's own gallery — reload is simplest and matches how
       // user_gallery.html already handles this event.
-      document.addEventListener('imagerepo:upload-complete', (e) => {
+      document.addEventListener('constructicon:upload-complete', (e) => {
         if (!e.detail.failures.length) location.reload();
       });
     })();
@@ -342,7 +342,7 @@
       render();
 
       // Reload when a file is uploaded
-      document.addEventListener('imagerepo:upload-complete', (e) => {
+      document.addEventListener('constructicon:upload-complete', (e) => {
         if (!e.detail.failures.length) location.reload();
       });
     })();

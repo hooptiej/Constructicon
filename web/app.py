@@ -620,6 +620,14 @@ async def api_upload(
             status_code=409,
             detail=f"Already uploaded by {dupe['tech']} on {dupe_date} — see /object/{dupe['slug']}",
         )
+    # media_type from the uploaded file's extension — the only place this
+    # decision has to be extension-based, since that's all /api/upload has
+    # to go on. Everything downstream (thumbnail, OCR, badge, delete,
+    # backup) dispatches off this media_type via core/object_types.py's
+    # registry, not off the extension again.
+    media_type = object_types.detect_media_type(file.filename)
+    if media_type is None:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {Path(file.filename).suffix}")
     try:
         slug, stored_filename = storage.save_file(file.filename, content)
     except ValueError as e:
@@ -628,26 +636,6 @@ async def api_upload(
         tag_list = json.loads(tags) if tags else []
     except json.JSONDecodeError:
         tag_list = []
-    # media_type from the uploaded file's extension — the only place this
-    # decision has to be extension-based, since that's all /api/upload has
-    # to go on. Everything downstream (thumbnail, OCR, badge, delete,
-    # backup) dispatches off this media_type via core/object_types.py's
-    # registry, not off the extension again.
-    ext = Path(file.filename).suffix.lower()
-    if ext in storage.PDF_EXTENSIONS:
-        media_type = "pdf"
-    elif ext in storage.STL_EXTENSIONS:
-        media_type = "stl"
-    elif ext in storage.PSD_EXTENSIONS:
-        media_type = "psd"
-    elif ext in storage.AUDIO_EXTENSIONS:
-        media_type = "audio"
-    elif ext in storage.SVG_EXTENSIONS:
-        media_type = "svg"
-    elif ext in storage.EPS_EXTENSIONS:
-        media_type = "eps"
-    else:
-        media_type = "image"
     spec = object_types.get_object_type(media_type)
     db.insert_upload(
         slug, file.filename, stored_filename, user,

@@ -89,7 +89,7 @@ register(ObjectTypeSpec(
     label="Photoshop document",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,  # OCR runs against the composited preview — see this module
-    extensions=frozenset(storage.PSD_EXTENSIONS),
+    extensions=frozenset({".psd"}),
     capture_fn=capture_thumbnail,
     badge_icon="\U0001F3A8",  # artist palette
     badge_text="PSD",

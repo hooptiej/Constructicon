@@ -110,7 +110,7 @@ register(ObjectTypeSpec(
     label="PDF document",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,
-    extensions=frozenset(storage.PDF_EXTENSIONS),
+    extensions=frozenset({".pdf"}),
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,
     badge_icon="\U0001F4C4",

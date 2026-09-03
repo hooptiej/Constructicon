@@ -128,7 +128,7 @@ register(ObjectTypeSpec(
     # small apt dependency) was picked.
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,
-    extensions=frozenset(storage.SVG_EXTENSIONS),
+    extensions=frozenset({".svg"}),
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,  # <text> elements read directly, no OCR needed when present
     badge_icon="\U0001F4D0",  # triangular ruler

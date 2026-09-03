@@ -232,11 +232,9 @@ Two containers run side by side on that box:
   **Checkout may be ahead of `main`, deliberately**: `constructicon-test`'s
   bind-mounted checkout can be left on a feature branch between sessions
   when that branch is the one the *next* piece of work builds on. As of
-  2026-09-03, it's on `fix/home-widget-card-backgrounds-69` (#69 part 2 —
-  card backgrounds for the home widgets; the full #67 object-type plugin
-  migration series is done and deployed to production as of 2026-09-03) —
-  so #69's part 1 (the new "Files" home widget) has a live container to test
-  against. Check `git -C
+  2026-09-04, it's on `feat/files-widget-per-type-lists-107` (#107 —
+  per-type independent lists for Files widget tabs, ensuring all types with
+  uploads appear even if crowded out of a global top-N pool). Check `git -C
   "/mnt/Storage Pool/home/hoop/hoop/constructicon-test" log -1` (or just
   read its `core/`/`web/` files) before assuming this container reflects
   `main` — don't silently reset it to `main` without checking whether it's

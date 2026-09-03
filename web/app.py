@@ -391,12 +391,16 @@ def home_page(request: Request, tag: str = ""):
     # filed into one. See db.list_unfiled_items's docstring for the incident
     # this fixes.
     unfiled_items = [_to_public(r) for r in db.list_unfiled_items()]
-    # #69 part 1: most recent uploads across the whole gallery (#69 part 1),
-    # scoped by media_type via client-side tabs. Embedded as JSON so the
-    # Files widget can filter/tab client-side the same way Projects and Unfiled
-    # already do — no new /api/ endpoint needed unless lazy-loading becomes
-    # worth it later.
-    recent_items = [_to_public(r) for r in db.list_recent_items()]
+    # #107: most recent uploads per media_type. Each type gets its own N
+    # most recent items, independent of upload activity in other types. This
+    # ensures every type that has any uploads appears in the Files widget tabs.
+    # Embedded as JSON keyed by media_type so the Files widget can render
+    # per-type tabs and fetch each type's own list without competing within a
+    # shared global pool.
+    recent_by_type = {
+        mt: [_to_public(r) for r in rows]
+        for mt, rows in db.list_recent_items_by_type().items()
+    }
     return templates.TemplateResponse(
         request, "home.html",
         {
@@ -407,7 +411,7 @@ def home_page(request: Request, tag: str = ""):
             "owner_name": _owner_label,
             "owner_initials": _owner_initials,
             "unfiled_items": unfiled_items,
-            "recent_items": recent_items,
+            "recent_by_type": recent_by_type,
         },
     )
 

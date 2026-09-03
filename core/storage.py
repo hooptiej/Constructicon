@@ -19,7 +19,7 @@ STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 # defines its own extensions frozenset. IMAGE_EXTENSIONS is kept here for
 # storage.make_thumbnail()'s use case: deciding whether a file IS an image
 # (and needs a thumbnail generated) vs. something else.
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif"}
 MAX_BYTES = 25 * 1024 * 1024
 THUMB_MAX_DIM = 400
 THUMB_BG = (20, 23, 15)  # matches the app's dark page background, for flattened transparency

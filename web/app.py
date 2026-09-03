@@ -153,7 +153,7 @@ def _friendly_datetime(epoch):
     return f"{_friendly_date(epoch)} at {hour12}:{dt.minute:02d} {ampm}"
 
 
-IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif")
 
 
 def _to_object_detail(row):
@@ -184,6 +184,10 @@ def _to_object_detail(row):
         # core/object_types.py and nothing here needs to know its exact
         # extensions.
         "is_audio_file": is_file and media_type == "audio",
+        # #92: drives the <video controls> player branch in object_detail.html,
+        # following the is_audio_file pattern — media_type-based check rather
+        # than extension tuple, since "video" is registered in object_types.py.
+        "is_video_file": is_file and media_type == "video",
         "url": f"/f/{row['slug']}" if is_file else None,
         "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
         "external_url": row.get("external_url"),

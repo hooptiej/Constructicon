@@ -8,7 +8,7 @@ FROM python:3.14-slim
 # PostScript, so an actual PostScript interpreter is unavoidable; confirmed
 # installing cleanly (no build-from-source, no exotic packages) at ~47MB,
 # mostly URW base-35 fonts pulled in for text layout.
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libcairo2 ghostscript \
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libcairo2 ghostscript ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

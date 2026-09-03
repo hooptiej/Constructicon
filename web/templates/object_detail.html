@@ -36,6 +36,14 @@
             <div class="audio-preview-icon">{{ item.icon }}</div>
             <audio controls preload="metadata" src="{{ item.url }}"></audio>
           </div>
+        {% elif item.is_video_file %}
+          {# #92: video files with CAPTURE-sourced thumbnails (a frame
+             extracted by ffmpeg at upload time). The poster attribute shows
+             the thumbnail before playback, giving a visual preview same as
+             galleries show for all types. #}
+          <div class="video-preview">
+            <video controls preload="metadata" poster="{{ item.thumb_url }}" src="{{ item.url }}"></video>
+          </div>
         {% elif item.thumb_url %}
           {# Generic CAPTURE-sourced preview — a PDF's rendered first page
              today, a future stream/URL screenshot tomorrow (see

@@ -1,6 +1,6 @@
 """PSD support (issue #27): rendered composite-preview thumbnail, wired
 into the object-type registry (core/object_types.py) as a CAPTURE-sourced
-type's capture_fn — same shape as PDF's core/pdf.py and STL's core/stl.py.
+type's capture_fn — same shape as PDF's core/object_types/pdf.py and STL's core/object_types/stl.py.
 
 psd-tools (pure Python, no system dependencies) reads the PSD's layer tree
 and composites it down to a single flattened raster via
@@ -16,7 +16,7 @@ it doesn't depend on a resource that may not be there. Confirmed installing
 cleanly on this Dockerfile's python:3.14-slim base (manylinux wheel, no
 extra system packages beyond what's already installed for Pillow/numpy).
 
-No dedicated text_extract_fn (unlike PDF's core/pdf.py): a PSD has no
+No dedicated text_extract_fn (unlike PDF's core/object_types/pdf.py): a PSD has no
 general embedded text layer the way a PDF's content stream does — any text
 in a PSD is either baked into raster layers or lives in Photoshop's own
 text-engine layer data, which isn't a reliable plain-text source to pull
@@ -36,7 +36,7 @@ from io import BytesIO
 
 from psd_tools import PSDImage
 
-from . import storage
+from .. import storage
 
 
 def _stored_path(row):
@@ -79,3 +79,18 @@ def capture_thumbnail(row):
     rather than being the file itself, the same reasoning as PDF/STL."""
     path = _stored_path(row)
     return render_composite(path) if path else None
+
+
+# Registration: add this type to the object-type registry
+from . import register, ObjectTypeSpec, ThumbnailSource
+
+register(ObjectTypeSpec(
+    key="psd",
+    label="Photoshop document",
+    thumbnail_source=ThumbnailSource.CAPTURE,
+    ocr_capable=True,  # OCR runs against the composited preview — see this module
+    extensions=frozenset(storage.PSD_EXTENSIONS),
+    capture_fn=capture_thumbnail,
+    badge_icon="\U0001F3A8",  # artist palette
+    badge_text="PSD",
+))

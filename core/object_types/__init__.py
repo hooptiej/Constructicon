@@ -30,7 +30,6 @@ from enum import Enum
 from pathlib import Path
 
 from .. import eps as _eps
-from .. import psd as _psd
 from .. import svg as _svg
 
 
@@ -132,19 +131,9 @@ def classify_url(url):
 
 
 # Registered after auto-discovery to ensure all modules have been imported.
-# image, youtube, document, and audio are registered separately via their own
-# core/object_types/ modules. This section registers the remaining types:
-# pdf, stl, psd, svg, eps, stream, url, and the DEFAULT_SPEC fallback.
-
-_psd_spec = register(ObjectTypeSpec(
-    key="psd",
-    label="Photoshop document",
-    thumbnail_source=ThumbnailSource.CAPTURE,
-    ocr_capable=True,  # OCR runs against the composited preview — see core/psd.py
-    capture_fn=_psd.capture_thumbnail,
-    badge_icon="\U0001F3A8",  # artist palette
-    badge_text="PSD",
-))
+# image, youtube, document, audio, pdf, stl, and psd are registered separately
+# via their own core/object_types/ modules. This section registers the remaining
+# types: svg, eps, stream, url, and the DEFAULT_SPEC fallback.
 
 _svg_spec = register(ObjectTypeSpec(
     key="svg",

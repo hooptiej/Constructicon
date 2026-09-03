@@ -31,7 +31,6 @@ from pathlib import Path
 
 from .. import eps as _eps
 from .. import psd as _psd
-from .. import stl as _stl
 from .. import svg as _svg
 
 
@@ -136,16 +135,6 @@ def classify_url(url):
 # image, youtube, document, and audio are registered separately via their own
 # core/object_types/ modules. This section registers the remaining types:
 # pdf, stl, psd, svg, eps, stream, url, and the DEFAULT_SPEC fallback.
-
-_stl_spec = register(ObjectTypeSpec(
-    key="stl",
-    label="3D printing file",
-    thumbnail_source=ThumbnailSource.CAPTURE,
-    ocr_capable=False,  # binary mesh format, no meaningful text to extract
-    capture_fn=_stl.capture_thumbnail,
-    badge_icon="\U0001F9CA",  # ice cube — closest built-in glyph to a 3D-printed block
-    badge_text="STL",
-))
 
 _psd_spec = register(ObjectTypeSpec(
     key="psd",

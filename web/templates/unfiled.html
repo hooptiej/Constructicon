@@ -10,9 +10,15 @@
     Back
   </a>
 
-  <div>
-    <h1 class="page-title">Unfiled</h1>
-    <p class="page-subtitle" id="unfiled-count-label">{{ unfiled_items | length }} upload{{ 's' if unfiled_items|length != 1 else '' }} not yet added to a project.</p>
+  <div class="home-col-header">
+    <div>
+      <h1 class="page-title">Unfiled</h1>
+      <p class="page-subtitle" id="unfiled-count-label">{{ unfiled_items | length }} upload{{ 's' if unfiled_items|length != 1 else '' }} not yet added to a project.</p>
+    </div>
+    <div class="layout-toggle" id="layout-toggle" role="group" aria-label="Layout">
+      <button type="button" class="layout-toggle-btn" data-layout="grid" title="Grid view">Grid</button>
+      <button type="button" class="layout-toggle-btn" data-layout="list" title="List view">List</button>
+    </div>
   </div>
 
   <div class="selection-bar" id="selection-bar" style="display:flex">
@@ -42,7 +48,7 @@
     <button type="button" class="ocr-retry-btn" id="followup-dismiss-btn">No thanks</button>
   </div>
 
-  <div class="home-gallery-grid" id="unfiled-grid"></div>
+  <div class="gallery-grid" id="unfiled-grid"></div>
   <p class="empty-state" id="empty-state" style="display:none">No unfiled items — everything's been filed.</p>
 </div>
 
@@ -133,6 +139,28 @@
     document.getElementById('unfiled-count-label').textContent =
       `${items.length} upload${items.length === 1 ? '' : 's'} not yet added to a project.`;
   }
+
+  // #117: grid (default) vs. list layout, per-viewer preference. Only the
+  // wrapping container's class changes -- .gallery-grid is the untouched
+  // base .gallery-card look (taller tile), .home-gallery-grid compresses it
+  // into the compact row the small home-page widget uses. Same cardHtml()
+  // markup either way.
+  const LAYOUT_KEY = 'constructicon-unfiled-layout';
+  const layoutToggle = document.getElementById('layout-toggle');
+  function applyLayout(layout) {
+    grid.className = layout === 'list' ? 'home-gallery-grid' : 'gallery-grid';
+    layoutToggle.querySelectorAll('.layout-toggle-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.layout === layout);
+    });
+    try { localStorage.setItem(LAYOUT_KEY, layout); } catch (e) { /* private mode etc — layout just won't persist */ }
+  }
+  layoutToggle.addEventListener('click', (e) => {
+    const btn = e.target.closest('.layout-toggle-btn');
+    if (btn) applyLayout(btn.dataset.layout);
+  });
+  let savedLayout = 'grid';
+  try { savedLayout = localStorage.getItem(LAYOUT_KEY) || 'grid'; } catch (e) { /* private mode etc */ }
+  applyLayout(savedLayout);
 
   function reload() {
     // Whatever a bulk action just changed (an item filed, tagged, or

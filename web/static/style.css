@@ -261,6 +261,18 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   display: none;
 }
 body.delete-mode-on .card-select { display: block; }
+/* #117 follow-up: on the Unfiled page, .card-select moved out of the
+   thumbnail overlay (it got lost/obscured against busy thumbnails,
+   especially in grid view's larger tiles) and down into the card body,
+   bottom-right, with a text label. Overrides the overlay positioning
+   above -- this selector's higher specificity (two classes) wins. */
+.card-select-row {
+  display: none; align-items: center; justify-content: flex-end; gap: 6px;
+  margin-top: 2px; cursor: pointer;
+}
+body.delete-mode-on .card-select-row { display: flex; }
+.card-select-row .card-select { position: static; top: auto; right: auto; width: 15px; height: 15px; }
+.card-select-label { font-size: 11px; color: var(--text-3); }
 .selection-bar {
   display: none; align-items: center; gap: 12px; background: var(--card);
   border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;

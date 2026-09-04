@@ -111,8 +111,6 @@
         <div class="gallery-thumb${item.redacted ? ' redacted-thumb' : ''}">
           ${item.redacted ? LOCK_ICON : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON)}
           ${item.type_icon ? `<span class="type-badge-corner" title="${escapeHtml(item.type_label || item.type_badge || '')}">${item.type_icon}</span>` : ''}
-          <input type="checkbox" class="card-select" data-slug="${item.slug}" title="Select"
-            onclick="event.stopPropagation()" onchange="toggleCardSelect(this)" ${selectedSlugs.has(item.slug) ? 'checked' : ''}>
         </div>
         <div class="gallery-body">
           <div>
@@ -126,6 +124,11 @@
               <span class="client-name">${item.client || 'No project yet'}</span>
             </span>
           </div>
+          <label class="card-select-row" onclick="event.stopPropagation()">
+            <span class="card-select-label">Select</span>
+            <input type="checkbox" class="card-select" data-slug="${item.slug}"
+              onchange="toggleCardSelect(this)" ${selectedSlugs.has(item.slug) ? 'checked' : ''}>
+          </label>
         </div>
       </a>`;
   }

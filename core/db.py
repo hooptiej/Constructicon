@@ -1069,7 +1069,7 @@ def list_projects_for_post(post_slug):
 
 
 def list_unfiled_items(limit=10000):
-    """capture_events rows with no project_items row at all — "unfiled"
+    """capture_events rows with no project_items row AND no tags — "unfiled"
     uploads (#41). #17 moved the raw upload gallery into the home page's
     hover/drag pop-out and left the main page showing only Project tiles;
     with zero projects created (or an upload simply never tagged to one),
@@ -1078,6 +1078,15 @@ def list_unfiled_items(limit=10000):
     to an accidental production /api/delete-all. home_page renders this
     list as an always-visible "Unfiled" section so that state can never
     look like "everything is gone" again.
+
+    #123: also excludes anything with a non-empty tags array, not just
+    project membership. Once #98 added bulk tagging on this very page, an
+    item could get real tags applied while never being added to a project
+    -- it kept showing as "unfiled" even though a human had clearly already
+    organized it. Tagging is still an explicit, deliberate action (nothing
+    tags an item automatically on upload), so this doesn't reintroduce the
+    original "looks like everything's gone" risk this function exists to
+    prevent -- it only clears items a human actually did something to.
 
     LEFT JOIN + IS NULL rather than NOT IN/NOT EXISTS — reads cleanest
     given project_items' exact shape (a plain (project_id, post_slug)
@@ -1088,7 +1097,8 @@ def list_unfiled_items(limit=10000):
     conn = get_conn()
     rows = conn.execute(
         "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-        "WHERE pi.post_slug IS NULL ORDER BY ce.timestamp DESC LIMIT ?",
+        "WHERE pi.post_slug IS NULL AND (ce.tags IS NULL OR ce.tags = '[]') "
+        "ORDER BY ce.timestamp DESC LIMIT ?",
         (limit,),
     ).fetchall()
     conn.close()

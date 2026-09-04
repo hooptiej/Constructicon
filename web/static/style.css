@@ -610,6 +610,20 @@ body.delete-mode-on .card-select { display: block; }
 .home-gallery-grid .gallery-thumb { width: 72px; height: 72px; flex-shrink: 0; border-bottom: none; border-right: 1px solid rgba(226,214,150,0.06); }
 .home-gallery-grid .gallery-body { padding: 10px 12px; gap: 5px; }
 
+/* #117: Unfiled page's grid/list layout toggle. Both views reuse the exact
+   same .gallery-card markup — .gallery-grid gives the untouched base
+   .gallery-card styling (taller vertical tile, the "grid" default);
+   .home-gallery-grid's own rules above are what compress it into the
+   compact row/list look, same as the small home-page widget always used. */
+.layout-toggle { display: flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; align-self: flex-start; }
+.layout-toggle-btn {
+  padding: 7px 13px; background: var(--surface); border: none; border-right: 1px solid var(--border-strong);
+  font-size: 12px; font-weight: 500; color: var(--text-2); cursor: pointer;
+}
+.layout-toggle-btn:last-child { border-right: none; }
+.layout-toggle-btn:hover { color: var(--text); }
+.layout-toggle-btn.active { background: var(--purple); color: #fff; }
+
 /* --- #56: Projects-primary / Unfiled-secondary home page hierarchy --- */
 .sort-control { display: flex; align-items: center; gap: 8px; }
 .sort-label { font-size: 11px; color: var(--text-3); }

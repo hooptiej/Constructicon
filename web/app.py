@@ -1035,6 +1035,49 @@ def api_create_project(request: Request, title: str = Form(...)):
     return JSONResponse(_to_project_option(project))
 
 
+@app.post("/api/projects/from-selection")
+def api_create_project_from_selection(slugs: list[str] = Form(...), title: str = Form(...)):
+    """Issue #98: "turn this selection into a project" — the Unfiled page's
+    bulk-tag follow-up prompt, and usable standalone. Deliberately operates
+    on the exact slugs passed in, not a tag-name lookup: this app has two
+    separate, unlinked tag systems (the flat per-object `tags` array bulk
+    tagging above writes to, vs. the hierarchical blog_tags/post_tags tree
+    /api/tags and list_posts_for_tag walk) — a tag-name lookup here would
+    silently miss items that were only ever bulk-tagged the flat way.
+
+    Registered ahead of /api/projects/{project_id} below on purpose — FastAPI
+    matches routes in registration order, and that dynamic path param route
+    would otherwise swallow this literal path (project_id="from-selection"),
+    404ing instead of ever reaching this handler. Same for from-related."""
+    title = title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Project name can't be empty")
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+    for slug in slugs:
+        if db.get_by_slug(slug) is not None:
+            _attach_to_project(slug, project["id"])
+    return JSONResponse(_to_project_option(project))
+
+
+@app.post("/api/projects/from-related")
+def api_create_project_from_related(slug: str = Form(...), title: str = Form(...)):
+    """Issue #98: "turn this object + its related items into a project" —
+    surfaced on the object detail page's Related panel. See from-selection
+    above for why this is registered ahead of /api/projects/{project_id}."""
+    title = title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Project name can't be empty")
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    tag = db.get_or_create_tag(title, parent_id=None)
+    project = db.create_project(title, tag_id=tag["id"])
+    _attach_to_project(slug, project["id"])
+    for related in db.list_related(slug):
+        _attach_to_project(related["slug"], project["id"])
+    return JSONResponse(_to_project_option(project))
+
+
 @app.post("/api/projects/{project_id}")
 def api_update_project(
     request: Request,
@@ -1124,43 +1167,6 @@ def api_bulk_attach_tags(slugs: list[str] = Form(...), tag_names: list[str] = Fo
         db.update_tags(slug, description=row["description"], tags=merged_tags, client=row.get("client"))
         count += 1
     return JSONResponse({"count": count})
-
-
-@app.post("/api/projects/from-selection")
-def api_create_project_from_selection(slugs: list[str] = Form(...), title: str = Form(...)):
-    """Issue #98: "turn this selection into a project" — the Unfiled page's
-    bulk-tag follow-up prompt, and usable standalone. Deliberately operates
-    on the exact slugs passed in, not a tag-name lookup: this app has two
-    separate, unlinked tag systems (the flat per-object `tags` array bulk
-    tagging above writes to, vs. the hierarchical blog_tags/post_tags tree
-    /api/tags and list_posts_for_tag walk) — a tag-name lookup here would
-    silently miss items that were only ever bulk-tagged the flat way."""
-    title = title.strip()
-    if not title:
-        raise HTTPException(status_code=400, detail="Project name can't be empty")
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"])
-    for slug in slugs:
-        if db.get_by_slug(slug) is not None:
-            _attach_to_project(slug, project["id"])
-    return JSONResponse(_to_project_option(project))
-
-
-@app.post("/api/projects/from-related")
-def api_create_project_from_related(slug: str = Form(...), title: str = Form(...)):
-    """Issue #98: "turn this object + its related items into a project" —
-    surfaced on the object detail page's Related panel."""
-    title = title.strip()
-    if not title:
-        raise HTTPException(status_code=400, detail="Project name can't be empty")
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"])
-    _attach_to_project(slug, project["id"])
-    for related in db.list_related(slug):
-        _attach_to_project(related["slug"], project["id"])
-    return JSONResponse(_to_project_option(project))
 
 
 @app.get("/api/tags")

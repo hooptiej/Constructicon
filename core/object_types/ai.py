@@ -73,31 +73,12 @@ def extract_text_for_row(row):
 
 
 def get_properties(row):
-    """ObjectTypeSpec.properties_fn for media_type='ai' — delegates to PDF's
-    page-count logic for modern PDF-compatible .ai files; returns {} for
-    legacy PostScript .ai files or on any failure."""
-    path = _stored_path(row)
-    if not path:
-        return {}
-    try:
-        # Try PDF path first (modern .ai files)
-        # Attempt to open via fitz and get page count
-        doc = pdf._open(path)
-        if doc is not None:
-            try:
-                page_count = doc.page_count
-                doc.close()
-                return {"Pages": str(page_count)}
-            except Exception:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
-        # Legacy .ai files (PostScript) — no page count available
-        return {}
-    except Exception as e:
-        print(f"AI properties extraction failed for {path}: {e!r}")
-        return {}
+    """ObjectTypeSpec.properties_fn for media_type='ai' — delegates entirely
+    to pdf.get_properties (page count, title, author, creation date) for
+    modern PDF-compatible .ai files. pdf.get_properties already returns {}
+    gracefully when fitz can't open the file at all, which is exactly the
+    legacy-PostScript-.ai case — no separate handling needed here."""
+    return pdf.get_properties(row)
 
 
 # Registration: add this type to the object-type registry

@@ -33,7 +33,7 @@ def get_properties(row):
         cmd = [
             "ffprobe",
             "-v", "error",
-            "-show_entries", "format=duration",
+            "-show_entries", "format=duration,bit_rate:stream=codec_type,codec_name",
             "-of", "json",
             str(path)
         ]
@@ -56,6 +56,18 @@ def get_properties(row):
                     props["Duration"] = f"{hours}:{minutes % 60:02d}:{seconds:02d}"
                 else:
                     props["Duration"] = f"{minutes}:{seconds:02d}"
+            except (ValueError, TypeError):
+                pass
+
+        for stream in data.get("streams", []):
+            if stream.get("codec_type") == "audio" and stream.get("codec_name"):
+                props["Codec"] = stream["codec_name"].upper()
+                break
+
+        bit_rate = data.get("format", {}).get("bit_rate")
+        if bit_rate:
+            try:
+                props["Bitrate"] = f"{int(bit_rate) // 1000} kbps"
             except (ValueError, TypeError):
                 pass
 

@@ -93,6 +93,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    form_body TEXT NOT NULL DEFAULT '{}',
+    affected_slugs TEXT NOT NULL DEFAULT '[]',
+    status_code INTEGER,
+    error_detail TEXT,
+    timestamp REAL NOT NULL
+);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -1217,3 +1227,47 @@ def list_recent_items_by_type(limit_per_type=10):
 
     conn.close()
     return result
+
+
+# --- Audit log ---
+# Captures mutating API requests for debugging/recovery after failures.
+
+def insert_audit_log(method, path, form_body, status_code, error_detail=None, affected_slugs=None):
+    """Insert a row into the audit_log table. form_body should be a dict (will be
+    JSON-serialized). affected_slugs can be a list of slugs or None. Automatically
+    records the current timestamp."""
+    conn = get_conn()
+    now = time.time()
+    conn.execute(
+        "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            method,
+            path,
+            json.dumps(form_body),
+            json.dumps(affected_slugs or []),
+            status_code,
+            error_detail,
+            now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_recent_audit_logs(limit=100):
+    """Fetch the most recent audit_log rows (most recent first). Returns a list
+    of dicts with all columns. form_body and affected_slugs are parsed from JSON."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            **dict(row),
+            "form_body": json.loads(row["form_body"]) if row["form_body"] else {},
+            "affected_slugs": json.loads(row["affected_slugs"]) if row["affected_slugs"] else [],
+        }
+        for row in rows
+    ]

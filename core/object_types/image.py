@@ -12,7 +12,7 @@ register(ObjectTypeSpec(
     label="Image",
     thumbnail_source=ThumbnailSource.UPLOADED_FILE,
     ocr_capable=True,
-    extensions=frozenset({".png", ".jpg", ".jpeg"}),
+    extensions=frozenset({".png", ".jpg", ".jpeg", ".ico", ".bmp", ".tiff", ".tif", ".webp"}),
     badge_icon="\U0001F5BC️",
     badge_text="IMAGE",
 ))

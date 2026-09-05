@@ -8,7 +8,9 @@ FROM python:3.14-slim
 # PostScript, so an actual PostScript interpreter is unavoidable; confirmed
 # installing cleanly (no build-from-source, no exotic packages) at ~47MB,
 # mostly URW base-35 fonts pulled in for text layout.
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libcairo2 ghostscript ffmpeg \
+# build-essential: py7zr (archive.py, issue #128) requires building pyppmd
+# (a C extension) — needed during pip install, removed after to keep slim.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libcairo2 ghostscript ffmpeg build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

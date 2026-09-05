@@ -102,6 +102,26 @@ def extract_text_for_row(row):
     return extract_text(path) if path else ""
 
 
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='pdf' — returns page
+    count, or {} on any failure."""
+    path = _stored_path(row)
+    if not path:
+        return {}
+    try:
+        doc = _open(path)
+        if doc is None:
+            return {}
+        try:
+            page_count = doc.page_count
+            return {"Pages": str(page_count)}
+        finally:
+            doc.close()
+    except Exception as e:
+        print(f"PDF properties extraction failed for {path}: {e!r}")
+        return {}
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
@@ -113,6 +133,7 @@ register(ObjectTypeSpec(
     extensions=frozenset({".pdf"}),
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,
+    properties_fn=get_properties,
     badge_icon="\U0001F4C4",
     badge_text="PDF",
 ))

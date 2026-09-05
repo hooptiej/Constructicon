@@ -108,6 +108,18 @@
       </div>
       {% endif %}
 
+      {# #135: Properties panel showing file size, original modification date,
+         and type-specific properties (dimensions, duration, etc.) #}
+      {% if item.file_size_display or item.source_modified_at_display or item.properties %}
+      <div class="content-meta-panel">
+        <div class="detail-meta">
+          {% if item.file_size_display %}<span>{{ item.file_size_display }}</span>{% endif %}
+          {% if item.source_modified_at_display %}<span>Originally created {{ item.source_modified_at_display }}</span>{% endif %}
+          {% for label, value in item.properties.items() %}<span>{{ label }}: {{ value }}</span>{% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
       {% if item.ocr_capable %}
       <div class="ocr-panel" id="ocr-panel" style="display:none">
         <div class="ocr-panel-header">

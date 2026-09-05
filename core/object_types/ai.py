@@ -72,6 +72,34 @@ def extract_text_for_row(row):
     return extract_text(path) if path else ""
 
 
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='ai' — delegates to PDF's
+    page-count logic for modern PDF-compatible .ai files; returns {} for
+    legacy PostScript .ai files or on any failure."""
+    path = _stored_path(row)
+    if not path:
+        return {}
+    try:
+        # Try PDF path first (modern .ai files)
+        # Attempt to open via fitz and get page count
+        doc = pdf._open(path)
+        if doc is not None:
+            try:
+                page_count = doc.page_count
+                doc.close()
+                return {"Pages": str(page_count)}
+            except Exception:
+                try:
+                    doc.close()
+                except Exception:
+                    pass
+        # Legacy .ai files (PostScript) — no page count available
+        return {}
+    except Exception as e:
+        print(f"AI properties extraction failed for {path}: {e!r}")
+        return {}
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
@@ -83,6 +111,7 @@ register(ObjectTypeSpec(
     extensions=frozenset({".ai"}),
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,
+    properties_fn=get_properties,
     badge_icon="✒️",
     badge_text="AI",
 ))

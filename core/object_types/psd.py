@@ -81,6 +81,21 @@ def capture_thumbnail(row):
     return render_composite(path) if path else None
 
 
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='psd' — returns canvas
+    size, or {} on any failure."""
+    path = _stored_path(row)
+    if not path:
+        return {}
+    try:
+        psd = PSDImage.open(path)
+        width, height = psd.size
+        return {"Canvas size": f"{width} × {height}"}
+    except Exception as e:
+        print(f"PSD properties extraction failed for {path}: {e!r}")
+        return {}
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
@@ -91,6 +106,7 @@ register(ObjectTypeSpec(
     ocr_capable=True,  # OCR runs against the composited preview — see this module
     extensions=frozenset({".psd"}),
     capture_fn=capture_thumbnail,
+    properties_fn=get_properties,
     badge_icon="\U0001F3A8",  # artist palette
     badge_text="PSD",
 ))

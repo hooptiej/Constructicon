@@ -92,48 +92,57 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                 # break the actual request
                 pass
 
-        # Call the actual route handler
+        # Call the actual route handler. A route can fail two ways: a caught
+        # HTTPException/RequestValidationError, which Starlette's own
+        # exception middleware (inside call_next) already turns into a
+        # normal Response before it gets back here — no raise, just a 4xx/5xx
+        # response, handled by the `else` branch below — or a truly unhandled
+        # exception, which propagates out of call_next itself. The whole
+        # point of #122 was making *that* second case debuggable after the
+        # fact, so the audit row must still be written even though we
+        # re-raise: do it in `finally`, not after a bare `try/except ...
+        # raise` (which would skip the insert on every unhandled exception —
+        # exactly the scenario this feature exists for).
+        response = None
+        status_code = 500
+        error_detail = None
         try:
             response = await call_next(request)
             status_code = response.status_code
-            error_detail = None
         except Exception as e:
-            # Capture errors raised by the handler
-            status_code = 500
             error_detail = str(e)
             raise
+        finally:
+            if should_audit:
+                scrubbed_form = _scrub_secrets(form_data)
+                affected_slugs = []
+                # Try to extract affected slugs from the path (e.g., /api/image/{slug})
+                if "/image/" in request.url.path:
+                    parts = request.url.path.split("/")
+                    if len(parts) > 3 and parts[1] == "api" and parts[2] == "image":
+                        slug = parts[3]
+                        affected_slugs = [slug]
+                # Also check for slugs in form data if present
+                if "slugs" in form_data:
+                    try:
+                        slugs = form_data["slugs"]
+                        if isinstance(slugs, str):
+                            slugs = json.loads(slugs)
+                        if isinstance(slugs, list):
+                            affected_slugs.extend(slugs)
+                    except Exception:
+                        pass
+                # Deduplicate
+                affected_slugs = list(set(affected_slugs))
 
-        # Log the request if it's an audit-worthy request
-        if should_audit:
-            scrubbed_form = _scrub_secrets(form_data)
-            affected_slugs = []
-            # Try to extract affected slugs from the path (e.g., /api/image/{slug})
-            if "/image/" in request.url.path:
-                parts = request.url.path.split("/")
-                if len(parts) > 3 and parts[1] == "api" and parts[2] == "image":
-                    slug = parts[3]
-                    affected_slugs = [slug]
-            # Also check for slugs in form data if present
-            if "slugs" in form_data:
-                try:
-                    slugs = form_data["slugs"]
-                    if isinstance(slugs, str):
-                        slugs = json.loads(slugs)
-                    if isinstance(slugs, list):
-                        affected_slugs.extend(slugs)
-                except Exception:
-                    pass
-            # Deduplicate
-            affected_slugs = list(set(affected_slugs))
-
-            db.insert_audit_log(
-                method=request.method,
-                path=request.url.path,
-                form_body=scrubbed_form,
-                status_code=status_code,
-                error_detail=error_detail,
-                affected_slugs=affected_slugs,
-            )
+                db.insert_audit_log(
+                    method=request.method,
+                    path=request.url.path,
+                    form_body=scrubbed_form,
+                    status_code=status_code,
+                    error_detail=error_detail,
+                    affected_slugs=affected_slugs,
+                )
 
         return response
 

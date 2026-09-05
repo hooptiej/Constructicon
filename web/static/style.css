@@ -234,10 +234,20 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .filter-select { min-width: 150px; background: var(--card); border: 1px solid var(--border); border-radius: 8px;
   padding: 9px 14px; font-size: 13px; color: var(--text-2-bright); }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px; }
+/* Style rule: object-type/gallery cards are portrait 3:4 (vs. project
+   cards, which are landscape 4:3 — see .project-cover above). aspect-ratio
+   lives here, on the actual grid item, NOT on the nested .gallery-thumb —
+   putting it on .gallery-thumb (grid > flex-column card > flex-column
+   thumb) created a circular sizing dependency real browsers resolve by
+   collapsing the whole card to ~0 height (confirmed live: a real card
+   measured 200.2 x 2px, with overflow:hidden clipping the rest). Sizing
+   the card itself from its own grid-track width is a single, unambiguous
+   calculation with no nested auto-height chain to go wrong. */
 .gallery-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
-  display: flex; flex-direction: column; color: inherit; text-decoration: none; }
+  display: flex; flex-direction: column; color: inherit; text-decoration: none;
+  aspect-ratio: 3 / 4; }
 .gallery-card:hover { border-color: var(--border-stronger); color: inherit; }
-.gallery-thumb { position: relative; height: 120px; background: var(--surface); display: flex; align-items: center; justify-content: center;
+.gallery-thumb { position: relative; flex: 1; min-height: 0; background: var(--surface); display: flex; align-items: center; justify-content: center;
   border-bottom: 1px solid rgba(230,225,200,0.06); overflow: hidden; }
 .gallery-thumb img { width: 100%; height: 100%; object-fit: cover; }
 /* File-kind badge (issue #12) — small corner chip on gallery/tile thumbs,
@@ -605,7 +615,7 @@ body.delete-mode-on .card-select-row { display: flex; }
 .modal-header h2 { font-size: 16px; font-weight: 500; margin: 0; }
 .modal-close { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 20px; line-height: 1; padding: 0; }
 
-/* --- Home page widgets (#17 Part B) ---
+/* --- Home page widgets (#17 Part B, #139) ---
    Gallery/upload moved into the pop-out (_gallery_drawer.html) below, so the
    main area is just a vertical stack of self-contained widgets — currently
    category tiles and the projects grid, each its own template partial. A
@@ -614,21 +624,74 @@ body.delete-mode-on .card-select-row { display: flex; }
    is the pragmatic reading of "widgetize for easy moving around" without
    building a much bigger layout-persistence feature this issue didn't spec
    out (see PR description for the drag-to-reorder follow-up note). Replaces
-   the old .home-columns 1fr/2fr gallery+projects split. */
-.home-widgets { display: flex; flex-direction: column; gap: 28px; }
+   the old .home-columns 1fr/2fr gallery+projects split.
+
+   #139: 2-column layout on desktop — Projects at 2/3 width (left column),
+   Unfiled+Files sharing 1/3 width (right column, stacked vertically). */
+.home-widgets { display: grid; grid-template-columns: 2fr 1fr; gap: 28px; }
 .home-widget { display: flex; flex-direction: column; gap: 18px; min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+.home-widgets-right-column { display: flex; flex-direction: column; gap: 28px; }
 .home-col-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .home-col-header h2 { font-size: 15px; font-weight: 500; margin: 0; }
 .home-col-header .see-all { font-size: 12px; color: var(--text-2); }
-.home-gallery-grid { display: flex; flex-direction: column; gap: 12px; }
-/* flex-shrink:0 matters once this sits inside a height-capped, scrollable
-   container (.unfiled-scroll below) — without it, a flex column with more
-   content than its max-height lets its items shrink to fit instead of
-   actually overflowing into the scrollbar, collapsing every card to a
-   sliver rather than showing a properly-sized list you can scroll. */
-.home-gallery-grid .gallery-card { flex-direction: row; align-items: center; flex-shrink: 0; }
-.home-gallery-grid .gallery-thumb { width: 72px; height: 72px; flex-shrink: 0; border-bottom: none; border-right: 1px solid rgba(226,214,150,0.06); }
-.home-gallery-grid .gallery-body { padding: 10px 12px; gap: 5px; }
+/* #139: Changed from flex column to grid layout for narrower column context.
+   Each card is now a small thumbnail tile (100px+) rather than a full-width row.
+   Gallery card component remains the same, but layout is more compact grid
+   suited to the 1/3-width right column. */
+.home-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 100px);
+  /* auto-fill with a fixed track size leaves whatever doesn't evenly
+     divide as empty space, and grid's default justify-content: start
+     dumps all of it on the right edge — worse, that leftover amount
+     changes with viewport width, so the gap looked "funky"/inconsistent
+     rather than just present. space-evenly spreads it as gaps between
+     and around the tiles instead, so the row always looks evenly laid
+     out regardless of exactly how many 100px tiles fit. */
+  justify-content: space-evenly;
+  gap: 12px;
+}
+/* Gallery cards in the home grid are locked to a specific size (100x133,
+   a clean 3:4) rather than sized by aspect-ratio against a variable
+   grid-track width — explicit width+height on the actual grid item is
+   simpler and has no nested-sizing ambiguity to go wrong (see the
+   .gallery-card comment above for what did go wrong with aspect-ratio
+   here). Maintain vertical flex for backward compat with other gallery
+   views (user_gallery.html uses the same .gallery-card class). */
+.home-gallery-grid .gallery-card {
+  width: 100px;
+  height: 133px;
+  flex-direction: column;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+.home-gallery-grid .gallery-thumb {
+  flex-shrink: 1;
+  border-bottom: 1px solid var(--border);
+  border-right: none;
+}
+.home-gallery-grid .gallery-body {
+  padding: 8px;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.home-gallery-grid .gallery-filename {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+.home-gallery-grid .gallery-date {
+  font-size: 9px;
+}
+.home-gallery-grid .gallery-tags {
+  display: none;
+}
+.home-gallery-grid .gallery-meta-row {
+  display: none;
+}
 
 /* #117: Unfiled page's grid/list layout toggle. Both views reuse the exact
    same .gallery-card markup — .gallery-grid gives the untouched base
@@ -650,8 +713,63 @@ body.delete-mode-on .card-select-row { display: flex; }
 .home-col-header .filter-select { min-width: 0; padding: 6px 10px; font-size: 12px; }
 
 .home-widget-primary .home-col-header h2 { font-size: 19px; font-weight: 600; }
-.home-widget-primary .project-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 22px; }
-.home-widget-primary .project-cover { height: 160px; }
+/* #featured-project and #projects-grid used to be two stacked flex
+   siblings (flex-direction: column) — the featured card was never
+   actually a grid item, so no CSS on it could make regular cards sit
+   beside it. .projects-container is now the ONE grid both live in:
+   #featured-project spans 2 tracks directly, and #projects-grid (still
+   its own element, for the JS that populates it) is display:contents so
+   its .project-card children are promoted to direct grid items here too
+   — that's what lets auto-placement flow a card into the row alongside
+   the featured one instead of starting a new row underneath it. */
+.home-widget-primary .projects-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 22px;
+}
+.home-widget-primary #featured-project { grid-column: span 2; grid-row: span 2; min-height: 0; }
+.home-widget-primary #projects-grid { display: contents; }
+/* Grid's default align-items: stretch was pulling regular cards up to
+   match the featured card's (much taller) row height. #featured-project
+   now spans 2 rows, so — combined with align-self: start here — the next
+   two regular cards auto-place into the single remaining column across
+   those 2 rows: a natural 2-card stack beside the featured one, each at
+   its own locked/natural size instead of stretched. */
+.home-widget-primary #projects-grid > .project-card {
+  align-self: start;
+}
+
+/* Featured project card fills whatever grid cell #featured-project (its
+   parent, and the actual grid item — see above) gives it. */
+.project-card-featured {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border-top: none;
+}
+.project-card-featured .project-cover {
+  height: auto;
+  min-height: 170px;
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+.project-card-featured .project-body {
+  padding: 18px;
+  font-size: 14px;
+  grid-column: 2;
+  display: flex;
+  justify-content: center;
+}
+.project-card-featured .project-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.project-card-featured .project-desc {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
 
 .home-widget-compact { gap: 10px; }
 .home-widget-compact .home-col-header h2 {
@@ -679,6 +797,34 @@ body.delete-mode-on .card-select-row { display: flex; }
 .file-tab.active { color: var(--text); background: var(--card); border-color: var(--border-strong); font-weight: 600; }
 .files-scroll { max-height: 300px; overflow-y: auto; padding-right: 4px; }
 
+/* #139: Responsive collapse to single-column layout on narrow viewports.
+   At 768px and below, the 2-column grid collapses back to full-width stacked
+   layout, and featured card returns to vertical layout. */
+@media (max-width: 768px) {
+  .home-widgets {
+    grid-template-columns: 1fr;
+  }
+  .home-widget-primary .projects-container {
+    grid-template-columns: 1fr;
+  }
+  .home-widget-primary #featured-project {
+    grid-column: auto;
+  }
+  .project-card-featured {
+    display: flex;
+    flex-direction: column;
+  }
+  .project-card-featured .project-cover {
+    height: 180px;
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .project-card-featured .project-body {
+    grid-column: auto;
+    padding: 16px;
+  }
+}
+
 /* --- Projects (curated cards) --- */
 .tag-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .tag-chip {
@@ -694,7 +840,9 @@ body.delete-mode-on .card-select-row { display: flex; }
   border-top: 3px solid var(--purple);
 }
 .project-card:hover { border-color: var(--border-stronger); border-top-color: var(--purple-bright); color: inherit; }
-.project-cover { height: 130px; background: var(--surface); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+/* Style rule: project cards are landscape 4:3 (vs. object-type/gallery
+   cards, which are portrait 3:4 — see .gallery-thumb below). */
+.project-cover { height: auto; aspect-ratio: 4 / 3; background: var(--surface); display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .project-cover img { width: 100%; height: 100%; object-fit: cover; }
 .project-cover-placeholder {
   width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;

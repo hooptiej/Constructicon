@@ -396,6 +396,27 @@ body.delete-mode-on .card-select-row { display: flex; }
 .apikey-status { font-size: 11px; color: var(--text-3); flex-shrink: 0; }
 .apikey-status-set { color: var(--accent); }
 
+/* Audit log (#122) — recent mutating API calls */
+.admin-audit-log-container { max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 8px; }
+.audit-log-empty { font-size: 12px; color: var(--text-3); padding: 12px; text-align: center; }
+.audit-log-list { display: flex; flex-direction: column; gap: 8px; }
+.audit-log-entry {
+  display: grid; grid-template-columns: 40px 1fr 50px 100px 120px; gap: 8px;
+  font-size: 11px; padding: 8px; background: var(--background); border-radius: 3px;
+  border-left: 2px solid var(--border);
+}
+.audit-log-method {
+  font-weight: 600; color: var(--text-2-bright); text-transform: uppercase; font-size: 10px;
+  display: flex; align-items: center; justify-content: center;
+}
+.audit-log-path { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-log-status { font-weight: 500; text-align: right; }
+.audit-log-status-success { color: var(--accent); }
+.audit-log-status-error { color: var(--hazard-red); }
+.audit-log-status-other { color: var(--text-2); }
+.audit-log-slugs { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-log-time { color: var(--text-3); text-align: right; }
+
 /* --- Combined gallery + upload pop-out (#17) — home page only.
    Sibling to the admin pane above: same fixed-trigger + CSS-transition
    panel family (transform/opacity transition, similar duration/easing —

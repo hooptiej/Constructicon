@@ -91,6 +91,14 @@
       <span id="admin-apikey-msg-thingiverse_app_token" class="backup-status"></span>
     </div>
     <div class="admin-pane-divider"></div>
+    <div class="admin-row">
+      <div>
+        <div class="admin-row-label">Recent activity</div>
+        <div class="admin-row-hint">Audit log of recent mutating API calls (#122)</div>
+      </div>
+    </div>
+    <div id="admin-audit-log-container" class="admin-audit-log-container"></div>
+    <div class="admin-pane-divider"></div>
     <button type="button" class="btn-danger admin-full-btn" id="admin-delete-all-btn"
             title="Development convenience while content is still in flux">Delete all</button>
     <button type="button" class="btn-ms admin-full-btn" id="admin-backup-btn"
@@ -218,6 +226,43 @@
       }
     });
   });
+
+  // Audit log (#122) — recent mutating API calls for debugging/recovery
+  const auditLogContainer = document.getElementById('admin-audit-log-container');
+  async function loadAuditLog() {
+    try {
+      const res = await fetch('/api/audit-log?limit=20');
+      if (!res.ok) return;
+      const rows = await res.json();
+      if (!rows || rows.length === 0) {
+        auditLogContainer.innerHTML = '<div class="audit-log-empty">No activity yet</div>';
+        return;
+      }
+      // Render a simple table-like view
+      let html = '<div class="audit-log-list">';
+      for (const row of rows) {
+        const statusClass = row.status_code >= 200 && row.status_code < 300 ? 'success' : row.status_code >= 400 ? 'error' : 'other';
+        const errorDetail = row.error_detail ? ` (${row.error_detail})` : '';
+        const slugs = row.affected_slugs && row.affected_slugs.length > 0
+          ? row.affected_slugs.join(', ')
+          : '-';
+        html += `
+          <div class="audit-log-entry">
+            <div class="audit-log-method">${row.method}</div>
+            <div class="audit-log-path">${row.path}</div>
+            <div class="audit-log-status audit-log-status-${statusClass}">${row.status_code}${errorDetail}</div>
+            <div class="audit-log-slugs">${slugs}</div>
+            <div class="audit-log-time">${row.timestamp_friendly || '-'}</div>
+          </div>
+        `;
+      }
+      html += '</div>';
+      auditLogContainer.innerHTML = html;
+    } catch (err) {
+      auditLogContainer.innerHTML = '<div class="audit-log-empty">Failed to load audit log</div>';
+    }
+  }
+  loadAuditLog();
 
   // "Back up now" — relocated from _header.html, same /api/backup call.
   const backupBtn = document.getElementById('admin-backup-btn');

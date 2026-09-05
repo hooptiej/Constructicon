@@ -21,6 +21,8 @@ from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Bac
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import FormData
 
 from core import backup, db, object_types, ocr, similarity, storage, thumbnails
 
@@ -34,6 +36,109 @@ _BRAND_DIR = Path(__file__).resolve().parent.parent / "assets" / "brand"
 if _BRAND_DIR.is_dir():
     app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+
+
+# --- Audit logging middleware ---
+
+def _scrub_secrets(form_data):
+    """Remove values from form_data dict whose keys look like secrets (contain
+    'key', 'secret', 'token', 'password', etc., case-insensitive) and replace
+    with a redaction marker. Returns a new dict without mutating the original."""
+    if not form_data:
+        return {}
+    scrubbed = {}
+    secret_keywords = {"key", "secret", "token", "password", "api", "auth"}
+    for key, value in form_data.items():
+        key_lower = key.lower()
+        # Check if any secret keyword is in the key name
+        if any(keyword in key_lower for keyword in secret_keywords):
+            scrubbed[key] = "[REDACTED]"
+        else:
+            scrubbed[key] = value
+    return scrubbed
+
+
+class AuditLoggingMiddleware(BaseHTTPMiddleware):
+    """Middleware to capture mutating /api/* requests (POST/PUT/DELETE) into
+    the audit_log table. Reads the form body, scrubs secrets, logs the request
+    with status and any error detail, then passes it through to the handler."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Only audit mutating /api/* requests
+        is_mutating = request.method in {"POST", "PUT", "DELETE"}
+        is_api = request.url.path.startswith("/api/")
+        should_audit = is_mutating and is_api
+
+        form_data = {}
+        if should_audit and request.method in {"POST", "PUT"}:
+            # Read the request body so we can log it. Starlette automatically caches
+            # the body after the first read, so the handler can read it again.
+            try:
+                body_bytes = await request.body()
+                # Try to parse as form data — FastAPI routes use Form(...) parameters
+                if body_bytes:
+                    try:
+                        form_data = dict(await request.form())
+                    except Exception:
+                        # If form parsing fails, try JSON (some endpoints might use JSON)
+                        try:
+                            form_data = json.loads(body_bytes)
+                        except Exception:
+                            # If both fail, leave form_data empty — don't break the request
+                            pass
+            except Exception:
+                # If anything goes wrong reading the body, just proceed without
+                # logging the request body — don't let an audit logging error
+                # break the actual request
+                pass
+
+        # Call the actual route handler
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            error_detail = None
+        except Exception as e:
+            # Capture errors raised by the handler
+            status_code = 500
+            error_detail = str(e)
+            raise
+
+        # Log the request if it's an audit-worthy request
+        if should_audit:
+            scrubbed_form = _scrub_secrets(form_data)
+            affected_slugs = []
+            # Try to extract affected slugs from the path (e.g., /api/image/{slug})
+            if "/image/" in request.url.path:
+                parts = request.url.path.split("/")
+                if len(parts) > 3 and parts[1] == "api" and parts[2] == "image":
+                    slug = parts[3]
+                    affected_slugs = [slug]
+            # Also check for slugs in form data if present
+            if "slugs" in form_data:
+                try:
+                    slugs = form_data["slugs"]
+                    if isinstance(slugs, str):
+                        slugs = json.loads(slugs)
+                    if isinstance(slugs, list):
+                        affected_slugs.extend(slugs)
+                except Exception:
+                    pass
+            # Deduplicate
+            affected_slugs = list(set(affected_slugs))
+
+            db.insert_audit_log(
+                method=request.method,
+                path=request.url.path,
+                form_body=scrubbed_form,
+                status_code=status_code,
+                error_detail=error_detail,
+                affected_slugs=affected_slugs,
+            )
+
+        return response
+
+
+app.add_middleware(AuditLoggingMiddleware)
 
 # Source (capture_events.tech): who or what actually added a row, and how —
 # see core/db.py's SOURCE_* constants/source_group() for the full vocabulary
@@ -606,6 +711,24 @@ def api_set_setting(key: str = Form(...), value: str = Form("")):
         raise HTTPException(status_code=400, detail=f"Unknown setting key: {key!r}")
     db.set_setting(key, value)
     return JSONResponse({key: db.has_setting(key)})
+
+
+@app.get("/api/audit-log")
+def api_get_audit_log(limit: int = 100):
+    """Fetch recent audit log entries (most recent first). Returns a list of
+    audit log rows, each with method, path, scrubbed form_body, affected_slugs,
+    status_code, error_detail, and a human-friendly timestamp."""
+    rows = db.list_recent_audit_logs(limit=limit)
+    # Add human-friendly timestamp to each row
+    result = []
+    for row in rows:
+        result.append(
+            {
+                **row,
+                "timestamp_friendly": _friendly_datetime(row["timestamp"]),
+            }
+        )
+    return JSONResponse(result)
 
 
 @app.get("/upload")

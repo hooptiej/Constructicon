@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS projects (
     status TEXT NOT NULL DEFAULT 'active',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
-    tag_id INTEGER REFERENCES blog_tags(id)
+    tag_id INTEGER REFERENCES blog_tags(id),
+    parent_id INTEGER REFERENCES projects(id)
 );
 CREATE TABLE IF NOT EXISTS project_items (
     project_id INTEGER NOT NULL REFERENCES projects(id),
@@ -292,6 +293,13 @@ def init_db():
     for column, ddl_type in (("display_name", "TEXT"), ("icon", "TEXT")):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+    # parent_id (#133): support for nested projects — projects can now have a
+    # parent project, enabling a simple hierarchy. Mirrors the same self-referencing
+    # pattern as blog_tags.parent_id for consistency.
+    if "parent_id" not in existing_project_columns:
+        conn.execute("ALTER TABLE projects ADD COLUMN parent_id INTEGER REFERENCES projects(id)")
+    # Create the index after the column is guaranteed to exist
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id)")
     conn.commit()
     conn.close()
 
@@ -928,7 +936,7 @@ def list_recent_posts(limit=10):
 # (title, description, optional cover image) and a hand-ordered set of
 # member posts, rather than being derived from tag membership.
 
-def create_project(title, description="", cover_slug=None, status="active", tag_id=None):
+def create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None):
     """Auto-generates a unique slug from title, same dedup-with-numeric-
     suffix pattern as get_or_create_tag.
 
@@ -936,7 +944,10 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
     "tied to the site tags") — callers that want a project reachable via the
     home page's tag filter should pass get_or_create_tag(title)["id"]
     themselves rather than this function inventing the tag on its own, since
-    not every project needs (or predates) a tag link."""
+    not every project needs (or predates) a tag link.
+
+    parent_id optionally links this project to a parent project (#133),
+    enabling a simple hierarchy of nested projects."""
     conn = get_conn()
     slug = _slugify(title)
     base_slug = slug
@@ -946,9 +957,9 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
         n += 1
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at, tag_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (slug, title, description, cover_slug, status, now, now, tag_id),
+        "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at, tag_id, parent_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (slug, title, description, cover_slug, status, now, now, tag_id, parent_id),
     )
     conn.commit()
     project_id = cur.lastrowid
@@ -963,6 +974,7 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
         "created_at": now,
         "updated_at": now,
         "tag_id": tag_id,
+        "parent_id": parent_id,
     }
 
 
@@ -991,21 +1003,34 @@ def list_projects(status=None):
     return [dict(r) for r in rows]
 
 
-def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None):
+def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None, parent_id=...):
     """Partial update — only overwrites fields that were passed, same
-    pattern as update_tags() for capture_events. Bumps updated_at."""
+    pattern as update_tags() for capture_events. Bumps updated_at.
+
+    parent_id can be updated; a cycle check prevents setting a project
+    as its own ancestor. Use parent_id=None to clear a parent."""
     existing = get_project(id_or_slug)
     if existing is None:
         return None
+
+    # Cycle detection: if setting a new parent, verify it's not a descendant
+    new_parent_id = parent_id if parent_id is not ... else existing.get("parent_id")
+    if parent_id is not ... and new_parent_id is not None:
+        # Check if the proposed parent is actually a descendant of this project
+        descendant_ids = _descendant_project_ids(existing["id"])
+        if new_parent_id in descendant_ids:
+            raise ValueError(f"Cannot set project {new_parent_id} as parent: it is already a descendant of this project")
+
     conn = get_conn()
     now = time.time()
     conn.execute(
-        "UPDATE projects SET title = ?, description = ?, cover_slug = ?, status = ?, updated_at = ? WHERE id = ?",
+        "UPDATE projects SET title = ?, description = ?, cover_slug = ?, status = ?, parent_id = ?, updated_at = ? WHERE id = ?",
         (
             title if title is not None else existing["title"],
             description if description is not None else existing["description"],
             cover_slug if cover_slug is not None else existing["cover_slug"],
             status if status is not None else existing["status"],
+            new_parent_id,
             now,
             existing["id"],
         ),
@@ -1013,6 +1038,62 @@ def update_project(id_or_slug, title=None, description=None, cover_slug=None, st
     conn.commit()
     conn.close()
     return get_project(existing["id"])
+
+
+def _descendant_project_ids(project_id):
+    """Recursively get all descendant project IDs (children, grandchildren, etc.)
+    for a given project — similar to _descendant_tag_ids but for projects.
+    Used for cycle detection and for breadcrumb navigation."""
+    conn = get_conn()
+    rows = conn.execute("SELECT id, parent_id FROM projects").fetchall()
+    conn.close()
+    children_by_parent = {}
+    for r in rows:
+        children_by_parent.setdefault(r["parent_id"], []).append(r["id"])
+    ids = [project_id]
+    frontier = [project_id]
+    while frontier:
+        frontier = [child for parent in frontier for child in children_by_parent.get(parent, [])]
+        ids.extend(frontier)
+    return ids
+
+
+def list_child_projects(project_id):
+    """Get the direct children of a project (not including grandchildren).
+    Returns a list of project dicts, ordered by title."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM projects WHERE parent_id = ? ORDER BY title",
+        (project_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def list_project_ancestors(project_id):
+    """Walk up the parent chain from a project to the root, returning a list
+    of ancestor project dicts in reverse order (root first). Used to build
+    breadcrumb navigation. Returns empty list if the project has no parent."""
+    ancestors = []
+    current_id = project_id
+    visited = set()
+    conn = get_conn()
+
+    while current_id is not None:
+        if current_id in visited:
+            # Cycle detected — shouldn't happen if set_project_parent's guard works
+            break
+        visited.add(current_id)
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (current_id,)).fetchone()
+        if row is None:
+            break
+        project = dict(row)
+        ancestors.append(project)
+        current_id = project.get("parent_id")
+
+    conn.close()
+    # Reverse so root is first, and exclude the current project (first in list before reversing)
+    return list(reversed(ancestors))[:-1] if len(ancestors) > 1 else []
 
 
 def add_item_to_project(project_id, post_slug, sort_order=None):

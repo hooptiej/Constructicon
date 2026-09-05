@@ -10,6 +10,17 @@
     Back to projects
   </a>
 
+  {% if ancestors %}
+  <div style="margin-bottom:16px;font-size:12px;color:var(--text-muted)">
+    <span>Breadcrumb:</span>
+    {% for ancestor in ancestors %}
+    <a href="/project/{{ ancestor.slug }}" style="color:inherit;text-decoration:none;border-bottom:1px dotted">{{ ancestor.title }}</a>
+    <span> / </span>
+    {% endfor %}
+    <span style="font-weight:500">{{ project.title }}</span>
+  </div>
+  {% endif %}
+
   <div class="project-detail-header">
     {% if cover_url %}
     <div class="project-cover" style="height:200px;border-radius:12px;border:1px solid var(--border)">
@@ -19,6 +30,12 @@
     <div>
       <h1 class="page-title">{{ project.title }}</h1>
       {% if project.description %}<p class="page-subtitle">{{ project.description }}</p>{% endif %}
+      <div style="margin-top:12px;display:flex;align-items:center;gap:12px;font-size:13px">
+        <label>Parent project:</label>
+        <select id="parent-project-select" style="padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px">
+          <option value="">— None —</option>
+        </select>
+      </div>
     </div>
     <span class="project-status-pill{% if project.status == 'archived' %} archived{% endif %}" style="width:fit-content">{{ project.status }}</span>
     <div class="hazard-stripe" style="width:64px"></div>
@@ -48,10 +65,28 @@
   {% else %}
   <p class="empty-state">This project has no items yet.</p>
   {% endif %}
+
+  {% if child_projects %}
+  <div style="margin-top:40px;border-top:1px solid var(--border);padding-top:24px">
+    <h2 style="font-size:18px;margin-bottom:16px">Sub-projects</h2>
+    <div style="display:grid;gap:12px">
+      {% for child in child_projects %}
+      <a href="/project/{{ child.slug }}" style="display:flex;align-items:center;padding:12px;border:1px solid var(--border);border-radius:8px;text-decoration:none;color:inherit;transition:background 0.2s">
+        <div>
+          <div style="font-weight:500">{{ child.title }}</div>
+          {% if child.description %}<div style="font-size:12px;color:var(--text-muted);margin-top:4px">{{ child.description }}</div>{% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 <script>
 let currentCoverSlug = {{ project.cover_slug | tojson }};
+let currentParentId = {{ project.parent_id | tojson }};
+const projectId = {{ project.id }};
 
 function revertCoverSelection(failedRadio) {
   failedRadio.checked = false;
@@ -67,7 +102,6 @@ document.querySelectorAll('.project-cover-selector').forEach(radio => {
   radio.addEventListener('change', async function() {
     if (!this.checked) return;
     const slug = this.dataset.slug;
-    const projectId = '{{ project.id }}';
     try {
       const response = await fetch(`/api/projects/${projectId}`, {
         method: 'POST',
@@ -86,6 +120,63 @@ document.querySelectorAll('.project-cover-selector').forEach(radio => {
     }
   });
 });
+
+// Parent project selector (#133)
+const parentSelect = document.getElementById('parent-project-select');
+async function loadParentProjects() {
+  try {
+    const res = await fetch('/api/projects');
+    const projects = await res.json();
+    // Filter out this project and its descendants to prevent cycles.
+    // The backend's cycle check (core/db.py's update_project) is the real
+    // guard — this is just keeping the dropdown from offering a choice
+    // guaranteed to be rejected.
+    const childrenByParent = {};
+    for (const p of projects) {
+      if (p.parent_id != null) (childrenByParent[p.parent_id] ||= []).push(p.id);
+    }
+    const excludedIds = new Set([projectId]);
+    let frontier = [projectId];
+    while (frontier.length) {
+      frontier = frontier.flatMap(id => childrenByParent[id] || []);
+      frontier.forEach(id => excludedIds.add(id));
+    }
+    const validParents = projects.filter(p => !excludedIds.has(p.id));
+    const html = validParents
+      .map(p => `<option value="${p.id}" ${p.id === currentParentId ? 'selected' : ''}>${p.title}</option>`)
+      .join('');
+    parentSelect.innerHTML = '<option value="">— None —</option>' + html;
+    parentSelect.value = String(currentParentId || '');
+  } catch (err) {
+    console.error('Failed to load projects:', err);
+  }
+}
+
+parentSelect.addEventListener('change', async function() {
+  const newParentId = this.value;
+  const previousValue = String(currentParentId || '');
+  try {
+    const response = await fetch(`/api/projects/${projectId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `parent_id=${encodeURIComponent(newParentId)}`
+    });
+    if (response.ok) {
+      currentParentId = newParentId ? parseInt(newParentId) : null;
+      // Optionally refresh the page to show updated breadcrumbs/hierarchy
+      // window.location.reload();
+    } else {
+      const body = await response.json().catch(() => ({}));
+      alert('Error: ' + (body.detail || 'Failed to update parent project'));
+      this.value = previousValue;
+    }
+  } catch (error) {
+    console.error('Error updating parent:', error);
+    this.value = previousValue;
+  }
+});
+
+loadParentProjects();
 </script>
 
 {% endblock %}

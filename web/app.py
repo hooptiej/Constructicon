@@ -627,12 +627,16 @@ def project_detail_page(request: Request, slug: str):
     if project is None:
         raise HTTPException(status_code=404, detail="not found")
     items = [_to_content_public(r, project_slug=slug) for r in db.list_project_items(project["id"])]
+    child_projects = db.list_child_projects(project["id"])
+    ancestors = db.list_project_ancestors(project["id"])
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
             "project": project,
             "cover_url": _project_cover_url(project.get("cover_slug")),
             "items": items,
+            "child_projects": child_projects,
+            "ancestors": ancestors,
         },
     )
 
@@ -1092,8 +1096,13 @@ def api_clients(request: Request):
 
 def _to_project_option(project):
     """Slim shape for the upload drawer's Project dropdown — just enough to
-    populate a <select> and let the client hand project_id back on upload."""
-    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"]}
+    populate a <select> and let the client hand project_id back on upload.
+    parent_id (#133) is included too — project_detail.html's parent-project
+    selector reuses this same endpoint and needs it client-side to exclude
+    a project's own descendants from its own "choose a parent" dropdown
+    (the backend's cycle check is the real guard; this just keeps the
+    dropdown itself from offering a choice guaranteed to be rejected)."""
+    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"], "parent_id": project.get("parent_id")}
 
 
 @app.get("/api/projects")
@@ -1105,7 +1114,7 @@ def api_projects(request: Request):
 
 
 @app.post("/api/projects")
-def api_create_project(request: Request, title: str = Form(...)):
+def api_create_project(request: Request, title: str = Form(...), parent_id: str = Form(None)):
     """Creates a project from the upload drawer's "+ New project..." flow
     (#1) — distinct from scripts/seed_example_projects.py's one-off seeding,
     this is the first real UI-driven way to make a project.
@@ -1116,12 +1125,24 @@ def api_create_project(request: Request, title: str = Form(...)):
     the rest of the site already has (see core/db.py's create_project
     docstring and README's "tied to the site tags" note) — not a parallel
     system, just handing the existing tag tree a project-shaped entry point.
+
+    parent_id (#133) optionally sets this project as a child of another project.
     """
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Project name can't be empty")
+
+    parent_id_int = None
+    if parent_id:
+        try:
+            parent_id_int = int(parent_id)
+            if db.get_project(parent_id_int) is None:
+                raise HTTPException(status_code=400, detail="Parent project not found")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid parent_id")
+
     tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"])
+    project = db.create_project(title, tag_id=tag["id"], parent_id=parent_id_int)
     return JSONResponse(_to_project_option(project))
 
 
@@ -1176,22 +1197,46 @@ def api_update_project(
     description: str = Form(None),
     cover_slug: str = Form(None),
     status: str = Form(None),
+    parent_id: str = Form(None),
 ):
     """Updates a project's properties (issue #103). Allows setting any
     combination of title, description, cover_slug (slug of an attached item
     to use as the cover image), and status. Only overwrites fields that were
     passed; omitted fields are left unchanged. Returns the updated project
-    in _to_project_option shape (same as the list endpoint)."""
+    in _to_project_option shape (same as the list endpoint).
+
+    parent_id (#133) can be set to create/remove a parent-child relationship.
+    Pass empty string to remove a parent, or a project ID to set one."""
     project = db.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    updated = db.update_project(
-        project_id,
-        title=title,
-        description=description,
-        cover_slug=cover_slug,
-        status=status,
-    )
+
+    parent_id_value = ...  # "..." means don't update parent_id
+    if parent_id is not None:
+        parent_id_value = None
+        if parent_id:
+            try:
+                parent_id_int = int(parent_id)
+                if parent_id_int == int(project_id):
+                    raise HTTPException(status_code=400, detail="A project cannot be its own parent")
+                if db.get_project(parent_id_int) is None:
+                    raise HTTPException(status_code=400, detail="Parent project not found")
+                parent_id_value = parent_id_int
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid parent_id")
+
+    try:
+        updated = db.update_project(
+            project_id,
+            title=title,
+            description=description,
+            cover_slug=cover_slug,
+            status=status,
+            parent_id=parent_id_value,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     return JSONResponse(updated or {})
 
 

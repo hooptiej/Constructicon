@@ -711,8 +711,17 @@ body.delete-mode-on .card-select-row { display: flex; }
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 22px;
 }
-.home-widget-primary #featured-project { grid-column: span 2; min-height: 0; }
+.home-widget-primary #featured-project { grid-column: span 2; grid-row: span 2; min-height: 0; }
 .home-widget-primary #projects-grid { display: contents; }
+/* Grid's default align-items: stretch was pulling regular cards up to
+   match the featured card's (much taller) row height. #featured-project
+   now spans 2 rows, so — combined with align-self: start here — the next
+   two regular cards auto-place into the single remaining column across
+   those 2 rows: a natural 2-card stack beside the featured one, each at
+   its own locked/natural size instead of stretched. */
+.home-widget-primary #projects-grid > .project-card {
+  align-self: start;
+}
 
 /* Featured project card fills whatever grid cell #featured-project (its
    parent, and the actual grid item — see above) gives it. */

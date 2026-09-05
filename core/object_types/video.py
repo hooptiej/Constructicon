@@ -100,7 +100,7 @@ def get_properties(row):
         cmd = [
             "ffprobe",
             "-v", "error",
-            "-show_entries", "format=duration:stream=width,height",
+            "-show_entries", "format=duration:stream=codec_type,width,height",
             "-of", "json",
             str(path)
         ]

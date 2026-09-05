@@ -100,7 +100,7 @@ def get_properties(row):
         cmd = [
             "ffprobe",
             "-v", "error",
-            "-show_entries", "format=duration:stream=codec_type,width,height",
+            "-show_entries", "format=duration,bit_rate:stream=codec_type,codec_name,width,height",
             "-of", "json",
             str(path)
         ]
@@ -126,7 +126,7 @@ def get_properties(row):
             except (ValueError, TypeError):
                 pass
 
-        # Extract resolution (width x height from first video stream)
+        # Resolution + codec, both from the first video stream
         streams = data.get("streams", [])
         for stream in streams:
             if stream.get("codec_type") == "video":
@@ -134,7 +134,19 @@ def get_properties(row):
                 height = stream.get("height")
                 if width and height:
                     props["Resolution"] = f"{width} × {height}"
-                    break
+                if stream.get("codec_name"):
+                    props["Codec"] = stream["codec_name"].upper()
+                break
+
+        # Overall bitrate (format-level — more reliably present than a
+        # per-stream bit_rate, which many containers, mp4 included, don't
+        # always populate).
+        bit_rate = data.get("format", {}).get("bit_rate")
+        if bit_rate:
+            try:
+                props["Bitrate"] = f"{int(bit_rate) / 1_000_000:.1f} Mbps"
+            except (ValueError, TypeError):
+                pass
 
         return props
     except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:

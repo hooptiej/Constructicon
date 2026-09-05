@@ -14,6 +14,8 @@ PDF returns None/""  rather than raising, so a bad upload never breaks the
 upload response or the OCR background task that calls these.
 """
 
+import re
+from datetime import datetime
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -102,9 +104,26 @@ def extract_text_for_row(row):
     return extract_text(path) if path else ""
 
 
+def _parse_pdf_date(raw):
+    """PDF date strings look like 'D:20230615120000+00'00'' (ISO 8601-ish,
+    PDF's own format, not ISO). Returns a friendly 'Jun 15, 2023', or None
+    if `raw` is empty/unparseable."""
+    if not raw:
+        return None
+    m = re.match(r"D:(\d{4})(\d{2})(\d{2})", raw)
+    if not m:
+        return None
+    try:
+        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).strftime("%b %-d, %Y")
+    except ValueError:
+        return None
+
+
 def get_properties(row):
-    """ObjectTypeSpec.properties_fn for media_type='pdf' — returns page
-    count, or {} on any failure."""
+    """ObjectTypeSpec.properties_fn for media_type='pdf' — page count plus
+    whatever of title/author/creation-date the PDF's own metadata actually
+    has set (most PDFs have some but not all of these), or {} on any
+    failure."""
     path = _stored_path(row)
     if not path:
         return {}
@@ -113,8 +132,16 @@ def get_properties(row):
         if doc is None:
             return {}
         try:
-            page_count = doc.page_count
-            return {"Pages": str(page_count)}
+            props = {"Pages": str(doc.page_count)}
+            meta = doc.metadata or {}
+            if meta.get("title"):
+                props["Title"] = meta["title"]
+            if meta.get("author"):
+                props["Author"] = meta["author"]
+            created = _parse_pdf_date(meta.get("creationDate"))
+            if created:
+                props["Created"] = created
+            return props
         finally:
             doc.close()
     except Exception as e:

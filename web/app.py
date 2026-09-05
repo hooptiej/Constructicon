@@ -1096,8 +1096,13 @@ def api_clients(request: Request):
 
 def _to_project_option(project):
     """Slim shape for the upload drawer's Project dropdown — just enough to
-    populate a <select> and let the client hand project_id back on upload."""
-    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"]}
+    populate a <select> and let the client hand project_id back on upload.
+    parent_id (#133) is included too — project_detail.html's parent-project
+    selector reuses this same endpoint and needs it client-side to exclude
+    a project's own descendants from its own "choose a parent" dropdown
+    (the backend's cycle check is the real guard; this just keeps the
+    dropdown itself from offering a choice guaranteed to be rejected)."""
+    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"], "parent_id": project.get("parent_id")}
 
 
 @app.get("/api/projects")

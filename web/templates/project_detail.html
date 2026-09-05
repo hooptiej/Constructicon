@@ -127,8 +127,21 @@ async function loadParentProjects() {
   try {
     const res = await fetch('/api/projects');
     const projects = await res.json();
-    // Filter out this project and its descendants to prevent cycles
-    const validParents = projects.filter(p => p.id !== projectId);
+    // Filter out this project and its descendants to prevent cycles.
+    // The backend's cycle check (core/db.py's update_project) is the real
+    // guard — this is just keeping the dropdown from offering a choice
+    // guaranteed to be rejected.
+    const childrenByParent = {};
+    for (const p of projects) {
+      if (p.parent_id != null) (childrenByParent[p.parent_id] ||= []).push(p.id);
+    }
+    const excludedIds = new Set([projectId]);
+    let frontier = [projectId];
+    while (frontier.length) {
+      frontier = frontier.flatMap(id => childrenByParent[id] || []);
+      frontier.forEach(id => excludedIds.add(id));
+    }
+    const validParents = projects.filter(p => !excludedIds.has(p.id));
     const html = validParents
       .map(p => `<option value="${p.id}" ${p.id === currentParentId ? 'selected' : ''}>${p.title}</option>`)
       .join('');

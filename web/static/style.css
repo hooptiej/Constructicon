@@ -173,10 +173,19 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .dropzone.dragover { border-color: var(--accent); }
 .dropzone-text { font-size: 14px; color: var(--text-2-bright); }
 .dropzone-hint { font-size: 12px; color: var(--text-3); }
-.staged-file {
-  display: flex; align-items: center; gap: 14px; background: var(--card); border: 1px solid var(--border);
-  border-radius: 10px; padding: 12px 14px;
+.staged-files-container {
+  max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px;
+  padding: 6px 0; margin: 14px 0;
 }
+.staged-file {
+  display: flex; align-items: center; gap: 14px; background: var(--card); border: none;
+  border-radius: 0; padding: 12px 14px;
+  margin: 0; transition: background-color 0.3s ease;
+}
+.staged-file:first-child { border-radius: 9px 9px 0 0; }
+.staged-file:last-child { border-radius: 0 0 9px 9px; }
+.staged-file + .staged-file { border-top: 1px solid var(--border); }
+.staged-file.completed { background: var(--surface); }
 .staged-thumb {
   width: 52px; height: 52px; border-radius: 8px; background: var(--surface);
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -190,6 +199,11 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 }
 .staged-retry-ocr-btn:hover { color: var(--accent-hover); }
 .staged-remove { background: none; border: none; color: var(--text-3); cursor: pointer; flex-shrink: 0; }
+.staged-more-indicator {
+  display: flex; align-items: center; justify-content: center; padding: 12px 14px;
+  font-size: 12px; color: var(--text-2); background: var(--surface);
+  border-top: 1px solid var(--border); font-weight: 500;
+}
 .meta-form { width: 320px; flex-shrink: 0; background: var(--card); border: 1px solid var(--border);
   border-radius: 12px; padding: 22px; display: flex; flex-direction: column; gap: 15px; }
 .tag-input-box {

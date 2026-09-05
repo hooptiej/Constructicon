@@ -119,6 +119,7 @@
          and type-specific properties (dimensions, duration, etc.) #}
       {% if item.file_size_display or item.source_modified_at_display or item.properties %}
       <div class="content-meta-panel">
+        <span class="related-panel-label">Properties</span>
         <div class="detail-meta">
           {% if item.file_size_display %}<span>{{ item.file_size_display }}</span>{% endif %}
           {% if item.source_modified_at_display %}<span>Originally created {{ item.source_modified_at_display }}</span>{% endif %}

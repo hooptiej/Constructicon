@@ -26,10 +26,11 @@ from .. import storage
 # Standard pangram — demonstrates all letters + numbers
 PANGRAM = "The quick brown fox jumps over the lazy dog 0123456789"
 
-# Canvas dimensions for the glyph sample
-CANVAS_WIDTH = 800
-CANVAS_HEIGHT = 200
-FONT_SIZE = 48
+# Fixed font size; canvas is sized to fit the rendered pangram at this size
+# (see render_glyph_sample) rather than a fixed width, so wide fonts don't
+# get clipped at a hardcoded canvas edge.
+FONT_SIZE = 32
+CANVAS_PADDING = 20
 
 # Match the app's dark page background (from storage.py)
 BG_COLOR = (20, 23, 15)
@@ -52,12 +53,22 @@ def render_glyph_sample(path):
         # Load the font
         font = ImageFont.truetype(str(path), size=FONT_SIZE)
 
-        # Create canvas
-        img = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), BG_COLOR)
+        # Size the canvas to the pangram's actual rendered bounding box at
+        # this font, so wide fonts/strings don't get clipped at a hardcoded
+        # canvas width.
+        bbox = font.getbbox(PANGRAM)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        canvas_width = text_width + CANVAS_PADDING * 2
+        canvas_height = text_height + CANVAS_PADDING * 2
+
+        img = Image.new("RGB", (canvas_width, canvas_height), BG_COLOR)
         draw = ImageDraw.Draw(img)
 
-        # Draw the pangram
-        draw.text((20, 20), PANGRAM, font=font, fill=TEXT_COLOR)
+        # Draw the pangram, offsetting by bbox[0]/bbox[1] so a font with a
+        # non-zero left/top bearing still lands inside the padding rather
+        # than drifting off-canvas.
+        draw.text((CANVAS_PADDING - bbox[0], CANVAS_PADDING - bbox[1]), PANGRAM, font=font, fill=TEXT_COLOR)
 
         # Encode as PNG bytes
         buf = BytesIO()

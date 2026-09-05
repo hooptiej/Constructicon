@@ -13,6 +13,7 @@ import threading
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote, quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -306,18 +307,66 @@ def _project_has_tag(project, member_slugs):
     return any(item["slug"] in member_slugs for item in db.list_project_items(project["id"]))
 
 
-def _to_content_public(row):
+def _build_breadcrumbs(from_param, current_item_name):
+    """Build a breadcrumb trail for the object detail page based on the `from`
+    query parameter. Returns a list of dicts with "label" and "href" keys.
+    The last item (current_item_name) has no href since it's not a link.
+
+    #137: breadcrumb navigation on object detail page.
+    """
+    breadcrumbs = []
+
+    if not from_param:
+        # No from param — default to just Home
+        breadcrumbs.append({"label": "Home", "href": "/"})
+    elif from_param == "unfiled":
+        breadcrumbs.append({"label": "Home", "href": "/"})
+        breadcrumbs.append({"label": "Unfiled", "href": "/unfiled"})
+    elif from_param.startswith("project:"):
+        # Extract project slug and look up the project
+        project_slug = from_param[8:]  # Remove "project:" prefix
+        project = db.get_project(project_slug)
+        if project:
+            breadcrumbs.append({"label": "Home", "href": "/"})
+            # No dedicated projects index route, so Projects links to home
+            breadcrumbs.append({"label": "Projects", "href": "/"})
+            breadcrumbs.append({"label": project["title"], "href": f"/project/{project_slug}"})
+        else:
+            # Project doesn't exist or was deleted — fall back to Home only
+            breadcrumbs.append({"label": "Home", "href": "/"})
+    elif from_param.startswith("user:"):
+        # Extract and URL-decode the uploader name
+        uploader = unquote(from_param[5:])  # Remove "user:" prefix
+        breadcrumbs.append({"label": "Home", "href": "/"})
+        breadcrumbs.append({"label": f"{uploader}'s uploads", "href": f"/gallery/user/{quote(uploader)}"})
+    else:
+        # Unrecognized from param — default to Home
+        breadcrumbs.append({"label": "Home", "href": "/"})
+
+    # Add the current item as a non-linked breadcrumb
+    breadcrumbs.append({"label": current_item_name, "href": None})
+
+    return breadcrumbs
+
+
+def _to_content_public(row, project_slug=None):
     """Public shape for a project-item card. Broader than _to_public: a
     project can contain backfilled youtube/document posts as well as real
     uploaded files, and those have no filename/stored_filename to build a
     thumb from (see core/db.py's insert_content) — but every row, regardless
     of media_type, now gets its own local /object/<slug> detail page, so
     cards always link locally instead of bouncing straight to external_url.
+
+    If project_slug is provided, appends ?from=project:{project_slug} to the
+    link for breadcrumb navigation (#137).
     """
     is_file = bool(row.get("filename"))
     media_type = row.get("media_type") or "image"
     spec = object_types.get_object_type(media_type)
     has_thumb = _has_thumbnail(row)
+    link = f"/object/{row['slug']}"
+    if project_slug:
+        link = f"{link}?from=project:{project_slug}"
     return {
         "slug": row["slug"],
         "title": row.get("content_description") or row.get("description") or row.get("filename") or row["slug"],
@@ -326,7 +375,7 @@ def _to_content_public(row):
         "type_badge": spec.badge_text,
         "is_file": is_file,
         "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb and not row.get("redacted") else None,
-        "link": f"/object/{row['slug']}",
+        "link": link,
         "external": not is_file,
         "tags": row["tags"],
         "content_date": row.get("content_date"),
@@ -577,7 +626,7 @@ def project_detail_page(request: Request, slug: str):
     project = db.get_project(slug)
     if project is None:
         raise HTTPException(status_code=404, detail="not found")
-    items = [_to_content_public(r) for r in db.list_project_items(project["id"])]
+    items = [_to_content_public(r, project_slug=slug) for r in db.list_project_items(project["id"])]
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
@@ -634,9 +683,12 @@ def object_detail_page(request: Request, slug: str):
     # content-only row (youtube, document posts), not just non-file types.
     # Always computed now so every object type gets the same panel.
     related = [_to_public(r) for r in db.list_related(slug)]
+    # #137: breadcrumb navigation — read the from param and build the breadcrumb list
+    from_param = request.query_params.get("from")
+    breadcrumbs = _build_breadcrumbs(from_param, item["display_name"])
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related},
+        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs},
     )
 
 

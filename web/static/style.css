@@ -436,6 +436,14 @@ body.delete-mode-on .card-select-row { display: flex; }
 /* --- Image detail page --- */
 .back-link { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
 .back-link:hover { color: var(--accent); }
+
+/* #137: breadcrumb navigation — replaced back-link with breadcrumb trail */
+.breadcrumb-nav { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); flex-wrap: wrap; }
+.breadcrumb-link { color: var(--text-2); text-decoration: none; }
+.breadcrumb-link:hover { color: var(--accent); }
+.breadcrumb-separator { color: var(--text-3); margin: 0 2px; }
+.breadcrumb-current { color: var(--text-2); font-weight: 500; }
+
 .detail-layout { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
 .detail-main { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 16px; }
 .detail-preview {

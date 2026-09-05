@@ -684,17 +684,28 @@ body.delete-mode-on .card-select-row { display: flex; }
 .home-col-header .filter-select { min-width: 0; padding: 6px 10px; font-size: 12px; }
 
 .home-widget-primary .home-col-header h2 { font-size: 19px; font-weight: 600; }
-.home-widget-primary .projects-container { display: flex; flex-direction: column; gap: 22px; }
-.home-widget-primary #featured-project { min-height: 0; }
-.home-widget-primary .project-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 22px; }
+/* #featured-project and #projects-grid used to be two stacked flex
+   siblings (flex-direction: column) — the featured card was never
+   actually a grid item, so no CSS on it could make regular cards sit
+   beside it. .projects-container is now the ONE grid both live in:
+   #featured-project spans 2 tracks directly, and #projects-grid (still
+   its own element, for the JS that populates it) is display:contents so
+   its .project-card children are promoted to direct grid items here too
+   — that's what lets auto-placement flow a card into the row alongside
+   the featured one instead of starting a new row underneath it. */
+.home-widget-primary .projects-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 22px;
+}
+.home-widget-primary #featured-project { grid-column: span 2; min-height: 0; }
+.home-widget-primary #projects-grid { display: contents; }
 .home-widget-primary .project-cover { height: 160px; }
 
-/* Featured project card — larger and more prominent than regular grid cards,
-   but only spans 2 of the project-grid's auto-fill columns (not the whole
-   row) so a row of regular smaller cards can sit alongside it rather than
-   forcing it alone on its own full-width row. */
+/* Featured project card fills whatever grid cell #featured-project (its
+   parent, and the actual grid item — see above) gives it. */
 .project-card-featured {
-  grid-column: span 2;
+  height: 100%;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0;
@@ -755,6 +766,12 @@ body.delete-mode-on .card-select-row { display: flex; }
 @media (max-width: 768px) {
   .home-widgets {
     grid-template-columns: 1fr;
+  }
+  .home-widget-primary .projects-container {
+    grid-template-columns: 1fr;
+  }
+  .home-widget-primary #featured-project {
+    grid-column: auto;
   }
   .project-card-featured {
     display: flex;

@@ -635,7 +635,8 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .home-gallery-grid .gallery-thumb {
   width: 100%;
-  height: 90px;
+  height: auto;
+  aspect-ratio: 3 / 4;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   border-right: none;
@@ -688,9 +689,12 @@ body.delete-mode-on .card-select-row { display: flex; }
 .home-widget-primary .project-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 22px; }
 .home-widget-primary .project-cover { height: 160px; }
 
-/* Featured project card — larger and more prominent than regular grid cards */
+/* Featured project card — larger and more prominent than regular grid cards,
+   but only spans 2 of the project-grid's auto-fill columns (not the whole
+   row) so a row of regular smaller cards can sit alongside it rather than
+   forcing it alone on its own full-width row. */
 .project-card-featured {
-  grid-column: 1 / -1;
+  grid-column: span 2;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0;
@@ -698,25 +702,25 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .project-card-featured .project-cover {
   height: auto;
-  min-height: 240px;
+  min-height: 170px;
   grid-column: 1;
   grid-row: 1 / -1;
 }
 .project-card-featured .project-body {
-  padding: 24px;
-  font-size: 15.5px;
+  padding: 18px;
+  font-size: 14px;
   grid-column: 2;
   display: flex;
   justify-content: center;
 }
 .project-card-featured .project-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .project-card-featured .project-desc {
-  font-size: 13.5px;
-  line-height: 1.6;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .home-widget-compact { gap: 10px; }

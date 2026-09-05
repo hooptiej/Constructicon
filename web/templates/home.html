@@ -46,15 +46,19 @@
       {% include "_category_tiles.html" %}
 
       {% if projects %}
-      <div class="project-grid" id="projects-grid"></div>
+      <div class="projects-container">
+        <div class="featured-project" id="featured-project"></div>
+        <div class="project-grid" id="projects-grid"></div>
+      </div>
       <script>
       (function () {
         function escapeHtml(str) {
           return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         }
-        function projectCardHtml(p) {
+        function projectCardHtml(p, isFeatured = false) {
+          const cardClass = isFeatured ? 'project-card project-card-featured' : 'project-card';
           return `
-            <a class="project-card" href="/project/${p.slug}">
+            <a class="${cardClass}" href="/project/${p.slug}">
               <div class="project-cover">
                 ${p.cover_url ? `<img src="${p.cover_url}" loading="lazy" alt="">` : `<div class="project-cover-placeholder"></div>`}
               </div>
@@ -69,15 +73,43 @@
         }
         const projects = {{ projects | tojson }};
         const grid = document.getElementById('projects-grid');
+        const featuredContainer = document.getElementById('featured-project');
         const sortSelect = document.getElementById('projects-sort');
         const SORTERS = {
           newest: (a, b) => b.created_at - a.created_at,
           oldest: (a, b) => a.created_at - b.created_at,
           az: (a, b) => a.title.localeCompare(b.title),
         };
+
+        // Select a featured project: prefer non-archived with cover_url, fallback to any non-archived
+        function selectFeaturedProject() {
+          const nonArchived = projects.filter(p => p.status !== 'archived');
+          if (nonArchived.length === 0) return null;
+
+          // Prefer projects with cover images
+          const withCover = nonArchived.filter(p => p.cover_url);
+          const candidates = withCover.length > 0 ? withCover : nonArchived;
+
+          // Random selection
+          return candidates[Math.floor(Math.random() * candidates.length)];
+        }
+
         function render() {
-          const sorted = projects.slice().sort(SORTERS[sortSelect.value]);
-          grid.innerHTML = sorted.map(projectCardHtml).join('');
+          const featured = selectFeaturedProject();
+          const sortedFull = projects.slice().sort(SORTERS[sortSelect.value]);
+
+          // Render featured if available
+          if (featured) {
+            featuredContainer.innerHTML = projectCardHtml(featured, true);
+          } else {
+            featuredContainer.innerHTML = '';
+          }
+
+          // Render grid, excluding the featured project
+          const gridProjects = featured
+            ? sortedFull.filter(p => p.slug !== featured.slug)
+            : sortedFull;
+          grid.innerHTML = gridProjects.map(p => projectCardHtml(p, false)).join('');
         }
         sortSelect.addEventListener('change', render);
         render();
@@ -89,6 +121,14 @@
       </p>
       {% endif %}
     </div>
+
+    <!-- #139 Part 2: right column wrapper for Unfiled and Files widgets.
+         Holds both compact widgets that share the right 1/3 of the 2-column
+         layout, stacked vertically within that column. Shows only if at
+         least one of Unfiled or Files has content. -->
+    {% if unfiled_items or recent_by_type %}
+    <div class="home-widgets-right-column">
+    {% endif %}
 
     <!-- #41: uploads with no project membership — always visible here (not
          just behind the gallery pop-out) so the home page never looks
@@ -348,6 +388,11 @@
       });
     })();
     </script>
+    {% endif %}
+
+    <!-- Close right column wrapper if it was opened -->
+    {% if unfiled_items or recent_by_type %}
+    </div>
     {% endif %}
   </div>
 </div>

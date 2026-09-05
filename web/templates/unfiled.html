@@ -292,6 +292,16 @@
       lastTaggedSlugs = slugs;
       pendingTags.length = 0;
       renderPendingTags();
+      // #125: a tagged item is no longer "unfiled" (list_unfiled_items
+      // excludes anything with a non-empty tags array), so drop it from the
+      // local grid immediately instead of leaving the cards showing as
+      // before with no visible sign the tag actually applied — previously
+      // the only feedback was this followup bar, easy to miss/dismiss,
+      // while the tagged cards sat there unchanged until a manual reload.
+      items = items.filter(item => !slugs.includes(item.slug));
+      slugs.forEach(s => selectedSlugs.delete(s));
+      render();
+      updateSelectionBar();
       followup.style.display = 'flex';
     } else {
       alert('Failed to apply tags.');

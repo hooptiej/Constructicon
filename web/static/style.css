@@ -633,6 +633,14 @@ body.delete-mode-on .card-select-row { display: flex; }
 .home-gallery-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, 100px);
+  /* auto-fill with a fixed track size leaves whatever doesn't evenly
+     divide as empty space, and grid's default justify-content: start
+     dumps all of it on the right edge — worse, that leftover amount
+     changes with viewport width, so the gap looked "funky"/inconsistent
+     rather than just present. space-evenly spreads it as gaps between
+     and around the tiles instead, so the row always looks evenly laid
+     out regardless of exactly how many 100px tiles fit. */
+  justify-content: space-evenly;
   gap: 12px;
 }
 /* Gallery cards in the home grid are locked to a specific size (100x133,

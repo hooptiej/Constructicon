@@ -26,6 +26,8 @@
   <div>
     <h2 class="gallery-drawer-section-title">Upload</h2>
     <form id="upload-form">
+      <p class="error-text" id="upload-error" style="display:none;margin-bottom:12px"></p>
+      <button class="btn-primary" type="submit" id="submit-btn" style="margin-bottom:14px" disabled>Upload to repo</button>
       <label class="dropzone" id="dropzone" for="file-input">
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
           <path d="M12 16V6M12 6L8 10M12 6L16 10" stroke="#6E6B57" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
@@ -46,7 +48,10 @@
           <button type="button" class="btn-secondary" id="youtube-add-btn">Add</button>
         </div>
       </div>
-      <div id="staged-list"></div>
+      <div id="staged-files-container" class="staged-files-container">
+        <div id="staged-list"></div>
+        <div id="staged-more-indicator" class="staged-more-indicator" style="display:none"></div>
+      </div>
       <div class="meta-form">
         <div class="field">
           <label>DESCRIPTION</label>
@@ -66,8 +71,6 @@
           </select>
           <input class="input mono" id="upload-new-project-input" placeholder="New project name" style="display:none;margin-top:6px">
         </div>
-        <p class="error-text" id="upload-error" style="display:none"></p>
-        <button class="btn-primary" type="submit" id="submit-btn" style="margin-top:4px" disabled>Upload to repo</button>
       </div>
     </form>
   </div>
@@ -199,6 +202,8 @@
   // --- Upload form (moved from _upload_drawer.html, unchanged logic) ----
   const fileInput = document.getElementById('file-input');
   const stagedList = document.getElementById('staged-list');
+  const stagedFilesContainer = document.getElementById('staged-files-container');
+  const stagedMoreIndicator = document.getElementById('staged-more-indicator');
   const dropzoneText = document.getElementById('dropzone-text');
   const tagBox = document.getElementById('upload-tag-box');
   const tagAddInput = document.getElementById('upload-tag-add-input');
@@ -212,6 +217,17 @@
   let stagedFiles = [];
   let fileStates = [];
   let isUploading = false;
+  const MAX_VISIBLE_FILES = 3;
+  // Files that have finished (paused briefly, then hidden) or been manually
+  // removed mid-batch — indexes into stagedFiles/fileStates. Deliberately
+  // NOT spliced out of those arrays: runWithConcurrency's lanes each hold a
+  // FIXED index captured when the batch started, and splicing mid-batch
+  // would shift every later index down, causing a still-in-flight lane's
+  // updateFileStatus call to land on the wrong (shifted) file. Hiding via
+  // this set instead keeps indices stable for the whole batch; the arrays
+  // only actually shrink/reset between batches, where dismissedIndices is
+  // reset alongside them.
+  let dismissedIndices = new Set();
 
   const YOUTUBE_URL_RE = /(?:v=|\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{6,})/;
 
@@ -228,6 +244,16 @@
     const existingSlug = fileStates[i] && fileStates[i].slug;
     fileStates[i] = { status, message: message || STATUS_META[status].label, slug: slug !== undefined ? slug : existingSlug };
     renderStaged();
+
+    // Pause briefly on the completed state so the user sees the success/
+    // failure feedback, then hide it — the next queued file backfills into
+    // the visible slots.
+    if ((status === 'done' || status === 'ocr-failed') && isUploading) {
+      setTimeout(() => {
+        dismissedIndices.add(i);
+        renderStaged();
+      }, 900);
+    }
   }
 
   function updateSubmitButton() {
@@ -248,64 +274,89 @@
 
   function renderStaged() {
     stagedList.innerHTML = '';
-    dropzoneText.textContent = stagedFiles.length
-      ? `${stagedFiles.length} item${stagedFiles.length > 1 ? 's' : ''} staged — drop more or click to add`
-      : 'Drag files here or click to browse';
-    stagedFiles.forEach((file, i) => {
-      const row = document.createElement('div');
-      row.className = 'staged-file';
-      row.style.marginTop = i === 0 ? '16px' : '8px';
-      row.innerHTML = `
-        <div class="staged-thumb">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-            <rect x="3" y="4" width="18" height="16" rx="2" stroke="#57543F" stroke-width="1.4"/>
-            <circle cx="8" cy="9" r="1.6" stroke="#57543F" stroke-width="1.4"/>
-            <path d="M3 16L8.5 11.5L13 15L16.5 12L21 16" stroke="#57543F" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
-        <div style="flex:1;min-width:0">
-          <div class="staged-name mono"></div>
-          <div class="staged-meta"></div>
-        </div>
-        <button type="button" class="staged-remove">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="#6E6B57" stroke-width="2" stroke-linecap="round"/></svg>
-        </button>`;
-      row.querySelector('.staged-name').textContent = file.name;
-      const state = fileStates[i];
-      const metaEl = row.querySelector('.staged-meta');
-      if (state) {
-        const meta = STATUS_META[state.status];
-        let metaHtml = `<span class="staged-status-dot" style="background:${meta.dot}"></span>${state.message}`;
-        if (state.status === 'ocr-failed' && state.slug) {
-          metaHtml += ` <button type="button" class="staged-retry-ocr-btn" data-index="${i}">Retry</button>`;
+    stagedMoreIndicator.style.display = 'none';
+    stagedMoreIndicator.textContent = '';
+
+    const activeIndices = stagedFiles.map((_, idx) => idx).filter(idx => !dismissedIndices.has(idx));
+
+    if (activeIndices.length === 0) {
+      stagedFilesContainer.style.display = 'none';
+      dropzoneText.textContent = 'Drag files here or click to browse';
+    } else {
+      stagedFilesContainer.style.display = 'block';
+      dropzoneText.textContent = `${activeIndices.length} item${activeIndices.length > 1 ? 's' : ''} staged — drop more or click to add`;
+
+      const visibleIndices = activeIndices.slice(0, MAX_VISIBLE_FILES);
+      for (const i of visibleIndices) {
+        const file = stagedFiles[i];
+        const row = document.createElement('div');
+        row.className = 'staged-file';
+        row.innerHTML = `
+          <div class="staged-thumb">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <rect x="3" y="4" width="18" height="16" rx="2" stroke="#57543F" stroke-width="1.4"/>
+              <circle cx="8" cy="9" r="1.6" stroke="#57543F" stroke-width="1.4"/>
+              <path d="M3 16L8.5 11.5L13 15L16.5 12L21 16" stroke="#57543F" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div class="staged-name mono"></div>
+            <div class="staged-meta"></div>
+          </div>
+          <button type="button" class="staged-remove">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="#6E6B57" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>`;
+        row.querySelector('.staged-name').textContent = file.name;
+        const state = fileStates[i];
+        const metaEl = row.querySelector('.staged-meta');
+        if (state) {
+          const meta = STATUS_META[state.status];
+          let metaHtml = `<span class="staged-status-dot" style="background:${meta.dot}"></span>${state.message}`;
+          if (state.status === 'ocr-failed' && state.slug) {
+            metaHtml += ` <button type="button" class="staged-retry-ocr-btn" data-index="${i}">Retry</button>`;
+          }
+          metaEl.innerHTML = metaHtml;
+          const retryBtn = metaEl.querySelector('.staged-retry-ocr-btn');
+          if (retryBtn) {
+            retryBtn.addEventListener('click', (e) => {
+              e.preventDefault();
+              retryOcrForStagedFile(i);
+            });
+          }
+          if (state.status === 'done' || state.status === 'ocr-failed') {
+            row.classList.add('completed');
+          }
+        } else {
+          metaEl.textContent = file.__isYoutube
+            ? 'YouTube link — ready to add'
+            : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
         }
-        metaEl.innerHTML = metaHtml;
-        const retryBtn = metaEl.querySelector('.staged-retry-ocr-btn');
-        if (retryBtn) {
-          retryBtn.addEventListener('click', (e) => {
+        const removeBtn = row.querySelector('.staged-remove');
+        if (state && (state.status === 'uploading' || state.status === 'ocr-pending')) {
+          removeBtn.style.visibility = 'hidden';
+        } else {
+          removeBtn.addEventListener('click', (e) => {
             e.preventDefault();
-            retryOcrForStagedFile(i);
+            if (isUploading) {
+              dismissedIndices.add(i);
+              renderStaged();
+            } else {
+              stagedFiles.splice(i, 1);
+              fileStates.splice(i, 1);
+              renderStaged();
+              updateSubmitButton();
+            }
           });
         }
-      } else {
-        metaEl.textContent = file.__isYoutube
-          ? 'YouTube link — ready to add'
-          : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
+        stagedList.appendChild(row);
       }
-      const removeBtn = row.querySelector('.staged-remove');
-      if (state && (state.status === 'uploading' || state.status === 'ocr-pending')) {
-        removeBtn.style.visibility = 'hidden';
-      } else {
-        removeBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          stagedFiles.splice(i, 1);
-          fileStates.splice(i, 1);
-          renderStaged();
-          updateSubmitButton();
-        });
+
+      if (activeIndices.length > MAX_VISIBLE_FILES) {
+        const moreCount = activeIndices.length - MAX_VISIBLE_FILES;
+        stagedMoreIndicator.textContent = `+ ${moreCount} more queued`;
+        stagedMoreIndicator.style.display = 'flex';
       }
-      stagedList.appendChild(row);
-    });
+    }
     updateSubmitButton();
   }
 
@@ -561,6 +612,7 @@
     uploadError.style.display = 'none';
     if (!stagedFiles.length || isUploading) return;
     isUploading = true;
+    dismissedIndices = new Set();
     submitBtn.disabled = true;
     submitBtn.textContent = 'Uploading...';
 
@@ -618,18 +670,23 @@
     if (failures.length === 0) {
       stagedFiles = [];
       fileStates = [];
+      dismissedIndices = new Set();
       renderStaged();
       pinned = false;
       scheduleHide(0);
       return;
     }
 
+    // stagedFiles/fileStates are still the full original batch here, indices
+    // matching results 1:1 — completed ones were only ever dismissed for
+    // display, never spliced out, so this alignment holds.
     const keptFiles = [], keptStates = [];
     stagedFiles.forEach((f, i) => {
       if (!results[i].ok) { keptFiles.push(f); keptStates.push(fileStates[i]); }
     });
     stagedFiles = keptFiles;
     fileStates = keptStates;
+    dismissedIndices = new Set();
     renderStaged();
     uploadError.textContent = `Some uploads failed: ${failures.join('; ')}`;
     uploadError.style.display = 'block';

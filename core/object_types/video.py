@@ -11,6 +11,7 @@ video, ffmpeg missing/erroring, zero-duration video) rather than raising,
 same as every other type's capture routine (see core/object_types/pdf.py).
 """
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -88,6 +89,59 @@ def capture_thumbnail(row):
     return None
 
 
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='video' — returns duration
+    and resolution using ffprobe, or {} on any failure."""
+    path = _stored_path(row)
+    if not path:
+        return {}
+
+    try:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration:stream=width,height",
+            "-of", "json",
+            str(path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=20, text=True)
+        if result.returncode != 0:
+            return {}
+
+        data = json.loads(result.stdout)
+        props = {}
+
+        # Extract duration
+        duration_sec = data.get("format", {}).get("duration")
+        if duration_sec:
+            try:
+                duration_sec = float(duration_sec)
+                minutes = int(duration_sec // 60)
+                seconds = int(duration_sec % 60)
+                hours = minutes // 60
+                if hours > 0:
+                    props["Duration"] = f"{hours}:{minutes % 60:02d}:{seconds:02d}"
+                else:
+                    props["Duration"] = f"{minutes}:{seconds:02d}"
+            except (ValueError, TypeError):
+                pass
+
+        # Extract resolution (width x height from first video stream)
+        streams = data.get("streams", [])
+        for stream in streams:
+            if stream.get("codec_type") == "video":
+                width = stream.get("width")
+                height = stream.get("height")
+                if width and height:
+                    props["Resolution"] = f"{width} × {height}"
+                    break
+
+        return props
+    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
+        print(f"Video properties extraction failed for {path}: {e!r}")
+        return {}
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
@@ -98,6 +152,7 @@ register(ObjectTypeSpec(
     ocr_capable=False,
     extensions=frozenset({".mov", ".mp4"}),
     capture_fn=capture_thumbnail,
+    properties_fn=get_properties,
     badge_icon="\U0001F3AC",
     badge_text="VIDEO",
 ))

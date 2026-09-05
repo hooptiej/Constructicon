@@ -77,6 +77,17 @@ class ObjectTypeSpec:
     # text layer to try (an uploaded screenshot goes straight to OCR, same
     # as always).
     text_extract_fn: object = None
+    # Issue #135: (row: dict) -> dict[str, str] of type-specific properties
+    # suitable for display on the object detail page. Returns an ordered dict
+    # of label → display-value pairs (e.g. {"Dimensions": "1920 × 1080"} for
+    # images, {"Duration": "3:42"} for video). Return {} on any failure
+    # (corrupt/missing file, extraction error), same best-effort discipline
+    # as text_extract_fn and capture_fn — never raise, print a warning and
+    # return the empty dict. Leave None for types that have no computed
+    # properties to display. web/app.py calls this defensively and routes the
+    # result to the template for generic iteration (no per-type template
+    # branches needed).
+    properties_fn: object = None
     # Issue #12: what the "file kind" badge shown on gallery tiles and the
     # object detail page looks like for this type. badge_icon is a single
     # glyph/emoji for the compact tile-corner badge; badge_text is a short

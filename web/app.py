@@ -153,6 +153,34 @@ def _friendly_datetime(epoch):
     return f"{_friendly_date(epoch)} at {hour12}:{dt.minute:02d} {ampm}"
 
 
+def _friendly_file_size(size_bytes):
+    """Convert a file size in bytes to a human-readable string (e.g.,
+    '1.2 MB', '340 KB', '12 B'). Returns None if size_bytes is None."""
+    if size_bytes is None:
+        return None
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+
+def _call_properties_fn(spec, row):
+    """Call the spec's properties_fn if it exists, with defensive error
+    handling. Returns {} on any failure, same best-effort discipline as
+    core/ocr.py/core/thumbnails.py's defensive-call patterns."""
+    if not spec.properties_fn:
+        return {}
+    try:
+        return spec.properties_fn(row) or {}
+    except Exception as e:
+        print(f"properties_fn failed for {row.get('slug')}: {e!r}")
+        return {}
+
+
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif")
 
 
@@ -223,6 +251,16 @@ def _to_object_detail(row):
         "redacted": bool(row["redacted"]),
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
+        # #135: file size and original modification date for the Properties panel
+        "file_size": row.get("file_size"),
+        "file_size_display": _friendly_file_size(row.get("file_size")),
+        "source_modified_at_display": _friendly_date(row.get("source_modified_at")),
+        # #135: type-specific properties (dimensions, duration, etc.) via the
+        # properties_fn hook, wrapped in defensive try/except at the call site
+        # (properties_fn implementations are best-effort internally; this adds
+        # a second layer of safety matching core/ocr.py/core/thumbnails.py's
+        # defensive-call pattern).
+        "properties": _call_properties_fn(spec, row),
     }
 
 

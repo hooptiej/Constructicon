@@ -5,10 +5,17 @@
 {% include "_upload_drawer.html" %}
 {% include "_admin_pane.html" %}
 <div class="app-main">
-  <a class="back-link" href="/">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    Back
-  </a>
+  {# #137: breadcrumb navigation trail, replaced hardcoded back link #}
+  <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+    {% for crumb in breadcrumbs %}
+      {% if crumb.href %}
+        <a href="{{ crumb.href }}" class="breadcrumb-link">{{ crumb.label }}</a>
+        <span class="breadcrumb-separator">›</span>
+      {% else %}
+        <span class="breadcrumb-current">{{ crumb.label }}</span>
+      {% endif %}
+    {% endfor %}
+  </nav>
   <div class="detail-layout">
     <div class="detail-main">
       <div class="detail-preview">

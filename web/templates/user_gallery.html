@@ -32,6 +32,7 @@
   <p class="empty-state" id="empty-state" {% if items %}style="display:none"{% endif %}>No uploads yet.</p>
 </div>
 <script>
+const uploaderName = {{ uploader | tojson }};
 const CLIENT_COLORS = {};
 const PALETTE = ["#B98B5E", "#8B7355", "#C9A66B", "#7FA37C", "#9CAD5E"];
 function colorFor(client) {
@@ -84,8 +85,9 @@ function updateSelectionBar() {
 
 function cardHtml(item) {
   const isImage = item.has_thumbnail;
+  const fromParam = `user:${encodeURIComponent(uploaderName)}`;
   return `
-    <a href="/object/${item.slug}" class="gallery-card">
+    <a href="/object/${item.slug}?from=${fromParam}" class="gallery-card">
       <div class="gallery-thumb${item.redacted ? ' redacted-thumb' : ''}">
         ${item.redacted ? LOCK_ICON : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON)}
         ${item.type_icon ? `<span class="type-badge-corner" title="${escapeHtml(item.type_label || item.type_badge || '')}">${item.type_icon}</span>` : ''}

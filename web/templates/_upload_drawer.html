@@ -91,6 +91,16 @@
   let fileStates = []; // parallel to stagedFiles once upload starts — empty before submit
   let isUploading = false;
   const MAX_VISIBLE_FILES = 3;
+  // Files that have finished (paused briefly, then hidden) or been manually
+  // removed — indexes into stagedFiles/fileStates. Deliberately NOT spliced
+  // out of those arrays: runWithConcurrency's lanes each hold a FIXED index
+  // captured when the batch started, and splicing mid-batch would shift
+  // every later index down, causing a still-in-flight lane's updateFileStatus
+  // call to land on the wrong (shifted) file. Hiding via this set instead
+  // keeps indices stable for the whole batch; the arrays only actually
+  // shrink/reset between batches (see the submit handler's success/failure
+  // tails), where dismissedIndices is reset alongside them.
+  let dismissedIndices = new Set();
 
   // Mirrors object_types.py's YOUTUBE_ID_RE server-side — used here only to
   // give immediate client-side feedback before ever hitting the network;
@@ -120,8 +130,7 @@
     // into the visible 3 slots.
     if ((status === 'done' || status === 'ocr-failed') && isUploading) {
       setTimeout(() => {
-        stagedFiles.splice(i, 1);
-        fileStates.splice(i, 1);
+        dismissedIndices.add(i);
         renderStaged();
       }, 900);
     }
@@ -148,16 +157,18 @@
     stagedMoreIndicator.style.display = 'none';
     stagedMoreIndicator.textContent = '';
 
-    if (stagedFiles.length === 0) {
+    const activeIndices = stagedFiles.map((_, idx) => idx).filter(idx => !dismissedIndices.has(idx));
+
+    if (activeIndices.length === 0) {
       stagedFilesContainer.style.display = 'none';
       dropzoneText.textContent = 'Drag files here or click to browse';
     } else {
       stagedFilesContainer.style.display = 'block';
-      dropzoneText.textContent = `${stagedFiles.length} item${stagedFiles.length > 1 ? 's' : ''} staged — drop more or click to add`;
+      dropzoneText.textContent = `${activeIndices.length} item${activeIndices.length > 1 ? 's' : ''} staged — drop more or click to add`;
 
-      // Render only the first MAX_VISIBLE_FILES files
-      const visibleCount = Math.min(stagedFiles.length, MAX_VISIBLE_FILES);
-      for (let i = 0; i < visibleCount; i++) {
+      // Render only the first MAX_VISIBLE_FILES still-active files
+      const visibleIndices = activeIndices.slice(0, MAX_VISIBLE_FILES);
+      for (const i of visibleIndices) {
         const file = stagedFiles[i];
         const row = document.createElement('div');
         row.className = 'staged-file';
@@ -208,18 +219,30 @@
         } else {
           removeBtn.addEventListener('click', (e) => {
             e.preventDefault();
-            stagedFiles.splice(i, 1);
-            fileStates.splice(i, 1);
-            renderStaged();
-            updateSubmitButton();
+            if (isUploading) {
+              // Mid-batch (this file just hasn't been picked up by a lane
+              // yet): dismiss rather than splice, same reasoning as the
+              // completion-timeout above — other staged files' lanes hold
+              // fixed indices into these same arrays, and splicing would
+              // shift them.
+              dismissedIndices.add(i);
+              renderStaged();
+            } else {
+              // Pre-upload: no lanes exist yet, a real splice is safe and
+              // keeps stagedFiles/updateSubmitButton's counts simple.
+              stagedFiles.splice(i, 1);
+              fileStates.splice(i, 1);
+              renderStaged();
+              updateSubmitButton();
+            }
           });
         }
         stagedList.appendChild(row);
       }
 
-      // Show the "+X more" indicator if there are files beyond the visible 3
-      if (stagedFiles.length > MAX_VISIBLE_FILES) {
-        const moreCount = stagedFiles.length - MAX_VISIBLE_FILES;
+      // Show the "+X more" indicator if there are active files beyond the visible 3
+      if (activeIndices.length > MAX_VISIBLE_FILES) {
+        const moreCount = activeIndices.length - MAX_VISIBLE_FILES;
         stagedMoreIndicator.textContent = `+ ${moreCount} more queued`;
         stagedMoreIndicator.style.display = 'flex';
       }
@@ -509,6 +532,7 @@
     uploadError.style.display = 'none';
     if (!stagedFiles.length || isUploading) return;
     isUploading = true;
+    dismissedIndices = new Set();
     submitBtn.disabled = true;
     submitBtn.textContent = 'Uploading...';
 
@@ -575,18 +599,23 @@
     if (failures.length === 0) {
       stagedFiles = [];
       fileStates = [];
+      dismissedIndices = new Set();
       renderStaged();
       closeDrawer();
       return;
     }
 
     // Keep only the ones that actually failed staged, so they're easy to retry.
+    // (stagedFiles/fileStates are still the full original batch here, indices
+    // matching results 1:1 — completed ones were only ever dismissed for
+    // display, never spliced out, so this alignment holds.)
     const keptFiles = [], keptStates = [];
     stagedFiles.forEach((f, i) => {
       if (!results[i].ok) { keptFiles.push(f); keptStates.push(fileStates[i]); }
     });
     stagedFiles = keptFiles;
     fileStates = keptStates;
+    dismissedIndices = new Set();
     renderStaged();
     uploadError.textContent = `Some uploads failed: ${failures.join('; ')}`;
     uploadError.style.display = 'block';

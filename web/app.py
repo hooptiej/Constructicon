@@ -592,7 +592,7 @@ def healthz():
 # --- Pages ---
 
 @app.get("/", response_class=HTMLResponse)
-def home_page(request: Request, tag: str = ""):
+def home_page(request: Request, tag: str = "", scope: str = "top"):
     """Home is the gallery itself (left third) plus a curated Projects
     section (right two-thirds) — see README's Projects/tag-tree note for why
     projects and blog_tags are separate concepts. ?tag=<slug> filters the
@@ -604,16 +604,28 @@ def home_page(request: Request, tag: str = ""):
     selected_tag = None
     if tag:
         selected_tag = next((t for t in _flatten_tags(tag_tree) if t["slug"] == tag), None)
-    # #154: the pill row should only surface organic topics and top-level
-    # projects, not every child project's auto-linked tag — but selected_tag
-    # above is matched against the full tree so a direct ?tag= link to a
-    # hidden pill still filters correctly.
-    child_project_tag_ids = set(db.list_child_project_tag_ids())
-    top_level_tag_tree = [t for t in tag_tree if t["id"] not in child_project_tag_ids]
+    all_projects = db.list_projects()
+    # #173: the pill row is a project filter, not a general tag browser —
+    # pills are derived from projects themselves (via each project's linked
+    # tag_id), not from every root-level blog_tags row. This naturally
+    # excludes pre-Projects "category" tags with no matching project (e.g.
+    # "AlienWhoop & TinyShark") that #154's child-project-only exclusion
+    # missed, and ?scope=all opts into including child projects' pills too.
+    # selected_tag above still matches against the full tag tree, so a
+    # direct ?tag= link works regardless of which pills are shown.
+    tags_by_id = {t["id"]: t for t in _flatten_tags(tag_tree)}
+    pill_source = all_projects if scope == "all" else [p for p in all_projects if p.get("parent_id") is None]
+    project_pills, seen_tag_ids = [], set()
+    for p in sorted(pill_source, key=lambda p: p["title"]):
+        pill_tag = tags_by_id.get(p.get("tag_id"))
+        if not pill_tag or pill_tag["id"] in seen_tag_ids:
+            continue
+        seen_tag_ids.add(pill_tag["id"])
+        project_pills.append({**pill_tag, "name": p["title"]})
     # #149: only top-level projects belong on the front-page widget — a
     # child project (parent_id set, #133) is reached via its parent's
     # project detail page, not as its own tile here.
-    projects = [p for p in db.list_projects() if p.get("parent_id") is None]
+    projects = [p for p in all_projects if p.get("parent_id") is None]
     if selected_tag:
         member_slugs = {r["slug"] for r in db.list_posts_for_tag(selected_tag["id"], limit=10000)}
         projects = [p for p in projects if _project_has_tag(p, member_slugs)]
@@ -643,8 +655,9 @@ def home_page(request: Request, tag: str = ""):
         request, "home.html",
         {
             "active": "home",
-            "top_tags": top_level_tag_tree,
+            "top_tags": project_pills,
             "selected_tag_slug": tag or None,
+            "pill_scope": scope,
             "projects": [_to_project_card(p) for p in projects],
             "owner_name": _owner_label,
             "owner_initials": _owner_initials,

@@ -1,13 +1,20 @@
-<!-- Category (top-level tag) chip row, extracted out of home.html for #17
-     Part B alongside _project_tile.html — the other half of "projects and
-     category tiles" the issue asks to widgetize. Expects `top_tags` and
-     `selected_tag_slug` in scope (passed through automatically by Jinja's
-     include context-sharing, same as _project_tile.html). -->
+<!-- Project-filter pill row, extracted out of home.html for #17 Part B
+     alongside _project_tile.html. #173: pills are one per project (via its
+     linked tag), not every root-level tag -- expects `top_tags` (despite
+     the name, now project-derived pills: {slug, name, id, parent_id}),
+     `selected_tag_slug`, and `pill_scope` ("top" or "all") in scope (passed
+     through automatically by Jinja's include context-sharing). -->
 {% if top_tags %}
-<div class="tag-chip-row">
-  <a class="tag-chip{% if not selected_tag_slug %} active{% endif %}" href="/">All</a>
-  {% for t in top_tags %}
-  <a class="tag-chip{% if selected_tag_slug == t.slug %} active{% endif %}" href="/?tag={{ t.slug }}">{{ t.name }}</a>
-  {% endfor %}
+<div class="tag-chip-row-wrap">
+  <div class="tag-chip-row">
+    <a class="tag-chip{% if not selected_tag_slug %} active{% endif %}" href="/{% if pill_scope == 'all' %}?scope=all{% endif %}">All</a>
+    {% for t in top_tags %}
+    <a class="tag-chip{% if selected_tag_slug == t.slug %} active{% endif %}" href="/?tag={{ t.slug }}{% if pill_scope == 'all' %}&scope=all{% endif %}">{{ t.name }}</a>
+    {% endfor %}
+  </div>
+  <div class="pill-scope-toggle">
+    <a class="pill-scope-option{% if pill_scope != 'all' %} active{% endif %}" href="/{% if selected_tag_slug %}?tag={{ selected_tag_slug }}{% endif %}" title="Top-level projects only">Top-level</a>
+    <a class="pill-scope-option{% if pill_scope == 'all' %} active{% endif %}" href="/?scope=all{% if selected_tag_slug %}&tag={{ selected_tag_slug }}{% endif %}" title="All projects, children included">All projects</a>
+  </div>
 </div>
 {% endif %}

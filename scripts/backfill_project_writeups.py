@@ -93,13 +93,17 @@ def get_request(url):
         ) from e
 
 
-def create_writeup_document(base_url, project_title):
-    """Create a new blank document-type capture_event for the project's writeup.
-    Returns the slug of the newly created document."""
+def create_writeup_document(base_url, project_id, project_title):
+    """Create a new blank document-type capture_event for the project's writeup,
+    attaching it to the project's items in the same call (via /api/content's
+    project_id param — the same path api_create_project uses) so the writeup
+    is a normal, visible project item, same as one created at project-creation
+    time. Returns the slug of the newly created document."""
     payload = {
         "media_type": "document",
         "content_description": f"{project_title} — Write-up",
         "type_metadata": json.dumps({"body": ""}),
+        "project_id": str(project_id),
     }
     url = f"{base_url.rstrip('/')}/api/content"
     response = post_request(url, payload)
@@ -154,7 +158,7 @@ def main():
             print(f"  ⧐ {project_title}: creating writeup...")
             try:
                 # Create the blank writeup document
-                new_slug = create_writeup_document(base_url, project_title)
+                new_slug = create_writeup_document(base_url, project_id, project_title)
                 # Attach it to the project
                 attach_writeup_to_project(base_url, project_id, new_slug)
                 print(f"    ✓ Created writeup ({new_slug})")

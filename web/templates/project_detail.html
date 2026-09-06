@@ -41,6 +41,13 @@
     <div class="hazard-stripe" style="width:64px"></div>
   </div>
 
+  {% if writeup_body %}
+  <div style="margin-top:32px;padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:8px">
+    <h2 style="font-size:16px;margin-bottom:12px;font-weight:500">Write-up</h2>
+    <div style="font-size:14px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-wrap:break-word">{{ writeup_body }}</div>
+  </div>
+  {% endif %}
+
   {% if items %}
   <div class="project-item-grid">
     {% for item in items %}
@@ -58,7 +65,12 @@
           <div class="project-item-meta">{{ item.media_type }}</div>
         </div>
       </a>
-      <input type="radio" class="project-cover-selector" name="cover" data-slug="{{ item.slug }}" title="Set as project cover" {% if item.slug == project.cover_slug %}checked{% endif %}>
+      <div class="project-item-selectors">
+        <input type="radio" class="project-cover-selector" name="cover" data-slug="{{ item.slug }}" title="Set as project cover" {% if item.slug == project.cover_slug %}checked{% endif %}>
+        {% if item.media_type == 'document' %}
+        <input type="radio" class="project-writeup-selector" name="writeup" data-slug="{{ item.slug }}" title="Set as write-up" {% if item.slug == project.writeup_slug %}checked{% endif %}>
+        {% endif %}
+      </div>
     </div>
     {% endfor %}
   </div>
@@ -85,6 +97,7 @@
 
 <script>
 let currentCoverSlug = {{ project.cover_slug | tojson }};
+let currentWriteupSlug = {{ project.writeup_slug | tojson }};
 let currentParentId = {{ project.parent_id | tojson }};
 const projectId = {{ project.id }};
 
@@ -93,6 +106,16 @@ function revertCoverSelection(failedRadio) {
   if (currentCoverSlug) {
     const previous = document.querySelector(
       `.project-cover-selector[data-slug="${CSS.escape(currentCoverSlug)}"]`
+    );
+    if (previous) previous.checked = true;
+  }
+}
+
+function revertWriteupSelection(failedRadio) {
+  failedRadio.checked = false;
+  if (currentWriteupSlug) {
+    const previous = document.querySelector(
+      `.project-writeup-selector[data-slug="${CSS.escape(currentWriteupSlug)}"]`
     );
     if (previous) previous.checked = true;
   }
@@ -117,6 +140,32 @@ document.querySelectorAll('.project-cover-selector').forEach(radio => {
     } catch (error) {
       console.error('Error updating cover:', error);
       revertCoverSelection(this);
+    }
+  });
+});
+
+// Writeup selector (#156)
+document.querySelectorAll('.project-writeup-selector').forEach(radio => {
+  radio.addEventListener('change', async function() {
+    if (!this.checked) return;
+    const slug = this.dataset.slug;
+    try {
+      const response = await fetch(`/api/projects/${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `writeup_slug=${encodeURIComponent(slug)}`
+      });
+      if (response.ok) {
+        currentWriteupSlug = slug;
+        // Optionally refresh to show the new writeup body
+        // window.location.reload();
+      } else {
+        console.error('Failed to update writeup:', response.status);
+        revertWriteupSelection(this);
+      }
+    } catch (error) {
+      console.error('Error updating writeup:', error);
+      revertWriteupSelection(this);
     }
   });
 });

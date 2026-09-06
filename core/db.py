@@ -310,6 +310,11 @@ def init_db():
         conn.execute("ALTER TABLE projects ADD COLUMN parent_id INTEGER REFERENCES projects(id)")
     # Create the index after the column is guaranteed to exist
     conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id)")
+    # writeup_slug (#156): optional reference to a document-type capture_event that
+    # serves as the project's write-up/article. Follows the same pattern as cover_slug —
+    # points at a capture_events.slug with no FK constraint.
+    if "writeup_slug" not in existing_project_columns:
+        conn.execute("ALTER TABLE projects ADD COLUMN writeup_slug TEXT")
     conn.commit()
     conn.close()
 
@@ -985,6 +990,7 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
         "updated_at": now,
         "tag_id": tag_id,
         "parent_id": parent_id,
+        "writeup_slug": None,
     }
 
 
@@ -1013,12 +1019,15 @@ def list_projects(status=None):
     return [dict(r) for r in rows]
 
 
-def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None, parent_id=...):
+def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None, parent_id=..., writeup_slug=...):
     """Partial update — only overwrites fields that were passed, same
     pattern as update_tags() for capture_events. Bumps updated_at.
 
     parent_id can be updated; a cycle check prevents setting a project
-    as its own ancestor. Use parent_id=None to clear a parent."""
+    as its own ancestor. Use parent_id=None to clear a parent.
+
+    writeup_slug points to a document-type capture_event (#156), same pattern
+    as cover_slug. Use writeup_slug=None to clear it."""
     existing = get_project(id_or_slug)
     if existing is None:
         return None
@@ -1033,14 +1042,16 @@ def update_project(id_or_slug, title=None, description=None, cover_slug=None, st
 
     conn = get_conn()
     now = time.time()
+    new_writeup_slug = writeup_slug if writeup_slug is not ... else existing.get("writeup_slug")
     conn.execute(
-        "UPDATE projects SET title = ?, description = ?, cover_slug = ?, status = ?, parent_id = ?, updated_at = ? WHERE id = ?",
+        "UPDATE projects SET title = ?, description = ?, cover_slug = ?, status = ?, parent_id = ?, writeup_slug = ?, updated_at = ? WHERE id = ?",
         (
             title if title is not None else existing["title"],
             description if description is not None else existing["description"],
             cover_slug if cover_slug is not None else existing["cover_slug"],
             status if status is not None else existing["status"],
             new_parent_id,
+            new_writeup_slug,
             now,
             existing["id"],
         ),

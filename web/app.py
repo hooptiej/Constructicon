@@ -404,6 +404,25 @@ def _project_cover_url(cover_slug):
 
 
 def _to_project_card(project):
+    writeup_excerpt = None
+    if project.get("writeup_slug"):
+        writeup_doc = db.get_by_slug(project["writeup_slug"])
+        if writeup_doc:
+            body = writeup_doc.get("type_metadata", {}).get("body", "")
+            if body:
+                # Truncate to ~200 chars at a word boundary
+                words = body.split()
+                excerpt_words = []
+                char_count = 0
+                for word in words:
+                    if char_count + len(word) + 1 > 200:
+                        break
+                    excerpt_words.append(word)
+                    char_count += len(word) + 1
+                writeup_excerpt = " ".join(excerpt_words)
+                if len(body) > char_count:
+                    writeup_excerpt += "…"
+
     return {
         "slug": project["slug"],
         "title": project["title"],
@@ -414,6 +433,7 @@ def _to_project_card(project):
         # by — created_at was already stored on every project row, just never
         # exposed to this card shape before.
         "created_at": project["created_at"],
+        "writeup_excerpt": writeup_excerpt,
     }
 
 
@@ -770,6 +790,12 @@ def project_detail_page(request: Request, slug: str):
     items = [_to_content_public(r, project_slug=slug) for r in db.list_project_items(project["id"])]
     child_projects = db.list_child_projects(project["id"])
     ancestors = db.list_project_ancestors(project["id"])
+    # #156: fetch the writeup document and pass its body to the template
+    writeup_body = None
+    if project.get("writeup_slug"):
+        writeup_doc = db.get_by_slug(project["writeup_slug"])
+        if writeup_doc:
+            writeup_body = writeup_doc.get("type_metadata", {}).get("body", "")
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
@@ -778,6 +804,7 @@ def project_detail_page(request: Request, slug: str):
             "items": items,
             "child_projects": child_projects,
             "ancestors": ancestors,
+            "writeup_body": writeup_body,
         },
     )
 
@@ -1242,8 +1269,10 @@ def _to_project_option(project):
     selector reuses this same endpoint and needs it client-side to exclude
     a project's own descendants from its own "choose a parent" dropdown
     (the backend's cycle check is the real guard; this just keeps the
-    dropdown itself from offering a choice guaranteed to be rejected)."""
-    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"], "parent_id": project.get("parent_id")}
+    dropdown itself from offering a choice guaranteed to be rejected).
+    writeup_slug (#156) is also included so the backfill script can see
+    which projects already have writeups."""
+    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"], "parent_id": project.get("parent_id"), "writeup_slug": project.get("writeup_slug")}
 
 
 @app.get("/api/projects")
@@ -1268,7 +1297,14 @@ def api_create_project(request: Request, title: str = Form(...), parent_id: str 
     system, just handing the existing tag tree a project-shaped entry point.
 
     parent_id (#133) optionally sets this project as a child of another project.
+
+    Also auto-creates a document-type capture_event (#156) as the project's
+    write-up, adds it to project_items, and sets the project's writeup_slug
+    to that document's slug.
     """
+    from core import storage
+    import secrets
+
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Project name can't be empty")
@@ -1284,6 +1320,23 @@ def api_create_project(request: Request, title: str = Form(...), parent_id: str 
 
     tag = db.get_or_create_tag(title, parent_id=None)
     project = db.create_project(title, tag_id=tag["id"], parent_id=parent_id_int)
+
+    # Create the auto-generated writeup document (#156)
+    writeup_slug = storage.make_slug()
+    db.insert_content(
+        slug=writeup_slug,
+        uploaded_by=db.SOURCE_AUTHORED,
+        media_type="document",
+        content_description=f"{title} — Write-up",
+        type_metadata={"body": ""},
+    )
+    # Add it to the project
+    db.add_item_to_project(project["id"], writeup_slug)
+    # Set it as the project's writeup
+    db.update_project(project["id"], writeup_slug=writeup_slug)
+
+    # Fetch the updated project with writeup_slug
+    project = db.get_project(project["id"])
     return JSONResponse(_to_project_option(project))
 
 
@@ -1339,6 +1392,7 @@ def api_update_project(
     cover_slug: str = Form(None),
     status: str = Form(None),
     parent_id: str = Form(None),
+    writeup_slug: str = Form(None),
 ):
     """Updates a project's properties (issue #103). Allows setting any
     combination of title, description, cover_slug (slug of an attached item
@@ -1347,7 +1401,10 @@ def api_update_project(
     in _to_project_option shape (same as the list endpoint).
 
     parent_id (#133) can be set to create/remove a parent-child relationship.
-    Pass empty string to remove a parent, or a project ID to set one."""
+    Pass empty string to remove a parent, or a project ID to set one.
+
+    writeup_slug (#156) can be set to point to a document-type item as the
+    project's write-up. Pass empty string to remove a writeup."""
     project = db.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -1366,6 +1423,10 @@ def api_update_project(
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid parent_id")
 
+    writeup_slug_value = ...  # "..." means don't update writeup_slug
+    if writeup_slug is not None:
+        writeup_slug_value = writeup_slug if writeup_slug else None
+
     try:
         updated = db.update_project(
             project_id,
@@ -1374,6 +1435,7 @@ def api_update_project(
             cover_slug=cover_slug,
             status=status,
             parent_id=parent_id_value,
+            writeup_slug=writeup_slug_value,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

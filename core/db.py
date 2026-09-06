@@ -711,14 +711,24 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50):
         clauses.append("(tech = ? OR tech LIKE ? OR tech LIKE ?)")
         params += [uploaded_by, f"{uploaded_by} —%", f"{uploaded_by} -%"]
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    rows = conn.execute(
-        f"SELECT * FROM capture_events {where} ORDER BY timestamp DESC LIMIT ?", params + [limit]
-    ).fetchall()
+    # #166: the tag filter runs in Python (tags is a JSON column, not
+    # queryable in SQL), so when it's present the row LIMIT must apply AFTER
+    # filtering, not before -- fetching only the `limit` most recent rows and
+    # THEN filtering by tag silently drops any older tagged match once
+    # `limit` newer, untagged rows exist. Only pay for the unbounded fetch
+    # when a tag filter is actually requested.
+    query_sql = f"SELECT * FROM capture_events {where} ORDER BY timestamp DESC"
+    query_params = list(params)
+    if not tags:
+        query_sql += " LIMIT ?"
+        query_params.append(limit)
+    rows = conn.execute(query_sql, query_params).fetchall()
     conn.close()
     results = [_row_to_dict(r) for r in rows]
     if tags:
         wanted = set(tags)
         results = [r for r in results if wanted & set(r["tags"])]
+        results = results[:limit]
     return results
 
 

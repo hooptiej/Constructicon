@@ -1160,24 +1160,23 @@ def list_projects_for_post(post_slug):
 
 
 def list_unfiled_items(limit=10000):
-    """capture_events rows with no project_items row AND no tags — "unfiled"
-    uploads (#41). #17 moved the raw upload gallery into the home page's
+    """capture_events rows with no project_items row — "unfiled" uploads
+    (#41). #17 moved the raw upload gallery into the home page's
     hover/drag pop-out and left the main page showing only Project tiles;
-    with zero projects created (or an upload simply never tagged to one),
+    with zero projects created (or an upload simply never filed into one),
     that made the home page look completely empty even though uploads
     still existed, which was mistaken for real data loss and led directly
     to an accidental production /api/delete-all. home_page renders this
     list as an always-visible "Unfiled" section so that state can never
     look like "everything is gone" again.
 
-    #123: also excludes anything with a non-empty tags array, not just
-    project membership. Once #98 added bulk tagging on this very page, an
-    item could get real tags applied while never being added to a project
-    -- it kept showing as "unfiled" even though a human had clearly already
-    organized it. Tagging is still an explicit, deliberate action (nothing
-    tags an item automatically on upload), so this doesn't reintroduce the
-    original "looks like everything's gone" risk this function exists to
-    prevent -- it only clears items a human actually did something to.
+    #123 had also excluded anything with a non-empty tags array, not just
+    project membership, on the theory that tagging was already "organizing"
+    an item. #152 reverted this: tags are for sorting/search assistance,
+    not a substitute for project membership, and an item that only ever
+    got tagged (never added to a project) had nowhere else in the UI to be
+    found and filed into a project. Only project membership means "filed"
+    now.
 
     LEFT JOIN + IS NULL rather than NOT IN/NOT EXISTS — reads cleanest
     given project_items' exact shape (a plain (project_id, post_slug)
@@ -1188,7 +1187,7 @@ def list_unfiled_items(limit=10000):
     conn = get_conn()
     rows = conn.execute(
         "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-        "WHERE pi.post_slug IS NULL AND (ce.tags IS NULL OR ce.tags = '[]') "
+        "WHERE pi.post_slug IS NULL "
         "ORDER BY ce.timestamp DESC LIMIT ?",
         (limit,),
     ).fetchall()

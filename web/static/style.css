@@ -673,7 +673,16 @@ body.delete-mode-on .card-select-row { display: flex; }
 .home-widgets-right-column { display: flex; flex-direction: column; gap: 28px; }
 .home-col-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .home-col-header h2 { font-size: 15px; font-weight: 500; margin: 0; }
-.home-col-header .see-all { font-size: 12px; color: var(--text-2); }
+/* #176: was plain colored text with no button chrome, stood out as
+   "clearly clickable but doesn't look like it" against every other real
+   action on the home page. Sized to fit the compact header row, not
+   .btn-secondary's full weight. */
+.home-col-header .see-all {
+  font-size: 12px; color: var(--text-2); background: var(--chip);
+  border: 1px solid var(--border-strong); border-radius: 100px; padding: 5px 12px;
+  text-decoration: none; flex-shrink: 0;
+}
+.home-col-header .see-all:hover { color: var(--text); border-color: var(--accent); }
 /* #139: Changed from flex column to grid layout for narrower column context.
    Each card is now a small thumbnail tile (100px+) rather than a full-width row.
    Gallery card component remains the same, but layout is more compact grid

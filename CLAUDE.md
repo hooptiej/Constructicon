@@ -155,24 +155,28 @@ answer "show me everything about X," walking the tag tree from X's tag
 `db.search()`/`/api/search` will silently miss. Don't assume a keyword
 search over descriptions is a substitute for a tag-tree walk.
 
-## Known gap: no MCP server (issue #68)
+## MCP server: `constructicon-mcp` (issue #68, resolved)
 
-Constructicon currently has **no MCP server wired up** — no `/mcp` route
-on the web app, no `constructicon-mcp` sidecar container on TrueNAS. This
-is a real, tracked gap, not something to silently fix as a drive-by: see
-https://github.com/hooptiej/Constructicon/issues/68.
+Constructicon **does have a live MCP server** — `constructicon-mcp` runs
+as its own container alongside `constructicon-web` (and
+`constructicon-test-mcp` alongside `constructicon-test`), built from
+`mcp_server/server.py`, exposing tools like `constructicon_list_projects`,
+`constructicon_create_project`, `constructicon_attach_tags`,
+`constructicon_get_posts_for_tag`, `constructicon_search`,
+`constructicon_update_project`, `constructicon_add_to_project`, etc.
+(`mcp__constructicon-mcp__*` in a session with it configured). #68 tracked
+standing this up and was closed 2026-09-02 — **don't assume it's still
+missing**; if a session's tools list doesn't show it, that's a
+configuration gap for that session, not evidence the server itself is gone.
 
-- The sibling app `imagerepo` (this app's fork origin) *does* run one —
-  `imagerepo-mcp`, a separate container alongside `imagerepo-web`.
-- `mcp_server/server.py` exists in this repo (and in the deployed image,
-  at `/app/mcp_server/`) with a working set of `imagerepo_*` tools, but
-  nothing runs it as a service — it was apparently dropped when
-  Constructicon split off from imagerepo and never re-wired.
-- If asked to stand this up, treat `mcp_server/server.py` as a stale
-  starting point that still needs renaming/updating to Constructicon's
-  actual vocabulary (no more `client`/`ticket_id` as meaningful concepts,
-  tag tree instead of flat tags, etc.) — not a finished, ready-to-deploy
-  file.
+- #167 tracks auditing this tool surface for real gaps found in later
+  work (e.g. whether `constructicon_search`'s `tags` filter shares
+  `db.search()`'s row-limit-before-filter bug, whether there's a tool for
+  setting a project's cover/write-up) — check it before assuming a
+  capability needs building from scratch.
+- `mcp_server/server.py` still carries some stale-vocabulary rough edges
+  from its imagerepo origin in places; treat naming inconsistencies as
+  worth fixing opportunistically, not as evidence the server isn't real.
 
 ## Build / test / run
 
@@ -216,25 +220,44 @@ There is no `docker-compose.yml` committed to this repo; the compose file
 lives only on the TrueNAS box itself (outside this checkout), which is why
 you won't find one here.
 
-**`constructicon-web`'s own checkout can't `git pull`** (#71 — HTTPS remote,
-no credentials configured on the box, `git fetch` fails outright with
-"could not read Username"). Its git HEAD is stuck on an old commit with a
-pile of uncommitted drift underneath it — same shape as `constructicon-test`
-was before its 2026-09-03 reset (see above), just not yet reset itself.
-**Deploying here means overlaying known-good files from a real local
-`main` checkout, not `git pull`** — same discipline as the
-`constructicon-test` live-testing recipe below (tar-over-ssh, see the
-gotcha under step 2), but against production: take a real
-`data + code` backup first (`POST /api/backup` for DB+storage, `cp -r` the
-code directories to a `constructicon-prod-deploy-backup-<timestamp>-<issues>`
-sibling dir — see existing ones on the box for the naming convention),
-then `tar czf - core web mcp_server scripts assets | ssh ... 'cd
-.../constructicon && tar xzf -'`, rebuild if the Dockerfile changed,
-`docker compose up -d`, verify real endpoints. Confirmed working
-2026-09-03 deploying #103/#95/#88+#90/#92+#93 this way. Fixing #71 itself
-(real git credentials on this checkout) would let this go back to a normal
-`git pull` — not yet done, deprioritized behind actual feature work per
-the owner.
+**`git pull`/`git fetch` work again on both checkouts** (#71, fixed
+2026-09-06). Each checkout's `origin` remote points at
+`git@github.com-constructicon-deploy:hooptiej/Constructicon.git` — a
+dedicated SSH `Host` alias in `~/.ssh/config` on the TrueNAS box
+(`IdentityFile ~/.ssh/id_ed25519_constructicon_deploy`), backed by a
+**read-only deploy key** registered on the repo (`gh repo deploy-key
+list --repo hooptiej/Constructicon` to see it) — not a personal token or
+a token embedded in the remote URL. Both checkouts were also
+`git reset --hard origin/main`'d back onto a clean, tracked `main` branch
+at the same time (their prior drift turned out to be entirely
+CRLF-line-ending noise from earlier Windows-sourced tar deploys plus
+files origin/main had already superseded/renamed — no real divergent
+work was discarded; see #71's diagnosis comment for the full file-by-file
+check before that reset).
+
+**Deploy with `scripts/deploy.sh`** (added alongside this fix): run it
+from inside either checkout —
+
+```
+./scripts/deploy.sh            # fetch + reset to origin/main, docker compose restart
+./scripts/deploy.sh --build    # same, but `up -d --build` -- only needed when
+                                # requirements.txt or the Dockerfile changed
+```
+
+This replaces `git pull` (still stuck on the old HTTPS-with-no-creds
+failure mode if anyone reverts the remote) and replaces routinely
+tar-over-ssh'ing files in by hand. **Tar-over-ssh is now a fallback, not
+the default** — reach for it only if `scripts/deploy.sh` itself can't run
+(e.g. git credentials break again) or for the desktop app's own build
+artifacts, which aren't part of this repo's git history. If you do fall
+back to it: `tar czf - core web mcp_server scripts assets | ssh ... 'cd
+.../constructicon && tar xzf -'`, confirmed working 2026-09-03 deploying
+#103/#95/#88+#90/#92+#93 this way.
+
+Either way — script or fallback — **take a real backup first for
+production**: `POST /api/backup` for DB+storage, `cp -r` the code
+directories to a `constructicon-prod-deploy-backup-<timestamp>-<issues>`
+sibling dir (see existing ones on the box for the naming convention).
 
 Two containers run side by side on that box:
 
@@ -260,16 +283,11 @@ Two containers run side by side on that box:
   read its `core/`/`web/` files) before assuming this container reflects
   `main` — don't silently reset it to `main` without checking whether it's
   intentionally parked on something else first.
-  **`git` inside that checkout is broken** (its `origin` remote is an SSH
-  URL, `git@github.com:...`, and `git fetch` there fails with `Host key
-  verification failed` — no known_hosts entry / no key registered for that
-  remote on this box). This doesn't block the live-testing recipe below,
-  which only ever `scp`s files in from a properly-authenticated local
-  checkout and never needs this checkout's own git remote to work — but
-  don't assume `git pull`/`git fetch` will work *inside*
-  `constructicon-test` itself. Mirrors the same class of problem as #71
-  (`constructicon-web`'s missing git credentials), just not yet filed as
-  its own issue for the test container specifically.
+  **`git` inside that checkout works now** (fixed alongside #71,
+  2026-09-06 — same deploy-key SSH remote as `constructicon-web`, see the
+  Deployment section above). `scripts/deploy.sh` works here too. The
+  live-testing recipe below (tar/scp) is still fine to use for a branch
+  that isn't merged to `main` yet — `deploy.sh` only ever pulls `main`.
 
 ### Live-testing a branch against `constructicon-test`
 

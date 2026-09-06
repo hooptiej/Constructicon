@@ -536,7 +536,34 @@ def update_tags(slug, description=None, tags=None, client=None):
     )
     conn.commit()
     conn.close()
+    if tags is not None:
+        sync_real_tags_for_post(slug, tags)
     return get_by_slug(slug)
+
+
+def sync_real_tags_for_post(post_slug, tag_names):
+    """#165: the free-text `tags` column above is invisible to /api/tags
+    (autocomplete) and the home page's tag-tree browsing/pills, which only
+    ever read blog_tags/post_tags -- a typed tag that only lands in the
+    free-text column can never be suggested again or browsed to. Keeps the
+    real tag tree in sync with whatever's typed into an item's TAGS box
+    (single-item save or bulk), full-replace semantics matching the
+    free-text column's own contract. Root-level tags only (parent_id None);
+    reuses an existing tag of the same name if one already exists (e.g. a
+    project's own auto-linked tag) rather than creating a duplicate."""
+    current_ids = {t["id"] for t in list_tags_for_post(post_slug)}
+    desired_ids = set()
+    for name in tag_names:
+        name = name.strip()
+        if not name:
+            continue
+        tag = get_or_create_tag(name, parent_id=None)
+        desired_ids.add(tag["id"])
+    to_add = desired_ids - current_ids
+    if to_add:
+        attach_tags(post_slug, list(to_add))
+    for tag_id in current_ids - desired_ids:
+        detach_tag(post_slug, tag_id)
 
 
 def rename_object(slug, display_name=None, icon=None):

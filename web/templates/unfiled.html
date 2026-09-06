@@ -33,16 +33,13 @@
     </select>
 
     <div class="tag-input-box" id="bulk-tag-box" style="width:220px">
-      <input class="tag-add-input" id="bulk-tag-input" placeholder="+ Tag, press Enter" autocomplete="off">
+      <input class="tag-add-input" id="bulk-tag-input" placeholder="+ Tag selection, press Enter" autocomplete="off">
       <div class="tag-suggestions" id="bulk-tag-suggestions" style="display:none"></div>
     </div>
-    <button type="button" class="btn-secondary" id="apply-tags-btn" title="Apply pending tags to the selection" style="display:none">Apply tags</button>
 
     <button type="button" class="btn-secondary" id="create-project-btn">Turn into project…</button>
     <button type="button" class="btn-danger" id="delete-selected-btn">Delete selected</button>
   </div>
-
-  <div id="pending-tags-row" class="tag-chip-row" style="display:none;margin-top:-6px"></div>
 
   <div id="from-selection-followup" class="selection-bar" style="display:none">
     <span class="selection-count">Tags applied — also create a project from these items?</span>
@@ -217,37 +214,39 @@
     else alert('Failed to add to project.');
   });
 
-  // --- Bulk tag: build a pending chip list (same add/remove chip pattern
-  // used everywhere else in this app), then apply to the whole selection at
-  // once with a real "Apply tags" action rather than tagging on every
-  // keystroke. ---
-  const pendingTags = [];
+  // --- Bulk tag: #161 — each Enter (or suggestion pick) applies that tag
+  // to the current selection immediately, same "type + Enter commits" model
+  // as everywhere else that isn't a two-step stage-then-apply. Confirmation
+  // is the tag pill now showing on each affected card (#152 stopped tagging
+  // from filing an item out of Unfiled, so the cards stay right where they
+  // are — no separate pending/applied chip list needed).
   const bulkTagInput = document.getElementById('bulk-tag-input');
   const bulkTagSuggestions = document.getElementById('bulk-tag-suggestions');
-  const pendingTagsRow = document.getElementById('pending-tags-row');
-  const applyTagsBtn = document.getElementById('apply-tags-btn');
   let allTags = [];
   fetch('/api/tags').then(res => res.ok ? res.json() : []).then(data => { allTags = data; }).catch(() => {});
   let bulkTagMatches = [];
   let bulkTagActiveIndex = -1;
 
-  function renderPendingTags() {
-    pendingTagsRow.innerHTML = pendingTags.map((t, i) => `
-      <span class="chip">${escapeHtml(t)} <button type="button" data-i="${i}" class="pending-tag-remove" style="background:none;border:none;color:inherit;cursor:pointer">×</button></span>
-    `).join('');
-    pendingTagsRow.style.display = pendingTags.length ? 'flex' : 'none';
-    applyTagsBtn.style.display = pendingTags.length ? 'inline-block' : 'none';
-    pendingTagsRow.querySelectorAll('.pending-tag-remove').forEach(btn => {
-      btn.addEventListener('click', () => { pendingTags.splice(+btn.dataset.i, 1); renderPendingTags(); });
-    });
-  }
-  function addPendingTag(value) {
+  async function applyBulkTagNow(value) {
     const trimmed = value.trim();
-    if (!trimmed || pendingTags.includes(trimmed)) return;
-    pendingTags.push(trimmed);
+    const slugs = [...selectedSlugs];
+    if (!trimmed || !slugs.length) return;
     bulkTagInput.value = '';
     hideBulkTagSuggestions();
-    renderPendingTags();
+    const fd = new FormData();
+    slugs.forEach(s => fd.append('slugs', s));
+    fd.append('tag_names', trimmed);
+    const res = await fetch('/api/bulk/attach-tags', { method: 'POST', body: fd });
+    if (res.ok) {
+      lastTaggedSlugs = slugs;
+      items.forEach(item => {
+        if (slugs.includes(item.slug) && !item.tags.includes(trimmed)) item.tags.push(trimmed);
+      });
+      render();
+      followup.style.display = 'flex';
+    } else {
+      alert('Failed to apply tag.');
+    }
   }
   function hideBulkTagSuggestions() {
     bulkTagSuggestions.style.display = 'none';
@@ -260,7 +259,7 @@
       `<div class="tag-suggestion-item${i === bulkTagActiveIndex ? ' active' : ''}" data-name="${escapeHtml(tag.name)}">${escapeHtml(tag.path)}</div>`
     ).join('') || `<div class="tag-suggestion-empty">No matching tags</div>`;
     bulkTagSuggestions.querySelectorAll('.tag-suggestion-item').forEach(el => {
-      el.addEventListener('mousedown', (e) => { e.preventDefault(); addPendingTag(el.dataset.name); });
+      el.addEventListener('mousedown', (e) => { e.preventDefault(); applyBulkTagNow(el.dataset.name); });
     });
     bulkTagSuggestions.style.display = 'block';
   }
@@ -277,39 +276,13 @@
     else if (e.key === 'ArrowUp' && bulkTagMatches.length) { e.preventDefault(); bulkTagActiveIndex = Math.max(bulkTagActiveIndex - 1, 0); renderBulkTagSuggestions(); }
     else if (e.key === 'Enter' && bulkTagInput.value.trim()) {
       e.preventDefault();
-      if (bulkTagActiveIndex >= 0 && bulkTagMatches[bulkTagActiveIndex]) addPendingTag(bulkTagMatches[bulkTagActiveIndex].name);
-      else addPendingTag(bulkTagInput.value);
+      if (bulkTagActiveIndex >= 0 && bulkTagMatches[bulkTagActiveIndex]) applyBulkTagNow(bulkTagMatches[bulkTagActiveIndex].name);
+      else applyBulkTagNow(bulkTagInput.value);
     } else if (e.key === 'Escape') hideBulkTagSuggestions();
   });
 
   const followup = document.getElementById('from-selection-followup');
   let lastTaggedSlugs = [];
-  applyTagsBtn.addEventListener('click', async () => {
-    const slugs = [...selectedSlugs];
-    if (!slugs.length || !pendingTags.length) return;
-    const fd = new FormData();
-    slugs.forEach(s => fd.append('slugs', s));
-    pendingTags.forEach(t => fd.append('tag_names', t));
-    const res = await fetch('/api/bulk/attach-tags', { method: 'POST', body: fd });
-    if (res.ok) {
-      lastTaggedSlugs = slugs;
-      pendingTags.length = 0;
-      renderPendingTags();
-      // #125: a tagged item is no longer "unfiled" (list_unfiled_items
-      // excludes anything with a non-empty tags array), so drop it from the
-      // local grid immediately instead of leaving the cards showing as
-      // before with no visible sign the tag actually applied — previously
-      // the only feedback was this followup bar, easy to miss/dismiss,
-      // while the tagged cards sat there unchanged until a manual reload.
-      items = items.filter(item => !slugs.includes(item.slug));
-      slugs.forEach(s => selectedSlugs.delete(s));
-      render();
-      updateSelectionBar();
-      followup.style.display = 'flex';
-    } else {
-      alert('Failed to apply tags.');
-    }
-  });
   document.getElementById('followup-dismiss-btn').addEventListener('click', () => { followup.style.display = 'none'; reload(); });
   document.getElementById('followup-create-btn').addEventListener('click', async () => {
     const title = document.getElementById('followup-project-title').value.trim();

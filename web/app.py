@@ -234,6 +234,7 @@ def _to_public(row):
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
         "artifact_link": row["artifact_link"],
+        "type_metadata": row.get("type_metadata", {}),
     }
 
 

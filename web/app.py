@@ -578,7 +578,10 @@ def home_page(request: Request, tag: str = ""):
     selected_tag = None
     if tag:
         selected_tag = next((t for t in _flatten_tags(tag_tree) if t["slug"] == tag), None)
-    projects = db.list_projects()
+    # #149: only top-level projects belong on the front-page widget — a
+    # child project (parent_id set, #133) is reached via its parent's
+    # project detail page, not as its own tile here.
+    projects = [p for p in db.list_projects() if p.get("parent_id") is None]
     if selected_tag:
         member_slugs = {r["slug"] for r in db.list_posts_for_tag(selected_tag["id"], limit=10000)}
         projects = [p for p in projects if _project_has_tag(p, member_slugs)]

@@ -303,6 +303,11 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .selection-bar .selection-count { font-size: 13px; color: var(--text-2); flex: 1; }
 .selection-bar .btn-danger { width: auto; padding: 8px 14px; }
+/* #160: the Unfiled page's bulk-action control panel specifically (not
+   every .selection-bar -- the "turn into project" followup bar below it
+   uses the same class but should scroll normally) stays reachable while
+   scrolling a long unfiled list, instead of scrolling out of view. */
+#selection-bar { position: sticky; top: 0; z-index: 10; }
 .type-badge {
   display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px;
   font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 500;

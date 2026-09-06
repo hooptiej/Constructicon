@@ -37,7 +37,12 @@
         </select>
       </div>
     </div>
-    <span class="project-status-pill{% if project.status == 'archived' %} archived{% endif %}" style="width:fit-content">{{ project.status }}</span>
+    <div style="display:flex;align-items:center;gap:8px">
+      <select id="project-status-select" class="project-status-pill{% if project.status == 'archived' %} archived{% endif %}" style="width:fit-content;border:none;cursor:pointer">
+        <option value="active" {% if project.status == 'active' %}selected{% endif %}>active</option>
+        <option value="archived" {% if project.status == 'archived' %}selected{% endif %}>archived</option>
+      </select>
+    </div>
     <div class="hazard-stripe" style="width:64px"></div>
   </div>
 
@@ -168,6 +173,31 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
       revertWriteupSelection(this);
     }
   });
+});
+
+// Status selector (#160-followup): active/archived, same immediate-effect
+// pattern as the cover/writeup selectors above.
+const statusSelect = document.getElementById('project-status-select');
+let currentStatus = {{ project.status | tojson }};
+statusSelect.addEventListener('change', async function() {
+  const value = this.value;
+  try {
+    const response = await fetch(`/api/projects/${projectId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `status=${encodeURIComponent(value)}`
+    });
+    if (response.ok) {
+      currentStatus = value;
+      statusSelect.classList.toggle('archived', value === 'archived');
+    } else {
+      console.error('Failed to update status:', response.status);
+      statusSelect.value = currentStatus;
+    }
+  } catch (error) {
+    console.error('Error updating status:', error);
+    statusSelect.value = currentStatus;
+  }
 });
 
 // Parent project selector (#133)

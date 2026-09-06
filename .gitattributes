@@ -1,0 +1,5 @@
+# #71: shell scripts run on the TrueNAS box (Linux) but are often edited
+# from a Windows checkout -- force LF regardless of the editing platform
+# so a script committed with CRLF doesn't fail with a shebang/line-ending
+# error once deployed.
+*.sh text eol=lf

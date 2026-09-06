@@ -53,6 +53,11 @@ def _scrub_secrets(form_data):
         # Check if any secret keyword is in the key name
         if any(keyword in key_lower for keyword in secret_keywords):
             scrubbed[key] = "[REDACTED]"
+        elif hasattr(value, "filename"):
+            # A multipart file field (Starlette UploadFile) — not
+            # JSON-serializable and its content isn't audit-log-worthy
+            # anyway, so log just enough to identify it.
+            scrubbed[key] = f"<file: {value.filename}>"
         else:
             scrubbed[key] = value
     return scrubbed

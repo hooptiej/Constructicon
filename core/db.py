@@ -1116,20 +1116,6 @@ def _descendant_project_ids(project_id):
     return ids
 
 
-def list_child_project_tag_ids():
-    """tag_id of every child project (parent_id set, #133) that has one.
-    #154: every project auto-creates a root-level blog_tags row with its own
-    name (get_or_create_tag in api_create_project) — used to filter a child
-    project's tag out of the home page's top-level pill row, which should
-    only surface organic topics and top-level projects, not every sub-project."""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT tag_id FROM projects WHERE parent_id IS NOT NULL AND tag_id IS NOT NULL"
-    ).fetchall()
-    conn.close()
-    return [r["tag_id"] for r in rows]
-
-
 def list_child_projects(project_id):
     """Get the direct children of a project (not including grandchildren).
     Returns a list of project dicts, ordered by title."""

@@ -866,6 +866,7 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 
 /* --- Projects (curated cards) --- */
+.tag-chip-row-wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .tag-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .tag-chip {
   font-size: 11.5px; color: var(--text-2); background: var(--chip); border: 1px solid var(--border-strong);
@@ -873,6 +874,13 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .tag-chip:hover { color: var(--text); border-color: var(--purple-bright); }
 .tag-chip.active { color: #fff; background: var(--purple); border-color: var(--purple-bright); }
+/* #173: top-level vs. all-projects pill-scope toggle */
+.pill-scope-toggle { display: flex; gap: 2px; font-size: 11px; flex-shrink: 0; }
+.pill-scope-option {
+  color: var(--text-3); text-decoration: none; padding: 4px 9px; border-radius: 100px;
+}
+.pill-scope-option:hover { color: var(--text-2); }
+.pill-scope-option.active { color: var(--text); background: var(--chip); }
 .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
 .project-card {
   background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;

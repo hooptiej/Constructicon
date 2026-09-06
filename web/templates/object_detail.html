@@ -195,6 +195,12 @@
           <label>DESCRIPTION</label>
           <textarea class="input" name="description" rows="3" placeholder="What does this show?">{{ item.description }}</textarea>
         </div>
+        {% if item.media_type == 'document' %}
+        <div class="field" style="margin-top:15px">
+          <label>WRITE-UP</label>
+          <textarea class="input" id="document-body-textarea" name="document_body" rows="8" placeholder="Write your document here…">{{ item.type_metadata.get('body', '') }}</textarea>
+        </div>
+        {% endif %}
         <div class="field" style="margin-top:15px">
           <label>TAGS</label>
           <div class="tag-input-box" id="tag-box">
@@ -667,6 +673,11 @@ document.getElementById('detail-form').addEventListener('submit', async (e) => {
   // editor above) — client/GET /api/clients/sync_clients.py are left
   // alone per #1's decision, this just stops the detail page's save form
   // from touching that field at all.
+  // #156: for document-type items, include the body in type_metadata
+  const documentBodyTextarea = document.getElementById('document-body-textarea');
+  if (documentBodyTextarea) {
+    form.append('type_metadata', JSON.stringify({ body: documentBodyTextarea.value }));
+  }
   const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
   if (res.ok) {
     saveConfirm.style.display = 'block';

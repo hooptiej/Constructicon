@@ -15,9 +15,12 @@
       <h1 class="page-title">Unfiled</h1>
       <p class="page-subtitle" id="unfiled-count-label">{{ unfiled_items | length }} upload{{ 's' if unfiled_items|length != 1 else '' }} not yet added to a project.</p>
     </div>
-    <div class="layout-toggle" id="layout-toggle" role="group" aria-label="Layout">
-      <button type="button" class="layout-toggle-btn" data-layout="grid" title="Grid view">Grid</button>
-      <button type="button" class="layout-toggle-btn" data-layout="list" title="List view">List</button>
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <button type="button" class="btn-secondary" id="new-project-btn" title="Create a new project">+ New project</button>
+      <div class="layout-toggle" id="layout-toggle" role="group" aria-label="Layout">
+        <button type="button" class="layout-toggle-btn" data-layout="grid" title="Grid view">Grid</button>
+        <button type="button" class="layout-toggle-btn" data-layout="list" title="List view">List</button>
+      </div>
     </div>
   </div>
 
@@ -331,6 +334,21 @@
     const res = await fetch('/api/projects/from-selection', { method: 'POST', body: fd });
     if (res.ok) reload();
     else alert('Failed to create project.');
+  });
+
+  // --- Create a new project without selection (#156) ---
+  document.getElementById('new-project-btn').addEventListener('click', async () => {
+    const title = prompt('New project name:');
+    if (!title || !title.trim()) return;
+    const fd = new FormData();
+    fd.append('title', title.trim());
+    const res = await fetch('/api/projects', { method: 'POST', body: fd });
+    if (res.ok) {
+      const project = await res.json();
+      window.location.href = `/project/${project.slug}`;
+    } else {
+      alert('Failed to create project.');
+    }
   });
 
   document.addEventListener('constructicon:upload-complete', (e) => {

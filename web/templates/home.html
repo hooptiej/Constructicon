@@ -65,6 +65,7 @@
               <div class="project-body">
                 <div class="project-title">${escapeHtml(p.title)}</div>
                 ${p.description ? `<div class="project-desc">${escapeHtml(p.description)}</div>` : ''}
+                ${p.writeup_excerpt ? `<div class="project-writeup-excerpt">${escapeHtml(p.writeup_excerpt)}</div>` : ''}
                 <div class="project-meta-row">
                   <span class="project-status-pill${p.status === 'archived' ? ' archived' : ''}">${escapeHtml(p.status)}</span>
                 </div>

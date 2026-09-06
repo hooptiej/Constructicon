@@ -578,6 +578,12 @@ def home_page(request: Request, tag: str = ""):
     selected_tag = None
     if tag:
         selected_tag = next((t for t in _flatten_tags(tag_tree) if t["slug"] == tag), None)
+    # #154: the pill row should only surface organic topics and top-level
+    # projects, not every child project's auto-linked tag — but selected_tag
+    # above is matched against the full tree so a direct ?tag= link to a
+    # hidden pill still filters correctly.
+    child_project_tag_ids = set(db.list_child_project_tag_ids())
+    top_level_tag_tree = [t for t in tag_tree if t["id"] not in child_project_tag_ids]
     # #149: only top-level projects belong on the front-page widget — a
     # child project (parent_id set, #133) is reached via its parent's
     # project detail page, not as its own tile here.
@@ -611,7 +617,7 @@ def home_page(request: Request, tag: str = ""):
         request, "home.html",
         {
             "active": "home",
-            "top_tags": tag_tree,
+            "top_tags": top_level_tag_tree,
             "selected_tag_slug": tag or None,
             "projects": [_to_project_card(p) for p in projects],
             "owner_name": _owner_label,

@@ -27,7 +27,7 @@
     <h2 class="gallery-drawer-section-title">Upload</h2>
     <form id="upload-form">
       <p class="error-text" id="upload-error" style="display:none;margin-bottom:12px"></p>
-      <button class="btn-primary" type="submit" id="submit-btn" style="margin-bottom:14px" disabled>Upload to repo</button>
+      <button class="btn-primary" type="submit" id="submit-btn" style="margin-bottom:14px" disabled>Ingest to Constructicon</button>
       <label class="dropzone" id="dropzone" for="file-input">
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
           <path d="M12 16V6M12 6L8 10M12 6L16 10" stroke="#6E6B57" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
@@ -262,13 +262,13 @@
     const fileCount = stagedFiles.filter(f => !f.__isYoutube).length;
     const linkCount = stagedFiles.length - fileCount;
     if (stagedFiles.length === 0) {
-      submitBtn.textContent = 'Upload to repo';
+      submitBtn.textContent = 'Ingest to Constructicon';
     } else if (linkCount === 0) {
-      submitBtn.textContent = fileCount > 1 ? `Upload ${fileCount} files to repo` : 'Upload to repo';
+      submitBtn.textContent = fileCount > 1 ? `Ingest ${fileCount} files to Constructicon` : 'Ingest to Constructicon';
     } else if (fileCount === 0) {
-      submitBtn.textContent = linkCount > 1 ? `Add ${linkCount} links to repo` : 'Add link to repo';
+      submitBtn.textContent = linkCount > 1 ? `Ingest ${linkCount} links to Constructicon` : 'Ingest link to Constructicon';
     } else {
-      submitBtn.textContent = `Add ${stagedFiles.length} items to repo`;
+      submitBtn.textContent = `Ingest ${stagedFiles.length} items to Constructicon`;
     }
   }
 

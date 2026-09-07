@@ -969,7 +969,7 @@ async def api_upload(
 async def api_create_content(
     request: Request,
     background_tasks: BackgroundTasks,
-    media_type: str = Form(...),
+    media_type: str | None = Form(None),
     external_url: str = Form(""),
     content_description: str = Form(""),
     content_date: str = Form(""),
@@ -997,7 +997,16 @@ async def api_create_content(
     Data API in the same pass it decides to create the row) doesn't need a
     separate follow-up call the way api_update_image's equivalent field
     does for correcting an EXISTING row.
+    media_type auto-classifies from external_url (YouTube vs. a plain web
+    page — see object_types.classify_url) when the caller doesn't already
+    know which type it wants, matching the upload drawer's generic "paste a
+    link" field (#184): the client no longer decides youtube-vs-url itself,
+    it just posts the URL and lets the server figure out what it is.
     """
+    if media_type is None:
+        if not external_url:
+            raise HTTPException(status_code=400, detail="media_type or external_url is required")
+        media_type = object_types.classify_url(external_url)
     spec = object_types.get_object_type(media_type)
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
         raise HTTPException(status_code=400, detail=f"{spec.label} objects require a file upload — use /api/upload")

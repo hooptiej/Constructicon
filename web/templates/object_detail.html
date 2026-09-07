@@ -78,7 +78,7 @@
         {% endif %}
       </div>
 
-      {% if item.media_type == 'youtube' or item.content_description or item.content_date_display %}
+      {% if item.media_type == 'youtube' or item.content_description or item.content_date_display or item.external_url %}
       <div class="content-meta-panel">
         {% if item.content_description %}<p class="content-meta-desc">{{ item.content_description }}</p>{% endif %}
         <div class="detail-meta">

@@ -50,6 +50,7 @@ itself, both are best-effort: a failure here never fails OCR overall, it
 just leaves that row without a similarity signal.
 """
 
+import io
 import re
 import threading
 from pathlib import Path
@@ -117,6 +118,25 @@ def _compute_similarity_signals(slug, image_path, text):
         print(f"Embedding failed for {slug}: {e!r}")
 
 
+def _load_for_ocr(image_path):
+    """Open an image for pytesseract, guaranteed to hand it a format it
+    actually recognizes. pytesseract checks the PIL Image's own `.format`
+    attribute (set once, at the original open, and preserved through
+    convert()) against a fixed list of formats tesseract natively reads --
+    a container format PIL can decode fine but that isn't on that list
+    (confirmed for real 2026-09-07: iPhone photos saved as MPO, a
+    multi-picture JPEG container used for portrait/depth shots) raises
+    TypeError('Unsupported image format/type') even though the pixels
+    load without issue. Re-encoding to PNG in memory and reopening resets
+    `.format` to something tesseract always accepts, regardless of what
+    the original container format was."""
+    img = Image.open(image_path).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return Image.open(buf)
+
+
 def run_ocr(slug):
     row = db.get_by_slug(slug)
     if row is None or row["redacted"]:
@@ -151,7 +171,7 @@ def run_ocr(slug):
             return
         with OCR_SEMAPHORE:
             try:
-                text = pytesseract.image_to_string(Image.open(image_path), timeout=OCR_TIMEOUT_SECONDS)
+                text = pytesseract.image_to_string(_load_for_ocr(image_path), timeout=OCR_TIMEOUT_SECONDS)
             except Exception as e:
                 # Best-effort — OCR quality issues, a corrupt image, or a
                 # timeout shouldn't ever surface as an upload failure, but

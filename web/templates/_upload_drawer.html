@@ -147,9 +147,9 @@
     } else if (linkCount === 0) {
       submitBtn.textContent = fileCount > 1 ? `Ingest ${fileCount} files to Constructicon` : 'Ingest to Constructicon';
     } else if (fileCount === 0) {
-      submitBtn.textContent = linkCount > 1 ? `Add ${linkCount} links to repo` : 'Add link to repo';
+      submitBtn.textContent = linkCount > 1 ? `Ingest ${linkCount} links to Constructicon` : 'Ingest link to Constructicon';
     } else {
-      submitBtn.textContent = `Add ${stagedFiles.length} items to repo`;
+      submitBtn.textContent = `Ingest ${stagedFiles.length} items to Constructicon`;
     }
   }
 

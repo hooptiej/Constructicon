@@ -462,7 +462,6 @@ body.delete-mode-on .card-select-row { display: flex; }
   font-size: 12px; font-weight: 600; color: var(--text-2-bright); margin: 0 0 12px;
   text-transform: uppercase; letter-spacing: 0.5px;
 }
-.gallery-drawer-divider { height: 1px; background: var(--border); margin: 22px 0; }
 
 /* --- User panes (widget grid, grouped by uploader) --- */
 #sections { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; align-items: start; }

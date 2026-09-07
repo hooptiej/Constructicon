@@ -21,9 +21,9 @@
       <div class="line"></div><span>OR</span><div class="line"></div>
     </div>
     <div class="field">
-      <label>YOUTUBE LINK</label>
+      <label>LINK</label>
       <div class="youtube-add-row">
-        <input class="input mono" id="youtube-url-input" placeholder="https://youtube.com/watch?v=... or youtu.be/...">
+        <input class="input mono" id="youtube-url-input" placeholder="Any URL — a YouTube link, or any other web page">
         <button type="button" class="btn-secondary" id="youtube-add-btn">Add</button>
       </div>
     </div>
@@ -102,10 +102,11 @@
   // tails), where dismissedIndices is reset alongside them.
   let dismissedIndices = new Set();
 
-  // Mirrors object_types.py's YOUTUBE_ID_RE server-side — used here only to
-  // give immediate client-side feedback before ever hitting the network;
-  // the server is still the source of truth for what counts as a valid link.
-  const YOUTUBE_URL_RE = /(?:v=|\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{6,})/;
+  // #184: any well-formed http(s) URL is accepted -- the server classifies
+  // it (YouTube vs. a plain web page — object_types.classify_url) rather
+  // than the client deciding up front, so this is deliberately loose, just
+  // catching obviously-not-a-URL input before it hits the network.
+  const LINK_URL_RE = /^https?:\/\/.+\..+/i;
 
   const STATUS_META = {
     queued:          { dot: '#57543F', label: 'Waiting…' },
@@ -210,7 +211,7 @@
           }
         } else {
           metaEl.textContent = file.__isYoutube
-            ? 'YouTube link — ready to add'
+            ? 'Link — ready to add'
             : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
         }
         const removeBtn = row.querySelector('.staged-remove');
@@ -269,8 +270,8 @@
     uploadError.style.display = 'none';
     const url = youtubeUrlInput.value.trim();
     if (!url) return;
-    if (!YOUTUBE_URL_RE.test(url)) {
-      uploadError.textContent = "That doesn't look like a YouTube link — paste a full youtube.com/watch or youtu.be URL.";
+    if (!LINK_URL_RE.test(url)) {
+      uploadError.textContent = "That doesn't look like a valid link — paste a full http:// or https:// URL.";
       uploadError.style.display = 'block';
       return;
     }
@@ -473,12 +474,11 @@
   async function addContentAndTrack(url, i, description, tagList, projectId) {
     // Content-only counterpart to uploadAndTrack above — POSTs to
     // /api/content instead of /api/upload (see web/app.py's
-    // api_create_content), passing the raw URL through as external_url:
-    // the server does its own video-ID extraction (object_types.extract_
-    // youtube_id), so the client doesn't need to parse it itself.
+    // api_create_content). No media_type here (#184) -- the server
+    // classifies the URL itself (object_types.classify_url: YouTube vs. a
+    // plain web page) rather than the client deciding up front.
     updateFileStatus(i, 'uploading', 'Adding link…');
     const form = new FormData();
-    form.append('media_type', 'youtube');
     form.append('external_url', url);
     form.append('description', description);
     form.append('tags', JSON.stringify(tagList));

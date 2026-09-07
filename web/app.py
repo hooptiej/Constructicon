@@ -1311,6 +1311,28 @@ def api_projects(request: Request):
     return JSONResponse([_to_project_option(p) for p in db.list_projects()])
 
 
+def _create_writeup_for_project(project):
+    """#156's auto-writeup logic, factored out so every project-creation
+    path gets it -- #191 found that /api/projects/from-selection and
+    /api/projects/from-related each called db.create_project() directly and
+    silently never got a writeup at all, since this was only ever inlined
+    into api_create_project below. Creates a blank document-type
+    capture_event as the project's write-up, adds it to project_items, and
+    sets the project's writeup_slug to that document's slug. Returns the
+    project row refreshed with its new writeup_slug."""
+    writeup_slug = storage.make_slug()
+    db.insert_content(
+        slug=writeup_slug,
+        uploaded_by=db.SOURCE_AUTHORED,
+        media_type="document",
+        content_description=f"{project['title']} — Write-up",
+        type_metadata={"body": ""},
+    )
+    db.add_item_to_project(project["id"], writeup_slug)
+    db.update_project(project["id"], writeup_slug=writeup_slug)
+    return db.get_project(project["id"])
+
+
 @app.post("/api/projects")
 def api_create_project(request: Request, title: str = Form(...), parent_id: str = Form(None)):
     """Creates a project from the upload drawer's "+ New project..." flow
@@ -1330,9 +1352,6 @@ def api_create_project(request: Request, title: str = Form(...), parent_id: str 
     write-up, adds it to project_items, and sets the project's writeup_slug
     to that document's slug.
     """
-    from core import storage
-    import secrets
-
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Project name can't be empty")
@@ -1348,23 +1367,7 @@ def api_create_project(request: Request, title: str = Form(...), parent_id: str 
 
     tag = db.get_or_create_tag(title, parent_id=None)
     project = db.create_project(title, tag_id=tag["id"], parent_id=parent_id_int)
-
-    # Create the auto-generated writeup document (#156)
-    writeup_slug = storage.make_slug()
-    db.insert_content(
-        slug=writeup_slug,
-        uploaded_by=db.SOURCE_AUTHORED,
-        media_type="document",
-        content_description=f"{title} — Write-up",
-        type_metadata={"body": ""},
-    )
-    # Add it to the project
-    db.add_item_to_project(project["id"], writeup_slug)
-    # Set it as the project's writeup
-    db.update_project(project["id"], writeup_slug=writeup_slug)
-
-    # Fetch the updated project with writeup_slug
-    project = db.get_project(project["id"])
+    project = _create_writeup_for_project(project)
     return JSONResponse(_to_project_option(project))
 
 
@@ -1387,6 +1390,7 @@ def api_create_project_from_selection(slugs: list[str] = Form(...), title: str =
         raise HTTPException(status_code=400, detail="Project name can't be empty")
     tag = db.get_or_create_tag(title, parent_id=None)
     project = db.create_project(title, tag_id=tag["id"])
+    project = _create_writeup_for_project(project)
     for slug in slugs:
         if db.get_by_slug(slug) is not None:
             _attach_to_project(slug, project["id"])
@@ -1405,6 +1409,7 @@ def api_create_project_from_related(slug: str = Form(...), title: str = Form(...
         raise HTTPException(status_code=404, detail="not found")
     tag = db.get_or_create_tag(title, parent_id=None)
     project = db.create_project(title, tag_id=tag["id"])
+    project = _create_writeup_for_project(project)
     _attach_to_project(slug, project["id"])
     for related in db.list_related(slug):
         _attach_to_project(related["slug"], project["id"])

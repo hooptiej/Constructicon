@@ -16,6 +16,9 @@
       <p class="page-subtitle" id="unfiled-count-label">{{ unfiled_items | length }} upload{{ 's' if unfiled_items|length != 1 else '' }} not yet added to a project.</p>
     </div>
     <div style="display: flex; gap: 8px; align-items: center;">
+      <select class="filter-select" id="unfiled-type-filter" title="Filter by file type">
+        <option value="">All types</option>
+      </select>
       <button type="button" class="btn-secondary" id="new-project-btn" title="Create a new project">+ New project</button>
       <div class="layout-toggle" id="layout-toggle" role="group" aria-label="Layout">
         <button type="button" class="layout-toggle-btn" data-layout="grid" title="Grid view">Grid</button>
@@ -136,11 +139,33 @@
   let items = {{ unfiled_items | tojson }};
   const grid = document.getElementById('unfiled-grid');
   const emptyState = document.getElementById('empty-state');
+  const countLabel = document.getElementById('unfiled-count-label');
+
+  // #180: filter by file type -- only offers types actually present among
+  // unfiled items (same "don't show empty options" discipline as #107's
+  // per-type Files widget tabs), not the full type registry.
+  const typeFilterSelect = document.getElementById('unfiled-type-filter');
+  let typeFilter = '';
+  (function populateTypeFilter() {
+    const seen = new Map();
+    items.forEach(item => { if (!seen.has(item.media_type)) seen.set(item.media_type, item.type_label || item.media_type); });
+    [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1])).forEach(([mediaType, label]) => {
+      typeFilterSelect.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(mediaType)}">${escapeHtml(label)}</option>`);
+    });
+  })();
+  typeFilterSelect.addEventListener('change', () => { typeFilter = typeFilterSelect.value; render(); });
+
+  function visibleItems() {
+    return typeFilter ? items.filter(item => item.media_type === typeFilter) : items;
+  }
+
   function render() {
-    grid.innerHTML = items.map(cardHtml).join('');
-    emptyState.style.display = items.length ? 'none' : 'block';
-    document.getElementById('unfiled-count-label').textContent =
-      `${items.length} upload${items.length === 1 ? '' : 's'} not yet added to a project.`;
+    const visible = visibleItems();
+    grid.innerHTML = visible.map(cardHtml).join('');
+    emptyState.style.display = visible.length ? 'none' : 'block';
+    countLabel.textContent = typeFilter
+      ? `${visible.length} of ${items.length} upload${items.length === 1 ? '' : 's'} shown (filtered by type).`
+      : `${items.length} upload${items.length === 1 ? '' : 's'} not yet added to a project.`;
   }
 
   // #117: grid (default) vs. list layout, per-viewer preference. Only the

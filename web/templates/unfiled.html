@@ -267,6 +267,15 @@
       items.forEach(item => {
         if (slugs.includes(item.slug) && !item.tags.includes(trimmed)) item.tags.push(trimmed);
       });
+      // #181: this selection was just committed -- clear it so it can't
+      // silently ride along into whatever bulk action (another tag, or
+      // add-to-project) the user does next. Regression from #161, which
+      // dropped this when removing the stale item-filtering it used to be
+      // bundled with. render() (right after) re-derives each card's
+      // checked state from selectedSlugs, so clearing here is enough to
+      // visually uncheck them too.
+      slugs.forEach(s => selectedSlugs.delete(s));
+      updateSelectionBar();
       render();
       followup.style.display = 'flex';
     } else {

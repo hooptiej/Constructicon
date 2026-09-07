@@ -42,9 +42,9 @@
         <div class="line"></div><span>OR</span><div class="line"></div>
       </div>
       <div class="field">
-        <label>YOUTUBE LINK</label>
+        <label>LINK</label>
         <div class="youtube-add-row">
-          <input class="input mono" id="youtube-url-input" placeholder="https://youtube.com/watch?v=... or youtu.be/...">
+          <input class="input mono" id="youtube-url-input" placeholder="Any URL — a YouTube link, or any other web page">
           <button type="button" class="btn-secondary" id="youtube-add-btn">Add</button>
         </div>
       </div>
@@ -229,7 +229,7 @@
   // reset alongside them.
   let dismissedIndices = new Set();
 
-  const YOUTUBE_URL_RE = /(?:v=|\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{6,})/;
+  const LINK_URL_RE = /^https?:\/\/.+\..+/i;
 
   const STATUS_META = {
     queued:          { dot: '#57543F', label: 'Waiting…' },
@@ -328,7 +328,7 @@
           }
         } else {
           metaEl.textContent = file.__isYoutube
-            ? 'YouTube link — ready to add'
+            ? 'Link — ready to add'
             : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
         }
         const removeBtn = row.querySelector('.staged-remove');
@@ -376,8 +376,8 @@
     uploadError.style.display = 'none';
     const url = youtubeUrlInput.value.trim();
     if (!url) return;
-    if (!YOUTUBE_URL_RE.test(url)) {
-      uploadError.textContent = "That doesn't look like a YouTube link — paste a full youtube.com/watch or youtu.be URL.";
+    if (!LINK_URL_RE.test(url)) {
+      uploadError.textContent = "That doesn't look like a valid link — paste a full http:// or https:// URL.";
       uploadError.style.display = 'block';
       return;
     }
@@ -558,7 +558,6 @@
   async function addContentAndTrack(url, i, description, tagList, projectId) {
     updateFileStatus(i, 'uploading', 'Adding link…');
     const form = new FormData();
-    form.append('media_type', 'youtube');
     form.append('external_url', url);
     form.append('description', description);
     form.append('tags', JSON.stringify(tagList));

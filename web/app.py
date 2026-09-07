@@ -1007,6 +1007,14 @@ async def api_create_content(
         if not external_url:
             raise HTTPException(status_code=400, detail="media_type or external_url is required")
         media_type = object_types.classify_url(external_url)
+    # #194: a generic web page has no title-fetch path the way YouTube does
+    # (real title via scripts/full_youtube_channel_sync.py's API call) --
+    # without this, content_description stays empty and _to_public's
+    # display_name fallback chain (filename/content_description/slug) shows
+    # the bare random slug on the page title/breadcrumb, with no visible
+    # trace of the URL the owner actually pasted.
+    if media_type == "url" and external_url and not content_description:
+        content_description = external_url
     spec = object_types.get_object_type(media_type)
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
         raise HTTPException(status_code=400, detail=f"{spec.label} objects require a file upload — use /api/upload")

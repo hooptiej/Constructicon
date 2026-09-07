@@ -71,6 +71,14 @@
             <circle cx="8" cy="9" r="1.6" stroke="#3F4530" stroke-width="1.4"/>
             <path d="M3 16L8.5 11.5L13 15L16.5 12L21 16" stroke="#3F4530" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
+        {% elif item.media_type == 'url' and item.external_url %}
+          {# #197: no capture_fn exists yet to generate a real screenshot
+             (see core/object_types/url.py), so this is a real clickable
+             link rather than a dead thumbnail/lightbox or unclickable
+             plain text. #}
+          <div class="content-text-preview">
+            <a href="{{ item.external_url }}" target="_blank" rel="noopener" class="external-link-btn">{{ item.external_url }}</a>
+          </div>
         {% else %}
           <div class="content-text-preview">
             <p>{{ item.content_description or item.description or 'No preview available for this content.' }}</p>

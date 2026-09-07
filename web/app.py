@@ -183,8 +183,15 @@ def _has_thumbnail(row, spec=None):
     short-circuiting on "row has a filename", since that assumption (true
     for image/pdf/stl/psd/svg/eps, whose uploaded-file types always have
     *some* visual to show) no longer holds once a type can have a stored
-    file with nothing image-like to derive a thumbnail from."""
+    file with nothing image-like to derive a thumbnail from.
+
+    A CAPTURE-strategy type with no `capture_fn` yet (e.g. `url` — see
+    core/object_types/url.py) can never actually produce one, regardless of
+    thumbnail_source, so it's excluded here too rather than optimistically
+    claiming a /f/<slug>/thumb URL that will only ever 404 (#197)."""
     spec = spec or object_types.get_object_type(row.get("media_type"))
+    if spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE and spec.capture_fn is None:
+        return False
     return spec.thumbnail_source != object_types.ThumbnailSource.NONE
 
 

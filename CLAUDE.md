@@ -386,6 +386,19 @@ sudo docker compose up -d --build
 image layers are unchanged and get cached — but always include it rather
 than guessing whether this particular change needs a rebuild.)
 
+**`scripts/deploy.sh --build` can report success without actually
+restarting the containers** (confirmed 2026-09-07, deploying #197/#198):
+it printed "Rebuilding and restarting" and `docker compose up -d --build`
+reported both containers as `Running`, but since the image layers were
+fully cached and compose saw no config change, it left the already-running
+processes alone — the new bind-mounted code sat on disk, unread, while the
+old code kept serving. `git log -1` inside the checkout showing the right
+commit is **not** sufficient proof the fix is live. After any deploy,
+verify the actual running process picked up the change — `sudo docker exec
+<container> grep <fix-specific-string> <file>` against the file *inside
+the container*, not the host checkout — and if it's not there yet, `sudo
+docker restart <container>` explicitly rather than re-running deploy.sh.
+
 ### SSH / access to TrueNAS
 
 - Passwordless `sudo docker` access via SSH as `hoop@10.0.1.78`, using a

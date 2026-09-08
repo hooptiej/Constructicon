@@ -27,6 +27,15 @@
         <button type="button" class="btn-secondary" id="youtube-add-btn">Add</button>
       </div>
     </div>
+    <div class="field">
+      <!-- Issue #200: pulls every new public-gallery submission from the
+           owner's Imgur account (Client-ID + username set in the admin
+           pane) in one server-side round trip — no staging, no per-item
+           progress in this drawer's staged-list UI, since the whole batch
+           either lands or reports one error. -->
+      <button type="button" class="btn-secondary" id="imgur-import-btn" style="width:100%">Import from Imgur</button>
+      <div class="dropzone-hint" id="imgur-import-status" style="margin-top:6px"></div>
+    </div>
     <div id="staged-files-container" class="staged-files-container">
       <div id="staged-list"></div>
       <div id="staged-more-indicator" class="staged-more-indicator" style="display:none"></div>
@@ -288,6 +297,36 @@
     if (e.key === 'Enter') {
       e.preventDefault();
       addYoutubeLink();
+    }
+  });
+
+  // Import from Imgur (#200) — one server-side round trip against the
+  // owner's public gallery submissions (see web/app.py's
+  // /api/imgur/import); the server does its own dedup against already-
+  // imported items, so this is safe to click again later to pick up
+  // anything new. Deliberately not staged item-by-item the way a file
+  // drop or a single pasted link is — the whole batch is one request.
+  const imgurImportBtn = document.getElementById('imgur-import-btn');
+  const imgurImportStatus = document.getElementById('imgur-import-status');
+  imgurImportBtn.addEventListener('click', async () => {
+    imgurImportBtn.disabled = true;
+    imgurImportBtn.textContent = 'Importing…';
+    imgurImportStatus.textContent = '';
+    imgurImportStatus.classList.remove('error-text');
+    try {
+      const res = await fetch('/api/imgur/import', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || 'Import failed');
+      imgurImportStatus.textContent = `Imported ${body.imported} new item${body.imported === 1 ? '' : 's'} (${body.skipped} already had, ${body.found} found total).`;
+      if (body.imported > 0) {
+        document.dispatchEvent(new CustomEvent('constructicon:upload-complete', { detail: { failures: [] } }));
+      }
+    } catch (err) {
+      imgurImportStatus.textContent = err.message;
+      imgurImportStatus.classList.add('error-text');
+    } finally {
+      imgurImportBtn.disabled = false;
+      imgurImportBtn.textContent = 'Import from Imgur';
     }
   });
 

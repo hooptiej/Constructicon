@@ -21,9 +21,17 @@
       <div class="line"></div><span>OR</span><div class="line"></div>
     </div>
     <div class="field">
-      <label>LINK</label>
-      <div class="youtube-add-row">
-        <input class="input mono" id="youtube-url-input" placeholder="Any URL — a YouTube link, or any other web page">
+      <!-- A URL field stays hidden behind a toggle button rather than
+           sitting always-open (issue #203). Handles a plain YouTube/web
+           link (#184) AND an Imgur post/album link, the same "paste any
+           URL, let the server figure out what it is" pattern either way —
+           see addYoutubeLink below for the client-side Imgur detection
+           that routes a staged item to /api/imgur/import-url instead of
+           /api/content at submit time. Deliberately ONE input for every
+           link-shaped add, not a separate field per source. -->
+      <button type="button" class="btn-secondary link-toggle-btn" id="link-toggle-btn" style="width:100%">+ Add a link</button>
+      <div class="youtube-add-row" id="youtube-add-row" style="display:none;margin-top:8px">
+        <input class="input mono" id="youtube-url-input" placeholder="Any URL — YouTube, Imgur, or any other web page">
         <button type="button" class="btn-secondary" id="youtube-add-btn">Add</button>
       </div>
     </div>
@@ -32,7 +40,10 @@
            owner's Imgur account (Client-ID + username set in the admin
            pane) in one server-side round trip — no staging, no per-item
            progress in this drawer's staged-list UI, since the whole batch
-           either lands or reports one error. -->
+           either lands or reports one error. A fundamentally different
+           action from the link field above (no URL to type, just "pull
+           everything new"), so it stays its own button rather than
+           folding into the link field too. -->
       <button type="button" class="btn-secondary" id="imgur-import-btn" style="width:100%">Import from Imgur</button>
       <div class="dropzone-hint" id="imgur-import-status" style="margin-top:6px"></div>
     </div>
@@ -88,6 +99,8 @@
   const submitBtn = document.getElementById('submit-btn');
   const youtubeUrlInput = document.getElementById('youtube-url-input');
   const youtubeAddBtn = document.getElementById('youtube-add-btn');
+  const linkToggleBtn = document.getElementById('link-toggle-btn');
+  const youtubeAddRow = document.getElementById('youtube-add-row');
   const projectSelect = document.getElementById('upload-project-select');
   const newProjectInput = document.getElementById('upload-new-project-input');
   let tags = [];
@@ -149,7 +162,7 @@
   function updateSubmitButton() {
     if (isUploading) return; // don't let a mid-upload re-render re-enable the button
     submitBtn.disabled = stagedFiles.length === 0;
-    const fileCount = stagedFiles.filter(f => !f.__isYoutube).length;
+    const fileCount = stagedFiles.filter(f => !f.__isYoutube && !f.__isImgur).length;
     const linkCount = stagedFiles.length - fileCount;
     if (stagedFiles.length === 0) {
       submitBtn.textContent = 'Ingest to Constructicon';
@@ -219,9 +232,11 @@
             row.classList.add('completed');
           }
         } else {
-          metaEl.textContent = file.__isYoutube
-            ? 'Link — ready to add'
-            : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
+          metaEl.textContent = file.__isImgur
+            ? 'Imgur link — ready to import'
+            : file.__isYoutube
+              ? 'Link — ready to add'
+              : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
         }
         const removeBtn = row.querySelector('.staged-remove');
         if (state && (state.status === 'uploading' || state.status === 'ocr-pending')) {
@@ -271,10 +286,26 @@
     fileInput.value = '';
   });
 
-  // Manual YouTube add (#25) — stages a placeholder object alongside any
-  // real staged Files, so it rides the exact same staged-list UI, submit
-  // button, and per-item status tracking as a file drop, just posted to
-  // /api/content instead of /api/upload when submit actually runs.
+  // Toggle open/closed for the link field (#203) — hidden until asked
+  // for, same reasoning as newProjectInput's reveal-on-select below.
+  linkToggleBtn.addEventListener('click', () => {
+    const opening = youtubeAddRow.style.display === 'none';
+    youtubeAddRow.style.display = opening ? 'flex' : 'none';
+    if (opening) youtubeUrlInput.focus();
+  });
+
+  // Recognizes an Imgur post/album link specifically (i.imgur.com/...,
+  // imgur.com/<id>, imgur.com/a/<id>, imgur.com/gallery/<id>) so a staged
+  // link item can be routed to /api/imgur/import-url (#203) instead of the
+  // generic /api/content at submit time — see core/imgur_import.py's
+  // parse_imgur_url for the server-side counterpart of this same shape.
+  const IMGUR_URL_RE = /imgur\.com\//i;
+
+  // Manual link add (#25, generalized by #184, Imgur-aware by #203) —
+  // stages a placeholder object alongside any real staged Files, so it
+  // rides the exact same staged-list UI, submit button, and per-item
+  // status tracking as a file drop. Routed to the right endpoint at
+  // submit time based on which flag got set here.
   function addYoutubeLink() {
     uploadError.style.display = 'none';
     const url = youtubeUrlInput.value.trim();
@@ -285,7 +316,8 @@
       return;
     }
     openDrawer();
-    stagedFiles.push({ name: url, size: 0, __isYoutube: true, url });
+    const isImgur = IMGUR_URL_RE.test(url);
+    stagedFiles.push({ name: url, size: 0, __isYoutube: !isImgur, __isImgur: isImgur, url });
     youtubeUrlInput.value = '';
     renderStaged();
   }
@@ -617,6 +649,42 @@
     return { ok: true };
   }
 
+  async function addImgurUrlAndTrack(url, i) {
+    // Imgur counterpart to addContentAndTrack (#203) — POSTs to
+    // /api/imgur/import-url instead of /api/content, since resolving a
+    // pasted Imgur post/album page link into a real direct image (and its
+    // metadata) needs a Client-ID-authenticated Imgur API call the server
+    // has to make, not something the generic content-add path does.
+    updateFileStatus(i, 'uploading', 'Importing from Imgur…');
+    let res;
+    try {
+      res = await fetch('/api/imgur/import-url', { method: 'POST', body: new URLSearchParams({ url }) });
+    } catch (err) {
+      updateFileStatus(i, 'upload-failed', err.message);
+      return { ok: false, message: `${url}: ${err.message}` };
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: 'Import failed' }));
+      const message = `Import failed — ${body.detail || 'unknown error'}`;
+      updateFileStatus(i, 'upload-failed', message);
+      return { ok: false, message: `${url}: ${message}` };
+    }
+
+    const item = await res.json();
+    if (item.skipped) {
+      updateFileStatus(i, 'done', 'Already imported');
+      return { ok: true };
+    }
+    if (item.ocr_status !== 'pending') {
+      updateFileStatus(i, 'done', undefined, item.slug);
+      return { ok: true };
+    }
+    updateFileStatus(i, 'ocr-pending', undefined, item.slug);
+    const finalStatus = await pollOcrStatus(item.slug);
+    updateFileStatus(i, finalStatus === 'failed' ? 'ocr-failed' : 'done', undefined, item.slug);
+    return { ok: true };
+  }
+
   async function retryOcrForStagedFile(i) {
     const slug = fileStates[i] && fileStates[i].slug;
     if (!slug) return;
@@ -690,9 +758,11 @@
     // solo retry from the detail page — a fully sequential queue removes
     // that contention rather than just papering over it with a bigger cap.
     const results = await runWithConcurrency(stagedFiles, 1, (file, i) =>
-      file.__isYoutube
-        ? addContentAndTrack(file.url, i, description, tagList, projectId)
-        : uploadAndTrack(file, i, description, tagList, projectId)
+      file.__isImgur
+        ? addImgurUrlAndTrack(file.url, i)
+        : file.__isYoutube
+          ? addContentAndTrack(file.url, i, description, tagList, projectId)
+          : uploadAndTrack(file, i, description, tagList, projectId)
     );
 
     tags = [];

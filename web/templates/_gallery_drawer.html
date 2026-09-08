@@ -42,9 +42,13 @@
         <div class="line"></div><span>OR</span><div class="line"></div>
       </div>
       <div class="field">
-        <label>LINK</label>
-        <div class="youtube-add-row">
-          <input class="input mono" id="youtube-url-input" placeholder="Any URL — a YouTube link, or any other web page">
+        <!-- Issue #203, mirrored from _upload_drawer.html: hidden behind
+             a toggle button, and Imgur-aware (see addYoutubeLink below) —
+             one link field for every link-shaped add, not a separate one
+             per source. -->
+        <button type="button" class="btn-secondary link-toggle-btn" id="link-toggle-btn" style="width:100%">+ Add a link</button>
+        <div class="youtube-add-row" id="youtube-add-row" style="display:none;margin-top:8px">
+          <input class="input mono" id="youtube-url-input" placeholder="Any URL — YouTube, Imgur, or any other web page">
           <button type="button" class="btn-secondary" id="youtube-add-btn">Add</button>
         </div>
       </div>
@@ -247,6 +251,8 @@
   const submitBtn = document.getElementById('submit-btn');
   const youtubeUrlInput = document.getElementById('youtube-url-input');
   const youtubeAddBtn = document.getElementById('youtube-add-btn');
+  const linkToggleBtn = document.getElementById('link-toggle-btn');
+  const youtubeAddRow = document.getElementById('youtube-add-row');
   const projectSelect = document.getElementById('upload-project-select');
   const newProjectInput = document.getElementById('upload-new-project-input');
   let tags = [];
@@ -295,7 +301,7 @@
   function updateSubmitButton() {
     if (isUploading) return;
     submitBtn.disabled = stagedFiles.length === 0;
-    const fileCount = stagedFiles.filter(f => !f.__isYoutube).length;
+    const fileCount = stagedFiles.filter(f => !f.__isYoutube && !f.__isImgur).length;
     const linkCount = stagedFiles.length - fileCount;
     if (stagedFiles.length === 0) {
       submitBtn.textContent = 'Ingest to Constructicon';
@@ -363,9 +369,11 @@
             row.classList.add('completed');
           }
         } else {
-          metaEl.textContent = file.__isYoutube
-            ? 'Link — ready to add'
-            : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
+          metaEl.textContent = file.__isImgur
+            ? 'Imgur link — ready to import'
+            : file.__isYoutube
+              ? 'Link — ready to add'
+              : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
         }
         const removeBtn = row.querySelector('.staged-remove');
         if (state && (state.status === 'uploading' || state.status === 'ocr-pending')) {
@@ -408,6 +416,18 @@
     fileInput.value = '';
   });
 
+  // Toggle open/closed for the link field (#203), mirrored from
+  // _upload_drawer.html.
+  linkToggleBtn.addEventListener('click', () => {
+    const opening = youtubeAddRow.style.display === 'none';
+    youtubeAddRow.style.display = opening ? 'flex' : 'none';
+    if (opening) youtubeUrlInput.focus();
+  });
+
+  // Recognizes an Imgur post/album link (#203), mirrored from
+  // _upload_drawer.html — see that file for the full reasoning.
+  const IMGUR_URL_RE = /imgur\.com\//i;
+
   function addYoutubeLink() {
     uploadError.style.display = 'none';
     const url = youtubeUrlInput.value.trim();
@@ -419,7 +439,8 @@
     }
     pinned = true;
     showPanel();
-    stagedFiles.push({ name: url, size: 0, __isYoutube: true, url });
+    const isImgur = IMGUR_URL_RE.test(url);
+    stagedFiles.push({ name: url, size: 0, __isYoutube: !isImgur, __isImgur: isImgur, url });
     youtubeUrlInput.value = '';
     renderStaged();
   }
@@ -649,6 +670,39 @@
     return { ok: true };
   }
 
+  async function addImgurUrlAndTrack(url, i) {
+    // Imgur counterpart to addContentAndTrack (#203), mirrored from
+    // _upload_drawer.html — see that file for the full reasoning.
+    updateFileStatus(i, 'uploading', 'Importing from Imgur…');
+    let res;
+    try {
+      res = await fetch('/api/imgur/import-url', { method: 'POST', body: new URLSearchParams({ url }) });
+    } catch (err) {
+      updateFileStatus(i, 'upload-failed', err.message);
+      return { ok: false, message: `${url}: ${err.message}` };
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: 'Import failed' }));
+      const message = `Import failed — ${body.detail || 'unknown error'}`;
+      updateFileStatus(i, 'upload-failed', message);
+      return { ok: false, message: `${url}: ${message}` };
+    }
+
+    const item = await res.json();
+    if (item.skipped) {
+      updateFileStatus(i, 'done', 'Already imported');
+      return { ok: true };
+    }
+    if (item.ocr_status !== 'pending') {
+      updateFileStatus(i, 'done', undefined, item.slug);
+      return { ok: true };
+    }
+    updateFileStatus(i, 'ocr-pending', undefined, item.slug);
+    const finalStatus = await pollOcrStatus(item.slug);
+    updateFileStatus(i, finalStatus === 'failed' ? 'ocr-failed' : 'done', undefined, item.slug);
+    return { ok: true };
+  }
+
   async function retryOcrForStagedFile(i) {
     const slug = fileStates[i] && fileStates[i].slug;
     if (!slug) return;
@@ -713,9 +767,11 @@
     renderStaged();
 
     const results = await runWithConcurrency(stagedFiles, 1, (file, i) =>
-      file.__isYoutube
-        ? addContentAndTrack(file.url, i, description, tagList, projectId)
-        : uploadAndTrack(file, i, description, tagList, projectId)
+      file.__isImgur
+        ? addImgurUrlAndTrack(file.url, i)
+        : file.__isYoutube
+          ? addContentAndTrack(file.url, i, description, tagList, projectId)
+          : uploadAndTrack(file, i, description, tagList, projectId)
     );
 
     tags = [];

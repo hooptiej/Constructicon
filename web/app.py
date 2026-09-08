@@ -1081,6 +1081,29 @@ def api_imgur_import(background_tasks: BackgroundTasks):
     return JSONResponse(summary)
 
 
+@app.post("/api/imgur/import-url")
+def api_imgur_import_url(background_tasks: BackgroundTasks, url: str = Form(...)):
+    """Issue #203: the generic link field's Imgur-aware counterpart to
+    /api/content (see _upload_drawer.html's addImgurUrlAndTrack) — one
+    pasted Imgur post/album URL, one row, giving the owner exact control
+    over what enters Constructicon instead of /api/imgur/import's
+    account-wide all-or-nothing pull. Returns the same public-item shape
+    /api/content does (so the drawer's OCR-poll logic works unchanged),
+    or {"skipped": true} if that item was already imported."""
+    try:
+        result = imgur_import.import_from_url(url)
+    except imgur_import.ImgurImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not result["slug"]:
+        return JSONResponse({"skipped": True})
+    slug = result["slug"]
+    spec = object_types.get_object_type("imgur")
+    row = db.get_by_slug(slug)
+    if spec.ocr_capable and row["ocr_status"] == "pending":
+        background_tasks.add_task(ocr.run_ocr, slug)
+    return JSONResponse(_to_public(db.get_by_slug(slug)))
+
+
 @app.get("/api/image/{slug}")
 def api_get_image(request: Request, slug: str):
     row = db.get_by_slug(slug)

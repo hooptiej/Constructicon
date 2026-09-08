@@ -9,9 +9,19 @@ Triggered synchronously from web/app.py's POST /api/imgur/import (the
 upload drawer's "Import from Imgur" button) — small enough personal
 galleries that a single request/response round trip is fine, no background
 job needed.
+
+Issue #203: sync_public_gallery() above is all-or-nothing — every public
+submission not already imported comes in on every click, which doesn't
+work for an owner who doesn't want every public post touching
+Constructicon. import_from_url() below is the narrower alternative: one
+pasted Imgur post/album link, one row, giving exact control over what
+comes in. Same Client-ID auth, same _normalize() shaping — just a
+different fetch (a single image/album lookup instead of the account-wide
+submissions list).
 """
 
 import json
+import re
 import urllib.error
 import urllib.request
 
@@ -19,6 +29,15 @@ from core import db, storage
 from core.object_types.imgur import extract_imgur_id
 
 IMGUR_API_BASE = "https://api.imgur.com/3"
+
+# Matches an Imgur album URL, e.g. https://imgur.com/a/AbC123d — checked
+# before IMGUR_ITEM_URL_RE so an album link doesn't get misread as a bare
+# image id.
+IMGUR_ALBUM_URL_RE = re.compile(r"imgur\.com/a/([A-Za-z0-9]+)")
+# Matches a single-image post URL, plain (imgur.com/AbC123d) or under
+# /gallery/ (imgur.com/gallery/AbC123d — Imgur's "shared to the public
+# gallery" form of the same post).
+IMGUR_ITEM_URL_RE = re.compile(r"imgur\.com/(?:gallery/)?([A-Za-z0-9]+)")
 
 
 class ImgurImportError(Exception):
@@ -135,3 +154,76 @@ def sync_public_gallery():
         "skipped": skipped,
         "slugs": imported_slugs,
     }
+
+
+def parse_imgur_url(url):
+    """A pasted URL -> ("album", id) or ("image", id), or (None, None) if
+    it doesn't look like an Imgur post/album link at all. Checks the album
+    form first so imgur.com/a/<id> isn't misread as a bare image id, then
+    falls back to a direct i.imgur.com file link (extract_imgur_id, same
+    regex the object type itself uses), then a plain/gallery post link."""
+    if not url:
+        return None, None
+    m = IMGUR_ALBUM_URL_RE.search(url)
+    if m:
+        return "album", m.group(1)
+    direct_id = extract_imgur_id(url)
+    if direct_id:
+        return "image", direct_id
+    m = IMGUR_ITEM_URL_RE.search(url)
+    if m:
+        return "image", m.group(1)
+    return None, None
+
+
+def _fetch_item(client_id, kind, item_id):
+    path = "album" if kind == "album" else "image"
+    url = f"{IMGUR_API_BASE}/{path}/{item_id}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Client-ID {client_id}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:200]
+        raise ImgurImportError(f"Imgur API error {e.code} for {path} {item_id!r}: {detail}")
+    except urllib.error.URLError as e:
+        raise ImgurImportError(f"Couldn't reach Imgur: {e.reason}")
+    if not body.get("success"):
+        raise ImgurImportError(f"Imgur API reported failure: {body}")
+    return body.get("data")
+
+
+def import_from_url(url):
+    """Issue #203: import exactly one pasted Imgur post/album URL — the
+    owner picks precisely what comes in, instead of sync_public_gallery's
+    all-or-nothing account-wide pull. Same Client-ID auth, same
+    _normalize() shaping, same dedup-by-Imgur-id discipline; only the
+    fetch itself differs (a single image/album lookup, not the
+    account/{username}/submissions list)."""
+    client_id = db.get_setting("imgur_client_id")
+    if not client_id:
+        raise ImgurImportError("Set an Imgur Client ID in the admin pane first.")
+
+    kind, item_id = parse_imgur_url(url)
+    if not item_id:
+        raise ImgurImportError(f"Doesn't look like an Imgur post or album link: {url!r}")
+
+    item = _fetch_item(client_id, kind, item_id)
+    norm = _normalize(item)
+    if norm is None:
+        raise ImgurImportError("Imgur returned no usable image for that link.")
+
+    imgur_id = extract_imgur_id(norm["external_url"])
+    if imgur_id and imgur_id in {extract_imgur_id(u) for u in db.list_external_urls_by_media_type("imgur")}:
+        return {"imported": 0, "skipped": 1, "slug": None}
+
+    slug = storage.make_slug()
+    db.insert_content(
+        slug, db.SOURCE_MANUAL_UPLOAD, "imgur",
+        external_url=norm["external_url"],
+        content_description=norm["title"] or None,
+        content_date=float(norm["datetime"]) if norm["datetime"] else None,
+        description=norm["description"],
+        type_metadata=norm["type_metadata"],
+    )
+    return {"imported": 1, "skipped": 0, "slug": slug}

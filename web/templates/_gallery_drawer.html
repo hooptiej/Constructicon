@@ -160,10 +160,71 @@
       scheduleHide();
     }
   });
-  window.addEventListener('drop', (e) => {
+  // Folder drop (#134), mirrored from _upload_drawer.html — see that file
+  // for the full reasoning (flattened single project per top-level folder,
+  // reusing an existing same-named project, only the first folder in a
+  // multi-item drop is handled this way).
+  function readAllEntries(dirReader) {
+    return new Promise((resolve, reject) => {
+      let all = [];
+      (function readBatch() {
+        dirReader.readEntries((entries) => {
+          if (!entries.length) { resolve(all); return; }
+          all = all.concat(entries);
+          readBatch();
+        }, reject);
+      })();
+    });
+  }
+
+  async function walkDirectory(dirEntry) {
+    const files = [];
+    async function walk(entry) {
+      if (entry.isFile) {
+        files.push(await new Promise((resolve, reject) => entry.file(resolve, reject)));
+      } else if (entry.isDirectory) {
+        for (const child of await readAllEntries(entry.createReader())) await walk(child);
+      }
+    }
+    await walk(dirEntry);
+    return files;
+  }
+
+  async function selectProjectForFolder(name) {
+    const res = await fetch('/api/projects');
+    const projects = await res.json();
+    const match = projects.find(p => p.title.trim().toLowerCase() === name.trim().toLowerCase());
+    if (match) {
+      await loadProjects(match.id);
+    } else {
+      await loadProjects();
+      projectSelect.value = '__new__';
+      newProjectInput.style.display = 'block';
+      newProjectInput.value = name;
+    }
+  }
+
+  window.addEventListener('drop', async (e) => {
     e.preventDefault();
     dragDepth = 0;
     dragging = false;
+    let folderEntry = null;
+    const items = e.dataTransfer.items;
+    if (items && items.length) {
+      for (const item of items) {
+        const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+        if (entry && entry.isDirectory) { folderEntry = entry; break; }
+      }
+    }
+    if (folderEntry) {
+      pinned = true;
+      const files = await walkDirectory(folderEntry);
+      if (files.length) {
+        addFiles(files);
+        await selectProjectForFolder(folderEntry.name);
+      }
+      return;
+    }
     if (e.dataTransfer.files.length) {
       pinned = true; // stay open through the upload, like a real drawer would
       addFiles(e.dataTransfer.files);

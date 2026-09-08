@@ -24,7 +24,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import backup, db, object_types, ocr, similarity, storage, thumbnails
+from core import backup, db, imgur_import, object_types, ocr, similarity, storage, thumbnails
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -746,9 +746,15 @@ def api_backup():
 # Thingiverse's side, so this is exactly the same "paste one static secret"
 # shape as youtube_data_api_key. No storage/endpoint changes required; this
 # confirms #55/#59's genericness holds for a second key.
+# imgur_client_id / imgur_username (#200): public-gallery-only Imgur import
+# (account/{username}/submissions), Client-ID auth — same "paste one static
+# secret" shape again. imgur_username isn't itself a secret but rides the
+# same generic settings mechanism rather than a one-off config path.
 KNOWN_SETTINGS = {
     "youtube_data_api_key": "YouTube Data API Key",
     "thingiverse_app_token": "Thingiverse App Token",
+    "imgur_client_id": "Imgur Client ID",
+    "imgur_username": "Imgur Username",
 }
 
 
@@ -1053,6 +1059,26 @@ async def api_create_content(
         background_tasks.add_task(_ensure_capture_thumbnail, slug)
     _attach_to_project(slug, project_id or None)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
+
+
+@app.post("/api/imgur/import")
+def api_imgur_import(background_tasks: BackgroundTasks):
+    """Issue #200: the upload drawer's "Import from Imgur" button. Runs
+    core.imgur_import.sync_public_gallery() synchronously — a personal
+    gallery's submission count is small enough that one request/response
+    round trip is fine, no background job needed — then schedules OCR for
+    each newly created row the same way /api/content does."""
+    try:
+        summary = imgur_import.sync_public_gallery()
+    except imgur_import.ImgurImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    spec = object_types.get_object_type("imgur")
+    if spec.ocr_capable:
+        for slug in summary["slugs"]:
+            row = db.get_by_slug(slug)
+            if row and row["ocr_status"] == "pending":
+                background_tasks.add_task(ocr.run_ocr, slug)
+    return JSONResponse(summary)
 
 
 @app.get("/api/image/{slug}")

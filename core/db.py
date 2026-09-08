@@ -981,6 +981,21 @@ def list_recent_posts(limit=10):
     return [_row_to_dict(r) for r in rows]
 
 
+def list_external_urls_by_media_type(media_type):
+    """Every non-null external_url for a given media_type, redacted rows
+    included (a redacted row still counts as "already imported" for dedup
+    purposes). Added for #200's Imgur importer, which needs to know what
+    it's already pulled in without re-fetching every row's full data —
+    generic enough for any future external-content importer's dedup pass."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT external_url FROM capture_events WHERE media_type = ? AND external_url IS NOT NULL",
+        (media_type,),
+    ).fetchall()
+    conn.close()
+    return [r["external_url"] for r in rows]
+
+
 # --- Projects ---
 # A curated collection of posts an owner deliberately assembles into one
 # card — distinct from blog_tags/post_tags, which is automatic grouping by

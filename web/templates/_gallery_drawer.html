@@ -48,6 +48,11 @@
           <button type="button" class="btn-secondary" id="youtube-add-btn">Add</button>
         </div>
       </div>
+      <div class="field">
+        <!-- Issue #200, mirrored from _upload_drawer.html -->
+        <button type="button" class="btn-secondary" id="imgur-import-btn" style="width:100%">Import from Imgur</button>
+        <div class="dropzone-hint" id="imgur-import-status" style="margin-top:6px"></div>
+      </div>
       <div id="staged-files-container" class="staged-files-container">
         <div id="staged-list"></div>
         <div id="staged-more-indicator" class="staged-more-indicator" style="display:none"></div>
@@ -365,6 +370,31 @@
     if (e.key === 'Enter') {
       e.preventDefault();
       addYoutubeLink();
+    }
+  });
+
+  // Import from Imgur (#200), mirrored from _upload_drawer.html.
+  const imgurImportBtn = document.getElementById('imgur-import-btn');
+  const imgurImportStatus = document.getElementById('imgur-import-status');
+  imgurImportBtn.addEventListener('click', async () => {
+    imgurImportBtn.disabled = true;
+    imgurImportBtn.textContent = 'Importing…';
+    imgurImportStatus.textContent = '';
+    imgurImportStatus.classList.remove('error-text');
+    try {
+      const res = await fetch('/api/imgur/import', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || 'Import failed');
+      imgurImportStatus.textContent = `Imported ${body.imported} new item${body.imported === 1 ? '' : 's'} (${body.skipped} already had, ${body.found} found total).`;
+      if (body.imported > 0) {
+        document.dispatchEvent(new CustomEvent('constructicon:upload-complete', { detail: { failures: [] } }));
+      }
+    } catch (err) {
+      imgurImportStatus.textContent = err.message;
+      imgurImportStatus.classList.add('error-text');
+    } finally {
+      imgurImportBtn.disabled = false;
+      imgurImportBtn.textContent = 'Import from Imgur';
     }
   });
 

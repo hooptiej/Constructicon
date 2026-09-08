@@ -73,23 +73,16 @@ Anything with an unrecognized extension still stores fine — it just gets
 no thumbnail and no OCR (`DEFAULT_SPEC`) until a real type spec is added
 for it.
 
-## Roadmap: publishing to hooptiej.com
+## Roadmap: static publishing
 
-The long-term goal is a data-driven site — this app, with a real backend
-and editable content — that generates a static export publishable to
-[hooptiej.com](https://hooptiej.com) (`hooptiej/hooptiej.github.io`),
-which is GitHub Pages and can only serve static files. So:
+The long-term goal is for this app to generate a static export of its
+content, publishable to a personal static site elsewhere (GitHub Pages),
+since Constructicon itself always stays private/internal — the dynamic
+app with the database and editing tooling, never exposed directly.
 
-- **Constructicon (here):** the dynamic app — uploads, database, editing
-  tooling. Runs on the home server, never exposed directly as the public
-  site.
-- **hooptiej.github.io:** the static output — plain HTML/CSS/JS generated
-  from Constructicon's content and pushed there.
-
-**Status: the static-export step doesn't exist yet.** No code in this
-repo generates a static site today — that's the next major piece of
-unbuilt work, after the blog UI itself (post authoring, a `/blog` route)
-lands.
+**Status: that export step doesn't exist yet.** No code in this repo
+generates a static site today — that's the next major piece of unbuilt
+work, after the blog UI itself (post authoring, a `/blog` route) lands.
 
 ## Palette
 

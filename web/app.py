@@ -1428,6 +1428,13 @@ def _create_writeup_for_project(project):
         type_metadata={"body": ""},
     )
     db.add_item_to_project(project["id"], writeup_slug)
+    # Tag the write-up with the project's linked tag, the same way
+    # _attach_to_project does for every other member (#219) -- otherwise the
+    # write-up is invisible to tag browsing (/?tag=<project>). Deliberately
+    # *not* routed through _attach_to_project itself, which would also make
+    # a blank write-up the project's auto-cover.
+    if project.get("tag_id"):
+        db.attach_tags(writeup_slug, [project["tag_id"]])
     db.update_project(project["id"], writeup_slug=writeup_slug)
     return db.get_project(project["id"])
 

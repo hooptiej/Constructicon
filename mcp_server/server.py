@@ -162,8 +162,10 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
 
     Pass None for any field you don't want to change. type_metadata is replaced wholesale, not
     merged — read the object's current type_metadata first if you only want to change one key.
-    There is no way to change content_description after creation (e.g. a YouTube video's title) —
-    the database has no update path for that column, only insert-time.
+    (The web app's POST /api/image/{slug} merges instead, via db.update_content_metadata.)
+    content_description (e.g. a YouTube video's title) isn't exposed through this tool yet —
+    db.update_content_metadata / POST /api/image/{slug} can change it, this tool just doesn't
+    take that parameter.
 
     Returns the updated object, or None if not found.
     """
@@ -252,7 +254,8 @@ def constructicon_delete_all() -> dict:
 def constructicon_backup() -> dict:
     """Create a timestamped backup of the entire database and storage.
 
-    Returns {"backup_path": "...","size": ...}.
+    Returns {"filename": ..., "path": ..., "size": ..., "created_at": ...}
+    (see core.backup.create_backup).
     """
     return backup.create_backup()
 
@@ -575,9 +578,16 @@ def constructicon_set_agent_notes(slug: str, notes: str | None = None) -> dict |
     or "already inventoried, skip on re-run."
 
     notes: the note text, or None to clear existing notes.
-    Returns the updated object, or None if not found.
+    Returns the updated object (the usual public shape plus "agent_notes"),
+    or None if not found.
     """
-    return db.set_agent_notes(slug, notes)
+    row = db.set_agent_notes(slug, notes)
+    if row is None:
+        return None
+    # Never return the raw DB row: it carries the `embedding` BLOB, which
+    # isn't JSON-serializable, so the tool call itself failed for every row
+    # that had been through OCR (#211).
+    return {**_to_public(row), "agent_notes": row.get("agent_notes")}
 
 
 if __name__ == "__main__":

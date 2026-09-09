@@ -27,7 +27,7 @@ exist yet.
 
 - **`web/app.py`** — FastAPI/Starlette app (`@app.get`/`@app.post`
   decorators, `HTTPException`, `JSONResponse`/`HTMLResponse`). All HTTP
-  routes live in this one file (~1100 lines): page routes
+  routes live in this one file (~1700 lines): page routes
   (`/`, `/object/{slug}`, `/project/{slug}`, `/gallery/user/{uploader}`,
   `/account`) render Jinja2 templates from `web/templates/`; `/api/*`
   routes are the JSON/form API the templates' JS calls; `/f/{slug}` and
@@ -61,11 +61,10 @@ exist yet.
   web app over the same `/api/upload`/`/api/content` HTTP API, identified
   server-side via the `X-Imagerepo-Client: desktop-app` header (not a
   client-supplied identity — this is still single-owner).
-- **`mcp_server/server.py`** — **not currently deployed** (see "Known gap:
-  no MCP server" below). Still carries the old imagerepo naming/tool
-  vocabulary (`ccc-imagerepo-mcp`, `imagerepo_*` tool names, `client`/
-  `ticket_id` params) — treat it as a stale reference implementation to
-  update, not a working sidecar to assume is running.
+- **`mcp_server/server.py`** — the live `constructicon-mcp` sidecar (see
+  "MCP server: `constructicon-mcp`" below for the tool surface and how it
+  runs alongside `constructicon-web`). Tool names are `constructicon_*`;
+  the old imagerepo vocabulary is gone from here.
 - **`scripts/`** — one-off/maintenance scripts (YouTube channel sync,
   backfill from the old static site, project-grouping fixups). These talk
   to a running instance over HTTP (`--base-url`), the same discipline the
@@ -432,8 +431,10 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
   of Constructicon's actual personal-use case — don't build new features
   assuming they're a live, meaningful concept for this app the way they
   were for imagerepo.
-- **`mcp_server/server.py` is not live** (see "Known gap" above) — don't
-  assume MCP tools are reachable against a running Constructicon instance.
+- **`mcp_server/server.py` IS live** (`constructicon-mcp` / `constructicon-test-mcp`
+  containers — see the MCP section above). If a session can't see
+  `mcp__constructicon-mcp__*` tools, that's a session configuration gap,
+  not evidence the server is missing.
 - **`GET /api/settings` never returns real secret values, only presence.**
   Scripts needing the actual value of a stored setting (e.g. the YouTube
   API key) must call `core.db.get_setting(...)` directly from a process

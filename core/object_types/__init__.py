@@ -138,10 +138,10 @@ def classify_url(url):
     return "url"
 
 
-# Registered after auto-discovery to ensure all modules have been imported.
-# All 11 types (image, youtube, document, audio, pdf, stl, psd, svg, eps,
-# stream, and url) are now registered separately via their own core/object_types/
-# modules. This section only defines the DEFAULT_SPEC fallback.
+# Every concrete type is registered by its own module in this package (the
+# pkgutil loop above imports all of them — `python -c "from core import
+# object_types; print(sorted(object_types.OBJECT_TYPES))"` lists the current
+# set). This section only defines the DEFAULT_SPEC fallback.
 
 
 # Anything not registered above (or media_type left unset) — never breaks

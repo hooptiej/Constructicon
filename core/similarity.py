@@ -14,6 +14,8 @@ Local-first on purpose, same call as OCR: screenshot content doesn't leave
 the box, and there's no per-request cost or new cloud credential to manage.
 """
 
+import threading
+
 import imagehash
 import numpy as np
 from PIL import Image
@@ -27,12 +29,20 @@ EMBEDDING_MATCH_THRESHOLD = 0.6   # cosine similarity — higher is more similar
 MAX_SIMILAR_RESULTS = 12
 
 _model = None
+# run_ocr runs under a 2-wide semaphore (core/ocr.py) and the startup
+# self-heal requeues every pending row at once, so on a cold start two
+# threads routinely race into the lazy init below at the same time -- without
+# the lock both would construct a SentenceTransformer (double load time,
+# double memory) (#224).
+_model_lock = threading.Lock()
 
 
 def _get_model():
     global _model
     if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        with _model_lock:
+            if _model is None:
+                _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return _model
 
 

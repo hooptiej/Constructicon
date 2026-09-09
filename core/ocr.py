@@ -144,7 +144,24 @@ def run_ocr(slug):
     spec = object_types.get_object_type(row.get("media_type"))
     if not spec.ocr_capable:
         return  # this type never gets ocr_status="pending" in the first place
+    # Best-effort end to end (#223): the tesseract call has its own targeted
+    # except inside _run_ocr_pipeline, but anything failing *after* it --
+    # the similarity model load, or any of the db writes hitting a locked
+    # database with the MCP process / watchdog as concurrent writers -- used
+    # to propagate out of the background task and leave the row stuck at
+    # "pending" until the watchdog's 10-minute requeue. Mark it failed
+    # instead, so the state is visible and retryable straight away.
+    try:
+        _run_ocr_pipeline(slug, row, spec)
+    except Exception as e:
+        print(f"OCR pipeline failed for {slug}: {e!r}")
+        try:
+            db.set_ocr_status(slug, "failed")
+        except Exception as e2:
+            print(f"could not mark {slug} failed after OCR pipeline error: {e2!r}")
 
+
+def _run_ocr_pipeline(slug, row, spec):
     # A type with its own embedded text layer (a text-layer PDF today — see
     # core/pdf.py — any future document-ish type tomorrow) gets its text
     # straight from that layer, no tesseract involved: cheaper, and more

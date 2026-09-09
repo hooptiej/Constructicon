@@ -83,6 +83,10 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
 
     If filename, file size, and source_modified_at all match an existing upload, returns
     the existing object instead with "duplicate": true.
+
+    OCR (for OCR-capable types) runs in the background, same as the web app's
+    /api/upload: the returned object has ocr_status "pending" -- call
+    constructicon_get on the slug later to read extracted_text once it's "done".
     """
     content = base64.b64decode(content_base64)
     dupe = db.find_duplicate(filename, len(content), source_modified_at)
@@ -101,7 +105,11 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
                       media_type=media_type,
                       ocr_status="pending" if spec.ocr_capable else None)
     if spec.ocr_capable:
-        ocr.run_ocr(slug)
+        # Background thread, not inline (#225): tesseract (up to
+        # OCR_TIMEOUT_SECONDS) plus a cold sentence-transformers load used to
+        # block the tool response. Same pattern constructicon_retry_ocr and
+        # the startup self-heal already use.
+        threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
     elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
         thumbnails.ensure_thumbnail(db.get_by_slug(slug))
     return {**_to_public(db.get_by_slug(slug)), "duplicate": False}
@@ -264,6 +272,9 @@ def constructicon_add_content(media_type: str, external_url: str | None = None, 
     """Create an object with no uploaded file (e.g., a YouTube link or external document).
 
     Use constructicon_upload instead for file-backed content.
+
+    For OCR-capable types, OCR runs in the background (#225) -- the returned
+    object has ocr_status "pending"; read it back with constructicon_get later.
     """
     spec = object_types.get_object_type(media_type)
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
@@ -276,7 +287,7 @@ def constructicon_add_content(media_type: str, external_url: str | None = None, 
     )
     row = db.get_by_slug(slug)
     if spec.ocr_capable and row["ocr_status"] == "pending":
-        ocr.run_ocr(slug)
+        threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
     elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
         thumbnails.ensure_thumbnail(row)
     return _to_public(db.get_by_slug(slug))

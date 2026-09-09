@@ -57,6 +57,8 @@ def _to_public_project(project):
         "description": project["description"],
         "status": project["status"],
         "cover_slug": project.get("cover_slug"),
+        "writeup_slug": project.get("writeup_slug"),
+        "parent_id": project.get("parent_id"),
     }
 
 
@@ -321,17 +323,20 @@ def constructicon_list_projects() -> list[dict]:
 
 
 @mcp.tool()
-def constructicon_create_project(title: str, description: str = "", cover_slug: str | None = None) -> dict:
+def constructicon_create_project(title: str, description: str = "", cover_slug: str | None = None, parent_id: int | None = None) -> dict:
     """Create a new project.
 
     Also creates a root-level tag with the same name and links it, so tagged
     objects surface through both project and tag browsing.
+
+    parent_id optionally links this project to a parent project (#133),
+    enabling a simple hierarchy of nested projects.
     """
     title = title.strip()
     if not title:
         raise ValueError("Project name can't be empty")
     tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, description=description, cover_slug=cover_slug, tag_id=tag["id"])
+    project = db.create_project(title, description=description, cover_slug=cover_slug, tag_id=tag["id"], parent_id=parent_id)
     return _to_public_project(project)
 
 
@@ -379,6 +384,100 @@ def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[
         raise ValueError("project not found")
     db.remove_item_from_project(project["id"], slug)
     return [_to_public_project(p) for p in db.list_projects_for_post(slug)]
+
+
+@mcp.tool()
+def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) -> list[dict]:
+    """Add multiple objects to a project in a single call.
+
+    Convenience wrapper around constructicon_add_to_project for bulk operations.
+    If the project has a linked tag, objects are also tagged with it.
+    Returns the list of added objects.
+    """
+    project = db.get_project(project_id)
+    if project is None:
+        raise ValueError("project not found")
+
+    added = []
+    for slug in slugs:
+        if db.get_by_slug(slug) is None:
+            continue
+        db.add_item_to_project(project["id"], slug)
+        if project.get("tag_id"):
+            db.attach_tags(slug, [project["tag_id"]])
+        added.append(_to_public(db.get_by_slug(slug)))
+
+    return added
+
+
+@mcp.tool()
+def constructicon_set_project_writeup(project_id: str | int, slug: str) -> dict | None:
+    """Set a project's write-up document to a given object.
+
+    The object must exist and be a document-type item. The document is also
+    added to the project's items if not already present.
+    Returns the updated project, or None if not found.
+    """
+    project = db.get_project(project_id)
+    if project is None:
+        return None
+    if db.get_by_slug(slug) is None:
+        raise ValueError("writeup slug not found")
+
+    # Add the writeup document to the project items if not already there
+    db.add_item_to_project(project["id"], slug)
+
+    # Update the project's writeup_slug
+    updated = db.update_project(project["id"], writeup_slug=slug)
+    return _to_public_project(updated) if updated else None
+
+
+@mcp.tool()
+def constructicon_get_project(id_or_slug: str | int) -> dict | None:
+    """Get a project with full details: metadata, items, tags, cover, and write-up body.
+
+    Returns a comprehensive dict with:
+    - id, slug, title, description, status, cover_slug, writeup_slug, parent_id
+    - items: list of objects in the project (with their tags)
+    - cover: the cover object if cover_slug is set, else None
+    - writeup: the writeup document object if writeup_slug is set, else None
+
+    Returns None if the project is not found.
+    """
+    project = db.get_project(id_or_slug)
+    if project is None:
+        return None
+
+    # Get the project items
+    items = db.list_project_items(project["id"])
+    items_public = []
+    for item in items:
+        item_dict = _to_public(item)
+        # Add tags for each item
+        tags = db.list_tags_for_post(item["slug"])
+        item_dict["tags"] = [t["name"] for t in tags]
+        items_public.append(item_dict)
+
+    # Get the cover object if it exists
+    cover = None
+    if project.get("cover_slug"):
+        cover_row = db.get_by_slug(project["cover_slug"])
+        if cover_row:
+            cover = _to_public(cover_row)
+
+    # Get the writeup object if it exists
+    writeup = None
+    if project.get("writeup_slug"):
+        writeup_row = db.get_by_slug(project["writeup_slug"])
+        if writeup_row:
+            writeup = _to_public(writeup_row)
+
+    return {
+        **_to_public_project(project),
+        "items": items_public,
+        "cover": cover,
+        "writeup": writeup,
+    }
 
 
 @mcp.tool()

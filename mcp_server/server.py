@@ -467,6 +467,20 @@ def constructicon_retry_ocr(slug: str) -> dict | None:
     return _to_public(db.get_by_slug(slug))
 
 
+@mcp.tool()
+def constructicon_set_agent_notes(slug: str, notes: str | None = None) -> dict | None:
+    """Set or clear agent-authored working notes for an object (#206).
+
+    Agent-only scratch space for Claude working state, never exposed in the
+    public API. For example: "this is a Fusion 360 screenshot, not user-facing"
+    or "already inventoried, skip on re-run."
+
+    notes: the note text, or None to clear existing notes.
+    Returns the updated object, or None if not found.
+    """
+    return db.set_agent_notes(slug, notes)
+
+
 if __name__ == "__main__":
     db.init_db()
     # Self-heal: this process (or the web one) may have been killed while OCR

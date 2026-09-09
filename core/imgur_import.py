@@ -46,20 +46,52 @@ class ImgurImportError(Exception):
     error. Never a raw exception traceback."""
 
 
-def _fetch_page(client_id, username, page):
-    url = f"{IMGUR_API_BASE}/account/{username}/submissions/{page}"
+def _get_json(url, client_id, what):
+    """One authenticated GET against the Imgur API, returning the parsed
+    `data` payload. Every failure mode becomes an ImgurImportError (#220):
+    not just HTTPError/URLError, but also a read timeout after connect
+    (TimeoutError isn't a URLError), a non-JSON body (a Cloudflare/HTML
+    error page), or a JSON body that isn't the {success, data} envelope --
+    any of those used to escape as a raw 500 in the drawer. `what` names
+    the thing being fetched for the error message."""
     req = urllib.request.Request(url, headers={"Authorization": f"Client-ID {client_id}"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read())
+            raw = resp.read()
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "ignore")[:200]
-        raise ImgurImportError(f"Imgur API error {e.code} for {username!r}: {detail}")
+        raise ImgurImportError(f"Imgur API error {e.code} for {what}: {detail}")
     except urllib.error.URLError as e:
         raise ImgurImportError(f"Couldn't reach Imgur: {e.reason}")
+    except (TimeoutError, OSError) as e:
+        raise ImgurImportError(f"Imgur request failed for {what}: {e!r}")
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise ImgurImportError(f"Imgur returned a non-JSON response for {what}: {raw[:200]!r}")
+    if not isinstance(body, dict):
+        raise ImgurImportError(f"Imgur returned an unexpected response shape for {what}: {raw[:200]!r}")
     if not body.get("success"):
         raise ImgurImportError(f"Imgur API reported failure: {body}")
-    return body.get("data") or []
+    return body.get("data")
+
+
+def _epoch(value):
+    """Imgur's `datetime` is a unix-seconds integer; treat anything that
+    doesn't coerce as unknown rather than crashing the whole import on one
+    odd item (#220)."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_page(client_id, username, page):
+    url = f"{IMGUR_API_BASE}/account/{username}/submissions/{page}"
+    data = _get_json(url, client_id, f"account {username!r}")
+    return data if isinstance(data, list) else []
 
 
 def fetch_all_submissions(client_id, username, max_pages=50):
@@ -84,7 +116,11 @@ def _normalize(item):
     count go in type_metadata instead. Returns None for a malformed item
     with no usable image link at all (best-effort — skip, don't crash the
     whole import over one bad entry)."""
+    if not isinstance(item, dict):
+        return None
     images = item.get("images") or []
+    if not isinstance(images, list) or not all(isinstance(i, dict) for i in images):
+        images = []
     is_album = bool(images)
     if is_album:
         cover_link = images[0].get("link")
@@ -140,7 +176,7 @@ def sync_public_gallery():
             slug, db.SOURCE_AUTOMATED_UPLOAD, "imgur",
             external_url=norm["external_url"],
             content_description=norm["title"] or None,
-            content_date=float(norm["datetime"]) if norm["datetime"] else None,
+            content_date=_epoch(norm["datetime"]),
             description=norm["description"],
             type_metadata=norm["type_metadata"],
         )
@@ -179,18 +215,10 @@ def parse_imgur_url(url):
 def _fetch_item(client_id, kind, item_id):
     path = "album" if kind == "album" else "image"
     url = f"{IMGUR_API_BASE}/{path}/{item_id}"
-    req = urllib.request.Request(url, headers={"Authorization": f"Client-ID {client_id}"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "ignore")[:200]
-        raise ImgurImportError(f"Imgur API error {e.code} for {path} {item_id!r}: {detail}")
-    except urllib.error.URLError as e:
-        raise ImgurImportError(f"Couldn't reach Imgur: {e.reason}")
-    if not body.get("success"):
-        raise ImgurImportError(f"Imgur API reported failure: {body}")
-    return body.get("data")
+    data = _get_json(url, client_id, f"{path} {item_id!r}")
+    if not isinstance(data, dict):
+        raise ImgurImportError(f"Imgur returned no {path} data for {item_id!r}")
+    return data
 
 
 def import_from_url(url):
@@ -222,7 +250,7 @@ def import_from_url(url):
         slug, db.SOURCE_MANUAL_UPLOAD, "imgur",
         external_url=norm["external_url"],
         content_description=norm["title"] or None,
-        content_date=float(norm["datetime"]) if norm["datetime"] else None,
+        content_date=_epoch(norm["datetime"]),
         description=norm["description"],
         type_metadata=norm["type_metadata"],
     )

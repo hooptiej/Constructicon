@@ -32,7 +32,30 @@ the network perimeter is the security boundary.
 - **Projects** — hand-curated portfolio collections (`projects`/
   `project_items`), distinct from tags: a project is a deliberately
   assembled set of items with manual ordering, shown on the home page's
-  Projects column (`/project/<slug>`).
+  Projects column (`/project/<slug>`). Dropping a folder onto the upload
+  drawer creates one flattened project named after the folder — every
+  file inside (subfolders included) lands in that single project.
+- **Project write-ups, drafted by Claude** — a project can carry a
+  write-up document (`projects.writeup_slug`). Point Claude at a
+  project's files (photos, STLs, videos, whatever's there) and it
+  reconstructs a plausible build chronology from what's actually
+  in the evidence — file timestamps, thumbnails/renders, OCR'd text,
+  video frames — then drafts the write-up, flagging its own guesses for
+  a quick correction pass before anything's finalized. This is the
+  standout feature for turning a pile of old project files into an
+  actual readable history, not just a sorted gallery.
+- **Imgur import** — pull in the owner's own public Imgur gallery
+  (Client-ID auth, no OAuth, so only ever public content), or paste a
+  single Imgur post/album URL into the same link field the YouTube/any
+  URL field already uses.
+- **A live MCP server** (`constructicon-mcp`) — list/search/tag/project
+  tools for driving the app from an agent session, including a
+  one-call `get_project` (items + tags + cover + write-up body) and a
+  reserved `agent_notes` field per item for an agent's own working
+  notes, separate from the owner's actual content.
+- **Project export** — `GET /api/projects/{id}/export.zip` bundles one
+  project's metadata and files for offline/agent analysis, without a
+  round trip per file.
 - **Backup** — `POST /api/backup` snapshots the DB and file storage to a
   zip on demand.
 
@@ -65,24 +88,38 @@ touch the rest of the app. Currently registered:
 | Source code | `.php` `.py` `.js` `.sh` `.json` `.yaml` `.yml` `.html` `.css` `.sql` |
 | Archive | `.zip` `.7z` |
 
-Plus non-file content types with no upload: **YouTube video** (a URL,
-classified automatically), generic **web page** (any other URL), **live
-stream**, and a plain **written post** (no attached file).
+Plus non-file content types with no upload: **YouTube video** and
+**Imgur upload** (both a URL, classified automatically), generic **web
+page** (any other URL), **live stream**, and a plain **written post**
+(no attached file — this is also the type project write-up documents
+use).
 
 Anything with an unrecognized extension still stores fine — it just gets
 no thumbnail and no OCR (`DEFAULT_SPEC`) until a real type spec is added
 for it.
 
-## Roadmap: static publishing
+## Roadmap
 
-The long-term goal is for this app to generate a static export of its
-content, publishable to a personal static site elsewhere (GitHub Pages),
-since Constructicon itself always stays private/internal — the dynamic
-app with the database and editing tooling, never exposed directly.
+The pipeline, as it's actually shaping up:
 
-**Status: that export step doesn't exist yet.** No code in this repo
-generates a static site today — that's the next major piece of unbuilt
-work, after the blog UI itself (post authoring, a `/blog` route) lands.
+1. **Sort content into Projects.** Already works — uploads get grouped by
+   hand, or in bulk via a folder drop.
+2. **Draft a write-up per project.** Already works — Claude reconstructs
+   a chronology from a project's own files and drafts the write-up,
+   saved to that project's `writeup_slug` document.
+3. **Blog UI** — post authoring, a `/blog` route, a title/body split on
+   `capture_events`. **Not built yet.** Once it exists, project
+   write-ups are the natural source material to backfill posts from,
+   rather than starting blog content from scratch.
+4. **Static export** — a template that funnels Projects + blog posts
+   into a static site, since Constructicon itself always stays
+   private/internal (the dynamic app with the database and editing
+   tooling, never exposed directly). **Not built yet** — no code in
+   this repo generates a static site today. Destination is a personal
+   static site elsewhere (GitHub Pages).
+
+Steps 1 and 2 are real and already load-bearing; 3 and 4 are the
+remaining unbuilt work, in that order.
 
 ## Palette
 

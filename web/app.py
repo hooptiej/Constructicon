@@ -218,10 +218,16 @@ def _has_thumbnail(row, spec=None):
 def _to_public(row):
     media_type = row.get("media_type") or "image"
     spec = object_types.get_object_type(media_type)
+    # A redacted row has no file left, and /f/<slug>/thumb answers 410 for
+    # it -- don't advertise a thumbnail URL that can't be fetched (#222).
+    # Matches what the project-card shape below already does; the card
+    # templates also check `redacted` themselves, so this is about the API
+    # shape being consistent for any consumer that doesn't.
+    has_thumb = _has_thumbnail(row, spec) and not row["redacted"]
     return {
         "slug": row["slug"],
         "url": f"/f/{row['slug']}",
-        "thumb_url": f"/f/{row['slug']}/thumb",
+        "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
         "filename": row["filename"],
         # filename is None for content-only rows (youtube/document posts —
         # see insert_content in core/db.py); the gallery cards need
@@ -248,7 +254,7 @@ def _to_public(row):
         # check, so a type with a generated thumbnail (a PDF's rendered
         # first page, once a stream/URL capture is wired up) picks this up
         # for free instead of always falling back to the file icon.
-        "has_thumbnail": _has_thumbnail(row, spec),
+        "has_thumbnail": has_thumb,
         "description": row["description"],
         "tags": row["tags"],
         "client": row["client"],

@@ -544,11 +544,14 @@ def update_tags(slug, description=None, tags=None, client=None):
     conn.commit()
     conn.close()
     if tags is not None:
-        sync_real_tags_for_post(slug, tags)
+        # #213 fix: pass the previous free-text tags so we can diff only against those,
+        # not against the entire tag tree (which includes tags from projects/MCP/etc.)
+        previous_tags = json.loads(existing["tags"]) if existing.get("tags") else []
+        sync_real_tags_for_post(slug, tags, previous_tags=previous_tags)
     return get_by_slug(slug)
 
 
-def sync_real_tags_for_post(post_slug, tag_names):
+def sync_real_tags_for_post(post_slug, tag_names, previous_tags=None):
     """#165: the free-text `tags` column above is invisible to /api/tags
     (autocomplete) and the home page's tag-tree browsing/pills, which only
     ever read blog_tags/post_tags -- a typed tag that only lands in the
@@ -557,8 +560,14 @@ def sync_real_tags_for_post(post_slug, tag_names):
     (single-item save or bulk), full-replace semantics matching the
     free-text column's own contract. Root-level tags only (parent_id None);
     reuses an existing tag of the same name if one already exists (e.g. a
-    project's own auto-linked tag) rather than creating a duplicate."""
-    current_ids = {t["id"] for t in list_tags_for_post(post_slug)}
+    project's own auto-linked tag) rather than creating a duplicate.
+
+    #213 fix: only detaches tags that were in the row's PREVIOUS free-text
+    list (passed as previous_tags), not the entire tag tree. This preserves
+    tags that arrived through other paths (project linkage, MCP attach,
+    child-tag creation) and only removes tags the user explicitly removed
+    from the free-text box."""
+    # Build the set of desired tag IDs from the new tag list
     desired_ids = set()
     for name in tag_names:
         name = name.strip()
@@ -566,10 +575,34 @@ def sync_real_tags_for_post(post_slug, tag_names):
             continue
         tag = get_or_create_tag(name, parent_id=None)
         desired_ids.add(tag["id"])
+
+    # Build the set of previously attached free-text tag IDs
+    # (only root-level tags from the previous free-text column)
+    previous_ids = set()
+    if previous_tags:
+        for name in previous_tags:
+            name = name.strip()
+            if not name:
+                continue
+            # Look up the previous tag — it should already exist (we're only
+            # diffing against what was there before), but use None default
+            # to be safe in case of data inconsistency.
+            tag = _find_tag_by_name(name)
+            if tag and tag["parent_id"] is None:
+                # Only include root-level tags from the previous list
+                previous_ids.add(tag["id"])
+
+    # Attach new tags
+    current_ids = {t["id"] for t in list_tags_for_post(post_slug)}
     to_add = desired_ids - current_ids
     if to_add:
         attach_tags(post_slug, list(to_add))
-    for tag_id in current_ids - desired_ids:
+
+    # Detach only tags that were in previous_ids but not in desired_ids
+    # This means: tags the user explicitly removed from the free-text box,
+    # while preserving tags that arrived through other paths (projects, MCP, etc.)
+    to_remove = previous_ids - desired_ids
+    for tag_id in to_remove:
         detach_tag(post_slug, tag_id)
 
 
@@ -889,11 +922,29 @@ def _slugify(name):
     return slug or "tag"
 
 
+def _find_tag_by_name(name):
+    """Search the entire tag tree for a tag with the given name, regardless
+    of parent. Returns the first match, or None if not found. Used to prevent
+    creating duplicate root-level tags when a child tag with the same name
+    already exists (#213)."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM blog_tags WHERE name = ?", (name,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def get_or_create_tag(name, parent_id=None):
     """Looked up by (name, parent_id) so the same tag name can exist under
     different parents (e.g. a "Camera" tag under both "FPV" and "3D
     Printing") without colliding — only the slug has to be globally unique,
-    and a name collision there just gets a numeric suffix."""
+    and a name collision there just gets a numeric suffix.
+
+    #213 fix: when parent_id is None (root-level lookup for free-text tags),
+    first search the whole tree for an existing tag with that name before
+    creating a new one. This prevents creating a duplicate root-level tag
+    when the user types a child tag's name into the free-text box."""
     conn = get_conn()
     row = conn.execute(
         "SELECT * FROM blog_tags WHERE name = ? AND parent_id IS ?", (name, parent_id)
@@ -901,6 +952,14 @@ def get_or_create_tag(name, parent_id=None):
     if row:
         conn.close()
         return dict(row)
+
+    # #213 fix: if we're creating a root-level tag, first check if this name
+    # exists anywhere in the tree. If so, reuse it instead of creating a duplicate.
+    if parent_id is None:
+        existing_tag = _find_tag_by_name(name)
+        if existing_tag:
+            return existing_tag
+
     slug = _slugify(name)
     base_slug = slug
     n = 2

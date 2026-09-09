@@ -1133,19 +1133,24 @@ def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks
 def api_update_image(
     request: Request,
     slug: str,
-    description: str = Form(""),
-    tags: str = Form("[]"),
-    client: str = Form(""),
+    description: str | None = Form(None),
+    tags: str | None = Form(None),
+    client: str | None = Form(None),
     display_name: str | None = Form(None),
     icon: str | None = Form(None),
     content_description: str | None = Form(None),
     type_metadata: str | None = Form(None),
 ):
-    try:
-        tag_list = json.loads(tags) if tags else []
-    except json.JSONDecodeError:
-        tag_list = []
-    row = db.update_tags(slug, description=description, tags=tag_list, client=client or None)
+    # #213 / A5 fix: only parse and pass tags if they were actually provided
+    # in the form. Defaults of None mean "don't touch this field", allowing
+    # partial updates (e.g. rename-only) without inadvertently wiping tags.
+    tag_list = None
+    if tags is not None:
+        try:
+            tag_list = json.loads(tags) if tags else []
+        except json.JSONDecodeError:
+            tag_list = []
+    row = db.update_tags(slug, description=description, tags=tag_list, client=client)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
     # display_name/icon (#11) — no dedicated UI yet (see #24's "Coming soon

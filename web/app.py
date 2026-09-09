@@ -329,9 +329,6 @@ def _call_properties_fn(spec, row):
         return {}
 
 
-IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif")
-
-
 def _to_object_detail(row):
     """Full detail-page shape for GET /object/<slug> — unlike _to_public,
     this works for any media_type, not just uploaded images. filename can be
@@ -352,13 +349,18 @@ def _to_object_detail(row):
         "ocr_capable": spec.ocr_capable,
         "filename": filename,
         "is_file": is_file,
-        "is_image_file": is_file and Path(filename).suffix.lower() in IMAGE_SUFFIXES,
+        # Drives the full-size <img src="{{ item.url }}"> preview branch in
+        # object_detail.html. Registry-driven (#218): a type whose thumbnail
+        # *is* the uploaded file (image, gif -- see core/object_types/) can be
+        # shown directly by the browser. The old hardcoded suffix tuple here
+        # missed .webp/.bmp/.tiff/.ico, which image.py registers, so those
+        # uploads fell through to the 400px-thumbnail branch instead.
+        "is_image_file": is_file and spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE,
         # #28: drives the <audio controls> mini player branch in
-        # object_detail.html. media_type-based rather than another
-        # extension-suffix check (unlike is_image_file, kept as-is above)
-        # since "audio" is registered ahead of _to_object_detail via
-        # core/object_types.py and nothing here needs to know its exact
-        # extensions.
+        # object_detail.html. media_type-based rather than an
+        # extension-suffix check, since "audio" is registered ahead of
+        # _to_object_detail via core/object_types.py and nothing here needs
+        # to know its exact extensions.
         "is_audio_file": is_file and media_type == "audio",
         # #92: drives the <video controls> player branch in object_detail.html,
         # following the is_audio_file pattern — media_type-based check rather

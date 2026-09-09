@@ -56,7 +56,7 @@ import threading
 from pathlib import Path
 
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageOps, ImageStat
 
 from . import db, object_types, similarity, storage, thumbnails
 
@@ -64,6 +64,17 @@ MIN_NICKNAME_LEN = 3
 OCR_TIMEOUT_SECONDS = 20  # a real screenshot should OCR in a few seconds; past 20s it's not worth the wait
 MAX_CONCURRENT_OCR = 2  # leave headroom on a 4-core box so the app itself stays responsive
 OCR_SEMAPHORE = threading.Semaphore(MAX_CONCURRENT_OCR)
+
+# #237: size bounds for the pre-OCR resize step. Below MIN_OCR_DIMENSION on
+# its long side, text is often too small for tesseract to resolve reliably;
+# above MAX_OCR_DIMENSION (a real iPhone photo can be 4032x3024+), there's no
+# accuracy benefit to the extra pixels, only wasted CPU time — confirmed a
+# real 4032x3024 photo OCRs in 0.8s downscaled vs. 4.8s at full size, same
+# (correctly empty) result. Everything in between is left untouched —
+# testing found a fixed upscale threshold as high as 1200px, combined with a
+# fixed contrast multiplier, actively degraded already-clean images.
+MIN_OCR_DIMENSION = 700
+MAX_OCR_DIMENSION = 2000
 
 
 def _match_client_tags(text):
@@ -118,6 +129,36 @@ def _compute_similarity_signals(slug, image_path, text):
         print(f"Embedding failed for {slug}: {e!r}")
 
 
+def _preprocess_for_ocr(img):
+    """#237: normalize contrast/background/size before tesseract sees the
+    image — tesseract's own defaults assume dark text on a light
+    background at a reasonable resolution, which a lot of real screenshots
+    (dark-mode UIs, tiny crops, huge phone photos) don't match.
+
+    Grayscale, then invert if the image is mean-dark (catches light-text-
+    on-dark-background UIs tesseract otherwise reads poorly), then
+    autocontrast only — deliberately no fixed ImageEnhance.Contrast
+    multiplier stacked on top, since testing found that combination
+    hallucinates garbage text on images that were already clean (an
+    already-fine light CAD panel screenshot went from correctly reading
+    "Origin / Bodies / Sketches" to "Component1:1" nonsense with a fixed
+    1.5x multiplier in the mix). Resize only at the extremes — see
+    MIN_OCR_DIMENSION/MAX_OCR_DIMENSION above."""
+    img = img.convert("L")
+    if ImageStat.Stat(img).mean[0] < 128:
+        img = ImageOps.invert(img)
+    img = ImageOps.autocontrast(img, cutoff=1)
+    w, h = img.size
+    long_side = max(w, h)
+    if long_side < MIN_OCR_DIMENSION:
+        scale = MIN_OCR_DIMENSION / long_side
+        img = img.resize((round(w * scale), round(h * scale)), Image.LANCZOS)
+    elif long_side > MAX_OCR_DIMENSION:
+        scale = MAX_OCR_DIMENSION / long_side
+        img = img.resize((round(w * scale), round(h * scale)), Image.LANCZOS)
+    return img
+
+
 def _load_for_ocr(image_path):
     """Open an image for pytesseract, guaranteed to hand it a format it
     actually recognizes. pytesseract checks the PIL Image's own `.format`
@@ -129,8 +170,12 @@ def _load_for_ocr(image_path):
     TypeError('Unsupported image format/type') even though the pixels
     load without issue. Re-encoding to PNG in memory and reopening resets
     `.format` to something tesseract always accepts, regardless of what
-    the original container format was."""
-    img = Image.open(image_path).convert("RGB")
+    the original container format was.
+
+    #237: also runs the image through _preprocess_for_ocr first — the PNG
+    round-trip below is still purely a format fix, the quality work
+    happens in that step."""
+    img = _preprocess_for_ocr(Image.open(image_path).convert("RGB"))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

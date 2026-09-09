@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS capture_events (
     content_date REAL,
     type_metadata TEXT NOT NULL DEFAULT '{}',
     display_name TEXT,
-    icon TEXT
+    icon TEXT,
+    agent_notes TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_capture_events_source ON capture_events(source);
 CREATE INDEX IF NOT EXISTS idx_capture_events_client ON capture_events(client);
@@ -315,6 +316,12 @@ def init_db():
     # points at a capture_events.slug with no FK constraint.
     if "writeup_slug" not in existing_project_columns:
         conn.execute("ALTER TABLE projects ADD COLUMN writeup_slug TEXT")
+    # agent_notes (#206): reserved space for agent-authored working notes, separate
+    # from owner-facing content. Used for Claude working state (e.g., "this is a
+    # Fusion 360 screenshot, not user-facing" or "already inventoried, skip on re-run").
+    # Never exposed through public HTTP API — agent-only scratch space.
+    if "agent_notes" not in existing_columns:
+        conn.execute("ALTER TABLE capture_events ADD COLUMN agent_notes TEXT")
     conn.commit()
     conn.close()
 
@@ -586,6 +593,22 @@ def rename_object(slug, display_name=None, icon=None):
             slug,
         ),
     )
+    conn.commit()
+    conn.close()
+    return get_by_slug(slug)
+
+
+def set_agent_notes(slug, notes):
+    """Sets or clears agent-authored working notes for an object (#206).
+
+    notes: the note text (a string), or None to clear existing notes.
+    Agent-only scratch space, never exposed through public HTTP API.
+    Returns the updated row, or None if not found."""
+    existing = get_by_slug(slug)
+    if existing is None:
+        return None
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET agent_notes = ? WHERE slug = ?", (notes, slug))
     conn.commit()
     conn.close()
     return get_by_slug(slug)

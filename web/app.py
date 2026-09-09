@@ -967,7 +967,9 @@ async def api_upload(
         raise HTTPException(status_code=400, detail="modified_at must be a unix-milliseconds number")
     dupe = db.find_duplicate(file.filename, file_size, source_modified_at)
     if dupe is not None:
-        dupe_date = datetime.fromtimestamp(dupe["timestamp"]).strftime("%b %-d, %Y at %-I:%M %p")
+        # _friendly_datetime, not a raw strftime with %-d/%-I -- those are the
+        # platform-specific extensions that helper exists to avoid (#211).
+        dupe_date = _friendly_datetime(dupe["timestamp"])
         raise HTTPException(
             status_code=409,
             detail=f"Already uploaded by {dupe['tech']} on {dupe_date} — see /object/{dupe['slug']}",
@@ -1731,6 +1733,12 @@ def get_file(slug: str):
         raise HTTPException(status_code=404, detail="not found")
     if row["redacted"]:
         raise HTTPException(status_code=410, detail="file was redacted (sensitive content) — metadata is still on the image page")
+    if not row.get("stored_filename"):
+        # Content-only row (youtube/imgur/url/document — see core/db.py's
+        # insert_content): there is no local file to serve. Without this
+        # guard storage.path_for(None) raises TypeError and the route 500s
+        # (#211), even though _to_public advertises /f/<slug> for every row.
+        raise HTTPException(status_code=404, detail="this object has no uploaded file — see its /object page")
     path = storage.path_for(row["stored_filename"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="file missing on disk")

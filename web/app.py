@@ -83,7 +83,17 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                 # Try to parse as form data — FastAPI routes use Form(...) parameters
                 if body_bytes:
                     try:
-                        form_data = dict(await request.form())
+                        # Starlette's FormData is a multi-dict — the bulk
+                        # routes send `slugs=a&slugs=b&...` as repeated
+                        # fields (`slugs: list[str] = Form(...)`), and a
+                        # plain dict() would keep only the last value
+                        # (#214). Keep every value: a repeated key becomes
+                        # a list, a single one stays a scalar.
+                        form = await request.form()
+                        form_data = {}
+                        for key in form.keys():
+                            values = form.getlist(key)
+                            form_data[key] = values if len(values) > 1 else values[0]
                     except Exception:
                         # If form parsing fails, try JSON (some endpoints might use JSON)
                         try:
@@ -127,14 +137,24 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                     if len(parts) > 3 and parts[1] == "api" and parts[2] == "image":
                         slug = parts[3]
                         affected_slugs = [slug]
-                # Also check for slugs in form data if present
+                # Also check for slugs in form data if present. Repeated
+                # form fields arrive as a list (see above); a single slug
+                # arrives as a bare string, which is the slug itself — not
+                # JSON to be parsed (#214). Only a string that actually
+                # looks like a JSON array gets decoded (a JSON-body client).
                 if "slugs" in form_data:
                     try:
                         slugs = form_data["slugs"]
                         if isinstance(slugs, str):
-                            slugs = json.loads(slugs)
+                            stripped = slugs.strip()
+                            if stripped.startswith("["):
+                                slugs = json.loads(stripped)
+                            else:
+                                slugs = [slugs]
                         if isinstance(slugs, list):
-                            affected_slugs.extend(slugs)
+                            affected_slugs.extend(
+                                s for s in slugs if isinstance(s, str) and s
+                            )
                     except Exception:
                         pass
                 # Deduplicate

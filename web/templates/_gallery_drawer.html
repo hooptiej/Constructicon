@@ -404,10 +404,49 @@
     updateSubmitButton();
   }
 
-  function addFiles(fileList) {
+  // Helper to stage a link after validation and Imgur detection.
+  // Used by both manual link-add (#25) and .url-file-drop paths.
+  function stageLink(url, showError = true) {
+    uploadError.style.display = 'none';
+    const trimmedUrl = url.trim();
+    if (!trimmedUrl) return false;
+    if (!LINK_URL_RE.test(trimmedUrl)) {
+      if (showError) {
+        uploadError.textContent = "That doesn't look like a valid link — paste a full http:// or https:// URL.";
+        uploadError.style.display = 'block';
+      }
+      return false;
+    }
+    const isImgur = IMGUR_URL_RE.test(trimmedUrl);
+    stagedFiles.push({ name: trimmedUrl, size: 0, __isYoutube: !isImgur, __isImgur: isImgur, url: trimmedUrl });
+    renderStaged();
+    return true;
+  }
+
+  async function addFiles(fileList) {
     pinned = true;
     showPanel();
-    for (const file of fileList) stagedFiles.push(file);
+    for (const file of fileList) {
+      // .url file support (#199) — Windows Internet Shortcut files are plain
+      // INI format; extract the URL and stage as a link, same path as pasted links.
+      if (file.name.toLowerCase().endsWith('.url')) {
+        try {
+          const content = await file.text();
+          const match = content.match(/^URL=(.+)$/im);
+          if (match && match[1]) {
+            stageLink(match[1], false); // don't error on malformed URL here
+          } else {
+            // Malformed .url file — fall back to uploading it as a file
+            stagedFiles.push(file);
+          }
+        } catch (err) {
+          // Error reading file — fall back to uploading as-is
+          stagedFiles.push(file);
+        }
+      } else {
+        stagedFiles.push(file);
+      }
+    }
     renderStaged();
   }
 
@@ -429,20 +468,12 @@
   const IMGUR_URL_RE = /imgur\.com\//i;
 
   function addYoutubeLink() {
-    uploadError.style.display = 'none';
-    const url = youtubeUrlInput.value.trim();
-    if (!url) return;
-    if (!LINK_URL_RE.test(url)) {
-      uploadError.textContent = "That doesn't look like a valid link — paste a full http:// or https:// URL.";
-      uploadError.style.display = 'block';
-      return;
+    const url = youtubeUrlInput.value;
+    if (stageLink(url, true)) {
+      pinned = true;
+      showPanel();
+      youtubeUrlInput.value = '';
     }
-    pinned = true;
-    showPanel();
-    const isImgur = IMGUR_URL_RE.test(url);
-    stagedFiles.push({ name: url, size: 0, __isYoutube: !isImgur, __isImgur: isImgur, url });
-    youtubeUrlInput.value = '';
-    renderStaged();
   }
   youtubeAddBtn.addEventListener('click', (e) => {
     e.preventDefault();

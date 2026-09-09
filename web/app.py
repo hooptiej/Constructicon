@@ -931,7 +931,12 @@ async def api_upload(
     user = db.SOURCE_AUTOMATED_UPLOAD if is_desktop_app else db.SOURCE_MANUAL_UPLOAD
     content = await file.read()
     file_size = len(content)
-    source_modified_at = float(modified_at) / 1000 if modified_at else None
+    try:
+        source_modified_at = float(modified_at) / 1000 if modified_at else None
+    except ValueError:
+        # Same clean-400 contract type_metadata gets in /api/content (#221),
+        # rather than a 500 traceback on a garbage timestamp.
+        raise HTTPException(status_code=400, detail="modified_at must be a unix-milliseconds number")
     dupe = db.find_duplicate(file.filename, file_size, source_modified_at)
     if dupe is not None:
         dupe_date = datetime.fromtimestamp(dupe["timestamp"]).strftime("%b %-d, %Y at %-I:%M %p")
@@ -1041,7 +1046,10 @@ async def api_create_content(
         parsed_type_metadata = json.loads(type_metadata) if type_metadata else None
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="type_metadata must be valid JSON")
-    content_date_epoch = float(content_date) if content_date else None
+    try:
+        content_date_epoch = float(content_date) if content_date else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="content_date must be a unix-seconds number")
     slug = storage.make_slug()
     db.insert_content(
         slug, user, media_type,
@@ -1512,7 +1520,12 @@ def api_update_project(
         if parent_id:
             try:
                 parent_id_int = int(parent_id)
-                if parent_id_int == int(project_id):
+                # Compare against the resolved row's id, not the path
+                # param: project_id may be a slug (db.get_project accepts
+                # either), and int("some-slug") would land in the
+                # except ValueError below as a bogus "Invalid parent_id"
+                # (#217).
+                if parent_id_int == project["id"]:
                     raise HTTPException(status_code=400, detail="A project cannot be its own parent")
                 if db.get_project(parent_id_int) is None:
                     raise HTTPException(status_code=400, detail="Parent project not found")

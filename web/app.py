@@ -1540,6 +1540,36 @@ def api_update_project(
     return JSONResponse(updated or {})
 
 
+@app.get("/api/projects/{project_id}/export.zip")
+def api_export_project(project_id: str):
+    """Export a project as a zip file containing the manifest and all uploaded
+    files. The zip contains:
+    - manifest.json: Project metadata and item descriptions
+    - files/: Directory with uploaded files for each item
+
+    Useful for offline review or agent analysis without repeated API calls."""
+    try:
+        from core import project_export
+        zip_bytes = project_export.export_project(project_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+
+    # Get project name for the download filename
+    try:
+        project = db.get_project(project_id)
+        filename = f"{project['slug']}-export.zip" if project else "project-export.zip"
+    except Exception:
+        filename = "project-export.zip"
+
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _attach_to_project(slug, project_id):
     """Shared by /api/upload and /api/content: adds the new row to the given
     project's curated item list (so it shows up on the project's own detail

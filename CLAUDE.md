@@ -319,6 +319,22 @@ Two containers run side by side on that box:
 
 ### Live-testing a branch against `constructicon-test`
 
+**Serialize work against this container — never dispatch two background
+agents whose verification touches `constructicon-test` (or the shared main
+checkout) at the same time.** Confirmed 2026-09-09/10: two agents running
+concurrently (one rebasing/deploying #240, another live-verifying #241)
+raced on the same remote directory — one agent's git-based reset wiped the
+other's tar-deployed files mid-test, producing a real-looking but entirely
+phantom error (`item.caption_capable` Undefined) that cost real time to
+chase before the actual cause (the collision itself, not a code bug) was
+confirmed. If a subagent's task will touch `constructicon-test` or deploy
+anything there, wait for it to fully finish (commit + PR opened) before
+starting the next one that needs the same shared infrastructure — don't
+run them in parallel just because the tasks themselves are independent.
+An agent working in its own isolated git worktree for its *own* checkout
+is fine to run alongside others; the shared remote box is the actual
+contended resource, not the local checkout.
+
 Real, live verification beats trusting a self-reported "py_compile passed"
 or "code review looks fine" claim — see the #67 scaffold PR's actual
 history: an agent's own compile/review-only check missed a real circular-

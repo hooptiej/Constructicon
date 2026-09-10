@@ -502,6 +502,10 @@
     dragDepth = Math.max(0, dragDepth - 1);
   });
 
+  // #240: name of the top-level folder from the most recent folder drop, or
+  // '' for individually dropped/picked files. Cleared once a batch finishes.
+  let droppedFolderName = '';
+
   // Folder drop (#134) — dropping a folder (vs. individual files) stages
   // every file found anywhere under it (subfolders included, flattened —
   // no sub-projects, deliberately simplified from the original nested
@@ -568,11 +572,16 @@
     if (folderEntry) {
       const files = await walkDirectory(folderEntry);
       if (files.length) {
+        // #240: the server matches this name against existing tags/projects
+        // too (sent as folder_name on each /api/upload — see uploadAndTrack),
+        // independent of the project auto-select below.
+        droppedFolderName = folderEntry.name;
         addFiles(files);
         await selectProjectForFolder(folderEntry.name);
       }
       return;
     }
+    droppedFolderName = '';
     if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
   });
 
@@ -615,6 +624,7 @@
     form.append('tags', JSON.stringify(tagList));
     form.append('project_id', projectId || '');
     form.append('modified_at', file.lastModified);
+    form.append('folder_name', droppedFolderName || '');
 
     let res;
     try {
@@ -805,10 +815,16 @@
     const failures = results.filter(r => !r.ok).map(r => r.message);
     document.dispatchEvent(new CustomEvent('constructicon:upload-complete', { detail: { failures } }));
 
+    // #240: the auto-match step may have queued "which project?" questions
+    // for this batch — let the admin pane refresh its badge/queue now
+    // rather than on the next page load.
+    document.dispatchEvent(new CustomEvent('constructicon:pending-decisions-changed'));
+
     if (failures.length === 0) {
       stagedFiles = [];
       fileStates = [];
       dismissedIndices = new Set();
+      droppedFolderName = '';
       renderStaged();
       closeDrawer();
       return;

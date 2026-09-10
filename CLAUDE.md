@@ -155,6 +155,16 @@ exist yet.
   the YouTube Data API key), so new integrations don't need a
   docker-compose env var wired in from outside. `GET /api/settings` only
   ever reports *presence* of a key, never its value.
+- **`pending_decisions`** (#240) — a small generic "don't auto-decide, ask
+  the owner" queue: `{id, kind, post_slug, payload JSON, created_at,
+  resolved_at}`. Only `kind='project_match'` exists today — written by
+  `core/automatch.py` when an upload's filename/folder name matches more
+  than one project title (one match auto-adds, tag-name matches always
+  auto-apply). Surfaces in the admin pane ("Needs your input", badge on
+  the trigger) via `GET /api/pending-decisions`; resolved with checkboxes
+  via `POST /api/pending-decisions/{id}/resolve`. Resolved rows are kept
+  (resolution stored in `payload.resolution`). A future "ask, don't guess"
+  case adds a new `kind` + payload shape, not a table.
 
 ### Tag hierarchy gotcha — walk the tree, don't just keyword-search
 

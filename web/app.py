@@ -24,7 +24,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import backup, captions, db, imgur_import, object_types, ocr, similarity, storage, thumbnails
+from core import automatch, backup, captions, db, imgur_import, object_types, ocr, similarity, storage, thumbnails
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -814,6 +814,76 @@ def api_set_setting(key: str = Form(...), value: str = Form("")):
     return JSONResponse({key: db.has_setting(key)})
 
 
+@app.get("/api/pending-decisions")
+def api_list_pending_decisions():
+    """#240: every open "ask, don't guess" question for the admin pane's
+    queue — today only kind="project_match" (an upload whose name matched
+    more than one project). Each entry carries the object it's about (slim
+    card shape) and, for project_match, the resolved candidate projects.
+    Decisions whose object or candidates have since vanished are resolved
+    away here as "stale" rather than shown as unanswerable."""
+    items = []
+    for decision in db.list_pending_decisions():
+        row = db.get_by_slug(decision["post_slug"])
+        if row is None:
+            db.resolve_pending_decision(decision["id"], {"stale": "object deleted"})
+            continue
+        entry = {
+            "id": decision["id"],
+            "kind": decision["kind"],
+            "created_at": decision["created_at"],
+            "created_at_display": _friendly_datetime(decision["created_at"]),
+            "post": _to_content_public(row),
+            "payload": decision["payload"],
+        }
+        if decision["kind"] == automatch.KIND_PROJECT_MATCH:
+            candidates = []
+            for pid in decision["payload"].get("candidate_project_ids", []):
+                project = db.get_project(pid)
+                if project is not None:
+                    candidates.append({"id": project["id"], "title": project["title"], "slug": project["slug"]})
+            if len(candidates) < 2:
+                # Not ambiguous any more (projects deleted/merged since) —
+                # nothing left worth asking; an owner can still file it by
+                # hand from the detail page.
+                db.resolve_pending_decision(decision["id"], {"stale": "fewer than two candidates remain"})
+                continue
+            entry["candidates"] = candidates
+        items.append(entry)
+    return JSONResponse({"count": len(items), "items": items})
+
+
+@app.post("/api/pending-decisions/{decision_id}/resolve")
+def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form([])):
+    """#240: the checkbox-resolve action. For project_match, `project_ids`
+    is whichever candidates were ticked — zero ("none of these"), one, or
+    several, since an item can reasonably belong to more than one project.
+    Only ids that were actually candidates are honored (anything else is
+    ignored, not an error — a stale form can't add the item somewhere it
+    was never asked about). Attaches via _attach_to_project so the linked
+    tag / cover behavior matches a drawer pick, then marks the decision
+    resolved with what was applied."""
+    decision = db.get_pending_decision(decision_id)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="No such pending decision")
+    if decision["resolved_at"] is not None:
+        raise HTTPException(status_code=409, detail="Already resolved")
+    applied = []
+    if decision["kind"] == automatch.KIND_PROJECT_MATCH:
+        allowed = {int(pid) for pid in decision["payload"].get("candidate_project_ids", [])}
+        chosen = []
+        for raw in project_ids:
+            raw = raw.strip()
+            if raw.isdigit() and int(raw) in allowed and int(raw) not in chosen:
+                chosen.append(int(raw))
+        if db.get_by_slug(decision["post_slug"]) is not None:
+            for pid in chosen:
+                _attach_to_project(decision["post_slug"], pid)
+                applied.append(pid)
+    db.resolve_pending_decision(decision_id, {"project_ids": applied})
+    return JSONResponse({"ok": True, "applied": applied, "remaining": db.count_pending_decisions()})
+
+
 @app.get("/api/audit-log")
 def api_get_audit_log(limit: int = 100):
     """Fetch recent audit log entries (most recent first). Returns a list of
@@ -951,6 +1021,7 @@ async def api_upload(
     client: str = Form(""),
     project_id: str = Form(""),
     modified_at: str = Form(""),
+    folder_name: str = Form(""),
 ):
     # Which Source string a browser upload gets is decided server-side, not
     # by a client-supplied field — the desktop uploader app (see
@@ -1019,7 +1090,34 @@ async def api_upload(
     if captions.should_caption(spec):
         background_tasks.add_task(captions.run_caption, slug)
     _attach_to_project(slug, project_id or None)
+    # #240: name-based auto-tag / auto-project, AFTER the explicit project
+    # pick above so an already-chosen project is excluded from the
+    # candidate set rather than re-asked about. folder_name is the dropped
+    # top-level folder for a folder-drop upload (#134), empty otherwise.
+    _auto_match_upload(slug, [Path(file.filename).stem, folder_name])
     return JSONResponse(_to_public(db.get_by_slug(slug)))
+
+
+def _auto_match_upload(slug, texts):
+    """#240 glue between core/automatch.py (which decides and applies tags)
+    and _attach_to_project (which owns project side effects: linked tag,
+    first-item cover). Best-effort, same discipline as the OCR/caption
+    background steps: a matching bug must never fail an upload that has
+    already been stored."""
+    try:
+        already_in = [p["id"] for p in db.list_projects_for_post(slug)]
+        result = automatch.apply_to_upload(slug, texts, exclude_project_ids=already_in)
+        if result["project"]:
+            _attach_to_project(slug, result["project"]["id"])
+        if result["tags"] or result["project"] or result["pending_id"]:
+            print(
+                f"automatch {slug}: tags={result['tags']} "
+                f"project={result['project']['title'] if result['project'] else None} "
+                f"pending={result['pending_id']} ({len(result['candidates'])} candidates)",
+                flush=True,
+            )
+    except Exception as e:
+        print(f"automatch failed for {slug}: {e!r}", flush=True)
 
 
 @app.post("/api/content")

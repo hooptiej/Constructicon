@@ -104,6 +104,15 @@ CREATE TABLE IF NOT EXISTS audit_log (
     error_detail TEXT,
     timestamp REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pending_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    post_slug TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL,
+    resolved_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_pending_decisions_open ON pending_decisions(kind, resolved_at);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -820,6 +829,9 @@ def delete_upload(slug):
     conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? OR slug_b = ?", (slug, slug))
     conn.execute("DELETE FROM project_items WHERE post_slug = ?", (slug,))
     conn.execute("DELETE FROM post_tags WHERE post_slug = ?", (slug,))
+    # #240: an open "which project?" question about a row that no longer
+    # exists is just noise in the admin pane's queue.
+    conn.execute("DELETE FROM pending_decisions WHERE post_slug = ?", (slug,))
     conn.commit()
     conn.close()
 
@@ -1415,3 +1427,99 @@ def list_recent_audit_logs(limit=100):
         }
         for row in rows
     ]
+
+
+# --- Pending decisions (#240) ---
+# A small generic "don't auto-decide, ask the owner" queue. One row per open
+# question about one capture_events row: `kind` names the trigger (today only
+# "project_match" — core/automatch.py's ambiguous multi-project name match),
+# `payload` is a freeform JSON bag whose shape is per-kind (for project_match:
+# {"candidate_project_ids": [...], "matched_text": "..."}), and resolving
+# stamps resolved_at plus whatever was decided into payload["resolution"].
+# Deliberately not a project_match-specific table: a future "ask, don't
+# guess" case (an ambiguous OCR client match, a duplicate-looking upload...)
+# adds a new `kind` and a payload shape, not a schema migration. Kept to
+# exactly what #240 needs beyond that — no priorities, no assignment, no
+# expiry.
+
+def _pending_row(row):
+    d = dict(row)
+    d["payload"] = json.loads(d["payload"]) if d.get("payload") else {}
+    return d
+
+
+def add_pending_decision(kind, post_slug, payload):
+    """Queues one open decision. If the same (kind, post_slug) already has an
+    UNRESOLVED entry, its payload is replaced instead of a duplicate being
+    queued (a re-upload / retry shouldn't ask the same question twice).
+    Returns the decision id either way."""
+    conn = get_conn()
+    existing = conn.execute(
+        "SELECT id FROM pending_decisions WHERE kind = ? AND post_slug = ? AND resolved_at IS NULL",
+        (kind, post_slug),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE pending_decisions SET payload = ?, created_at = ? WHERE id = ?",
+            (json.dumps(payload or {}), time.time(), existing["id"]),
+        )
+        decision_id = existing["id"]
+    else:
+        cur = conn.execute(
+            "INSERT INTO pending_decisions (kind, post_slug, payload, created_at) VALUES (?, ?, ?, ?)",
+            (kind, post_slug, json.dumps(payload or {}), time.time()),
+        )
+        decision_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return decision_id
+
+
+def get_pending_decision(decision_id):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM pending_decisions WHERE id = ?", (decision_id,)).fetchone()
+    conn.close()
+    return _pending_row(row) if row else None
+
+
+def list_pending_decisions(kind=None):
+    """Every UNRESOLVED decision, oldest first (the owner should see what's
+    been waiting longest at the top), optionally filtered by kind."""
+    conn = get_conn()
+    if kind is None:
+        rows = conn.execute("SELECT * FROM pending_decisions WHERE resolved_at IS NULL ORDER BY created_at ASC").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM pending_decisions WHERE resolved_at IS NULL AND kind = ? ORDER BY created_at ASC", (kind,)
+        ).fetchall()
+    conn.close()
+    return [_pending_row(r) for r in rows]
+
+
+def count_pending_decisions():
+    conn = get_conn()
+    n = conn.execute("SELECT COUNT(*) AS n FROM pending_decisions WHERE resolved_at IS NULL").fetchone()["n"]
+    conn.close()
+    return n
+
+
+def resolve_pending_decision(decision_id, resolution=None):
+    """Marks a decision resolved, recording what was chosen (any JSON-able
+    value — for project_match, the list of project ids applied, possibly
+    empty for "none of these") inside payload["resolution"]. Resolved rows
+    are kept, not deleted, so the audit trail of what got auto-asked and
+    what the owner answered survives. Returns the updated row, or None."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM pending_decisions WHERE id = ?", (decision_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return None
+    payload = json.loads(row["payload"]) if row["payload"] else {}
+    payload["resolution"] = resolution
+    conn.execute(
+        "UPDATE pending_decisions SET resolved_at = ?, payload = ? WHERE id = ?",
+        (time.time(), json.dumps(payload), decision_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_pending_decision(decision_id)

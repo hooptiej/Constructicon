@@ -509,6 +509,24 @@ body.delete-mode-on .card-select-row { display: flex; }
 .breadcrumb-separator { color: var(--text-3); margin: 0 2px; }
 .breadcrumb-current { color: var(--text-2); font-weight: 500; }
 
+/* #241: inline title editing, shared by the object detail page (display_name)
+   and the project detail page (title). The wrapper holds the read-only text
+   plus a small pencil button; clicking either swaps in an input of the same
+   font size, saved on Enter/blur, cancelled on Escape. */
+.title-edit { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+.title-edit-text { cursor: text; }
+.title-edit-btn {
+  background: none; border: none; padding: 2px; cursor: pointer; color: var(--text-3);
+  display: inline-flex; align-items: center; flex-shrink: 0; border-radius: 4px;
+}
+.title-edit-btn:hover, .title-edit:hover .title-edit-btn { color: var(--accent); }
+.title-edit-input {
+  background: var(--surface); border: 1px solid var(--accent); border-radius: 6px;
+  padding: 2px 6px; color: var(--text); font: inherit; width: 100%; min-width: 160px; box-sizing: border-box;
+}
+.title-edit-input:disabled { opacity: 0.6; }
+.title-edit-error { font-size: 12px; color: #C97A5E; margin: 4px 0 0; }
+
 .detail-layout { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
 .detail-main { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 16px; }
 .detail-preview {

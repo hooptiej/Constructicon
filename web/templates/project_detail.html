@@ -17,7 +17,7 @@
     <a href="/project/{{ ancestor.slug }}" style="color:inherit;text-decoration:none;border-bottom:1px dotted">{{ ancestor.title }}</a>
     <span> / </span>
     {% endfor %}
-    <span style="font-weight:500">{{ project.title }}</span>
+    <span style="font-weight:500" id="project-breadcrumb-current">{{ project.title }}</span>
   </div>
   {% endif %}
 
@@ -28,7 +28,16 @@
     </div>
     {% endif %}
     <div>
-      <h1 class="page-title">{{ project.title }}</h1>
+      {# #241: click the title (or the pencil) to rename in place — see the
+         title-edit script at the bottom, same immediate-effect pattern as
+         the cover/writeup/status selectors. #}
+      <h1 class="page-title title-edit" id="project-title-edit">
+        <span class="title-edit-text" id="project-title-text" title="Click to rename">{{ project.title }}</span>
+        <button type="button" class="title-edit-btn" id="project-title-edit-btn" title="Rename project" aria-label="Rename project">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 20H8L18.5 9.5C19.3284 8.67157 19.3284 7.32843 18.5 6.5L17.5 5.5C16.6716 4.67157 15.3284 4.67157 14.5 5.5L4 16V20Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 7L17 11" stroke="currentColor" stroke-width="1.8"/></svg>
+        </button>
+      </h1>
+      <p class="title-edit-error" id="project-title-error" style="display:none"></p>
       {% if project.description %}<p class="page-subtitle">{{ project.description }}</p>{% endif %}
       <div style="margin-top:12px;display:flex;align-items:center;gap:12px;font-size:13px">
         <label>Parent project:</label>
@@ -256,6 +265,89 @@ parentSelect.addEventListener('change', async function() {
 });
 
 loadParentProjects();
+
+// Inline title rename (#241). Click the title text or the pencil to swap in
+// an input; Enter or blur saves via the existing POST /api/projects/{id}
+// (title=...), Escape cancels. An empty/unchanged value is a no-op — the
+// backend would happily store "" as the title, and a project with no name
+// is never what a blur-away meant. On failure the old title is restored
+// and the error shown under the heading.
+{
+  const textEl = document.getElementById('project-title-text');
+  const editBtn = document.getElementById('project-title-edit-btn');
+  const errorEl = document.getElementById('project-title-error');
+  const breadcrumbEl = document.getElementById('project-breadcrumb-current');
+  let currentTitle = {{ project.title | tojson }};
+  let editing = false;
+
+  function applyTitle(title) {
+    currentTitle = title;
+    textEl.textContent = title;
+    if (breadcrumbEl) breadcrumbEl.textContent = title;
+    document.title = `${title} — Constructicon`;
+  }
+
+  function startEdit() {
+    if (editing) return;
+    editing = true;
+    errorEl.style.display = 'none';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'title-edit-input';
+    input.value = currentTitle;
+    input.maxLength = 200;
+    let done = false;
+
+    function finish() {
+      if (done) return;
+      done = true;
+      input.replaceWith(textEl);
+      editBtn.style.display = '';
+      editing = false;
+    }
+
+    async function commit() {
+      if (done) return;
+      const value = input.value.trim();
+      if (!value || value === currentTitle) { finish(); return; }
+      input.disabled = true;
+      try {
+        const response = await fetch(`/api/projects/${projectId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `title=${encodeURIComponent(value)}`
+        });
+        if (response.ok) {
+          const project = await response.json();
+          applyTitle(project.title || value);
+        } else {
+          const body = await response.json().catch(() => ({}));
+          errorEl.textContent = body.detail || `Rename failed (${response.status})`;
+          errorEl.style.display = 'block';
+        }
+      } catch (error) {
+        console.error('Error renaming project:', error);
+        errorEl.textContent = 'Rename failed — network error';
+        errorEl.style.display = 'block';
+      }
+      finish();
+    }
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(); }
+    });
+    input.addEventListener('blur', commit);
+
+    editBtn.style.display = 'none';
+    textEl.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+
+  textEl.addEventListener('click', startEdit);
+  editBtn.addEventListener('click', startEdit);
+}
 </script>
 
 {% endblock %}

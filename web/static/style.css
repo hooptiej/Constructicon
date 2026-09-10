@@ -880,15 +880,20 @@ body.delete-mode-on .card-select-row { display: flex; }
   font-size: 12.5px; font-weight: 500; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;
 }
 .home-widget-compact .page-subtitle { margin: 0; }
-/* Bounds Unfiled's footprint regardless of how many items land in it, so it
-   can never again dominate the page the way the full-width #41 section did
-   — it scrolls internally past this height instead of pushing Projects
-   further down the page. */
-.unfiled-scroll { max-height: 300px; overflow-y: auto; padding-right: 4px; }
 
-/* Files widget tabs (#69 part 1) — type-scoped filtering for recent uploads.
-   Tabs are built from the actual media types present in the data, with an
-   "All" tab for unfiltered view. Only types that have recent items get tabs
+/* #256: the right column (.home-widgets-right-column) is already stretched
+   by .home-widgets' grid default (align-items: stretch) to match Projects'
+   row height — the merged Files widget just needs to actually fill that
+   stretched height instead of sitting at its own content height with empty
+   space below it (which is what two short stacked widgets used to leave).
+   min-height: 0 overrides flexbox's default min-height: auto, which would
+   otherwise force this item back to its content size and make the
+   files-scroll rule below unable to constrain anything. */
+.home-widgets-right-column .home-widget { flex: 1; min-height: 0; }
+
+/* Files widget tabs (#69 part 1, #256) — type-scoped filtering across every
+   upload. Tabs are built from the actual media types present in the data,
+   with an "All" tab for unfiltered view. Only types that have data get tabs
    (no empty tabs). */
 .file-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
 .file-tab {
@@ -899,7 +904,12 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .file-tab:hover { color: var(--text-2); border-color: var(--border-stronger); }
 .file-tab.active { color: var(--text); background: var(--card); border-color: var(--border-strong); font-weight: 600; }
-.files-scroll { max-height: 300px; overflow-y: auto; padding-right: 4px; }
+/* #256: was a flat max-height: 300px (bounding the old standalone Files
+   widget's own footprint) — now flex-fills whatever's left inside the
+   merged widget after its header/tabs, so the card's overall height tracks
+   Projects' instead of a fixed pixel guess, still scrolling internally
+   rather than growing the page. */
+.files-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
 
 /* #139: Responsive collapse to single-column layout on narrow viewports.
    At 768px and below, the 2-column grid collapses back to full-width stacked

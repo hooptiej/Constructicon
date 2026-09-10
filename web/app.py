@@ -24,7 +24,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import backup, db, imgur_import, object_types, ocr, similarity, storage, thumbnails
+from core import backup, captions, db, imgur_import, object_types, ocr, similarity, storage, thumbnails
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -353,6 +353,9 @@ def _to_object_detail(row):
         "type_icon": spec.badge_icon,
         "type_badge": spec.badge_text,
         "ocr_capable": spec.ocr_capable,
+        # #239: drives the "Suggested caption" panel — the caption itself
+        # lives in type_metadata.auto_caption (see core/captions.py).
+        "caption_capable": spec.caption_capable and not captions.DISABLED,
         "filename": filename,
         "is_file": is_file,
         # Drives the full-size <img src="{{ item.url }}"> preview branch in
@@ -1009,6 +1012,12 @@ async def api_upload(
         # render onto (STL today) still needs one generated somewhere —
         # see _ensure_capture_thumbnail above.
         background_tasks.add_task(_ensure_capture_thumbnail, slug)
+    # #239: auto-caption suggestion via the local vision model. Its own
+    # background task, its own serialization (core/captions.py's
+    # CAPTION_LOCK + per-image Ollama restart) — deliberately not folded
+    # into OCR's semaphore, it's a different resource (the GPU).
+    if captions.should_caption(spec):
+        background_tasks.add_task(captions.run_caption, slug)
     _attach_to_project(slug, project_id or None)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
@@ -1095,6 +1104,8 @@ async def api_create_content(
         background_tasks.add_task(ocr.run_ocr, slug)
     elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
         background_tasks.add_task(_ensure_capture_thumbnail, slug)
+    if captions.should_caption(spec):
+        background_tasks.add_task(captions.run_caption, slug)  # #239, see /api/upload
     _attach_to_project(slug, project_id or None)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
@@ -1165,6 +1176,84 @@ def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks
     db.set_ocr_status(slug, "pending")
     background_tasks.add_task(ocr.run_ocr, slug)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
+
+
+@app.post("/api/image/{slug}/caption")
+def api_retry_caption(request: Request, slug: str, background_tasks: BackgroundTasks):
+    """#239: (re-)run the auto-caption suggestion for one object — for rows
+    that predate captioning, a failed attempt, or a caption worth another
+    roll. Same background/best-effort shape as api_retry_ocr; the detail
+    page polls GET /api/image/{slug} for type_metadata.auto_caption_status
+    to leave "pending"."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if row["redacted"]:
+        raise HTTPException(status_code=400, detail="File was redacted — there's no image left to caption")
+    spec = object_types.get_object_type(row.get("media_type"))
+    if not captions.should_caption(spec):
+        raise HTTPException(status_code=400, detail=f"Captioning isn't available for {spec.label} content")
+    db.update_content_metadata(slug, type_metadata={captions.STATUS_KEY: "pending"})
+    background_tasks.add_task(captions.run_caption, slug)
+    return JSONResponse(_to_public(db.get_by_slug(slug)))
+
+
+@app.get("/api/captions/defaults")
+def api_caption_defaults():
+    """#239: what the pipeline actually runs with, so the admin pane's
+    tuning panel starts from production's real values rather than its own
+    copy of them."""
+    return JSONResponse({
+        "model": captions.OLLAMA_MODEL,
+        "prompt": captions.DEFAULT_PROMPT,
+        "temperature": captions.DEFAULT_TEMPERATURE,
+        "num_predict": captions.DEFAULT_NUM_PREDICT,
+        "ollama_up": captions.is_ollama_up(),
+        "docker_socket": captions.docker_socket_available(),
+    })
+
+
+@app.post("/api/captions/test")
+def api_caption_test(
+    slug: str = Form(...),
+    temperature: float = Form(captions.DEFAULT_TEMPERATURE),
+    num_predict: int = Form(captions.DEFAULT_NUM_PREDICT),
+    prompt: str = Form(""),
+):
+    """#239: the admin pane's live tuning panel — one synchronous model call
+    against an existing object's real preview image with the given
+    settings, WITHOUT writing anything to the row. Goes through the exact
+    same caption_once() cycle as the pipeline (lock + post-call Ollama
+    restart), so a tuning run can never overlap a real one and measures
+    the same thing production will."""
+    row = db.get_by_slug(slug.strip())
+    if row is None:
+        raise HTTPException(status_code=404, detail="No object with that slug")
+    if row["redacted"]:
+        raise HTTPException(status_code=400, detail="That object was redacted")
+    spec = object_types.get_object_type(row.get("media_type"))
+    if not spec.caption_capable:
+        raise HTTPException(status_code=400, detail=f"{spec.label} objects aren't caption-capable (see core/object_types)")
+    image_path = captions._caption_source_path(row, spec)
+    if image_path is None:
+        raise HTTPException(status_code=400, detail="No preview image available for that object")
+    if not 0.0 <= temperature <= 2.0:
+        raise HTTPException(status_code=400, detail="temperature must be between 0 and 2")
+    if not 1 <= num_predict <= 1000:
+        raise HTTPException(status_code=400, detail="num_predict must be between 1 and 1000")
+    result = captions.caption_once(
+        image_path,
+        prompt=prompt.strip() or None,
+        temperature=temperature,
+        num_predict=num_predict,
+    )
+    return JSONResponse({
+        **result,
+        "slug": row["slug"],
+        "media_type": spec.key,
+        "thumb_url": f"/f/{row['slug']}/thumb" if _has_thumbnail(row, spec) else None,
+        "settings": {"temperature": temperature, "num_predict": num_predict, "prompt": prompt.strip() or captions.DEFAULT_PROMPT},
+    })
 
 
 @app.post("/api/image/{slug}")

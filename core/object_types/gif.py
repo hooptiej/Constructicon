@@ -55,6 +55,7 @@ register(ObjectTypeSpec(
     label="Animated GIF",
     thumbnail_source=ThumbnailSource.UPLOADED_FILE,
     ocr_capable=True,
+    caption_capable=True,  # #239: first frame, same image OCR sees
     extensions=frozenset({".gif"}),
     properties_fn=get_properties,
     badge_icon="\U0001F4CF",

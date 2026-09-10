@@ -106,6 +106,7 @@ register(ObjectTypeSpec(
     # had to route around.
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,  # OCR runs against the rendered raster; no text layer to extract directly (see core/eps.py)
+    caption_capable=True,  # #239: the Ghostscript-rendered raster
     extensions=frozenset({".eps"}),
     capture_fn=capture_thumbnail,
     badge_icon="\U0001F5A8️",  # printer — PostScript's original target device

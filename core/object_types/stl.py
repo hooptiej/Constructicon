@@ -137,6 +137,11 @@ register(ObjectTypeSpec(
     label="3D printing file",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=False,  # binary mesh format, no meaningful text to extract
+    # #239: explicitly NOT captioned. The plain-background wireframe preview
+    # above produced degenerate repeated-punctuation garbage from moondream
+    # in testing (2026-09-09) — a hard failure, not a weak caption. This is
+    # its own deliberate exclusion, not a side effect of ocr_capable=False.
+    caption_capable=False,
     extensions=frozenset({".stl"}),
     capture_fn=capture_thumbnail,
     badge_icon="\U0001F9CA",  # ice cube — closest built-in glyph to a 3D-printed block

@@ -1277,12 +1277,19 @@ def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks
 
 
 @app.post("/api/image/{slug}/caption")
-def api_retry_caption(request: Request, slug: str, background_tasks: BackgroundTasks):
+def api_retry_caption(request: Request, slug: str, background_tasks: BackgroundTasks, advance: bool = Form(False)):
     """#239: (re-)run the auto-caption suggestion for one object — for rows
     that predate captioning, a failed attempt, or a caption worth another
     roll. Same background/best-effort shape as api_retry_ocr; the detail
     page polls GET /api/image/{slug} for type_metadata.auto_caption_status
-    to leave "pending"."""
+    to leave "pending".
+
+    #250: advance=True is the detail page's "Regenerate" click (a caption
+    already exists) — moves to the next step in captions.STEPS and runs
+    only that one step (cascade=False), wrapping back to step 0 after the
+    last one, so repeated clicks give real variety instead of repeating
+    the same greedy default. advance=False (the "Generate" case, no prior
+    caption) behaves as before: start at step 0 and auto-cascade on empty."""
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -1292,7 +1299,12 @@ def api_retry_caption(request: Request, slug: str, background_tasks: BackgroundT
     if not captions.should_caption(spec):
         raise HTTPException(status_code=400, detail=f"Captioning isn't available for {spec.label} content")
     db.update_content_metadata(slug, type_metadata={captions.STATUS_KEY: "pending"})
-    background_tasks.add_task(captions.run_caption, slug)
+    if advance:
+        current_step = row["type_metadata"].get(captions.STEP_KEY, 0)
+        next_step = (current_step + 1) % len(captions.STEPS)
+        background_tasks.add_task(captions.run_caption, slug, next_step, False)
+    else:
+        background_tasks.add_task(captions.run_caption, slug)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 

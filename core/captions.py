@@ -115,6 +115,26 @@ METADATA_KEY = "auto_caption"
 STATUS_KEY = "auto_caption_status"  # "done" | "failed" (absent = never attempted)
 STEP_KEY = "auto_caption_step"  # #250: index into STEPS last attempted/used (absent = step 0)
 
+# #251: separate from STEP_KEY, which gets overwritten by every subsequent
+# Regenerate click — these record which ladder step actually produced the
+# text the owner chose to use, at the moment "Use this caption" is clicked
+# (see api_use_caption in web/app.py), so it survives further regenerating
+# and is still on record after the fact. Absent = no caption has ever been
+# adopted into description for this row.
+DESCRIPTION_STEP_KEY = "description_caption_step"
+DESCRIPTION_STEP_LABEL_KEY = "description_caption_step_label"  # precomputed describe_step() text, for templates that shouldn't need to know STEPS
+DESCRIPTION_MODEL_KEY = "description_caption_model"
+DESCRIPTION_USED_AT_KEY = "description_caption_used_at"
+
+
+def describe_step(step_index):
+    """Short human label for STEPS[step_index] — 'default (temp 0.0)' for
+    step 0, otherwise 'loosened prompt, temp X' — used wherever the owner
+    needs to see which rung of the ladder produced a caption (#251)."""
+    prompt, temperature = STEPS[step_index % len(STEPS)]
+    kind = "default prompt" if prompt == DEFAULT_PROMPT else "loosened prompt"
+    return f"{kind}, temp {temperature}"
+
 
 # --- Ollama HTTP ---
 

@@ -349,10 +349,15 @@ if (captionPanel) {
   if (captionStatus === 'pending') pollCaption();
   document.getElementById('caption-retry-btn').addEventListener('click', async () => {
     const prior = captionStatus;
+    // #250: a caption already showing means this click is "Regenerate" —
+    // step to the next ladder prompt instead of repeating the same
+    // greedy default (which would return byte-identical text).
+    const advance = !!captionText;
     captionStatus = 'pending';
     renderCaptionPanel();
     try {
-      const res = await fetch('/api/image/{{ item.slug }}/caption', { method: 'POST' });
+      const formBody = new URLSearchParams({ advance: advance ? 'true' : 'false' });
+      const res = await fetch('/api/image/{{ item.slug }}/caption', { method: 'POST', body: formBody });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: 'Failed to start captioning' }));
         alert(body.detail || 'Failed to start captioning');

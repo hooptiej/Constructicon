@@ -81,22 +81,28 @@ DEFAULT_PROMPT = (
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_NUM_PREDICT = 120
 
-# #246: DEFAULT_PROMPT's constraints ("do not guess", "do not read text",
-# stay to one or two sentences) occasionally make the model pick the
+# #246/#250: DEFAULT_PROMPT's constraints ("do not guess", "do not read
+# text", stay to one or two sentences) occasionally make the model pick the
 # end-of-output token as its very first token on an otherwise describable
 # image, returning empty — confirmed via the tuning panel that this is the
 # prompt's doing, not the image: a bare "Describe this image." at the same
 # temperature 0.0 produced a real caption immediately on the same photo.
-# So the escalation loosens the prompt first, then turns up the heat only
-# if that alone isn't enough — two retries, not a pyramid. FALLBACK_PROMPT
-# drops the constraints (more hallucination risk — accepted only on retry,
-# never the first attempt) and RETRY_TEMPERATURE is one small, modest bump,
-# kept well under the ~0.3 mark where #239's tuning saw invented objects.
+#
+# STEPS is the one shared escalation ladder: index 0 is always the strict
+# default; each step after it loosens the prompt first, then turns up the
+# heat, in small linear moves that stay well under the ~0.3 mark where
+# #239's tuning saw invented objects. Two jobs use the same ladder —
+# run_caption() cascades through it automatically on an empty response
+# (upload/import pipeline), and a manual "Regenerate" click advances
+# exactly one step at a time (see api_retry_caption in web/app.py) so
+# repeated clicks give real variety instead of repeating the same greedy
+# default. 3-5 steps total, then wraps back to 0 — not a pyramid.
 FALLBACK_PROMPT = "Describe this image."
-RETRY_TEMPERATURE = 0.15
-RETRY_STEPS = (
+STEPS = (
+    (DEFAULT_PROMPT, DEFAULT_TEMPERATURE),
     (FALLBACK_PROMPT, DEFAULT_TEMPERATURE),  # loosen the prompt first
-    (FALLBACK_PROMPT, RETRY_TEMPERATURE),  # then turn up the heat
+    (FALLBACK_PROMPT, 0.15),  # then turn up the heat, a little
+    (FALLBACK_PROMPT, 0.25),  # ...and a little more
 )
 
 GENERATE_TIMEOUT_SECONDS = 180  # first call after a restart includes loading the model onto the GPU
@@ -107,6 +113,7 @@ CAPTION_LOCK = threading.Lock()
 
 METADATA_KEY = "auto_caption"
 STATUS_KEY = "auto_caption_status"  # "done" | "failed" (absent = never attempted)
+STEP_KEY = "auto_caption_step"  # #250: index into STEPS last attempted/used (absent = step 0)
 
 
 # --- Ollama HTTP ---
@@ -263,9 +270,17 @@ def should_caption(spec):
     return bool(spec.caption_capable) and not DISABLED
 
 
-def run_caption(slug):
+def run_caption(slug, start_step=0, cascade=True):
     """Background task, mirrors ocr.run_ocr: best-effort end to end, writes
-    the result (or a failed marker) into type_metadata, never raises."""
+    the result (or a failed marker) into type_metadata, never raises.
+
+    start_step/cascade let the same function serve both callers of STEPS:
+    the upload/import pipeline (start_step=0, cascade=True — try the
+    strict default, auto-advance through the ladder on an empty response)
+    and a manual "Regenerate" click (#250; cascade=False — run exactly the
+    one step the caller picked via api_retry_caption's step-advance logic,
+    even if it comes back empty, so repeated clicks give real variety
+    instead of hidden multi-step jumps behind one click)."""
     try:
         row = db.get_by_slug(slug)
         if row is None or row["redacted"]:
@@ -281,23 +296,29 @@ def run_caption(slug):
             print(f"caption: no source image for {slug} ({spec.key}) — skipping", flush=True)
             db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
             return
-        result = caption_once(image_path)
-        for retry_prompt, retry_temperature in RETRY_STEPS:
-            if result["error"] or result["caption"]:
-                break
-            print(f"caption empty for {slug} — retrying with prompt {retry_prompt!r} at temperature {retry_temperature}", flush=True)
-            result = caption_once(image_path, prompt=retry_prompt, temperature=retry_temperature)
+        step_index = start_step % len(STEPS)
+        step_prompt, step_temperature = STEPS[step_index]
+        result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature)
+        if cascade:
+            for next_index in range(step_index + 1, len(STEPS)):
+                if result["error"] or result["caption"]:
+                    break
+                step_prompt, step_temperature = STEPS[next_index]
+                print(f"caption empty for {slug} — retrying with prompt {step_prompt!r} at temperature {step_temperature}", flush=True)
+                result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature)
+                step_index = next_index
         if result["error"] or not result["caption"]:
-            print(f"caption failed for {slug}: {result['error'] or 'empty response'}", flush=True)
-            db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
+            print(f"caption failed for {slug} at step {step_index}: {result['error'] or 'empty response'}", flush=True)
+            db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed", STEP_KEY: step_index})
             return
         db.update_content_metadata(slug, type_metadata={
             METADATA_KEY: result["caption"],
             STATUS_KEY: "done",
+            STEP_KEY: step_index,
             "auto_caption_model": OLLAMA_MODEL,
         })
         print(
-            f"caption done for {slug}: {result['elapsed_seconds']}s model, "
+            f"caption done for {slug}: step {step_index}, {result['elapsed_seconds']}s model, "
             f"restart={'yes' if result['restarted'] else 'NO'} ({result['restart_seconds']}s)",
             flush=True,
         )

@@ -317,6 +317,30 @@ Two containers run side by side on that box:
   live-testing recipe below (tar/scp) is still fine to use for a branch
   that isn't merged to `main` yet — `deploy.sh` only ever pulls `main`.
 
+## Periodic architectural review
+
+Beyond routine per-issue bug fixes, this repo has done one deep architectural
+audit so far: a Fable-model deep-dive session on issue #148 (2026-09-08/09)
+that surfaced #213 (a HIGH-severity tag-detachment data-integrity bug, fixed
+same session) plus a batch of smaller findings (#214/#217 fixed;
+#226-#229 deliberately filed-not-fixed, pending a scoping decision).
+That kind of review — a fresh model given full codebase context, hunting
+specifically for cross-cutting/architectural issues rather than the
+single-feature-at-a-time view a normal issue gives — catches a different
+class of problem than day-to-day work does, and is worth repeating on a
+cadence rather than only after something already went wrong.
+
+**Cadence: roughly every 150 merged PRs.** Baseline: 121 merged PRs as of
+2026-09-10 (`gh pr list --repo hooptiej/Constructicon --state merged --limit
+300 --json number | jq length`) — next review due somewhere around the
+~270-merged-PR mark, then every ~150 after that. This isn't an automated
+trigger (deliberately — see `~/.claude/CLAUDE.md`'s note on why standing
+always-on checking hooks get killed here for burning tokens unprompted);
+it's a number worth checking opportunistically (e.g. when already looking at
+`gh pr list` for something else, or when starting a session that's about to
+do a batch of new feature work) and flagging to the owner if it's been
+crossed, not something to poll for on a schedule.
+
 ### Live-testing a branch against `constructicon-test`
 
 **Serialize work against this container — never dispatch two background

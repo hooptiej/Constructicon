@@ -81,13 +81,23 @@ DEFAULT_PROMPT = (
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_NUM_PREDICT = 120
 
-# #246: greedy decoding (DEFAULT_TEMPERATURE) occasionally picks the
+# #246: DEFAULT_PROMPT's constraints ("do not guess", "do not read text",
+# stay to one or two sentences) occasionally make the model pick the
 # end-of-output token as its very first token on an otherwise describable
-# image, returning empty. Two small, linear bumps off of greedy are enough
-# to break that without drifting into the invented-object territory the
-# #239 tuning runs saw above ~0.3 — deliberately not escalating faster than
-# that per retry.
-RETRY_TEMPERATURES = (0.15, 0.2)
+# image, returning empty — confirmed via the tuning panel that this is the
+# prompt's doing, not the image: a bare "Describe this image." at the same
+# temperature 0.0 produced a real caption immediately on the same photo.
+# So the escalation loosens the prompt first, then turns up the heat only
+# if that alone isn't enough — two retries, not a pyramid. FALLBACK_PROMPT
+# drops the constraints (more hallucination risk — accepted only on retry,
+# never the first attempt) and RETRY_TEMPERATURE is one small, modest bump,
+# kept well under the ~0.3 mark where #239's tuning saw invented objects.
+FALLBACK_PROMPT = "Describe this image."
+RETRY_TEMPERATURE = 0.15
+RETRY_STEPS = (
+    (FALLBACK_PROMPT, DEFAULT_TEMPERATURE),  # loosen the prompt first
+    (FALLBACK_PROMPT, RETRY_TEMPERATURE),  # then turn up the heat
+)
 
 GENERATE_TIMEOUT_SECONDS = 180  # first call after a restart includes loading the model onto the GPU
 RESTART_TIMEOUT_SECONDS = 60
@@ -272,13 +282,11 @@ def run_caption(slug):
             db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
             return
         result = caption_once(image_path)
-        tried_temperature = DEFAULT_TEMPERATURE
-        for retry_temperature in RETRY_TEMPERATURES:
+        for retry_prompt, retry_temperature in RETRY_STEPS:
             if result["error"] or result["caption"]:
                 break
-            print(f"caption empty for {slug} at temperature {tried_temperature} — retrying at {retry_temperature}", flush=True)
-            result = caption_once(image_path, temperature=retry_temperature)
-            tried_temperature = retry_temperature
+            print(f"caption empty for {slug} — retrying with prompt {retry_prompt!r} at temperature {retry_temperature}", flush=True)
+            result = caption_once(image_path, prompt=retry_prompt, temperature=retry_temperature)
         if result["error"] or not result["caption"]:
             print(f"caption failed for {slug}: {result['error'] or 'empty response'}", flush=True)
             db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})

@@ -12,7 +12,7 @@
         <a href="{{ crumb.href }}" class="breadcrumb-link">{{ crumb.label }}</a>
         <span class="breadcrumb-separator">›</span>
       {% else %}
-        <span class="breadcrumb-current">{{ crumb.label }}</span>
+        <span class="breadcrumb-current" id="object-breadcrumb-current">{{ crumb.label }}</span>
       {% endif %}
     {% endfor %}
   </nav>
@@ -193,10 +193,21 @@
     </div>
     <div class="detail-panel">
       <div>
-        <div class="mono" style="font-size:14px">
-          {{ item.display_name }}
+        {# #241: click the name (or the pencil) to set/clear the display_name
+           override in place — see the title-edit script at the bottom.
+           item.display_name here is the already-resolved chain
+           (override → filename → content_description → slug), so an item
+           that's never been renamed still shows its filename as before. #}
+        <div class="mono" style="font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="title-edit" id="object-title-edit" style="min-width:0">
+            <span class="title-edit-text" id="object-title-text" title="Click to rename">{{ item.display_name }}</span>
+            <button type="button" class="title-edit-btn" id="object-title-edit-btn" title="Rename" aria-label="Rename">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M4 20H8L18.5 9.5C19.3284 8.67157 19.3284 7.32843 18.5 6.5L17.5 5.5C16.6716 4.67157 15.3284 4.67157 14.5 5.5L4 16V20Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 7L17 11" stroke="currentColor" stroke-width="1.8"/></svg>
+            </button>
+          </span>
           {% if item.type_badge %}<span class="type-badge" title="{{ item.type_label }}">{{ item.type_icon }} {{ item.type_badge }}</span>{% endif %}
         </div>
+        <p class="title-edit-error" id="object-title-error" style="display:none"></p>
         <div class="detail-meta" style="margin-top:8px">
           <span>Source: {{ item.source_display }}</span>
           <span>{{ item.uploaded_at_display }}</span>
@@ -798,6 +809,91 @@ document.getElementById('detail-form').addEventListener('submit', async (e) => {
 document.addEventListener('constructicon:upload-complete', (e) => {
   if (!e.detail.failures.length) location.reload();
 });
+
+// Inline display-name rename (#241). Click the name text or the pencil to
+// swap in an input; Enter or blur saves via the existing POST
+// /api/image/{slug} (display_name=...), Escape cancels. An empty or
+// unchanged value is a no-op, same as the project page: db.rename_object
+// documents "" as "clear the override", but FastAPI collapses an empty
+// Form value to the None default before the route ever sees it, so
+// sending "" changes nothing (verified live) — clearing an override back
+// to the filename fallback needs a route tweak, tracked separately.
+// Only display_name is sent, so tags/description on the form above aren't
+// touched (the route's fields default to "leave alone", see #213).
+{
+  const textEl = document.getElementById('object-title-text');
+  const editBtn = document.getElementById('object-title-edit-btn');
+  const errorEl = document.getElementById('object-title-error');
+  const breadcrumbEl = document.getElementById('object-breadcrumb-current');
+  let currentName = {{ item.display_name | tojson }};
+  let editing = false;
+
+  function applyName(name) {
+    currentName = name;
+    textEl.textContent = name;
+    if (breadcrumbEl) breadcrumbEl.textContent = name;
+    document.title = `${name} — Constructicon`;
+  }
+
+  function startEdit() {
+    if (editing) return;
+    editing = true;
+    errorEl.style.display = 'none';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'title-edit-input mono';
+    input.value = currentName;
+    input.maxLength = 200;
+    let done = false;
+
+    function finish() {
+      if (done) return;
+      done = true;
+      input.replaceWith(textEl);
+      editBtn.style.display = '';
+      editing = false;
+    }
+
+    async function commit() {
+      if (done) return;
+      const value = input.value.trim();
+      if (!value || value === currentName) { finish(); return; }
+      input.disabled = true;
+      const form = new FormData();
+      form.append('display_name', value);
+      try {
+        const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
+        if (res.ok) {
+          const item = await res.json();
+          applyName(item.display_name || value);
+        } else {
+          const body = await res.json().catch(() => ({}));
+          errorEl.textContent = body.detail || `Rename failed (${res.status})`;
+          errorEl.style.display = 'block';
+        }
+      } catch (err) {
+        console.error('Error renaming object:', err);
+        errorEl.textContent = 'Rename failed — network error';
+        errorEl.style.display = 'block';
+      }
+      finish();
+    }
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(); }
+    });
+    input.addEventListener('blur', commit);
+
+    editBtn.style.display = 'none';
+    textEl.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+
+  textEl.addEventListener('click', startEdit);
+  editBtn.addEventListener('click', startEdit);
+}
 
 // --- Related / Similar: available on every object type (#52) — the
 // backend relation mechanism (core/db.py's add_relation/remove_relation,

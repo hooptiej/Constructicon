@@ -126,13 +126,11 @@
     </div>
 
     <!-- #139/#256: right column wrapper for the Files widget, sharing the
-         right 1/3 of the 2-column layout. Grid's default align-items:stretch
-         already makes this column match Projects' row height; .home-widget
-         inside it gets flex:1 (style.css) so the ONE widget it now holds
-         fills that height instead of leaving empty space below a short
-         card, which is what motivated merging Unfiled+Files in the first
-         place — two short compact widgets stacked with visible slack below
-         them, in a column already as tall as Projects. -->
+         right 1/3 of the 2-column layout. Projects dictates the shared
+         height, not grid's own auto-row stretch (see the Files widget's
+         own script further down for why — CSS alone made whichever column
+         had more content inflate the other, which backfired once Files
+         could hold hundreds of uncapped cards). -->
     {% if files_by_type %}
     <div class="home-widgets-right-column">
 
@@ -292,6 +290,35 @@
       document.addEventListener('constructicon:upload-complete', (e) => {
         if (!e.detail.failures.length) location.reload();
       });
+
+      // #256: Projects dictates height, Files matches it — grid's own
+      // auto-row sizing counts both columns' natural content size, so
+      // relying on that alone let Files' now-uncapped card count inflate
+      // Projects' row instead of the other way around. Measuring here
+      // (Projects' script above already ran by the time this executes, so
+      // its DOM/height are real) and setting an explicit height directly
+      // is the only way to make one side unambiguously the one in charge.
+      // Only applies in the 2-column desktop layout (see style.css's
+      // 768px collapse breakpoint) — a single stacked mobile column has no
+      // "match" to make, so files-scroll's own max-height fallback
+      // (style.css) takes over there instead.
+      const projectsWidget = document.querySelector('[data-widget="projects"]');
+      const filesWidget = document.querySelector('[data-widget="files"]');
+      function matchProjectsHeight() {
+        if (!projectsWidget || !filesWidget) return;
+        const isTwoColumn = window.matchMedia('(min-width: 769px)').matches;
+        filesWidget.style.height = isTwoColumn ? `${projectsWidget.offsetHeight}px` : '';
+      }
+      matchProjectsHeight();
+      window.addEventListener('resize', matchProjectsHeight);
+      // Projects' sort control re-renders its grid (and, via the featured
+      // project's description length, sometimes its height) without a
+      // page reload — a MutationObserver catches that without needing
+      // Projects' own script to know or care that Files is watching it.
+      const projectsGrid = document.getElementById('projects-grid');
+      if (projectsGrid) {
+        new MutationObserver(matchProjectsHeight).observe(projectsGrid, { childList: true, subtree: true });
+      }
     })();
     </script>
     </div>

@@ -370,6 +370,19 @@ the module was actually imported with real dependencies.
 3. `sudo docker restart constructicon-test`, then `sudo docker logs
    constructicon-test --tail 20` — look for `Application startup complete`
    with no traceback.
+   **`constructicon-test`'s actual command has no `--reload` flag** (checked
+   via `docker inspect constructicon-test --format '{{.Config.Cmd}}'` and
+   its compose file directly, 2026-09-10 — don't assume otherwise). A health
+   check run immediately after `docker restart` can still transiently hit
+   `ConnectionRefusedError` for a second or two while uvicorn rebinds the
+   port (confirmed repeatedly, e.g. 2026-09-09/10) — that's just normal
+   restart latency, not a failed deploy. Separately, a `--tail N` log read
+   after a session with several earlier restarts will show multiple
+   `Shutting down`/`Uvicorn running` pairs in the window, which can look
+   like a crash-loop at a glance; it usually isn't — check specifically for
+   a traceback between them, and if the last line is a clean `Uvicorn
+   running on http://0.0.0.0:80` with nothing after it, just retry the
+   health check rather than treating an old restart boundary as new.
 4. There's no `curl` inside the app image — verify with `sudo docker exec
    constructicon-test python3 -c "import urllib.request; ..."` against
    `http://localhost:80/...` (the container's *internal* port; check

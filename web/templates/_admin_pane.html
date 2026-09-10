@@ -14,6 +14,8 @@
     <path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="#ECE8DA" stroke-width="1.6"/>
     <path d="M19.4 13.5a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V19.5a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H4.5a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H10a1.65 1.65 0 001-1.51V4.5a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V10a1.65 1.65 0 001.51 1h.09a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="#ECE8DA" stroke-width="1.3"/>
   </svg>
+  <!-- #240: count of open "needs your input" decisions; hidden at zero -->
+  <span class="admin-pane-badge" id="admin-pane-badge" hidden>0</span>
 </button>
 <div class="admin-pane" id="admin-pane">
   <div class="admin-pane-header">
@@ -21,6 +23,25 @@
     <button type="button" class="modal-close" id="admin-pane-close">&times;</button>
   </div>
   <div class="admin-pane-body">
+    <!-- Needs your input (#240) — the pending-decision queue. Today the only
+         kind is "project_match": an upload whose filename/folder matched
+         MORE THAN ONE existing project's title, so the auto-match step
+         (core/automatch.py) queued the question instead of guessing. Each
+         entry lists every candidate with a checkbox; Apply adds the item to
+         whichever are ticked (zero, one, or several) and clears the entry.
+         Rendered first, above everything else, and hidden entirely when the
+         queue is empty — the badge on the trigger button is the "N uploads
+         need your input" signal. -->
+    <div id="admin-pending-section" hidden>
+      <div class="admin-row">
+        <div>
+          <div class="admin-row-label">Needs your input <span id="admin-pending-count" class="apikey-status"></span></div>
+          <div class="admin-row-hint">Uploads whose name matched more than one project (#240)</div>
+        </div>
+      </div>
+      <div id="admin-pending-list" class="admin-pending-list"></div>
+      <div class="admin-pane-divider"></div>
+    </div>
     <div class="admin-row">
       <div>
         <div class="admin-row-label">Delete mode</div>
@@ -378,6 +399,81 @@
   capTemp.addEventListener('change', runCaptionTest);
   capTokens.addEventListener('change', runCaptionTest);
   capSlug.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runCaptionTest(); } });
+
+  // Pending decisions (#240) — see the markup comment above. Loaded on
+  // every page (the pane is included wherever the upload drawer is), and
+  // refreshed when the drawer signals a finished batch.
+  const pendingSection = document.getElementById('admin-pending-section');
+  const pendingList = document.getElementById('admin-pending-list');
+  const pendingCount = document.getElementById('admin-pending-count');
+  const pendingBadge = document.getElementById('admin-pane-badge');
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function renderPendingDecisions(data) {
+    const items = (data && data.items) || [];
+    pendingBadge.textContent = items.length;
+    pendingBadge.hidden = items.length === 0;
+    pendingSection.hidden = items.length === 0;
+    pendingCount.textContent = items.length ? `(${items.length})` : '';
+    pendingList.innerHTML = '';
+    for (const item of items) {
+      const el = document.createElement('div');
+      el.className = 'pending-decision';
+      el.dataset.id = item.id;
+      const thumb = item.post.thumb_url
+        ? `<img class="pending-decision-thumb" src="${escapeHtml(item.post.thumb_url)}" alt="">`
+        : `<span class="pending-decision-thumb pending-decision-thumb-icon">${escapeHtml(item.post.type_icon || '')}</span>`;
+      const candidates = (item.candidates || []).map((c) => `
+        <label class="pending-decision-candidate">
+          <input type="checkbox" name="project_ids" value="${c.id}"> ${escapeHtml(c.title)}
+        </label>`).join('');
+      el.innerHTML = `
+        <div class="pending-decision-head">
+          ${thumb}
+          <a class="pending-decision-title" href="${escapeHtml(item.post.link)}" title="${escapeHtml(item.post.title)}">${escapeHtml(item.post.title)}</a>
+        </div>
+        <div class="pending-decision-candidates">${candidates}</div>
+        <div class="pending-decision-actions">
+          <button type="button" class="btn-ms pending-decision-apply">Apply</button>
+          <button type="button" class="btn-ms pending-decision-skip" title="Add to none of these and clear the question">None of these</button>
+          <span class="backup-status pending-decision-msg"></span>
+        </div>`;
+      const msg = el.querySelector('.pending-decision-msg');
+      async function resolve(ids) {
+        el.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        try {
+          const body = new URLSearchParams();
+          ids.forEach((id) => body.append('project_ids', id));
+          const res = await fetch(`/api/pending-decisions/${item.id}/resolve`, { method: 'POST', body });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || `Failed (${res.status})`);
+          loadPendingDecisions();
+        } catch (err) {
+          msg.textContent = err.message || 'Failed';
+          msg.className = 'backup-status backup-status-error pending-decision-msg';
+          el.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+        }
+      }
+      el.querySelector('.pending-decision-apply').addEventListener('click', () => {
+        resolve(Array.from(el.querySelectorAll('input[name="project_ids"]:checked')).map((i) => i.value));
+      });
+      el.querySelector('.pending-decision-skip').addEventListener('click', () => resolve([]));
+      pendingList.appendChild(el);
+    }
+  }
+
+  async function loadPendingDecisions() {
+    try {
+      const res = await fetch('/api/pending-decisions');
+      if (!res.ok) return;
+      renderPendingDecisions(await res.json());
+    } catch (err) { /* leave whatever's shown */ }
+  }
+  loadPendingDecisions();
+  document.addEventListener('constructicon:pending-decisions-changed', loadPendingDecisions);
 
   // Audit log (#122) — recent mutating API calls for debugging/recovery
   const auditLogContainer = document.getElementById('admin-audit-log-container');

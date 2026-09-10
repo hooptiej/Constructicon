@@ -81,6 +81,14 @@ DEFAULT_PROMPT = (
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_NUM_PREDICT = 120
 
+# #246: greedy decoding (DEFAULT_TEMPERATURE) occasionally picks the
+# end-of-output token as its very first token on an otherwise describable
+# image, returning empty. Two small, linear bumps off of greedy are enough
+# to break that without drifting into the invented-object territory the
+# #239 tuning runs saw above ~0.3 — deliberately not escalating faster than
+# that per retry.
+RETRY_TEMPERATURES = (0.15, 0.2)
+
 GENERATE_TIMEOUT_SECONDS = 180  # first call after a restart includes loading the model onto the GPU
 RESTART_TIMEOUT_SECONDS = 60
 READY_POLL_SECONDS = 90  # how long to wait for Ollama to answer /api/tags again after a restart
@@ -264,6 +272,13 @@ def run_caption(slug):
             db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
             return
         result = caption_once(image_path)
+        tried_temperature = DEFAULT_TEMPERATURE
+        for retry_temperature in RETRY_TEMPERATURES:
+            if result["error"] or result["caption"]:
+                break
+            print(f"caption empty for {slug} at temperature {tried_temperature} — retrying at {retry_temperature}", flush=True)
+            result = caption_once(image_path, temperature=retry_temperature)
+            tried_temperature = retry_temperature
         if result["error"] or not result["caption"]:
             print(f"caption failed for {slug}: {result['error'] or 'empty response'}", flush=True)
             db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})

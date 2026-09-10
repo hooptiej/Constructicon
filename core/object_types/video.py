@@ -162,6 +162,7 @@ register(ObjectTypeSpec(
     label="Video file",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=False,
+    caption_capable=True,  # #239: captions the existing generated thumbnail frame — one frame proved enough in testing, no extra sampling
     extensions=frozenset({".mov", ".mp4"}),
     capture_fn=capture_thumbnail,
     properties_fn=get_properties,

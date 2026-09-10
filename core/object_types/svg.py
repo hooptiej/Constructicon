@@ -128,6 +128,7 @@ register(ObjectTypeSpec(
     # small apt dependency) was picked.
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,
+    caption_capable=True,  # #239: the rasterized preview
     extensions=frozenset({".svg"}),
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,  # <text> elements read directly, no OCR needed when present

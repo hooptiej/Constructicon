@@ -104,6 +104,7 @@ register(ObjectTypeSpec(
     label="Photoshop document",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,  # OCR runs against the composited preview — see this module
+    caption_capable=True,  # #239: same composited preview
     extensions=frozenset({".psd"}),
     capture_fn=capture_thumbnail,
     properties_fn=get_properties,

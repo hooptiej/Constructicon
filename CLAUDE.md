@@ -53,6 +53,25 @@ exist yet.
 - **`core/pdf.py`, `core/stl.py`, `core/psd.py`, `core/svg.py`,
   `core/eps.py`** — per-format thumbnail/preview rendering, one module per
   exotic upload type, plugged into `object_types.py`'s registry.
+- **`core/captions.py`** (#239) — auto-caption *suggestions* from a local
+  Ollama vision model (`moondream`) on the TrueNAS box's GPU, written to
+  `type_metadata.auto_caption` (never into `description` on its own).
+  Gated per type by `ObjectTypeSpec.caption_capable` (distinct from
+  `ocr_capable`: video is captioned but not OCR'd; STL is explicitly
+  excluded — wireframe renders produce garbage). Strictly one image at a
+  time under `CAPTION_LOCK`, and the **Ollama container is restarted after
+  every single image** via the Docker Engine API — a long-lived Ollama
+  process doesn't release resources between calls. **Deploy prerequisites
+  for the app container** (both already applied to `constructicon-test`'s
+  compose on the box, still TODO for `constructicon-web`): join Ollama's
+  compose network (`ollama_default`, external — the ipvlan `questlog-lan`
+  network can't reach the host's published `:11434`) so
+  `http://ollama:11434` resolves, and bind-mount `/var/run/docker.sock`
+  for the restart. Without the socket it degrades to Ollama's own
+  `keep_alive: 0` model unload and logs a warning per image; set
+  `CAPTION_DISABLED=1` to skip captioning entirely. Tune with the admin
+  pane's "Caption tuning" panel (`POST /api/captions/test`) before
+  changing the defaults in that module.
 - **`core/backup.py`** — standalone `POST /api/backup` backup-to-zip
   (DB snapshot + `storage/`). Deliberately **not** wired into any delete
   path (a past incident wiped storage while only the DB got backed up).

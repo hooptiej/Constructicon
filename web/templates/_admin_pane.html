@@ -128,6 +128,42 @@
       <span id="admin-apikey-msg-imgur_username" class="backup-status"></span>
     </div>
     <div class="admin-pane-divider"></div>
+    <!-- Caption tuning (#239) — live sliders for the local vision model
+         (moondream via Ollama) run against a real existing object's preview
+         image, showing the model's actual output for each setting. Same
+         philosophy as every other subjective-tuning control in this repo:
+         an objective tool beats a guess-deploy-eyeball cycle. Each run goes
+         through the exact pipeline cycle (POST /api/captions/test →
+         core/captions.py caption_once: lock, one call, Ollama restart), so
+         the timings shown are what production will see. Nothing here
+         writes to the object. -->
+    <div class="admin-row admin-apikey-row admin-caption-tuning">
+      <div class="admin-apikey-label-row">
+        <div>
+          <div class="admin-row-label">Caption tuning</div>
+          <div class="admin-row-hint">Live moondream output vs. temperature / token cap (#239)</div>
+        </div>
+        <span id="admin-caption-ollama-status" class="apikey-status">…</span>
+      </div>
+      <div class="admin-apikey-input-row">
+        <input type="text" class="input admin-apikey-input mono" id="admin-caption-slug"
+               placeholder="Slug of a test image" autocomplete="off">
+        <button type="button" class="btn-ms admin-apikey-save" id="admin-caption-run">Run</button>
+      </div>
+      <img id="admin-caption-preview" class="admin-caption-preview" alt="" style="display:none">
+      <label class="admin-caption-slider">
+        <span>Temperature <b id="admin-caption-temp-val">0.10</b></span>
+        <input type="range" id="admin-caption-temp" min="0" max="1" step="0.05" value="0.1">
+      </label>
+      <label class="admin-caption-slider">
+        <span>Token cap <b id="admin-caption-tokens-val">120</b></span>
+        <input type="range" id="admin-caption-tokens" min="20" max="300" step="10" value="120">
+      </label>
+      <textarea class="input admin-caption-prompt" id="admin-caption-prompt" rows="4" placeholder="Prompt"></textarea>
+      <pre class="admin-caption-output mono" id="admin-caption-output">Enter a slug and run.</pre>
+      <span id="admin-caption-timing" class="backup-status"></span>
+    </div>
+    <div class="admin-pane-divider"></div>
     <div class="admin-row">
       <div>
         <div class="admin-row-label">Recent activity</div>
@@ -263,6 +299,85 @@
       }
     });
   });
+
+  // Caption tuning (#239) — see the markup comment above. Sliders fire a
+  // run on release (`change`, not `input`, so dragging doesn't queue a
+  // model call per pixel); the Run button re-runs with the current
+  // settings, useful for checking the model's consistency at one setting.
+  // Runs are serialized server-side (one Ollama call at a time, container
+  // restart between), so the UI also refuses to overlap them.
+  const capSlug = document.getElementById('admin-caption-slug');
+  const capRun = document.getElementById('admin-caption-run');
+  const capPreview = document.getElementById('admin-caption-preview');
+  const capTemp = document.getElementById('admin-caption-temp');
+  const capTempVal = document.getElementById('admin-caption-temp-val');
+  const capTokens = document.getElementById('admin-caption-tokens');
+  const capTokensVal = document.getElementById('admin-caption-tokens-val');
+  const capPrompt = document.getElementById('admin-caption-prompt');
+  const capOutput = document.getElementById('admin-caption-output');
+  const capTiming = document.getElementById('admin-caption-timing');
+  const capOllamaStatus = document.getElementById('admin-caption-ollama-status');
+  let capRunning = false;
+
+  capTemp.addEventListener('input', () => { capTempVal.textContent = Number(capTemp.value).toFixed(2); });
+  capTokens.addEventListener('input', () => { capTokensVal.textContent = capTokens.value; });
+
+  (async function loadCaptionDefaults() {
+    try {
+      const res = await fetch('/api/captions/defaults');
+      if (!res.ok) return;
+      const d = await res.json();
+      capTemp.value = d.temperature; capTempVal.textContent = Number(d.temperature).toFixed(2);
+      capTokens.value = d.num_predict; capTokensVal.textContent = d.num_predict;
+      capPrompt.value = d.prompt;
+      capOllamaStatus.textContent = d.ollama_up ? `${d.model} up` + (d.docker_socket ? '' : ' (no restart)') : 'Ollama unreachable';
+      capOllamaStatus.className = 'apikey-status' + (d.ollama_up ? ' apikey-status-set' : '');
+    } catch (err) { /* leave the placeholder */ }
+  })();
+
+  // Remember the last test slug per browser so re-tuning later doesn't
+  // start from a blank field.
+  try { capSlug.value = localStorage.getItem('constructicon:caption-test-slug') || ''; } catch (e) {}
+
+  async function runCaptionTest() {
+    const slug = capSlug.value.trim();
+    if (!slug || capRunning) return;
+    capRunning = true;
+    capRun.disabled = true;
+    capRun.textContent = 'Running…';
+    capTiming.textContent = '';
+    capTiming.className = 'backup-status';
+    capOutput.textContent = '…';
+    try { localStorage.setItem('constructicon:caption-test-slug', slug); } catch (e) {}
+    try {
+      const body = new URLSearchParams({
+        slug,
+        temperature: capTemp.value,
+        num_predict: capTokens.value,
+        prompt: capPrompt.value,
+      });
+      const res = await fetch('/api/captions/test', { method: 'POST', body });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `Run failed (${res.status})`);
+      if (data.thumb_url) { capPreview.src = data.thumb_url; capPreview.style.display = 'block'; }
+      if (data.error) throw new Error(data.error);
+      capOutput.textContent = data.caption || '(empty response)';
+      capTiming.textContent = `model ${data.elapsed_seconds}s · restart ${data.restarted ? data.restart_seconds + 's' : 'skipped'} · T=${data.settings.temperature} · cap=${data.settings.num_predict}`;
+      capTiming.className = 'backup-status backup-status-ok';
+    } catch (err) {
+      capOutput.textContent = '';
+      capTiming.textContent = err.message || 'Run failed';
+      capTiming.className = 'backup-status backup-status-error';
+    } finally {
+      capRunning = false;
+      capRun.disabled = false;
+      capRun.textContent = 'Run';
+    }
+  }
+  capRun.addEventListener('click', runCaptionTest);
+  capTemp.addEventListener('change', runCaptionTest);
+  capTokens.addEventListener('change', runCaptionTest);
+  capSlug.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runCaptionTest(); } });
 
   // Audit log (#122) — recent mutating API calls for debugging/recovery
   const auditLogContainer = document.getElementById('admin-audit-log-container');

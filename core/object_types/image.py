@@ -101,6 +101,7 @@ register(ObjectTypeSpec(
     label="Image",
     thumbnail_source=ThumbnailSource.UPLOADED_FILE,
     ocr_capable=True,
+    caption_capable=True,  # #239: the uploaded image itself goes to the vision model
     extensions=frozenset({".png", ".jpg", ".jpeg", ".ico", ".bmp", ".tiff", ".tif", ".webp"}),
     properties_fn=get_properties,
     badge_icon="\U0001F5BC️",

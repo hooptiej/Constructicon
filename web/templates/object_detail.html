@@ -153,6 +153,24 @@
       </div>
       {% endif %}
 
+      {# #239: auto-caption *suggestion* from the local vision model
+         (core/captions.py) — lives in type_metadata.auto_caption, never
+         written into description on its own. "Use as description" copies
+         it into the form field for the owner to edit/save deliberately. #}
+      {% if item.caption_capable %}
+      <div class="ocr-panel" id="caption-panel">
+        <div class="ocr-panel-header">
+          <span class="ocr-lamp" id="caption-lamp"></span>
+          <span class="ocr-panel-label" id="caption-label"></span>
+          <button type="button" class="ocr-retry-btn" id="caption-retry-btn"></button>
+        </div>
+        <p class="caption-text" id="caption-text" style="display:none"></p>
+        <div class="caption-actions" id="caption-actions" style="display:none">
+          <button type="button" class="ocr-retry-btn" id="caption-use-btn">Use as description</button>
+        </div>
+      </div>
+      {% endif %}
+
       {# #52: relations are type-agnostic on the backend (core/db.py's
          add_relation/remove_relation, #16) — this used to be gated on
          item.is_file, which hid "Add related" for every content-only row
@@ -266,6 +284,87 @@ const IS_OCR_CAPABLE = {{ item.ocr_capable | tojson }};
 const IS_FILE = {{ item.is_file | tojson }};
 let ocrStatus = {{ item.ocr_status | tojson }};
 let ocrText = {{ item.extracted_text | tojson }};
+
+// #239: suggested-caption panel state. Mirrors the OCR panel below; the
+// "status" is type_metadata.auto_caption_status (pending/done/failed, or
+// absent = never attempted) rather than a dedicated column.
+const IS_CAPTION_CAPABLE = {{ item.caption_capable | tojson }};
+let captionStatus = {{ (item.type_metadata.get('auto_caption_status') or '') | tojson }};
+let captionText = {{ (item.type_metadata.get('auto_caption') or '') | tojson }};
+const CAPTION_LAMP_META = {
+  pending: { color: '#BA7517', label: 'Captioning…' },
+  done:    { color: '#7FA37C', label: 'Suggested caption' },
+  failed:  { color: '#E24B4A', label: 'Captioning failed' },
+  none:    { color: '#6E6B57', label: 'No caption yet' },
+};
+const captionPanel = document.getElementById('caption-panel');
+function renderCaptionPanel() {
+  if (!IS_CAPTION_CAPABLE || !captionPanel) return;
+  captionPanel.style.display = 'flex';
+  const meta = CAPTION_LAMP_META[captionStatus || 'none'];
+  document.getElementById('caption-lamp').style.background = meta.color;
+  document.getElementById('caption-label').textContent = meta.label;
+  const btn = document.getElementById('caption-retry-btn');
+  btn.disabled = captionStatus === 'pending';
+  btn.textContent = captionStatus === 'pending' ? 'Running…' : (captionText ? 'Regenerate' : 'Generate');
+  const textEl = document.getElementById('caption-text');
+  const actions = document.getElementById('caption-actions');
+  textEl.textContent = captionText;
+  textEl.style.display = captionText ? 'block' : 'none';
+  actions.style.display = captionText ? 'flex' : 'none';
+}
+renderCaptionPanel();
+async function pollCaption() {
+  // Captions queue behind one another (one Ollama call + restart at a
+  // time), so poll longer than OCR does — up to ~3 minutes.
+  for (let i = 0; i < 90; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const res = await fetch('/api/image/{{ item.slug }}');
+      if (res.ok) {
+        const item = await res.json();
+        const tm = item.type_metadata || {};
+        if (tm.auto_caption_status !== 'pending') {
+          captionStatus = tm.auto_caption_status || '';
+          captionText = tm.auto_caption || '';
+          renderCaptionPanel();
+          return;
+        }
+      }
+    } catch (e) { /* transient — keep polling */ }
+  }
+}
+if (captionPanel) {
+  if (captionStatus === 'pending') pollCaption();
+  document.getElementById('caption-retry-btn').addEventListener('click', async () => {
+    const prior = captionStatus;
+    captionStatus = 'pending';
+    renderCaptionPanel();
+    try {
+      const res = await fetch('/api/image/{{ item.slug }}/caption', { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: 'Failed to start captioning' }));
+        alert(body.detail || 'Failed to start captioning');
+        captionStatus = prior;
+        renderCaptionPanel();
+        return;
+      }
+      pollCaption();
+    } catch (err) {
+      alert(err.message);
+      captionStatus = prior;
+      renderCaptionPanel();
+    }
+  });
+  document.getElementById('caption-use-btn').addEventListener('click', () => {
+    // Fill (or append to) the description field — the owner still has to
+    // hit Save, so this never silently changes the stored description.
+    const ta = document.querySelector('#detail-form textarea[name="description"]');
+    if (!ta || !captionText) return;
+    ta.value = ta.value.trim() ? `${ta.value.trim()}\n${captionText}` : captionText;
+    ta.focus();
+  });
+}
 
 const OCR_LAMP_META = {
   pending: { color: '#BA7517', label: 'OCR in progress…' },

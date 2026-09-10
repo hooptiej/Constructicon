@@ -99,6 +99,16 @@ class ObjectTypeSpec:
     # a badge for free.
     badge_icon: str = "\U0001F4E6"  # package emoji — generic fallback
     badge_text: str = "FILE"
+    # Issue #239: should this type's representative image (the same one OCR
+    # runs against — the uploaded file itself, or the generated thumbnail /
+    # video frame / rendered raster) be sent to the local vision model for
+    # an auto-caption suggestion (core/captions.py)? Scoped by whether the
+    # type has a *real rendered-image preview*, NOT by ocr_capable — the two
+    # differ on purpose: video is captionable but not OCR'd, and STL is the
+    # explicit hard exclusion (plain-background wireframe renders produced
+    # degenerate repeated-punctuation garbage in testing, not just a weak
+    # caption). Defaults False so a new type opts in deliberately.
+    caption_capable: bool = False
 
 
 OBJECT_TYPES = {}

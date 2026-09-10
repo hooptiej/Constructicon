@@ -168,6 +168,10 @@
         <div class="caption-actions" id="caption-actions" style="display:none">
           <button type="button" class="ocr-retry-btn" id="caption-use-btn">Use as description</button>
         </div>
+        {# #251: provenance for whichever caption ended up in description —
+           set the moment "Use as description" is clicked, independent of
+           auto_caption_step (which the next Regenerate click overwrites). #}
+        <p class="caption-used-note" id="caption-used-note" style="display:none;font-size:0.85em;color:#6E6B57;margin-top:4px"></p>
       </div>
       {% endif %}
 
@@ -302,6 +306,9 @@ let ocrText = {{ item.extracted_text | tojson }};
 const IS_CAPTION_CAPABLE = {{ item.caption_capable | tojson }};
 let captionStatus = {{ (item.type_metadata.get('auto_caption_status') or '') | tojson }};
 let captionText = {{ (item.type_metadata.get('auto_caption') or '') | tojson }};
+// #251: which ladder step's text last got copied into description, if any —
+// separate from auto_caption_step so it survives further Regenerate clicks.
+let descriptionCaptionStepLabel = {{ (item.type_metadata.get('description_caption_step_label') or '') | tojson }};
 const CAPTION_LAMP_META = {
   pending: { color: '#BA7517', label: 'Captioning…' },
   done:    { color: '#7FA37C', label: 'Suggested caption' },
@@ -323,6 +330,13 @@ function renderCaptionPanel() {
   textEl.textContent = captionText;
   textEl.style.display = captionText ? 'block' : 'none';
   actions.style.display = captionText ? 'flex' : 'none';
+  renderCaptionUsedNote();
+}
+function renderCaptionUsedNote() {
+  const note = document.getElementById('caption-used-note');
+  if (!note) return;
+  note.textContent = descriptionCaptionStepLabel ? `Description sourced from: ${descriptionCaptionStepLabel}` : '';
+  note.style.display = descriptionCaptionStepLabel ? 'block' : 'none';
 }
 renderCaptionPanel();
 async function pollCaption() {
@@ -372,13 +386,25 @@ if (captionPanel) {
       renderCaptionPanel();
     }
   });
-  document.getElementById('caption-use-btn').addEventListener('click', () => {
+  document.getElementById('caption-use-btn').addEventListener('click', async () => {
     // Fill (or append to) the description field — the owner still has to
     // hit Save, so this never silently changes the stored description.
     const ta = document.querySelector('#detail-form textarea[name="description"]');
     if (!ta || !captionText) return;
     ta.value = ta.value.trim() ? `${ta.value.trim()}\n${captionText}` : captionText;
     ta.focus();
+    // #251: record which ladder step produced this text, so it's still on
+    // record after further Regenerate clicks move auto_caption_step along.
+    // Best-effort — never blocks or alerts on failure, losing this note is
+    // much cheaper than losing the caption that's already in the textarea.
+    try {
+      const res = await fetch('/api/image/{{ item.slug }}/caption/mark-used', { method: 'POST' });
+      if (res.ok) {
+        const body = await res.json();
+        descriptionCaptionStepLabel = body.step_label || '';
+        renderCaptionUsedNote();
+      }
+    } catch (err) { /* non-critical, ignore */ }
   });
 }
 

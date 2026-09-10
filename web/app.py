@@ -10,6 +10,7 @@ import io
 import json
 import sys
 import threading
+import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -1306,6 +1307,32 @@ def api_retry_caption(request: Request, slug: str, background_tasks: BackgroundT
     else:
         background_tasks.add_task(captions.run_caption, slug)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
+
+
+@app.post("/api/image/{slug}/caption/mark-used")
+def api_mark_caption_used(slug: str):
+    """#251: fired alongside the detail page's "Use this caption" click —
+    records which STEPS rung produced the text just copied into the
+    description field, separately from captions.STEP_KEY (which the next
+    Regenerate click overwrites). Best-effort/fire-and-forget from the
+    frontend's side: the description edit itself isn't gated on this
+    succeeding, since losing the provenance note is much cheaper than
+    losing the actual caption text."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    tm = row["type_metadata"]
+    if tm.get(captions.STATUS_KEY) != "done" or not tm.get(captions.METADATA_KEY):
+        raise HTTPException(status_code=400, detail="No current suggested caption to mark as used")
+    step_index = tm.get(captions.STEP_KEY, 0)
+    step_label = captions.describe_step(step_index)
+    db.update_content_metadata(slug, type_metadata={
+        captions.DESCRIPTION_STEP_KEY: step_index,
+        captions.DESCRIPTION_STEP_LABEL_KEY: step_label,
+        captions.DESCRIPTION_MODEL_KEY: tm.get("auto_caption_model"),
+        captions.DESCRIPTION_USED_AT_KEY: time.time(),
+    })
+    return JSONResponse({"step": step_index, "step_label": step_label})
 
 
 @app.get("/api/captions/defaults")

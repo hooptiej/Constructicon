@@ -1085,10 +1085,9 @@ body.delete-mode-on .card-select-row { display: flex; }
 .timeline-rail {
   position: fixed;
   left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
+  top: 56px; /* matches .app-header's height */
+  bottom: 0;
   width: 110px;
-  max-height: 70vh;
   overflow-y: auto;
   overflow-x: hidden;
   z-index: 45;

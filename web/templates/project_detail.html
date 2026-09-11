@@ -5,9 +5,6 @@
 {% include "_upload_drawer.html" %}
 {% include "_admin_pane.html" %}
 {% if timeline_items %}
-<div class="timeline-rail-tab" id="project-timeline-tab" title="Timeline" role="button" tabindex="0">
-  <span class="timeline-rail-tab-label">Timeline</span>
-</div>
 <aside class="timeline-rail" id="project-timeline-rail"></aside>
 {% endif %}
 <div class="app-main">
@@ -126,30 +123,7 @@
   {% include "_timeline_card_modal.html" %}
   <script>
   (function () {
-    // Tab-triggered slide-in drawer, same click-to-toggle/outside-click/
-    // Escape-close pattern as _gallery_drawer.html's tab -- not a
-    // permanent sidebar.
-    const tab = document.getElementById('project-timeline-tab');
     const rail = document.getElementById('project-timeline-rail');
-    function toggleRail() {
-      rail.classList.toggle('open');
-      tab.classList.toggle('active');
-    }
-    tab.addEventListener('click', toggleRail);
-    tab.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRail(); } });
-    document.addEventListener('click', (e) => {
-      if (!rail.classList.contains('open')) return;
-      if (rail.contains(e.target) || tab.contains(e.target)) return;
-      rail.classList.remove('open');
-      tab.classList.remove('active');
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && rail.classList.contains('open')) {
-        rail.classList.remove('open');
-        tab.classList.remove('active');
-      }
-    });
-
     const timelineItems = {{ timeline_items | tojson }};
     if (timelineItems.length) {
       new TimelineRail(

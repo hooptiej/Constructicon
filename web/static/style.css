@@ -1066,10 +1066,11 @@ body.delete-mode-on .card-select-row { display: flex; }
 /* Timeline feature: shared rail used on the gallery page (project spans)
    and a project detail page (item points). See
    docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
-   Fixed to the actual viewport (not sticky within a widget's scroll
-   context) -- .app-main-shifted below is what makes the rest of the page
-   make room for it, per the owner's explicit "attached to the viewport,
-   shift the existing content" spec. 56px matches .app-header's height.
+
+   A floating panel, not a drawer -- always visible, same visual language
+   as the gallery/upload drawers' edge tab (rounded corner facing away from
+   the edge, drop shadow) but the timeline itself is the floating element,
+   not a trigger for a hidden one. No open/close state.
 
    Entries are grouped by year in normal document flow -- no animation, no
    absolute-position/transform math. An earlier animated version (dock
@@ -1080,54 +1081,22 @@ body.delete-mode-on .card-select-row { display: flex; }
    viewport's left edge had nowhere to expand into but off-screen. Year
    labels are the actual timeline indicator now; normal flow can't drift
    or clip since nothing is absolutely positioned or transformed. */
-.timeline-rail-tab {
-  position: fixed;
-  top: 50%;
-  left: 0;
-  z-index: 46;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  background: var(--purple);
-  border: 1px solid var(--border-stronger);
-  border-left: none;
-  border-radius: 0 10px 10px 0;
-  padding: 14px 9px;
-  cursor: pointer;
-  box-shadow: 2px 2px 10px rgba(0,0,0,0.35);
-  transition: background 0.2s ease;
-}
-.timeline-rail-tab:hover, .timeline-rail-tab.active {
-  background: var(--purple-hover);
-}
-.timeline-rail-tab-label {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-size: 11px;
-  color: var(--text);
-  letter-spacing: 0.3px;
-}
 .timeline-rail {
   position: fixed;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 200px;
-  max-width: 90vw;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 100px;
+  max-height: 70vh;
   overflow-y: auto;
   overflow-x: hidden;
   z-index: 45;
   background: var(--card);
-  border-right: 1px solid var(--border);
-  padding: 22px 8px 12px;
+  border: 1px solid var(--border-stronger);
+  border-radius: 10px;
+  box-shadow: 2px 2px 10px rgba(0,0,0,0.35);
+  padding: 12px 8px;
   box-sizing: border-box;
-  transform: translateX(-100%);
-  transition: transform 0.2s ease;
-}
-.timeline-rail.open {
-  transform: translateX(0);
 }
 .timeline-year-group {
   margin-bottom: 16px;

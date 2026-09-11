@@ -943,7 +943,11 @@ def project_detail_page(request: Request, slug: str):
     project = db.get_project(slug)
     if project is None:
         raise HTTPException(status_code=404, detail="not found")
-    items = [_to_content_public(r, project_slug=slug) for r in db.list_project_items(project["id"])]
+    # raw_items feeds both the card grid (via _to_content_public below) and
+    # the Timeline feature's span resolution (core/timeline.py), which needs
+    # the raw capture_events fields _to_content_public's card shape drops.
+    raw_items = db.list_project_items(project["id"])
+    items = [_to_content_public(r, project_slug=slug) for r in raw_items]
     child_projects = db.list_child_projects(project["id"])
     ancestors = db.list_project_ancestors(project["id"])
     # #156: fetch the writeup document and pass its body to the template
@@ -952,6 +956,7 @@ def project_detail_page(request: Request, slug: str):
         writeup_doc = db.get_by_slug(project["writeup_slug"])
         if writeup_doc:
             writeup_body = writeup_doc.get("type_metadata", {}).get("body", "")
+    effective_start, effective_end = timeline.resolve_project_span(project, raw_items)
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
@@ -961,6 +966,10 @@ def project_detail_page(request: Request, slug: str):
             "child_projects": child_projects,
             "ancestors": ancestors,
             "writeup_body": writeup_body,
+            "start_date_input": _datetime_local_value(project.get("start_date_override")),
+            "end_date_input": _datetime_local_value(project.get("end_date_override")),
+            "effective_start_display": _friendly_datetime(effective_start),
+            "effective_end_display": _friendly_datetime(effective_end),
         },
     )
 
@@ -1799,6 +1808,10 @@ def api_update_project(
     status: str = Form(None),
     parent_id: str = Form(None),
     writeup_slug: str = Form(None),
+    start_date: str = Form(None),
+    reset_start_date: bool = Form(False),
+    end_date: str = Form(None),
+    reset_end_date: bool = Form(False),
 ):
     """Updates a project's properties (issue #103). Allows setting any
     combination of title, description, cover_slug (slug of an attached item
@@ -1850,6 +1863,15 @@ def api_update_project(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Timeline feature: each reset_*_date flag wins over its corresponding
+    # *_date value if a client somehow sends both (mirrors the object edit
+    # endpoint and the MCP tools' same reset-flag convention). start/end are
+    # independent -- clearing one doesn't touch the other.
+    if reset_start_date or reset_end_date or start_date or end_date:
+        new_start = None if reset_start_date else (datetime.fromisoformat(start_date).timestamp() if start_date else ...)
+        new_end = None if reset_end_date else (datetime.fromisoformat(end_date).timestamp() if end_date else ...)
+        updated = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
 
     return JSONResponse(updated or {})
 

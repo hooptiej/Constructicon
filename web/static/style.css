@@ -1083,17 +1083,21 @@ body.delete-mode-on .card-select-row { display: flex; }
    go in date order, no date-to-pixel math, so nothing to collapse, drift,
    or clip. */
 .timeline-rail {
+  /* Fixed to the viewport -- stays put when the page scrolls, doesn't
+     move with the body. No bottom/height/overflow constraint: the box
+     just sizes to its content naturally, so no internal scrollbar ever
+     appears (that's the tradeoff vs. absolute positioning -- a list tall
+     enough to exceed the viewport runs past its bottom edge rather than
+     scrolling into view, since a fixed element doesn't grow the page's
+     own scrollable area). */
   position: fixed;
   left: 12px;
-  top: 56px; /* matches .app-header's height */
-  bottom: 0;
+  top: 68px; /* .app-header's height (56px) + a little breathing room */
   width: 110px;
-  overflow-y: auto;
-  overflow-x: hidden;
   z-index: 45;
   background: transparent;
   border-left: 2px solid var(--border-strong);
-  padding: 12px 0 12px 16px;
+  padding: 0 0 12px 16px;
   box-sizing: border-box;
 }
 .timeline-year-marker {

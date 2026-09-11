@@ -1,130 +1,83 @@
-// Shared timeline rail: dormant (small, evenly spaced) vs. interactive
-// (dock-magnified, time-proportional spacing) states. Used on both the
-// gallery page (project spans) and a project detail page (item points).
-// See docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
+// Shared timeline rail: entries grouped by year, in normal document flow.
+// Used on both the gallery page (project spans) and a project detail page
+// (item points). See
+// docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
 //
-// Entries are absolutely positioned within a .timeline-track, each one's
-// `top` computed independently from its own date/index every layout pass
-// -- not accumulated from the previous entry's position. A margin-stacking
-// approach was tried first and drifted entries out of view on repeated
-// mousemove-triggered relayouts; independent absolute positions can't
-// drift since nothing compounds across entries or across calls.
-
-const ENTRY_HEIGHT = 40;
-const DORMANT_SPACING = 48;
+// A prior version animated entries (dock-style magnification on hover,
+// spacing morphing from even to time-proportional) using absolute
+// positioning computed from each entry's raw date. Dropped entirely: (1)
+// real project dates cluster heavily, so linear date-to-pixel mapping
+// collapsed almost everything to two points at the extremes: no readable
+// timeline resulted; (2) the rail sits flush against the viewport's left
+// edge, so a scale() transform had nowhere to expand into but off-screen.
+// Year grouping sidesteps both -- it's not a continuous axis, so clustered
+// dates just mean a bigger group under one label, and normal flow can't
+// clip or drift since there's no absolute positioning or transform at all.
 
 class TimelineRail {
   constructor(container, entries, options = {}) {
     this.container = container;
     this.entries = entries;
     this.onOpen = options.onOpen || function () {};
-    this.mode = 'dormant';
-    this._idleTimer = null;
     this._render();
-    this._bindEvents();
-    this._layoutDormant();
   }
 
   _sorted() {
-    return [...this.entries].sort((a, b) => a.date - b.date);
+    return [...this.entries].sort((a, b) => b.date - a.date);
+  }
+
+  _groupByYear(sorted) {
+    const groups = [];
+    let current = null;
+    sorted.forEach((entry) => {
+      const year = new Date(entry.date * 1000).getFullYear();
+      if (!current || current.year !== year) {
+        current = { year, entries: [] };
+        groups.push(current);
+      }
+      current.entries.push(entry);
+    });
+    return groups;
   }
 
   _render() {
     this.container.innerHTML = '';
     this.container.classList.add('timeline-rail');
-    this._entries = this._sorted();
+    const sorted = this._sorted();
+    const groups = this._groupByYear(sorted);
 
-    this._track = document.createElement('div');
-    this._track.className = 'timeline-track';
-    this.container.appendChild(this._track);
+    groups.forEach((group) => {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'timeline-year-group';
 
-    this._entries.forEach((entry) => {
-      const node = document.createElement('button');
-      node.type = 'button';
-      node.className = 'timeline-entry' + (entry.isChild ? ' timeline-entry-child' : '');
-      node.dataset.id = entry.id;
+      const label = document.createElement('div');
+      label.className = 'timeline-year-label';
+      label.textContent = group.year;
+      groupEl.appendChild(label);
 
-      const thumb = document.createElement('img');
-      thumb.className = 'timeline-thumb';
-      thumb.loading = 'lazy';
-      thumb.src = entry.thumbUrl || '';
-      thumb.alt = entry.label || '';
-      node.appendChild(thumb);
+      const entriesEl = document.createElement('div');
+      entriesEl.className = 'timeline-year-entries';
+      group.entries.forEach((entry) => {
+        const node = document.createElement('button');
+        const isSpan = entry.endDate !== undefined && entry.endDate !== entry.date;
+        node.type = 'button';
+        node.className = 'timeline-entry'
+          + (entry.isChild ? ' timeline-entry-child' : '')
+          + (isSpan ? ' timeline-entry-span' : '');
+        node.title = entry.label || '';
 
-      if (entry.endDate !== undefined && entry.endDate !== entry.date) {
-        const bracket = document.createElement('span');
-        bracket.className = 'timeline-bracket';
-        node.appendChild(bracket);
-      }
+        const thumb = document.createElement('img');
+        thumb.className = 'timeline-thumb';
+        thumb.loading = 'lazy';
+        thumb.src = entry.thumbUrl || '';
+        thumb.alt = entry.label || '';
+        node.appendChild(thumb);
 
-      node.addEventListener('click', () => this.onOpen(entry));
-      this._track.appendChild(node);
-      entry._node = node;
-    });
-  }
-
-  _bindEvents() {
-    this.container.addEventListener('mousemove', (e) => this._onMouseMove(e));
-    this.container.addEventListener('mouseleave', () => this._scheduleDormant());
-  }
-
-  _railHeight() {
-    // container.clientHeight is the *visible* scrollable area -- always
-    // usable as the layout height even for a long list, since the track's
-    // own height (set below) is what actually makes it scrollable.
-    return Math.max(this.container.clientHeight, 200);
-  }
-
-  _layoutDormant() {
-    this.mode = 'dormant';
-    this.container.classList.remove('timeline-rail-interactive');
-    this._entries.forEach((entry, i) => {
-      entry._node.style.top = `${i * DORMANT_SPACING}px`;
-      entry._node.style.transform = '';
-    });
-    this._track.style.height = `${Math.max(this._entries.length * DORMANT_SPACING, this._railHeight())}px`;
-  }
-
-  _layoutProportional() {
-    if (this._entries.length === 0) return;
-    this.mode = 'interactive';
-    this.container.classList.add('timeline-rail-interactive');
-    const dates = this._entries.map((e) => e.date);
-    const min = Math.min(...dates);
-    const max = Math.max(...dates);
-    const span = max - min || 1;
-    const trackHeight = this._railHeight();
-    const usableHeight = Math.max(trackHeight - ENTRY_HEIGHT, 0);
-    this._entries.forEach((entry) => {
-      const top = ((entry.date - min) / span) * usableHeight;
-      entry._node.style.top = `${top}px`;
-    });
-    this._track.style.height = `${trackHeight}px`;
-  }
-
-  _onEngage() {
-    if (this.mode !== 'interactive') {
-      this._layoutProportional();
-    }
-    this._scheduleDormant();
-  }
-
-  _scheduleDormant() {
-    clearTimeout(this._idleTimer);
-    this._idleTimer = setTimeout(() => this._layoutDormant(), 1200);
-  }
-
-  _onMouseMove(e) {
-    this._onEngage();
-    const rect = this.container.getBoundingClientRect();
-    const cursorY = e.clientY - rect.top;
-    this._entries.forEach((entry) => {
-      const node = entry._node;
-      const nodeRect = node.getBoundingClientRect();
-      const nodeCenterY = nodeRect.top - rect.top + nodeRect.height / 2;
-      const distance = Math.abs(cursorY - nodeCenterY);
-      const scale = Math.max(1, 1.8 - distance / 80);
-      node.style.transform = `scale(${scale.toFixed(2)})`;
+        node.addEventListener('click', () => this.onOpen(entry));
+        entriesEl.appendChild(node);
+      });
+      groupEl.appendChild(entriesEl);
+      this.container.appendChild(groupEl);
     });
   }
 }

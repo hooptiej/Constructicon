@@ -45,13 +45,21 @@
       </div>
       <div class="hazard-stripe" style="width:64px"></div>
 
-      {% include "_category_tiles.html" %}
+      <div class="timeline-widget-row">
+        <aside class="timeline-rail" id="gallery-timeline-rail"></aside>
+        <div class="timeline-widget-main">
+          {% include "_category_tiles.html" %}
+
+          {% if projects %}
+          <div class="projects-container">
+            <div class="featured-project" id="featured-project"></div>
+            <div class="project-grid" id="projects-grid"></div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
 
       {% if projects %}
-      <div class="projects-container">
-        <div class="featured-project" id="featured-project"></div>
-        <div class="project-grid" id="projects-grid"></div>
-      </div>
       <script>
       (function () {
         function escapeHtml(str) {
@@ -122,6 +130,41 @@
       <p class="empty-state">
         {% if selected_tag_slug %}No projects tagged under this category yet.{% else %}No projects yet.{% endif %}
       </p>
+      {% endif %}
+
+      {% if timeline_projects %}
+      <script src="/static/js/timeline-rail.js"></script>
+      {% include "_timeline_card_modal.html" %}
+      <script>
+      (function () {
+        const timelineProjects = {{ timeline_projects | tojson }};
+        const railEl = document.getElementById('gallery-timeline-rail');
+        if (railEl && timelineProjects.length) {
+          new TimelineRail(
+            railEl,
+            timelineProjects.map((p) => ({
+              id: p.id,
+              thumbUrl: p.cover_url,
+              label: p.title,
+              date: p.effective_start,
+              endDate: p.effective_end,
+              isChild: p.is_child,
+            })),
+            {
+              onOpen: (entry) => {
+                const p = timelineProjects.find((x) => x.id === entry.id);
+                window.openTimelineCardModal({
+                  thumbUrl: p.cover_url,
+                  label: p.title,
+                  dateLabel: new Date(p.effective_start * 1000).toLocaleDateString(),
+                  openUrl: `/project/${p.slug}`,
+                });
+              },
+            }
+          );
+        }
+      })();
+      </script>
       {% endif %}
     </div>
 

@@ -1069,47 +1069,51 @@ body.delete-mode-on .card-select-row { display: flex; }
 
    No card, no background of its own -- a real vertical axis with a small
    perpendicular tick at every entry and a larger tick + year label at
-   each year boundary, floating directly on the page. One entry per row,
-   stacked top-to-bottom in chronological order -- this is what actually
-   reads as "a timeline": position down the page IS reading order IS time
-   order. A prior version packed entries into flex-wrap rows grouped by
-   year, which looked like a plain image grid and destroyed that cue
-   entirely (nothing about a wrapped grid position corresponds to when
-   something happened). A version before that animated entries with
-   continuous date-to-pixel positioning, dropped because real dates
-   cluster heavily (collapses to two points at the extremes) and a
-   scale() transform flush against the viewport edge had nowhere to
-   expand but off-screen. This vertical list needs neither: entries just
-   go in date order, no date-to-pixel math, so nothing to collapse, drift,
-   or clip. */
+   each year boundary, floating directly on the page. Fixed to the
+   viewport (doesn't scroll with the page) and fit to the full window
+   height via flex space-between, so the whole chronology is visible with
+   no scrollbar. Hovering magnifies entries dock-style, scaling from their
+   LEFT edge so they grow rightward into the page -- never leftward off
+   the viewport, which is what broke an earlier version (see below).
+
+   Two things that failed before, and why this version avoids them:
+   - Absolute-positioned entries with date-proportional spacing, recomputed
+     on every mousemove: real dates cluster heavily (collapses to two
+     points at the extremes) and the recomputation itself drifted entries
+     out of view over repeated calls. This version never recomputes
+     position -- entries sit in a static flex column, position set once by
+     the browser's own layout and never touched again. Only `transform`
+     (a compositor property, doesn't affect layout/siblings) changes on
+     hover, so nothing can drift.
+   - transform: scale() with the default center origin, on an entry flush
+     against the viewport's left edge: the magnified thumbnail had nowhere
+     to expand into but off-screen past x=0. transform-origin: left center
+     below fixes this at the source -- growth only ever extends rightward. */
 .timeline-rail {
-  /* Fixed to the viewport -- stays put when the page scrolls, doesn't
-     move with the body. No bottom/height/overflow constraint: the box
-     just sizes to its content naturally, so no internal scrollbar ever
-     appears (that's the tradeoff vs. absolute positioning -- a list tall
-     enough to exceed the viewport runs past its bottom edge rather than
-     scrolling into view, since a fixed element doesn't grow the page's
-     own scrollable area). */
   position: fixed;
   left: 12px;
   top: 68px; /* .app-header's height (56px) + a little breathing room */
+  bottom: 12px;
   width: 110px;
   z-index: 45;
   background: transparent;
   border-left: 2px solid var(--border-strong);
-  padding: 0 0 12px 16px;
+  padding: 0 0 0 16px;
   box-sizing: border-box;
+  overflow: visible; /* magnified entries extend past this box on purpose */
+}
+.timeline-track {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
 }
 .timeline-year-marker {
   position: relative;
-  margin: 14px 0 8px;
   font-size: 11px;
   font-weight: 600;
   color: var(--accent);
   letter-spacing: 0.03em;
-}
-.timeline-year-marker:first-child {
-  margin-top: 0;
 }
 .timeline-year-marker::before {
   /* the year tick: a perpendicular mark crossing the axis, bigger than a
@@ -1129,7 +1133,8 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .timeline-entry-row {
   position: relative;
-  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
 }
 .timeline-entry-row::before {
   /* the per-entry tick: same idea as the year tick, smaller (minor tick). */
@@ -1146,12 +1151,15 @@ body.delete-mode-on .card-select-row { display: flex; }
   all: unset;
   cursor: pointer;
   display: block;
-  width: 28px;
-  height: 28px;
+  position: relative;
+  width: 24px;
+  height: 24px;
   border-radius: 4px;
   overflow: hidden;
   border: 1px solid var(--border-strong);
   box-sizing: border-box;
+  transform-origin: left center;
+  transition: transform 100ms ease;
 }
 .timeline-entry:hover {
   border-color: var(--accent);
@@ -1160,8 +1168,8 @@ body.delete-mode-on .card-select-row { display: flex; }
   border-width: 2px;
 }
 .timeline-entry-child {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   opacity: 0.75;
 }
 .timeline-thumb {

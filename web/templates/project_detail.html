@@ -85,34 +85,74 @@
   </div>
   {% endif %}
 
-  {% if items %}
-  <div class="project-item-grid">
-    {% for item in items %}
-    <div class="project-item-card-wrapper" data-slug="{{ item.slug }}">
-      <a class="project-item-card" href="{{ item.link }}">
-        <div class="project-item-thumb">
-          {% if item.thumb_url %}
-            <img src="{{ item.thumb_url }}" loading="lazy" alt="">
-          {% else %}
-            <span class="media-type-pill">{{ item.media_type }}</span>
-          {% endif %}
+  <div class="timeline-widget-row">
+    {% if timeline_items %}
+    <aside class="timeline-rail" id="project-timeline-rail"></aside>
+    {% endif %}
+    <div class="timeline-widget-main">
+      {% if items %}
+      <div class="project-item-grid">
+        {% for item in items %}
+        <div class="project-item-card-wrapper" data-slug="{{ item.slug }}">
+          <a class="project-item-card" href="{{ item.link }}">
+            <div class="project-item-thumb">
+              {% if item.thumb_url %}
+                <img src="{{ item.thumb_url }}" loading="lazy" alt="">
+              {% else %}
+                <span class="media-type-pill">{{ item.media_type }}</span>
+              {% endif %}
+            </div>
+            <div class="project-item-body">
+              <div class="project-item-title">{{ item.title }}</div>
+              <div class="project-item-meta">{{ item.media_type }}</div>
+            </div>
+          </a>
+          <div class="project-item-selectors">
+            <input type="radio" class="project-cover-selector" name="cover" data-slug="{{ item.slug }}" title="Set as project cover" {% if item.slug == project.cover_slug %}checked{% endif %}>
+            {% if item.media_type == 'document' %}
+            <input type="radio" class="project-writeup-selector" name="writeup" data-slug="{{ item.slug }}" title="Set as write-up" {% if item.slug == project.writeup_slug %}checked{% endif %}>
+            {% endif %}
+          </div>
         </div>
-        <div class="project-item-body">
-          <div class="project-item-title">{{ item.title }}</div>
-          <div class="project-item-meta">{{ item.media_type }}</div>
-        </div>
-      </a>
-      <div class="project-item-selectors">
-        <input type="radio" class="project-cover-selector" name="cover" data-slug="{{ item.slug }}" title="Set as project cover" {% if item.slug == project.cover_slug %}checked{% endif %}>
-        {% if item.media_type == 'document' %}
-        <input type="radio" class="project-writeup-selector" name="writeup" data-slug="{{ item.slug }}" title="Set as write-up" {% if item.slug == project.writeup_slug %}checked{% endif %}>
-        {% endif %}
+        {% endfor %}
       </div>
+      {% else %}
+      <p class="empty-state">This project has no items yet.</p>
+      {% endif %}
     </div>
-    {% endfor %}
   </div>
-  {% else %}
-  <p class="empty-state">This project has no items yet.</p>
+
+  {% if timeline_items %}
+  <script src="/static/js/timeline-rail.js"></script>
+  {% include "_timeline_card_modal.html" %}
+  <script>
+  (function () {
+    const timelineItems = {{ timeline_items | tojson }};
+    const railEl = document.getElementById('project-timeline-rail');
+    if (railEl && timelineItems.length) {
+      new TimelineRail(
+        railEl,
+        timelineItems.map((it) => ({
+          id: it.slug,
+          thumbUrl: it.thumb_url,
+          label: it.title,
+          date: it.effective_date,
+        })),
+        {
+          onOpen: (entry) => {
+            const it = timelineItems.find((x) => x.slug === entry.id);
+            window.openTimelineCardModal({
+              thumbUrl: it.thumb_url,
+              label: it.title,
+              dateLabel: new Date(it.effective_date * 1000).toLocaleDateString(),
+              openUrl: `/object/${it.slug}?from=project:{{ project.slug }}`,
+            });
+          },
+        }
+      );
+    }
+  })();
+  </script>
   {% endif %}
 
   {% if child_projects %}

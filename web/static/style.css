@@ -1067,20 +1067,21 @@ body.delete-mode-on .card-select-row { display: flex; }
    and a project detail page (item points). See
    docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
 
-   No card, no background of its own -- a real axis (a vertical line) with
-   a small perpendicular tick at each year, floating directly on the page.
-   Thumbnails sit beside their tick, attached to the axis, not inside any
-   panel.
-
-   Entries are grouped by year in normal document flow -- no animation, no
-   absolute-position/transform math. An earlier animated version (dock
-   magnification on hover, spacing morphing from even to time-proportional)
-   was dropped after live testing: real dates cluster heavily, so a linear
-   date-to-pixel mapping collapsed almost everything to two points at the
-   extremes, and a scale() transform on an entry flush against the
-   viewport's left edge had nowhere to expand into but off-screen. Normal
-   flow can't drift or clip since nothing is absolutely positioned or
-   transformed. */
+   No card, no background of its own -- a real vertical axis with a small
+   perpendicular tick at every entry and a larger tick + year label at
+   each year boundary, floating directly on the page. One entry per row,
+   stacked top-to-bottom in chronological order -- this is what actually
+   reads as "a timeline": position down the page IS reading order IS time
+   order. A prior version packed entries into flex-wrap rows grouped by
+   year, which looked like a plain image grid and destroyed that cue
+   entirely (nothing about a wrapped grid position corresponds to when
+   something happened). A version before that animated entries with
+   continuous date-to-pixel positioning, dropped because real dates
+   cluster heavily (collapses to two points at the extremes) and a
+   scale() transform flush against the viewport edge had nowhere to
+   expand but off-screen. This vertical list needs neither: entries just
+   go in date order, no date-to-pixel math, so nothing to collapse, drift,
+   or clip. */
 .timeline-rail {
   position: fixed;
   left: 12px;
@@ -1093,39 +1094,50 @@ body.delete-mode-on .card-select-row { display: flex; }
   z-index: 45;
   background: transparent;
   border-left: 2px solid var(--border-strong);
-  padding: 12px 0 12px 12px;
+  padding: 12px 0 12px 16px;
   box-sizing: border-box;
 }
-.timeline-year-group {
+.timeline-year-marker {
   position: relative;
-  margin-bottom: 16px;
-}
-.timeline-year-group::before {
-  /* the tick: a short perpendicular mark crossing the axis at this year.
-     .timeline-rail's border-left sits 14px to the left of this group's own
-     box (2px border + 12px padding) -- left:-20px/width:8px puts this span
-     from -6px to +2px relative to the group, i.e. straddling the border
-     (0 to 2px) with a few px sticking out past it into the page margin,
-     like a ruler tick projecting away from the axis. */
-  content: '';
-  position: absolute;
-  left: -20px;
-  top: 6px;
-  width: 8px;
-  height: 2px;
-  background: var(--accent);
-}
-.timeline-year-label {
+  margin: 14px 0 8px;
   font-size: 11px;
   font-weight: 600;
   color: var(--accent);
   letter-spacing: 0.03em;
-  margin-bottom: 6px;
 }
-.timeline-year-entries {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.timeline-year-marker:first-child {
+  margin-top: 0;
+}
+.timeline-year-marker::before {
+  /* the year tick: a perpendicular mark crossing the axis, bigger than a
+     per-entry tick. .timeline-rail's border-left sits 18px to the left of
+     this element's own box (2px border + 16px padding) -- left:-24px/
+     width:14px spans -6px to +8px relative to it, straddling the border
+     (0-2px) with 6px sticking out past it into the page margin, like a
+     ruler's major tick. */
+  content: '';
+  position: absolute;
+  left: -24px;
+  top: 50%;
+  width: 14px;
+  height: 2px;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+.timeline-entry-row {
+  position: relative;
+  margin-bottom: 8px;
+}
+.timeline-entry-row::before {
+  /* the per-entry tick: same idea as the year tick, smaller (minor tick). */
+  content: '';
+  position: absolute;
+  left: -20px;
+  top: 50%;
+  width: 8px;
+  height: 1px;
+  background: var(--border-strong);
+  transform: translateY(-50%);
 }
 .timeline-entry {
   all: unset;

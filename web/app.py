@@ -501,6 +501,23 @@ def _to_project_card(project):
     }
 
 
+def _to_timeline_project(project):
+    """Shape for one entry on the gallery timeline rail (web/static/js/timeline-rail.js).
+    Unlike _to_project_card, this includes children (is_child) -- the rail
+    shows every project, the grid deliberately doesn't (#149)."""
+    items = db.list_project_items(project["id"])
+    effective_start, effective_end = timeline.resolve_project_span(project, items)
+    return {
+        "id": project["id"],
+        "slug": project["slug"],
+        "title": project["title"],
+        "cover_url": _project_cover_url(project.get("cover_slug")),
+        "effective_start": effective_start,
+        "effective_end": effective_end,
+        "is_child": project.get("parent_id") is not None,
+    }
+
+
 def _project_has_tag(project, member_slugs):
     return any(item["slug"] in member_slugs for item in db.list_project_items(project["id"]))
 
@@ -712,6 +729,11 @@ def home_page(request: Request, tag: str = "", scope: str = "top"):
         mt: [_to_public(r) for r in rows]
         for mt, rows in db.list_recent_items_by_type(limit_per_type=10000).items()
     }
+    # Timeline feature: the gallery rail shows every project (including
+    # children, with an is_child flag) in date order -- deliberately built
+    # from all_projects, not the top-level-only `projects` local above that
+    # #149 scoped to the grid.
+    timeline_projects = [_to_timeline_project(p) for p in all_projects]
     return templates.TemplateResponse(
         request, "home.html",
         {
@@ -724,6 +746,7 @@ def home_page(request: Request, tag: str = "", scope: str = "top"):
             "owner_initials": _owner_initials,
             "unfiled_slugs": unfiled_slugs,
             "files_by_type": files_by_type,
+            "timeline_projects": timeline_projects,
         },
     )
 

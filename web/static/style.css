@@ -1067,10 +1067,10 @@ body.delete-mode-on .card-select-row { display: flex; }
    and a project detail page (item points). See
    docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
 
-   A floating panel, not a drawer -- always visible, same visual language
-   as the gallery/upload drawers' edge tab (rounded corner facing away from
-   the edge, drop shadow) but the timeline itself is the floating element,
-   not a trigger for a hidden one. No open/close state.
+   No card, no background of its own -- a real axis (a vertical line) with
+   a small perpendicular tick at each year, floating directly on the page.
+   Thumbnails sit beside their tick, attached to the axis, not inside any
+   panel.
 
    Entries are grouped by year in normal document flow -- no animation, no
    absolute-position/transform math. An earlier animated version (dock
@@ -1078,28 +1078,42 @@ body.delete-mode-on .card-select-row { display: flex; }
    was dropped after live testing: real dates cluster heavily, so a linear
    date-to-pixel mapping collapsed almost everything to two points at the
    extremes, and a scale() transform on an entry flush against the
-   viewport's left edge had nowhere to expand into but off-screen. Year
-   labels are the actual timeline indicator now; normal flow can't drift
-   or clip since nothing is absolutely positioned or transformed. */
+   viewport's left edge had nowhere to expand into but off-screen. Normal
+   flow can't drift or clip since nothing is absolutely positioned or
+   transformed. */
 .timeline-rail {
   position: fixed;
   left: 12px;
   top: 50%;
   transform: translateY(-50%);
-  width: 100px;
+  width: 110px;
   max-height: 70vh;
   overflow-y: auto;
   overflow-x: hidden;
   z-index: 45;
-  background: var(--card);
-  border: 1px solid var(--border-stronger);
-  border-radius: 10px;
-  box-shadow: 2px 2px 10px rgba(0,0,0,0.35);
-  padding: 12px 8px;
+  background: transparent;
+  border-left: 2px solid var(--border-strong);
+  padding: 12px 0 12px 12px;
   box-sizing: border-box;
 }
 .timeline-year-group {
+  position: relative;
   margin-bottom: 16px;
+}
+.timeline-year-group::before {
+  /* the tick: a short perpendicular mark crossing the axis at this year.
+     .timeline-rail's border-left sits 14px to the left of this group's own
+     box (2px border + 12px padding) -- left:-20px/width:8px puts this span
+     from -6px to +2px relative to the group, i.e. straddling the border
+     (0 to 2px) with a few px sticking out past it into the page margin,
+     like a ruler tick projecting away from the axis. */
+  content: '';
+  position: absolute;
+  left: -20px;
+  top: 6px;
+  width: 8px;
+  height: 2px;
+  background: var(--accent);
 }
 .timeline-year-label {
   font-size: 11px;
@@ -1107,8 +1121,6 @@ body.delete-mode-on .card-select-row { display: flex; }
   color: var(--accent);
   letter-spacing: 0.03em;
   margin-bottom: 6px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border-strong);
 }
 .timeline-year-entries {
   display: flex;

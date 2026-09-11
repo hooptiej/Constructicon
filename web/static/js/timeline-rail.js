@@ -86,7 +86,7 @@ class TimelineRail {
       const rect = node.getBoundingClientRect();
       const centerY = rect.top + rect.height / 2;
       const distance = Math.abs(cursorY - centerY);
-      const scale = Math.max(1, 2.2 - distance / 50);
+      const scale = Math.max(1, 2.64 - distance / 50);
       node.style.transform = scale > 1 ? `scale(${scale.toFixed(2)})` : '';
       node.style.zIndex = scale > 1.05 ? 10 : '';
     });

@@ -5,7 +5,11 @@
 {% include "_gallery_drawer.html" %}
 {% include "_admin_pane.html" %}
 
-<div class="app-main">
+{% if timeline_projects %}
+<aside class="timeline-rail" id="gallery-timeline-rail"></aside>
+{% endif %}
+
+<div class="app-main{% if timeline_projects %} app-main-shifted{% endif %}">
   <div>
     <h1 class="page-title">Constructicon</h1>
     <p class="page-subtitle">Curated projects below — gallery and upload live behind the tab on the right (hover, or drag a file over it).</p>
@@ -45,21 +49,13 @@
       </div>
       <div class="hazard-stripe" style="width:64px"></div>
 
-      <div class="timeline-widget-row">
-        <aside class="timeline-rail" id="gallery-timeline-rail"></aside>
-        <div class="timeline-widget-main">
-          {% include "_category_tiles.html" %}
-
-          {% if projects %}
-          <div class="projects-container">
-            <div class="featured-project" id="featured-project"></div>
-            <div class="project-grid" id="projects-grid"></div>
-          </div>
-          {% endif %}
-        </div>
-      </div>
+      {% include "_category_tiles.html" %}
 
       {% if projects %}
+      <div class="projects-container">
+        <div class="featured-project" id="featured-project"></div>
+        <div class="project-grid" id="projects-grid"></div>
+      </div>
       <script>
       (function () {
         function escapeHtml(str) {

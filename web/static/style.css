@@ -1065,33 +1065,49 @@ body.delete-mode-on .card-select-row { display: flex; }
 
 /* Timeline feature: shared rail used on the gallery page (project spans)
    and a project detail page (item points). See
-   docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md. */
+   docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
+   Fixed to the actual viewport (not sticky within a widget's scroll
+   context) -- .app-main-shifted below is what makes the rest of the page
+   make room for it, per the owner's explicit "attached to the viewport,
+   shift the existing content" spec. 56px matches .app-header's height. */
 .timeline-rail {
-  position: sticky;
-  top: 1rem;
+  position: fixed;
+  left: 0;
+  top: 56px;
   width: 64px;
-  max-height: calc(100vh - 2rem);
+  height: calc(100vh - 56px);
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  flex-shrink: 0;
+  overflow-x: hidden;
+  z-index: 5;
+  background: var(--bg);
+  border-right: 1px solid var(--border-strong);
+  padding: 12px 0;
+  box-sizing: border-box;
+}
+.app-main-shifted {
+  margin-left: 80px;
+}
+.timeline-track {
+  position: relative;
+  width: 100%;
 }
 .timeline-entry {
   all: unset;
+  position: absolute;
+  left: 12px;
   cursor: pointer;
   display: block;
   width: 40px;
   height: 40px;
   border-radius: 6px;
   overflow: hidden;
-  transition: transform 120ms ease;
+  transition: transform 120ms ease, top 200ms ease;
   transform-origin: center;
 }
 .timeline-entry-child {
+  left: 24px;
   width: 32px;
   height: 32px;
-  margin-left: 12px;
 }
 .timeline-thumb {
   width: 100%;
@@ -1105,18 +1121,6 @@ body.delete-mode-on .card-select-row { display: flex; }
   height: 12px;
   margin: 2px auto 0;
   background: var(--accent);
-}
-.timeline-rail-interactive .timeline-entry {
-  transition: transform 80ms ease, margin-top 200ms ease;
-}
-.timeline-widget-row {
-  display: flex;
-  gap: 1rem;
-  align-items: flex-start;
-}
-.timeline-widget-main {
-  flex: 1;
-  min-width: 0;
 }
 .timeline-card-cover {
   width: 100%;

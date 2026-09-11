@@ -1062,3 +1062,59 @@ body.delete-mode-on .card-select-row { display: flex; }
   align-items: center; justify-content: center; cursor: pointer; z-index: 51;
 }
 .lightbox-close:hover { border-color: var(--accent); }
+
+/* Timeline feature: shared rail used on the gallery page (project spans)
+   and a project detail page (item points). See
+   docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md. */
+.timeline-rail {
+  position: sticky;
+  top: 1rem;
+  width: 64px;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+.timeline-entry {
+  all: unset;
+  cursor: pointer;
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  transition: transform 120ms ease;
+  transform-origin: center;
+}
+.timeline-entry-child {
+  width: 32px;
+  height: 32px;
+  margin-left: 12px;
+}
+.timeline-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.timeline-bracket {
+  display: block;
+  width: 2px;
+  height: 12px;
+  margin: 2px auto 0;
+  background: var(--accent);
+}
+.timeline-rail-interactive .timeline-entry {
+  transition: transform 80ms ease, margin-top 200ms ease;
+}
+.timeline-widget-row {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.timeline-widget-main {
+  flex: 1;
+  min-width: 0;
+}

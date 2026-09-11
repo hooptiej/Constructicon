@@ -242,7 +242,7 @@
             <input class="input" type="datetime-local" id="timeline-date-input" name="display_date" value="{{ item.display_date_override_input or '' }}">
             <button type="button" class="btn" id="timeline-date-reset">Reset</button>
           </div>
-          <div style="font-size:12px;color:var(--muted,#888);margin-top:4px">
+          <div style="font-size:12px;color:var(--placeholder);margin-top:4px">
             {% if item.display_date_override %}Manually set.{% else %}Computed: {{ item.effective_date_display }}{% endif %}
           </div>
         </div>

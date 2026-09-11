@@ -25,7 +25,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, db, imgur_import, object_types, ocr, similarity, storage, thumbnails
+from core import automatch, backup, captions, db, imgur_import, object_types, ocr, similarity, storage, thumbnails, timeline
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -308,6 +308,16 @@ def _friendly_datetime(epoch):
     return f"{_friendly_date(epoch)} at {hour12}:{dt.minute:02d} {ampm}"
 
 
+def _datetime_local_value(epoch):
+    """'%Y-%m-%dT%H:%M'-shaped string an <input type="datetime-local">
+    accepts as its value attribute. None when epoch is None, so an unset
+    override renders as an empty (placeholder-only) field rather than
+    Jan 1 1970."""
+    if epoch is None:
+        return None
+    return datetime.fromtimestamp(epoch).strftime("%Y-%m-%dT%H:%M")
+
+
 def _friendly_file_size(size_bytes):
     """Convert a file size in bytes to a human-readable string (e.g.,
     '1.2 MB', '340 KB', '12 B'). Returns None if size_bytes is None."""
@@ -421,6 +431,15 @@ def _to_object_detail(row):
         # a second layer of safety matching core/ocr.py/core/thumbnails.py's
         # defensive-call pattern).
         "properties": _call_properties_fn(spec, row),
+        # Timeline feature: manual override for this object's position on
+        # the Constructicon timeline. display_date_override is the raw
+        # epoch (None if unset); *_input is pre-formatted for the
+        # datetime-local field's value attribute; effective_date_display
+        # is what the timeline actually uses today (override, else
+        # content_date, else uploaded_at) — see core/timeline.py.
+        "display_date_override": row.get("display_date_override"),
+        "display_date_override_input": _datetime_local_value(row.get("display_date_override")),
+        "effective_date_display": _friendly_datetime(timeline.resolve_item_date(row)),
     }
 
 
@@ -1407,6 +1426,8 @@ def api_update_image(
     icon: str | None = Form(None),
     content_description: str | None = Form(None),
     type_metadata: str | None = Form(None),
+    display_date: str | None = Form(None),
+    reset_display_date: bool = Form(False),
 ):
     # #213 / A5 fix: only parse and pass tags if they were actually provided
     # in the form. Defaults of None mean "don't touch this field", allowing
@@ -1442,6 +1463,15 @@ def api_update_image(
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="type_metadata must be valid JSON")
         row = db.update_content_metadata(slug, content_description=content_description, type_metadata=parsed_metadata)
+    # Timeline feature: reset_display_date wins over a stray display_date
+    # value if a client somehow sends both (mirrors the MCP tools' same
+    # reset-flag convention in mcp_server/server.py).
+    if reset_display_date:
+        db.set_display_date_override(slug, None)
+        row = db.get_by_slug(slug)
+    elif display_date:
+        db.set_display_date_override(slug, datetime.fromisoformat(display_date).timestamp())
+        row = db.get_by_slug(slug)
     return JSONResponse(_to_public(row))
 
 

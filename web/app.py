@@ -980,6 +980,19 @@ def project_detail_page(request: Request, slug: str):
         if writeup_doc:
             writeup_body = writeup_doc.get("type_metadata", {}).get("body", "")
     effective_start, effective_end = timeline.resolve_project_span(project, raw_items)
+    # Timeline feature: per-item effective dates for this project's own
+    # content rail -- single points (no endDate), unlike the gallery
+    # rail's project spans. Built from raw_items, not `items`, since
+    # _to_content_public's card shape drops the raw date columns.
+    timeline_items = [
+        {
+            "slug": r["slug"],
+            "thumb_url": f"/f/{r['slug']}/thumb" if _has_thumbnail(r) and not r.get("redacted") else None,
+            "title": r.get("content_description") or r.get("description") or r.get("filename") or r["slug"],
+            "effective_date": timeline.resolve_item_date(r),
+        }
+        for r in raw_items
+    ]
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
@@ -993,6 +1006,7 @@ def project_detail_page(request: Request, slug: str):
             "end_date_input": _datetime_local_value(project.get("end_date_override")),
             "effective_start_display": _friendly_datetime(effective_start),
             "effective_end_display": _friendly_datetime(effective_end),
+            "timeline_items": timeline_items,
         },
     )
 

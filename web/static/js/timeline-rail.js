@@ -153,7 +153,11 @@ class TimelineRail {
       el.style.height = `${rowHeight}px`;
       el.style.display = 'flex';
       el.style.alignItems = 'center';
-      el.style.overflow = 'hidden';
+      // Entry rows stay visible so the hover-magnify transform (#292, see
+      // .timeline-entry:hover) isn't clipped by its own compressed row --
+      // year/month markers keep hidden since their own text truncation
+      // still matters and they don't magnify.
+      el.style.overflow = kind === 'entry' ? 'visible' : 'hidden';
       if (kind === 'year') {
         el.style.fontSize = `${Math.max(7, Math.min(11, rowHeight * 0.85))}px`;
       } else if (kind === 'month') {

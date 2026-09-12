@@ -626,7 +626,18 @@ body.delete-mode-on .card-select-row { display: flex; }
    something real. */
 .audio-preview { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 36px 24px; width: 100%; box-sizing: border-box; }
 .audio-preview-icon { font-size: 48px; line-height: 1; }
-.audio-preview audio { width: 100%; max-width: 520px; }
+/* color-scheme: dark tells the browser to draw its OWN native chrome (the
+   scrubber track, volume slider, timestamps) in dark colors instead of the
+   light default it otherwise assumes absent a page-level color-scheme --
+   <audio controls> is a closed shadow-root widget the rest of this
+   stylesheet can't reach any other way. accent-color re-tints the
+   scrubber/volume fill to the app's own accent instead of the browser's
+   default blue, same idiom already used for this app's <input type=range>
+   sliders (e.g. .admin-caption-slider, .cropper-controls). Support for
+   theming <audio> specifically (rather than just <input type=range>) is
+   Chromium-only as of this writing; Firefox/Safari fall back to their own
+   native player unstyled, which is an acceptable degrade, not a bug. */
+.audio-preview audio { width: 100%; max-width: 520px; color-scheme: dark; accent-color: var(--accent); }
 /* #290: the file's own tags in the preview (title/artist headline, then the
    labelled rest), or an explicit empty state. */
 .audio-tags { display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center; max-width: 520px; min-width: 0; }

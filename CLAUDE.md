@@ -62,11 +62,10 @@ exist yet.
   time under `CAPTION_LOCK`, and the **Ollama container is restarted after
   every single image** via the Docker Engine API — a long-lived Ollama
   process doesn't release resources between calls. **Deploy prerequisites
-  for the app container** (both already applied to `constructicon-test`'s
-  compose on the box, still TODO for `constructicon-web`): join Ollama's
-  compose network (`ollama_default`, external — the ipvlan `questlog-lan`
-  network can't reach the host's published `:11434`) so
-  `http://ollama:11434` resolves, and bind-mount `/var/run/docker.sock`
+  for the app container** — join Ollama's compose network (`ollama_default`,
+  external — the ipvlan `questlog-lan` network can't reach the host's
+  published `:11434`) so `http://ollama:11434` resolves, and bind-mount
+  `/var/run/docker.sock`
   for the restart. Without the socket it degrades to Ollama's own
   `keep_alive: 0` model unload and logs a warning per image; set
   `CAPTION_DISABLED=1` to skip captioning entirely. Tune with the admin
@@ -225,8 +224,14 @@ uvicorn web.app:app --host 0.0.0.0 --port 8000 --reload
   hard-crashing the app.
 - `sentence_transformers` pulls in `torch`; the Dockerfile deliberately
   installs the CPU-only build first (`--index-url
-  https://download.pytorch.org/whl/cpu`) since the TrueNAS box has no GPU —
-  do the same locally if disk space for CUDA wheels is a concern.
+  https://download.pytorch.org/whl/cpu`) — this app container itself has no
+  need for CUDA (similarity/embeddings are cheap enough on CPU), so it
+  doesn't reach for the box's GPU even though one exists (an RTX 3060 Ti,
+  8GB — confirmed via `nvidia-smi` 2026-09-12; passed through to the Ollama
+  container via compose's `deploy.resources.reservations.devices` for
+  moondream captioning, see above). Do the CPU-only install locally too if
+  disk space for CUDA wheels is a concern — it's about this container's own
+  footprint, not the box's actual hardware.
 - `imagerepo.db` (SQLite file) and `storage/` are created at the repo root
   on first run, gitignored, not baked into the image.
 - `seed_test_data.py` seeds a handful of fake-upload rows for exercising

@@ -15,11 +15,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr l
 
 WORKDIR /app
 
-# This box has no GPU (confirmed: no nvidia-smi, no nvidia PCI device), but
-# sentence-transformers pulls in torch, and plain PyPI torch ships CUDA
-# libraries by default — several GB of nvidia-* packages this box can never
-# use. Installing torch's CPU-only build first satisfies that dependency
-# before pip gets a chance to reach for the CUDA one.
+# This container has no need for CUDA (sentence-transformers' embeddings
+# are cheap enough on CPU) even though the box itself has a real GPU (an
+# RTX 3060 Ti — used by the separate Ollama container for moondream
+# captioning, see core/captions.py; confirmed via nvidia-smi 2026-09-12,
+# correcting an earlier "this box has no GPU" note here that predated that
+# hardware). Plain PyPI torch ships CUDA libraries by default regardless —
+# several GB of nvidia-* packages this container would never use. Installing
+# torch's CPU-only build first satisfies that dependency before pip gets a
+# chance to reach for the CUDA one.
 RUN pip install --no-cache-dir torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt .

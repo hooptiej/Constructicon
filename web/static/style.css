@@ -1261,11 +1261,17 @@ body.delete-mode-on .card-select-row { display: flex; }
      indicator line/needle for the axis, phosphor-blue glowing readouts
      for the dates -- see the scale-line/-label/event-time rules below. */
   margin-top: 10px;
-  padding: 12px 14px 16px;
+  padding: 18px 26px 16px;
   background: #0a0d12;
   border: 1px solid #232a36;
   border-radius: 8px;
   box-shadow: 0 0 28px rgba(70, 150, 255, 0.10), inset 0 0 46px rgba(70, 150, 255, 0.05);
+  /* Extra top/side padding plus a hard clip below give the diagonal time
+     flags room to run at a steep angle without escaping the chassis --
+     only a flag genuinely anchored at the very edge (the timeline's first
+     or last event) ever reaches this crop, and it reads as the readout
+     running behind the tuner's own bezel rather than a layout bug. */
+  overflow: hidden;
 }
 .project-video-timeline-panel-label {
   font-size: 11px;
@@ -1376,7 +1382,10 @@ body.delete-mode-on .card-select-row { display: flex; }
 .project-video-timeline-event-time {
   /* Anchored at the pole's top (bottom: 100% of the wrap + the pole's own
      height), not the diamond directly -- reads up and to the right so it
-     doesn't collide with a neighboring flag immediately. */
+     doesn't collide with a neighboring flag immediately. Steep (-65deg,
+     near-vertical) rather than the original -40deg specifically to keep
+     its horizontal reach small enough to stay inside the chassis for
+     ordinary timelines. */
   position: absolute;
   bottom: calc(100% + 40px);
   left: 50%;
@@ -1386,7 +1395,18 @@ body.delete-mode-on .card-select-row { display: flex; }
   font-family: 'JetBrains Mono', monospace;
   white-space: nowrap;
   transform-origin: bottom left;
-  transform: rotate(-40deg);
+  transform: rotate(-65deg);
+}
+.project-video-timeline-event-time--end {
+  /* The timeline's true last event sits at the range's right edge, so
+     its flag is the one guaranteed to run toward the chassis wall no
+     matter how steep the angle -- mirror it to lean up-and-left instead,
+     same way a tooltip flips near a screen edge, rather than relying on
+     the panel's overflow:hidden crop for the common case. */
+  left: auto;
+  right: 50%;
+  transform-origin: bottom right;
+  transform: rotate(65deg);
 }
 .project-video-timeline-event {
   /* A video-editor-style keyframe diamond, not a bare dot -- sized and

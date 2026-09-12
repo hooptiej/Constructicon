@@ -224,6 +224,7 @@ class ProjectVideoTimeline {
     eventRow.className = 'project-video-timeline-events';
     const sortedEvents = [...this.events].sort((a, b) => a.date - b.date);
     const showFlag = this._clusterEvents(sortedEvents, range);
+    const lastEvent = sortedEvents[sortedEvents.length - 1];
     sortedEvents.forEach((event) => {
       // Wrapper carries the position; a diamond with a flagpole reaching
       // up past the scale line and an angled time flag at its top,
@@ -243,6 +244,12 @@ class ProjectVideoTimeline {
 
         const time = document.createElement('span');
         time.className = 'project-video-timeline-event-time';
+        if (event === lastEvent) {
+          // The true endpoint always sits at the range's right edge --
+          // mirror its flag so it leans away from that wall instead of
+          // into it (see the --end rule in style.css).
+          time.classList.add('project-video-timeline-event-time--end');
+        }
         time.textContent = new Date(event.date * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
         wrap.appendChild(time);
       }

@@ -7,7 +7,7 @@
 {% if timeline_items %}
 <aside class="timeline-rail" id="project-timeline-rail"></aside>
 {% endif %}
-<div class="app-main">
+<div class="app-main{% if timeline_items %} app-main-shifted{% endif %}">
   <a class="back-link" href="/">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
     Back to projects
@@ -120,7 +120,6 @@
 
   {% if timeline_items %}
   <script src="/static/js/timeline-rail.js"></script>
-  {% include "_timeline_card_modal.html" %}
   <script>
   (function () {
     const rail = document.getElementById('project-timeline-rail');
@@ -133,17 +132,11 @@
           thumbUrl: it.thumb_url,
           label: it.title,
           date: it.effective_date,
+          dateLabel: new Date(it.effective_date * 1000).toLocaleDateString(),
+          openUrl: `/object/${it.slug}?from=project:{{ project.slug }}`,
         })),
         {
-          onOpen: (entry) => {
-            const it = timelineItems.find((x) => x.slug === entry.id);
-            window.openTimelineCardModal({
-              thumbUrl: it.thumb_url,
-              label: it.title,
-              dateLabel: new Date(it.effective_date * 1000).toLocaleDateString(),
-              openUrl: `/object/${it.slug}?from=project:{{ project.slug }}`,
-            });
-          },
+          onOpen: (entry) => { window.location.href = entry.openUrl; },
         }
       );
     }

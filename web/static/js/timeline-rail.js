@@ -5,26 +5,69 @@
 // (project spans) and a project detail page (item points). See
 // docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
 //
-// Time is the primary content here, not the project/item itself: each row
-// shows a tick + a day-of-month label (the month/year is already carried
-// by the marker above it), not a thumbnail. Click opens a popup (the
-// shared card-preview modal) with the actual item -- thumbnail, title,
-// date, a link to the real page. An earlier version showed thumbnails
-// inline with dock-style hover magnification; dropped in favor of this
-// once real project data made clear the list needed to read as a
-// chronology first, with the "what" available on demand rather than
-// competing for space with the "when."
+// Every year between the earliest and latest entry gets its own marker,
+// even years with zero entries in them -- a real chronology has to show
+// the gaps, not just the years something happened. Hovering an entry
+// shows a lightweight popover (no backdrop -- meant to be glanced at while
+// moving through the list, not a modal dialog); clicking navigates
+// straight to the real page. An earlier version reversed this (click
+// opened a popup, no hover) and rendered nothing before a year that
+// happened to have no entries, both fixed here.
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 class TimelineRail {
   constructor(container, entries, options = {}) {
     this.container = container;
     this.entries = entries;
     this.onOpen = options.onOpen || function () {};
+    this._popover = null;
     this._render();
   }
 
   _sorted() {
     return [...this.entries].sort((a, b) => b.date - a.date);
+  }
+
+  _ensurePopover() {
+    if (this._popover) return this._popover;
+    const el = document.createElement('div');
+    el.className = 'timeline-popover';
+    el.innerHTML = `
+      <img class="timeline-popover-cover" alt="">
+      <div class="timeline-popover-title"></div>
+      <div class="timeline-popover-date"></div>
+    `;
+    document.body.appendChild(el);
+    this._popover = el;
+    return el;
+  }
+
+  _showPopover(entry, node) {
+    const popover = this._ensurePopover();
+    const cover = popover.querySelector('.timeline-popover-cover');
+    if (entry.thumbUrl) {
+      cover.src = entry.thumbUrl;
+      cover.style.display = '';
+    } else {
+      cover.style.display = 'none';
+    }
+    popover.querySelector('.timeline-popover-title').textContent = entry.label || '';
+    popover.querySelector('.timeline-popover-date').textContent =
+      entry.dateLabel || new Date(entry.date * 1000).toLocaleDateString();
+
+    popover.classList.add('visible');
+    // Measure after making it visible (offsetHeight is 0 while display:none).
+    const nodeRect = node.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    let top = nodeRect.top + nodeRect.height / 2 - popoverRect.height / 2;
+    top = Math.max(8, Math.min(top, window.innerHeight - popoverRect.height - 8));
+    popover.style.left = `${nodeRect.right + 10}px`;
+    popover.style.top = `${top}px`;
+  }
+
+  _hidePopover() {
+    if (this._popover) this._popover.classList.remove('visible');
   }
 
   _render() {
@@ -36,48 +79,50 @@ class TimelineRail {
     this.container.appendChild(this._track);
 
     const sorted = this._sorted();
-    let lastYear = null;
-    let lastMonthKey = null;
-    const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    if (sorted.length === 0) return;
 
-    sorted.forEach((entry) => {
-      const d = new Date(entry.date * 1000);
-      const year = d.getFullYear();
-      const monthKey = `${year}-${d.getMonth()}`;
-      if (year !== lastYear) {
-        const marker = document.createElement('div');
-        marker.className = 'timeline-year-marker';
-        marker.textContent = year;
-        this._track.appendChild(marker);
-        lastYear = year;
-        lastMonthKey = monthKey;
-      } else if (monthKey !== lastMonthKey) {
-        // Between year boundaries, a month marker is the only other
-        // chronology cue -- without it, real data spanning just one or
-        // two years (common early on) shows almost no temporal texture at
-        // all beyond a couple of year labels at the top of the list.
-        const marker = document.createElement('div');
-        marker.className = 'timeline-month-marker';
-        marker.textContent = MONTH_NAMES[d.getMonth()];
-        this._track.appendChild(marker);
-        lastMonthKey = monthKey;
+    const years = sorted.map((entry) => new Date(entry.date * 1000).getFullYear());
+    const maxYear = Math.max(...years);
+    const minYear = Math.min(...years);
+
+    let entryIndex = 0;
+    for (let year = maxYear; year >= minYear; year--) {
+      const yearMarker = document.createElement('div');
+      yearMarker.className = 'timeline-year-marker';
+      yearMarker.textContent = year;
+      this._track.appendChild(yearMarker);
+
+      let lastMonth = null;
+      while (entryIndex < sorted.length && new Date(sorted[entryIndex].date * 1000).getFullYear() === year) {
+        const entry = sorted[entryIndex];
+        const d = new Date(entry.date * 1000);
+        if (d.getMonth() !== lastMonth) {
+          const monthMarker = document.createElement('div');
+          monthMarker.className = 'timeline-month-marker';
+          monthMarker.textContent = MONTH_NAMES[d.getMonth()];
+          this._track.appendChild(monthMarker);
+          lastMonth = d.getMonth();
+        }
+
+        const row = document.createElement('div');
+        row.className = 'timeline-entry-row';
+
+        const node = document.createElement('button');
+        const isSpan = entry.endDate !== undefined && entry.endDate !== entry.date;
+        node.type = 'button';
+        node.className = 'timeline-entry'
+          + (entry.isChild ? ' timeline-entry-child' : '')
+          + (isSpan ? ' timeline-entry-span' : '');
+        node.textContent = `${d.getMonth() + 1}/${d.getDate()}`;
+
+        node.addEventListener('mouseenter', () => this._showPopover(entry, node));
+        node.addEventListener('mouseleave', () => this._hidePopover());
+        node.addEventListener('click', () => this.onOpen(entry));
+
+        row.appendChild(node);
+        this._track.appendChild(row);
+        entryIndex++;
       }
-
-      const row = document.createElement('div');
-      row.className = 'timeline-entry-row';
-
-      const node = document.createElement('button');
-      const isSpan = entry.endDate !== undefined && entry.endDate !== entry.date;
-      node.type = 'button';
-      node.className = 'timeline-entry'
-        + (entry.isChild ? ' timeline-entry-child' : '')
-        + (isSpan ? ' timeline-entry-span' : '');
-      node.title = entry.label || '';
-      node.textContent = String(d.getDate());
-
-      node.addEventListener('click', () => this.onOpen(entry));
-      row.appendChild(node);
-      this._track.appendChild(row);
-    });
+    }
   }
 }

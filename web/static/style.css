@@ -1068,27 +1068,26 @@ body.delete-mode-on .card-select-row { display: flex; }
    docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
 
    No card, no background of its own -- a real vertical axis with a small
-   perpendicular tick at every entry and a larger tick + year label at
-   each year boundary, floating directly on the page. Fixed to the
-   viewport (doesn't scroll with the page) and fit to the full window
-   height via flex space-between, so the whole chronology is visible with
-   no scrollbar. Hovering magnifies entries dock-style, scaling from their
-   LEFT edge so they grow rightward into the page -- never leftward off
-   the viewport, which is what broke an earlier version (see below).
+   perpendicular tick at every entry and larger ticks + labels at year and
+   month boundaries, floating directly on the page. Fixed to the viewport
+   (doesn't scroll with the page) and fit to the full window height via
+   flex space-between, so the whole chronology is visible with no
+   scrollbar. .app-main-shifted (added to the page's main content when the
+   rail is present) pushes the rest of the page over so there's real empty
+   space behind the rail instead of page content running underneath it.
 
-   Two things that failed before, and why this version avoids them:
-   - Absolute-positioned entries with date-proportional spacing, recomputed
-     on every mousemove: real dates cluster heavily (collapses to two
-     points at the extremes) and the recomputation itself drifted entries
-     out of view over repeated calls. This version never recomputes
-     position -- entries sit in a static flex column, position set once by
-     the browser's own layout and never touched again. Only `transform`
-     (a compositor property, doesn't affect layout/siblings) changes on
-     hover, so nothing can drift.
-   - transform: scale() with the default center origin, on an entry flush
-     against the viewport's left edge: the magnified thumbnail had nowhere
-     to expand into but off-screen past x=0. transform-origin: left center
-     below fixes this at the source -- growth only ever extends rightward. */
+   Every year between the earliest and latest entry gets a marker, even
+   ones with zero entries -- a real chronology has to show the gaps
+   between activity, not just the years something happened (a version
+   before this only emitted a marker for years that actually had an
+   entry, so a real 2017-to-2026 span read as two labels back to back with
+   no sense that 9 quiet years separated them).
+
+   Hovering an entry shows a lightweight popover positioned next to it (no
+   backdrop -- meant for glancing while moving through the list); clicking
+   navigates straight to the real page. An earlier version had this
+   backwards (click opened a heavier modal-with-backdrop, no hover at
+   all). */
 .timeline-rail {
   position: fixed;
   left: 12px;
@@ -1100,7 +1099,10 @@ body.delete-mode-on .card-select-row { display: flex; }
   border-left: 2px solid var(--border-strong);
   padding: 0 0 0 16px;
   box-sizing: border-box;
-  overflow: visible; /* magnified entries extend past this box on purpose */
+  overflow: visible;
+}
+.app-main-shifted {
+  margin-left: 140px; /* .timeline-rail's left(12) + width(110) + a gap */
 }
 .timeline-track {
   display: flex;
@@ -1174,15 +1176,15 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .timeline-entry {
   /* Time is the primary content of a row now, not the item itself -- this
-     is a day-of-month label, not a thumbnail. Click opens the shared
-     card-preview modal (window.openTimelineCardModal) as the "what was
-     this" popup, on demand rather than always taking up rail space. */
+     is a month/day label, not a thumbnail. Hover shows .timeline-popover
+     (the "what was this" preview); click navigates straight to the real
+     page. */
   all: unset;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
+  min-width: 28px;
   height: 18px;
   padding: 0 4px;
   border-radius: 3px;
@@ -1202,9 +1204,39 @@ body.delete-mode-on .card-select-row { display: flex; }
 .timeline-entry-child {
   opacity: 0.75;
 }
-.timeline-card-cover {
+.timeline-popover {
+  /* No backdrop -- meant to be glanced at while moving through the list,
+     not a modal dialog. Position (left/top) is set by JS per hover,
+     placed to the entry's right. */
+  position: fixed;
+  z-index: 50;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  width: 220px;
+  background: var(--card);
+  border: 1px solid var(--border-stronger);
+  border-radius: 8px;
+  box-shadow: 2px 2px 12px rgba(0,0,0,0.4);
+  padding: 10px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.timeline-popover.visible {
+  display: flex;
+}
+.timeline-popover-cover {
   width: 100%;
-  max-height: 240px;
+  max-height: 120px;
   object-fit: cover;
-  border-radius: 6px;
+  border-radius: 5px;
+}
+.timeline-popover-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+.timeline-popover-date {
+  font-size: 11px;
+  color: var(--text-2);
 }

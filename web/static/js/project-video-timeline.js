@@ -12,6 +12,8 @@
 // multi-decade, wildly-clustered spread where continuous positioning
 // collapsed almost everything to two points.
 
+const SCALE_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 class ProjectVideoTimeline {
   constructor(container, { blocks = [], events = [] } = {}) {
     this.container = container;
@@ -39,6 +41,43 @@ class ProjectVideoTimeline {
 
   _percent(date, range) {
     return ((date - range.min) / (range.max - range.min)) * 100;
+  }
+
+  _scaleTicks(range) {
+    // Regular calendar-aligned ticks (a real ruler), independent of where
+    // blocks/events actually fall -- yearly for a multi-year span, monthly
+    // for a span of a few months to two years, weekly for anything
+    // tighter than that.
+    const spanDays = (range.max - range.min) / 86400;
+    const minDate = new Date(range.min * 1000);
+    const ticks = [];
+
+    if (spanDays > 730) {
+      let year = minDate.getFullYear();
+      while (true) {
+        const t = new Date(year, 0, 1).getTime() / 1000;
+        if (t > range.max) break;
+        if (t >= range.min) ticks.push({ date: t, label: String(year) });
+        year++;
+      }
+    } else if (spanDays > 45) {
+      let year = minDate.getFullYear();
+      let month = minDate.getMonth();
+      while (true) {
+        const t = new Date(year, month, 1).getTime() / 1000;
+        if (t > range.max) break;
+        if (t >= range.min) ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[month]} ${year}` });
+        month++;
+        if (month > 11) { month = 0; year++; }
+      }
+    } else {
+      const dayMs = 7 * 86400;
+      for (let t = range.min; t <= range.max; t += dayMs) {
+        const d = new Date(t * 1000);
+        ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[d.getMonth()]} ${d.getDate()}` });
+      }
+    }
+    return ticks;
   }
 
   _ensurePopover() {
@@ -105,9 +144,25 @@ class ProjectVideoTimeline {
     });
     this.container.appendChild(blockRow);
 
-    const axis = document.createElement('div');
-    axis.className = 'project-video-timeline-axis';
-    this.container.appendChild(axis);
+    const scale = document.createElement('div');
+    scale.className = 'project-video-timeline-scale';
+    const scaleLine = document.createElement('div');
+    scaleLine.className = 'project-video-timeline-scale-line';
+    scale.appendChild(scaleLine);
+    this._scaleTicks(range).forEach((tick) => {
+      const tickEl = document.createElement('div');
+      tickEl.className = 'project-video-timeline-scale-tick';
+      tickEl.style.left = `${this._percent(tick.date, range)}%`;
+      const mark = document.createElement('span');
+      mark.className = 'project-video-timeline-scale-mark';
+      const label = document.createElement('span');
+      label.className = 'project-video-timeline-scale-label';
+      label.textContent = tick.label;
+      tickEl.appendChild(mark);
+      tickEl.appendChild(label);
+      scale.appendChild(tickEl);
+    });
+    this.container.appendChild(scale);
 
     const eventRow = document.createElement('div');
     eventRow.className = 'project-video-timeline-events';

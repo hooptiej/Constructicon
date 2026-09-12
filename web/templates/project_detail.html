@@ -28,7 +28,10 @@
     </div>
     {% endif %}
     {% if timeline_children or timeline_items %}
-    <div class="project-video-timeline" id="project-video-timeline"></div>
+    <div class="project-video-timeline-panel">
+      <div class="project-video-timeline-panel-label">Project Timeline</div>
+      <div class="project-video-timeline" id="project-video-timeline"></div>
+    </div>
     {% endif %}
     <div>
       {# #241: click the title (or the pencil) to rename in place — see the

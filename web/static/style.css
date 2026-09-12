@@ -1249,10 +1249,29 @@ body.delete-mode-on .card-select-row { display: flex; }
    coherent time range, unlike the gallery's whole multi-decade spread.
    Reuses .timeline-popover/-cover/-title/-date from above for its hover
    preview -- same shape, just positioned above the hovered element
-   instead of to its right (see project-video-timeline.js). */
+   instead of to its right (see project-video-timeline.js).
+
+   Unlike the gallery rail (deliberately no card/background), this one
+   gets a real contrasting panel with a label -- it's an embedded page
+   element, not something floating over the viewport, and needs to read
+   as its own distinct "timescale" instrument at a glance. */
+.project-video-timeline-panel {
+  margin-top: 10px;
+  padding: 12px 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--border-stronger);
+  border-radius: 8px;
+}
+.project-video-timeline-panel-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
 .project-video-timeline {
   position: relative;
-  margin-top: 6px;
 }
 .project-video-timeline-blocks {
   position: relative;
@@ -1280,10 +1299,37 @@ body.delete-mode-on .card-select-row { display: flex; }
 .project-video-timeline-block:hover {
   border-color: var(--accent);
 }
-.project-video-timeline-axis {
+.project-video-timeline-scale {
+  position: relative;
+  height: 28px;
+  margin: 10px 0;
+}
+.project-video-timeline-scale-line {
+  position: absolute;
+  top: 8px;
+  left: 0;
+  right: 0;
   height: 2px;
   background: var(--border-strong);
-  margin: 12px 0;
+}
+.project-video-timeline-scale-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.project-video-timeline-scale-mark {
+  width: 2px;
+  height: 8px;
+  background: var(--text-2);
+}
+.project-video-timeline-scale-label {
+  font-size: 10px;
+  color: var(--text-2);
+  white-space: nowrap;
+  margin-top: 2px;
 }
 .project-video-timeline-events {
   position: relative;

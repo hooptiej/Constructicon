@@ -25,7 +25,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, db, imgur_import, object_types, ocr, similarity, storage, thumbnails, timeline
+from core import automatch, backup, captions, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, thumbnails, timeline
 
 app = FastAPI()
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -256,9 +256,11 @@ def _to_public(row):
         # something readable to show in its place rather than the literal
         # string "null".
         # row["display_name"] (#11) is a per-object override — set via
-        # /api/image/<slug> or the constructicon_rename MCP tool — that takes
-        # priority over the old filename/content_description/slug fallback
-        # chain when present.
+        # /api/image/<slug> or the constructicon_rename MCP tool, or seeded
+        # from an audio file's own tag title at upload time (#255, see
+        # core/embedded_metadata.py for why the title lands here and not
+        # only in content_description) — that takes priority over the old
+        # filename/content_description/slug fallback chain when present.
         "display_name": row.get("display_name") or row["filename"] or row.get("content_description") or row["slug"],
         # File-kind badge (issue #12) — driven entirely by the type's
         # ObjectTypeSpec (core/object_types.py) so gallery cards never need
@@ -1192,6 +1194,14 @@ async def api_upload(
         media_type=media_type,
         ocr_status="pending" if spec.ocr_capable else None,
     )
+    # #255: seed content_description/display_name/type_metadata from the
+    # file's own tags (an MP3's ID3 title/artist/album/...). Synchronous
+    # and before the response on purpose: one ffprobe header read, not an
+    # OCR/caption-sized job, and the JSON returned below then already
+    # carries the title for the upload drawer's new card. Dispatches off
+    # spec.embedded_metadata_fn — a type without one is a no-op — and only
+    # ever fills fields the row doesn't have yet; see core/embedded_metadata.py.
+    embedded_metadata.fill_missing(slug)
     # Runs after this response is sent — OCR happens once the upload/tag step
     # is actually done, not as part of what the user is waiting on. The client
     # polls GET /api/image/{slug} to see ocr_status flip from "pending".

@@ -78,8 +78,14 @@ class TimelineRail {
     const popoverRect = popover.getBoundingClientRect();
     let top = nodeRect.top + nodeRect.height / 2 - popoverRect.height / 2;
     top = Math.max(8, Math.min(top, window.innerHeight - popoverRect.height - 8));
+    // Deliberately overlaps the scaled pill by a few px rather than
+    // buttping up against it -- the popover has pointer-events: none (see
+    // .timeline-popover) so the pill underneath stays hoverable through
+    // the overlap; a real gap here was worse, not just cosmetically loose
+    // -- it was dead space the mouse could wander into and lose hover
+    // entirely before ever reaching the popover.
     const scaledRight = nodeRect.left + nodeRect.width * ENTRY_HOVER_SCALE;
-    popover.style.left = `${scaledRight + 6}px`;
+    popover.style.left = `${scaledRight - 10}px`;
     popover.style.top = `${top}px`;
   }
 

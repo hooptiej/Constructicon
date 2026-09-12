@@ -45,6 +45,11 @@ register(ObjectTypeSpec(
     thumbnail_source=ThumbnailSource.FETCH_URL,
     thumbnail_url_fn=imgur_thumbnail_url,
     ocr_capable=True,
+    # #249: the fetched i.imgur.com image itself (the same ~640px "l"
+    # variant OCR runs against) goes to the vision model — a real rendered
+    # photo, not a wireframe or a document page. Without this flag the
+    # import routes' captions.should_caption() gate is always False.
+    caption_capable=True,
     # Populated by core/imgur_import.py from account/{username}/submissions.
     # is_album/image_count/permalink only mean anything for an album
     # submission — for a plain single-image one they're just False/1/the

@@ -81,14 +81,33 @@ class TimelineRail {
   }
 
   _onMouseMove(e) {
+    // Discrete tiers, not a continuous falloff: the closest entry to the
+    // cursor gets the full HOVER_SCALE, its immediate neighbors (one on
+    // each side) get NEIGHBOR_SCALE, everything else stays at 1. A
+    // continuous distance-based falloff (tried first) always ties how far
+    // the effect reaches to the peak scale -- turning up the peak
+    // inevitably turns up how much neighbors move too.
+    const HOVER_SCALE = 6.6;
+    const NEIGHBOR_SCALE = HOVER_SCALE / 2;
     const cursorY = e.clientY;
-    this._entryNodes.forEach((node) => {
+
+    let closestIndex = -1;
+    let closestDistance = Infinity;
+    this._entryNodes.forEach((node, i) => {
       const rect = node.getBoundingClientRect();
       const centerY = rect.top + rect.height / 2;
       const distance = Math.abs(cursorY - centerY);
-      const scale = Math.max(1, 6.6 - distance / 50);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = i;
+      }
+    });
+
+    this._entryNodes.forEach((node, i) => {
+      const offset = Math.abs(i - closestIndex);
+      const scale = offset === 0 ? HOVER_SCALE : offset === 1 ? NEIGHBOR_SCALE : 1;
       node.style.transform = scale > 1 ? `scale(${scale.toFixed(2)})` : '';
-      node.style.zIndex = scale > 1.05 ? 10 : '';
+      node.style.zIndex = scale > 1 ? 10 : '';
     });
   }
 

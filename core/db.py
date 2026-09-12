@@ -831,14 +831,17 @@ def list_uploaders(query=None, client=None):
     """
     conn = get_conn()
     try:
-        clauses, params = [], []
+        # #282: these totals sit next to /api/gallery's per-uploader item
+        # lists, which come from search() and hide redacted rows -- count
+        # the same set so "N items" matches what's actually listed.
+        clauses, params = ["redacted = 0"], []
         if query:
             clauses.append("(description LIKE ? OR filename LIKE ?)")
             params += [f"%{query}%", f"%{query}%"]
         if client:
             clauses.append("client = ?")
             params.append(client)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        where = f"WHERE {' AND '.join(clauses)}"
         rows = conn.execute(f"SELECT tech, timestamp FROM capture_events {where}", params).fetchall()
         groups = {}
         for r in rows:
@@ -851,10 +854,27 @@ def list_uploaders(query=None, client=None):
         conn.close()
 
 
-def search(query=None, tags=None, client=None, uploaded_by=None, limit=50):
+def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, include_redacted=False):
+    """Keyword/filter search over capture_events, most recent first.
+
+    #282: redacted rows are excluded by default, same as every other
+    list/browse query here (list_recent_posts, list_unfiled_items, ...) --
+    a redacted item is reachable only by its direct /object/<slug> link
+    and the admin pane's list_redacted() view. `include_redacted=True` is
+    the escape hatch for a caller that uses this as "enumerate every row"
+    rather than as a search -- today just the two delete-all paths, which
+    must not orphan redacted rows. The maintenance scripts' own
+    `db.search(limit=<huge>)` discovery passes deliberately keep the
+    default: they either work on the stored file (which a redacted row no
+    longer has -- thumbnail/EXIF backfills) or only touch youtube/URL rows,
+    which have no stored file and so can never be redacted in the first
+    place.
+    """
     conn = get_conn()
     try:
         clauses, params = [], []
+        if not include_redacted:
+            clauses.append("redacted = 0")
         if query:
             clauses.append("(description LIKE ? OR filename LIKE ? OR extracted_text LIKE ?)")
             params += [f"%{query}%", f"%{query}%", f"%{query}%"]
@@ -901,12 +921,62 @@ def set_extracted_text(slug, text):
 
 
 def mark_redacted(slug):
-    """File removed (sensitive content), metadata kept for future correlation."""
+    """File removed (sensitive content), metadata kept for future correlation.
+
+    The caller (web/app.py's /api/image/{slug}/redact, the
+    constructicon_redact MCP tool) deletes the stored file first; this also
+    clears stored_filename to NULL -- the row's one authoritative "is there
+    a real file right now" signal, since #282's unmark_redacted can flip
+    `redacted` back to 0 without ever being able to restore the actual file.
+    Every has_thumb/is_file-style check in web/app.py keys off
+    stored_filename for exactly that reason, not off `redacted` (which was
+    a sufficient proxy before un-redact existed, and stopped being one the
+    moment a row could become un-redacted-but-still-fileless).
+
+    filename (the original human-readable name) is deliberately left alone
+    -- "metadata kept for future correlation" means that one, not the
+    internal storage path, which has no display purpose once the file it
+    pointed to is gone. Since #282 a redacted row is hidden from every
+    list/browse/search query and reachable only by its direct /object/<slug>
+    link or list_redacted()."""
     conn = get_conn()
     try:
-        conn.execute("UPDATE capture_events SET redacted = 1 WHERE slug = ?", (slug,))
+        conn.execute("UPDATE capture_events SET redacted = 1, stored_filename = NULL WHERE slug = ?", (slug,))
         conn.commit()
         return get_by_slug(slug)
+    finally:
+        conn.close()
+
+
+def unmark_redacted(slug):
+    """Reverse of mark_redacted (#282): clears the flag so the row rejoins
+    ordinary browsing/search. Deliberately does NOT touch stored_filename --
+    it's already NULL (mark_redacted cleared it) and stays that way, since
+    the file itself was deleted and can't be restored. That's what keeps
+    web/app.py's has_thumb/is_file checks correctly file-less after this
+    call despite `redacted` now being 0 again."""
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE capture_events SET redacted = 0 WHERE slug = ?", (slug,))
+        conn.commit()
+        return get_by_slug(slug)
+    finally:
+        conn.close()
+
+
+def list_redacted():
+    """Every currently-redacted row, most recently uploaded first (#282).
+    The admin pane's "Redacted items" view -- once redacted rows are hidden
+    from every other list this is the only place they can be found again
+    without already knowing the slug. There's no redacted_at column, so
+    this can't say *when* a row was redacted; the audit log has the web
+    route's call if that matters."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE redacted = 1 ORDER BY timestamp DESC"
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 
@@ -1215,7 +1285,7 @@ def list_posts_for_tag(tag_id, include_descendants=True, limit=50):
     try:
         rows = conn.execute(
             f"SELECT DISTINCT ce.* FROM capture_events ce JOIN post_tags pt ON pt.post_slug = ce.slug "
-            f"WHERE pt.tag_id IN ({placeholders}) ORDER BY ce.timestamp DESC LIMIT ?",
+            f"WHERE pt.tag_id IN ({placeholders}) AND ce.redacted = 0 ORDER BY ce.timestamp DESC LIMIT ?",
             tag_ids + [limit],
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
@@ -1529,7 +1599,7 @@ def list_project_items(project_id):
     try:
         rows = conn.execute(
             "SELECT ce.* FROM project_items pi JOIN capture_events ce ON ce.slug = pi.post_slug "
-            "WHERE pi.project_id = ? ORDER BY pi.sort_order ASC",
+            "WHERE pi.project_id = ? AND ce.redacted = 0 ORDER BY pi.sort_order ASC",
             (project_id,),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
@@ -1581,7 +1651,7 @@ def list_unfiled_items(limit=10000):
     try:
         rows = conn.execute(
             "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-            "WHERE pi.post_slug IS NULL "
+            "WHERE pi.post_slug IS NULL AND ce.redacted = 0 "
             "ORDER BY ce.timestamp DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -1606,15 +1676,16 @@ def list_recent_items_by_type(limit_per_type=10):
     """
     conn = get_conn()
     try:
-        # Fetch all distinct media_types that have at least one row
+        # Fetch all distinct media_types that have at least one (non-redacted,
+        # #282) row -- a type whose only rows are redacted gets no tab.
         media_type_rows = conn.execute(
-            "SELECT DISTINCT media_type FROM capture_events"
+            "SELECT DISTINCT media_type FROM capture_events WHERE redacted = 0"
         ).fetchall()
 
         result = {}
         for (media_type,) in media_type_rows:
             rows = conn.execute(
-                "SELECT * FROM capture_events WHERE media_type = ? ORDER BY timestamp DESC LIMIT ?",
+                "SELECT * FROM capture_events WHERE media_type = ? AND redacted = 0 ORDER BY timestamp DESC LIMIT ?",
                 (media_type, limit_per_type),
             ).fetchall()
             if rows:

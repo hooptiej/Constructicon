@@ -240,12 +240,18 @@ def _has_thumbnail(row, spec=None):
 def _to_public(row):
     media_type = row.get("media_type") or "image"
     spec = object_types.get_object_type(media_type)
-    # A redacted row has no file left, and /f/<slug>/thumb answers 410 for
-    # it -- don't advertise a thumbnail URL that can't be fetched (#222).
-    # Matches what the project-card shape below already does; the card
-    # templates also check `redacted` themselves, so this is about the API
-    # shape being consistent for any consumer that doesn't.
-    has_thumb = _has_thumbnail(row, spec) and not row["redacted"]
+    # A row with no stored_filename has no file left, and /f/<slug>/thumb
+    # answers 410/404 for it -- don't advertise a thumbnail URL that can't
+    # be fetched (#222). Keyed on stored_filename, not `redacted`: a
+    # currently-redacted row has stored_filename cleared by
+    # db.mark_redacted (#282), but so does a row that WAS redacted and got
+    # un-redacted since -- unmark_redacted only restores visibility, never
+    # the file itself, so `redacted` alone stopped being a reliable "no
+    # file" signal the moment that became possible. Matches what the
+    # project-card shape below already does; the card templates also check
+    # this themselves, so this is about the API shape being consistent for
+    # any consumer that doesn't.
+    has_thumb = _has_thumbnail(row, spec) and bool(row.get("stored_filename"))
     return {
         "slug": row["slug"],
         "url": f"/f/{row['slug']}",
@@ -396,10 +402,18 @@ def _to_object_detail(row):
     core/db.py), so nothing here assumes it's set.
     """
     filename = row.get("filename")
-    is_file = bool(filename)
+    # is_file/has_thumb key off stored_filename (whether a real file
+    # currently exists), not the historical `filename` column -- filename
+    # is kept forever for display even once a row is redacted (or
+    # redacted-then-un-redacted, #282), but stored_filename is cleared by
+    # db.mark_redacted the moment the actual file is deleted and never
+    # comes back. Without this, an un-redacted row would fall through the
+    # template's redacted-placeholder branch straight into is_image_file/
+    # thumb_url and try to render a file that's permanently gone.
+    is_file = bool(row.get("stored_filename"))
     media_type = row.get("media_type") or "image"
     spec = object_types.get_object_type(media_type)
-    has_thumb = _has_thumbnail(row, spec)
+    has_thumb = _has_thumbnail(row, spec) and is_file
     return {
         "slug": row["slug"],
         "media_type": media_type,
@@ -618,10 +632,19 @@ def _to_content_public(row, project_slug=None):
     If project_slug is provided, appends ?from=project:{project_slug} to the
     link for breadcrumb navigation (#137).
     """
+    # is_file/external stay keyed on `filename` (this row's TYPE -- was it
+    # ever an uploaded file at all, vs. a backfilled youtube/document post
+    # with no local-file concept -- see the docstring above), which is
+    # preserved forever even once redacted. has_thumb is the separate
+    # question of whether a real file exists RIGHT NOW to actually thumb --
+    # that one has to key on stored_filename (cleared by db.mark_redacted,
+    # #282, and never restored by unmark_redacted), not `redacted`, or a
+    # redacted-then-un-redacted row would advertise a thumb_url for a file
+    # that's permanently gone.
     is_file = bool(row.get("filename"))
     media_type = row.get("media_type") or "image"
     spec = object_types.get_object_type(media_type)
-    has_thumb = _has_thumbnail(row)
+    has_thumb = _has_thumbnail(row) and bool(row.get("stored_filename"))
     link = f"/object/{row['slug']}"
     if project_slug:
         link = f"{link}?from=project:{project_slug}"
@@ -632,7 +655,7 @@ def _to_content_public(row, project_slug=None):
         "type_icon": spec.badge_icon,
         "type_badge": spec.badge_text,
         "is_file": is_file,
-        "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb and not row.get("redacted") else None,
+        "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
         "link": link,
         "external": not is_file,
         "tags": row["tags"],
@@ -803,7 +826,9 @@ def api_delete_all():
     Development convenience while content/schema are still in flux, not a
     feature meant to stick around once the site has real content worth
     protecting."""
-    rows = db.search(limit=100000)
+    # include_redacted (#282): search() hides redacted rows by default;
+    # a full reset has to take them too or they'd survive as orphans.
+    rows = db.search(limit=100000, include_redacted=True)
     for row in rows:
         if row.get("stored_filename"):
             storage.delete_files(row["slug"], row["stored_filename"])
@@ -989,6 +1014,18 @@ def api_get_audit_log(limit: int = 100):
             }
         )
     return JSONResponse(result)
+
+
+@app.get("/api/redacted")
+def api_list_redacted():
+    """#282: every currently-redacted row, for the admin pane's "Redacted
+    items" list. Redacted rows are hidden from every list/search/project/
+    tag query, so this is the only way to find one again without already
+    knowing its slug. Same card shape as the gallery (_to_public -- thumb_url
+    is always None here, the file is gone) plus the direct /object link,
+    which keeps working for a redacted row."""
+    items = [{**_to_public(row), "link": f"/object/{row['slug']}"} for row in db.list_redacted()]
+    return JSONResponse({"count": len(items), "items": items})
 
 
 @app.get("/upload")
@@ -1704,6 +1741,23 @@ def api_redact_image(request: Request, slug: str):
         raise HTTPException(status_code=400, detail="This row has no uploaded file to redact")
     storage.delete_files(slug, row["stored_filename"])
     updated = db.mark_redacted(slug)
+    return JSONResponse(_to_public(updated))
+
+
+@app.post("/api/image/{slug}/unredact")
+def api_unredact_image(request: Request, slug: str):
+    """#282: reverse of /redact -- clears the flag so the row rejoins
+    ordinary browsing/search. Can't bring the file back: /redact deleted it
+    from storage before setting the flag, so the row stays a file-less
+    metadata record; it's just findable again. 409 rather than a silent
+    no-op on a row that isn't redacted, so a stale admin-pane list can't
+    misreport success."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if not row["redacted"]:
+        raise HTTPException(status_code=409, detail="This row isn't redacted")
+    updated = db.unmark_redacted(slug)
     return JSONResponse(_to_public(updated))
 
 

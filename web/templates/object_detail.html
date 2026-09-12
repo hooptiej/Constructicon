@@ -1028,7 +1028,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     relatedGrid.innerHTML = relatedItems.map(r => `
       <div class="related-item">
         <a href="/object/${r.slug}" class="related-thumb${r.redacted ? ' redacted-thumb' : ''}" title="${escapeHtml(r.filename || r.display_name)}${r.redacted ? ' (redacted)' : ''}">
-          ${r.redacted ? '' : `<img src="${r.thumb_url}" loading="lazy">`}
+          ${r.thumb_url ? `<img src="${r.thumb_url}" loading="lazy">` : ''}
         </a>
         <button type="button" class="related-remove" data-slug="${r.slug}" title="Remove relation">
           <svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>
@@ -1067,7 +1067,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
       return;
     }
     relatedPickerGrid.innerHTML = candidates.map(i =>
-      `<button type="button" class="existing-avatar-thumb${i.redacted ? ' redacted-thumb' : ''}" data-slug="${i.slug}" title="${escapeHtml(i.filename || i.display_name)}${i.redacted ? ' (redacted)' : ''}">${i.redacted ? '' : `<img src="${i.thumb_url}" loading="lazy">`}</button>`
+      `<button type="button" class="existing-avatar-thumb${i.redacted ? ' redacted-thumb' : ''}" data-slug="${i.slug}" title="${escapeHtml(i.filename || i.display_name)}${i.redacted ? ' (redacted)' : ''}">${i.thumb_url ? `<img src="${i.thumb_url}" loading="lazy">` : ''}</button>`
     ).join('');
   }
 
@@ -1134,7 +1134,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     similarGrid.innerHTML = items.map(i => `
       <div class="related-item">
         <a href="/object/${i.slug}" class="related-thumb${i.redacted ? ' redacted-thumb' : ''}" title="${escapeHtml(i.filename || i.display_name)} — ${REASON_LABEL[i.similarity_reason] || 'Similar'}${i.redacted ? ' (redacted)' : ''}">
-          ${i.redacted ? '' : `<img src="${i.thumb_url}" loading="lazy">`}
+          ${i.thumb_url ? `<img src="${i.thumb_url}" loading="lazy">` : ''}
         </a>
         <button type="button" class="related-remove similar-add" data-slug="${i.slug}" title="Add as related">
           <svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12H19" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>

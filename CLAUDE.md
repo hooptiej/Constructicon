@@ -154,6 +154,21 @@ exist yet.
     `object_types.py`'s `MetadataField` for the documented shape per type.
   - `extracted_text`, `perceptual_hash`, `embedding`, `ocr_status` —
     OCR/similarity pipeline state.
+  - `redacted` — "file removed, metadata kept" (the detail page's "Remove
+    file, keep info" button / `constructicon_redact`; the caller deletes
+    the file, `db.mark_redacted` only flips the flag). Since #282 a
+    redacted row is hidden from **every** list/browse/search query in
+    `core/db.py` (`search`, `list_unfiled_items`,
+    `list_recent_items_by_type`, `list_project_items`,
+    `list_posts_for_tag`, `list_recent_posts`, and `list_uploaders`'
+    totals) and reachable only by its direct `/object/<slug>` link, the
+    admin pane's "Redacted items" list (`GET /api/redacted` /
+    `db.list_redacted()`) or the MCP `constructicon_list_redacted` tool.
+    `POST /api/image/{slug}/unredact` / `constructicon_unredact` flips it
+    back — visibility only, the file is gone for good.
+    `db.search(include_redacted=True)` is the one escape hatch, used only
+    by the two delete-all paths so a full reset doesn't orphan hidden
+    rows. There is no `redacted_at` column.
 - **`blog_tags`** — the tag tree: `{id, name, slug, parent_id}`, nestable
   to arbitrary depth via self-referencing `parent_id`. Not a fixed
   Section/Category/Tag split — a post can attach to any tag at any depth,

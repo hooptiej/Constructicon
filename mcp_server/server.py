@@ -149,7 +149,8 @@ def constructicon_search(query: str | None = None, tags: list[str] | None = None
     """Search objects by description, filename, or tags.
 
     Returns a JSON list of matching objects. If both query and tags are
-    provided, filters by both (AND logic).
+    provided, filters by both (AND logic). Redacted objects are excluded
+    (#282) -- use constructicon_list_redacted to see those.
     """
     return [_to_public(r) for r in db.search(query=query, tags=tags, client=None)]
 
@@ -250,6 +251,36 @@ def constructicon_redact(slug: str) -> dict | None:
 
 
 @mcp.tool()
+def constructicon_unredact(slug: str) -> dict | None:
+    """Reverse of constructicon_redact (#282): clear the redacted flag so the
+    object shows up in searches, project listings and tag walks again.
+
+    Does NOT bring the file back -- redaction deleted it permanently. The
+    object stays a file-less metadata record; it's just findable again.
+    Returns the updated object, or None if the slug doesn't exist; raises if
+    the object isn't redacted.
+    """
+    row = db.get_by_slug(slug)
+    if row is None:
+        return None
+    if not row["redacted"]:
+        raise ValueError("This object isn't redacted")
+    return _to_public(db.unmark_redacted(slug))
+
+
+@mcp.tool()
+def constructicon_list_redacted() -> list[dict]:
+    """List every redacted object (#282).
+
+    Redacted objects are hidden from constructicon_search,
+    constructicon_get_project and constructicon_get_posts_for_tag; this is
+    the only listing that includes them. constructicon_get still works for
+    one by slug.
+    """
+    return [_to_public(r) for r in db.list_redacted()]
+
+
+@mcp.tool()
 def constructicon_delete(slug: str) -> bool:
     """Fully delete an object — file and all metadata. Irreversible."""
     row = db.get_by_slug(slug)
@@ -286,7 +317,9 @@ def constructicon_delete_all() -> dict:
 
     Call constructicon_backup first if you want to preserve the current content.
     """
-    rows = db.search(limit=100000)
+    # include_redacted (#282): search() hides redacted rows by default;
+    # a full reset has to take them too or they'd survive as orphans.
+    rows = db.search(limit=100000, include_redacted=True)
     for row in rows:
         if row.get("stored_filename"):
             storage.delete_files(row["slug"], row["stored_filename"])

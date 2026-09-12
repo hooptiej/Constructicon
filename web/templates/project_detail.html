@@ -122,7 +122,7 @@
   {% endif %}
 
   {% if timeline_children or timeline_items %}
-  <script src="/static/js/project-video-timeline.js"></script>
+  <script src="/static/js/project-video-timeline.js?v={{ static_version('js/project-video-timeline.js') }}"></script>
   <script>
   (function () {
     const timelineChildren = {{ timeline_children | tojson }};

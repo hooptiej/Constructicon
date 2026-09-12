@@ -28,7 +28,8 @@ from starlette.datastructures import FormData
 from core import automatch, backup, captions, db, imgur_import, object_types, ocr, similarity, storage, thumbnails, timeline
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+_STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 # Brand assets (logo, wordmarks, favicons) live at the repo root in
 # assets/brand/, independent of web/static/ — see README's "Retained art
 # assets" section. Mounted separately rather than copied into web/static so
@@ -37,6 +38,26 @@ _BRAND_DIR = Path(__file__).resolve().parent.parent / "assets" / "brand"
 if _BRAND_DIR.is_dir():
     app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+
+
+def static_version(relative_path):
+    """#258: a browser that already cached /static/style.css (or any JS
+    under /static/js/) has no reason to revalidate it after a deploy --
+    confirmed 2026-09-10, the server was serving updated CSS but a browser
+    kept rendering the old layout until a hard refresh. Appending this as
+    a ?v= query string busts the cache exactly when the file's own content
+    actually changes (mtime-based, not a single value for every asset on
+    every deploy), with no build step or hashed-filename renaming needed.
+    Falls back to "0" if the file's missing so a template render never
+    hard-fails over a cache-buster.
+    """
+    try:
+        return str(int((_STATIC_DIR / relative_path).stat().st_mtime))
+    except OSError:
+        return "0"
+
+
+templates.env.globals["static_version"] = static_version
 
 
 # --- Audit logging middleware ---

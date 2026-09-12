@@ -41,6 +41,30 @@
              distinct from a generic CAPTURE thumbnail. #}
           <div class="audio-preview">
             <div class="audio-preview-icon">{{ item.icon }}</div>
+            {# #290: the file's own tags, right in the preview rather than
+               only on the Properties panel further down. Read straight off
+               the row -- #255 already put the title in content_description
+               and artist/album/track/year/genre in type_metadata (the key
+               names are core/object_types/audio.py's metadata_fields), so
+               no per-page ffprobe here. A tagless file (the DASH->mp3
+               remux case) says so explicitly instead of leaving dead space. #}
+            {% set audio_tags = item.type_metadata %}
+            {% if item.content_description or audio_tags.artist or audio_tags.album or audio_tags.track or audio_tags.year or audio_tags.genre %}
+            <div class="audio-tags">
+              {% if item.content_description %}<div class="audio-tag-title">{{ item.content_description }}</div>{% endif %}
+              {% if audio_tags.artist %}<div class="audio-tag-artist">{{ audio_tags.artist }}</div>{% endif %}
+              {% if audio_tags.album or audio_tags.track or audio_tags.year or audio_tags.genre %}
+              <div class="audio-tag-row">
+                {% if audio_tags.album %}<span><span class="audio-tag-label">Album</span>{{ audio_tags.album }}</span>{% endif %}
+                {% if audio_tags.track %}<span><span class="audio-tag-label">Track</span>{{ audio_tags.track }}</span>{% endif %}
+                {% if audio_tags.year %}<span><span class="audio-tag-label">Year</span>{{ audio_tags.year }}</span>{% endif %}
+                {% if audio_tags.genre %}<span><span class="audio-tag-label">Genre</span>{{ audio_tags.genre }}</span>{% endif %}
+              </div>
+              {% endif %}
+            </div>
+            {% else %}
+            <div class="audio-tags audio-tags-empty">No tags found</div>
+            {% endif %}
             <audio controls preload="metadata" src="{{ item.url }}"></audio>
           </div>
         {% elif item.is_video_file %}

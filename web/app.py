@@ -983,7 +983,12 @@ def project_detail_page(request: Request, slug: str):
     # Timeline feature: per-item effective dates for this project's own
     # content rail -- single points (no endDate), unlike the gallery
     # rail's project spans. Built from raw_items, not `items`, since
-    # _to_content_public's card shape drops the raw date columns.
+    # _to_content_public's card shape drops the raw date columns. The
+    # write-up itself is excluded -- same reasoning as
+    # core.timeline.resolve_project_span: it's not a chronological event,
+    # it's documentation of the project, generated whenever someone got
+    # around to writing it up. Still a normal browsable item in the grid
+    # above, just not a timeline event.
     timeline_items = [
         {
             "slug": r["slug"],
@@ -992,6 +997,7 @@ def project_detail_page(request: Request, slug: str):
             "effective_date": timeline.resolve_item_date(r),
         }
         for r in raw_items
+        if r["slug"] != project.get("writeup_slug")
     ]
     # Horizontal in-page timeline (distinct from the gallery's vertical
     # rail): sub-projects render as blocks (they're spans), this project's

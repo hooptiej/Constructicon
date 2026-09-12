@@ -78,6 +78,26 @@ def test_project_span_respects_overrides():
     assert (start, end) == (50.0, 999.0), "explicit overrides win over derived item dates"
 
 
+def test_project_span_excludes_writeup():
+    # The write-up's own timestamp is whenever it was authored, not the
+    # project's real chronology -- confirmed against real data (#264
+    # follow-up) where a freshly machine-generated write-up's recent
+    # timestamp was skewing effective_end for every project regardless of
+    # how old the actual content was.
+    make_item("t7a", timestamp=100.0)
+    make_item("t7b", timestamp=200.0)
+    make_item("t7-writeup", timestamp=99999.0)  # authored long after the real content
+    project = db.create_project("Writeup Project")
+    db.add_item_to_project(project["id"], "t7a")
+    db.add_item_to_project(project["id"], "t7b")
+    db.add_item_to_project(project["id"], "t7-writeup")
+    db.update_project(project["id"], writeup_slug="t7-writeup")
+    project = db.get_project(project["id"])
+    items = db.list_project_items(project["id"])
+    start, end = resolve_project_span(project, items)
+    assert (start, end) == (100.0, 200.0), "writeup's own timestamp must not affect the span"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0

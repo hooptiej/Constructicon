@@ -923,13 +923,25 @@ def set_extracted_text(slug, text):
 def mark_redacted(slug):
     """File removed (sensitive content), metadata kept for future correlation.
 
-    Only flips the flag -- the caller (web/app.py's /api/image/{slug}/redact,
-    the constructicon_redact MCP tool) deletes the stored file first. Since
-    #282 a redacted row is hidden from every list/browse/search query and
-    reachable only by its direct /object/<slug> link or list_redacted()."""
+    The caller (web/app.py's /api/image/{slug}/redact, the
+    constructicon_redact MCP tool) deletes the stored file first; this also
+    clears stored_filename to NULL -- the row's one authoritative "is there
+    a real file right now" signal, since #282's unmark_redacted can flip
+    `redacted` back to 0 without ever being able to restore the actual file.
+    Every has_thumb/is_file-style check in web/app.py keys off
+    stored_filename for exactly that reason, not off `redacted` (which was
+    a sufficient proxy before un-redact existed, and stopped being one the
+    moment a row could become un-redacted-but-still-fileless).
+
+    filename (the original human-readable name) is deliberately left alone
+    -- "metadata kept for future correlation" means that one, not the
+    internal storage path, which has no display purpose once the file it
+    pointed to is gone. Since #282 a redacted row is hidden from every
+    list/browse/search query and reachable only by its direct /object/<slug>
+    link or list_redacted()."""
     conn = get_conn()
     try:
-        conn.execute("UPDATE capture_events SET redacted = 1 WHERE slug = ?", (slug,))
+        conn.execute("UPDATE capture_events SET redacted = 1, stored_filename = NULL WHERE slug = ?", (slug,))
         conn.commit()
         return get_by_slug(slug)
     finally:
@@ -938,9 +950,11 @@ def mark_redacted(slug):
 
 def unmark_redacted(slug):
     """Reverse of mark_redacted (#282): clears the flag so the row rejoins
-    ordinary browsing/search. The file itself is already gone (deleted by
-    the redact caller before the flag was set) and cannot be restored --
-    this only affects visibility of the metadata row."""
+    ordinary browsing/search. Deliberately does NOT touch stored_filename --
+    it's already NULL (mark_redacted cleared it) and stays that way, since
+    the file itself was deleted and can't be restored. That's what keeps
+    web/app.py's has_thumb/is_file checks correctly file-less after this
+    call despite `redacted` now being 0 again."""
     conn = get_conn()
     try:
         conn.execute("UPDATE capture_events SET redacted = 0 WHERE slug = ?", (slug,))

@@ -70,7 +70,11 @@ body {
      plain white, so it reads as ambient light on this palette, not a cool
      spotlight. */
   background:
-    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(236, 230, 210, 0.14), transparent 100%),
+    /* rgba(154,168,58,...) = --accent (#9AA83A), the palette's actual
+       yellow-green olive tone -- the original used --text's warm cream,
+       which is desaturated enough to read as plain grey once blended thin
+       over --bg instead of carrying any real hue. */
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(154, 168, 58, 0.16), transparent 100%),
     var(--bg);
   background-attachment: fixed;
   color: var(--text);
@@ -1294,7 +1298,13 @@ body.delete-mode-on .card-select-row { display: flex; }
 .timeline-popover {
   /* No backdrop -- meant to be glanced at while moving through the list,
      not a modal dialog. Position (left/top) is set by JS per hover,
-     placed to the entry's right. */
+     placed to the entry's right. Shared base class -- also used by
+     project-video-timeline.js's horizontal popover, which floats directly
+     over its own hovered element with no deliberate overlap and no
+     hover-bridging logic, so pointer-events stays `none` here (the
+     original, click/hover-through behavior both users were built against).
+     See .timeline-popover-hoverable below for the vertical rail's own
+     opt-in override. */
   position: fixed;
   z-index: 50;
   display: none;
@@ -1308,6 +1318,15 @@ body.delete-mode-on .card-select-row { display: flex; }
   padding: 10px;
   box-sizing: border-box;
   pointer-events: none;
+}
+.timeline-popover-hoverable {
+  /* #292: the vertical rail's popover deliberately overlaps its magnified
+     pill so they read as one object -- that only works if the popover can
+     itself catch mouseenter to keep itself open while the mouse crosses
+     from the pill onto the card (see timeline-rail.js's _ensurePopover/
+     _scheduleHidePopover). Its footprint sits to the right of the rail's
+     own entry column, so this doesn't intercept clicks on other entries. */
+  pointer-events: auto;
 }
 .timeline-popover.visible {
   display: flex;

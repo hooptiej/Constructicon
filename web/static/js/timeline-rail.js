@@ -30,6 +30,7 @@ class TimelineRail {
     this.entries = entries;
     this.onOpen = options.onOpen || function () {};
     this._popover = null;
+    this._hideTimer = null;
     this._rows = [];
     this._render();
     this._onResize = () => this._layout();
@@ -43,18 +44,45 @@ class TimelineRail {
   _ensurePopover() {
     if (this._popover) return this._popover;
     const el = document.createElement('div');
-    el.className = 'timeline-popover';
+    el.className = 'timeline-popover timeline-popover-hoverable';
     el.innerHTML = `
       <img class="timeline-popover-cover" alt="">
       <div class="timeline-popover-title"></div>
       <div class="timeline-popover-date"></div>
     `;
+    // The popover overlaps the magnified pill on purpose (see _showPopover
+    // below) so they read as one connected object -- but overlap alone
+    // doesn't keep the popover open, since it used to be pointer-events:
+    // none (mouse events passed straight through it, so it could never
+    // itself see a mouseenter). It's now a real hover target: moving from
+    // the pill onto the card cancels the pending hide the pill's own
+    // mouseleave scheduled, instead of racing it.
+    el.addEventListener('mouseenter', () => this._cancelHidePopover());
+    el.addEventListener('mouseleave', () => this._scheduleHidePopover());
     document.body.appendChild(el);
     this._popover = el;
     return el;
   }
 
+  _cancelHidePopover() {
+    clearTimeout(this._hideTimer);
+    this._hideTimer = null;
+  }
+
+  _scheduleHidePopover() {
+    this._cancelHidePopover();
+    // Short grace period, not zero: even with the popover overlapping the
+    // pill, the mouse crosses a sliver of neither element's hit-box for a
+    // frame or two during a fast diagonal move between them -- long enough
+    // to otherwise trigger the pill's mouseleave before the popover's own
+    // mouseenter lands.
+    this._hideTimer = setTimeout(() => {
+      if (this._popover) this._popover.classList.remove('visible');
+    }, 150);
+  }
+
   _showPopover(entry, node) {
+    this._cancelHidePopover();
     const popover = this._ensurePopover();
     const cover = popover.querySelector('.timeline-popover-cover');
     if (entry.thumbUrl) {
@@ -79,18 +107,11 @@ class TimelineRail {
     let top = nodeRect.top + nodeRect.height / 2 - popoverRect.height / 2;
     top = Math.max(8, Math.min(top, window.innerHeight - popoverRect.height - 8));
     // Deliberately overlaps the scaled pill by a few px rather than
-    // buttping up against it -- the popover has pointer-events: none (see
-    // .timeline-popover) so the pill underneath stays hoverable through
-    // the overlap; a real gap here was worse, not just cosmetically loose
-    // -- it was dead space the mouse could wander into and lose hover
-    // entirely before ever reaching the popover.
+    // butting up against it, so the two read as one connected object
+    // instead of a card floating a gap away from its own label.
     const scaledRight = nodeRect.left + nodeRect.width * ENTRY_HOVER_SCALE;
-    popover.style.left = `${scaledRight - 13}px`;
+    popover.style.left = `${scaledRight - 15}px`;
     popover.style.top = `${top}px`;
-  }
-
-  _hidePopover() {
-    if (this._popover) this._popover.classList.remove('visible');
   }
 
   _render() {
@@ -142,7 +163,7 @@ class TimelineRail {
         node.textContent = `${d.getMonth() + 1}/${d.getDate()}`;
 
         node.addEventListener('mouseenter', () => this._showPopover(entry, node));
-        node.addEventListener('mouseleave', () => this._hidePopover());
+        node.addEventListener('mouseleave', () => this._scheduleHidePopover());
         node.addEventListener('click', () => this.onOpen(entry));
 
         row.appendChild(node);

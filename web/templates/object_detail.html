@@ -106,6 +106,14 @@
             {% if item.media_type == 'youtube' %}Watch on YouTube ↗{% else %}View original ↗{% endif %}
           </a>
           {% endif %}
+          {% if item.media_type == 'youtube' %}
+          {# #275: per-item re-fetch of the real publishedAt on demand,
+             reusing scripts/full_youtube_channel_sync.py's single-video
+             correction logic (POST /api/image/{slug}/fetch-real-date)
+             rather than needing that whole-channel batch script for a
+             one-off correction. #}
+          <button type="button" class="ocr-retry-btn" id="fetch-real-date-btn">Fetch real date</button>
+          {% endif %}
         </div>
         {# #54: real YouTube Data API stats/metadata — see
            core/object_types.py's "youtube" metadata_fields and
@@ -326,6 +334,25 @@ let ocrText = {{ item.extracted_text | tojson }};
 // already use), so it survives a reload and shows up on cards too (see
 // cardRotationStyle in each card-rendering template).
 let currentRotation = {{ (item.type_metadata.get('rotation') or 0) | tojson }};
+const fetchRealDateBtn = document.getElementById('fetch-real-date-btn');
+if (fetchRealDateBtn) {
+  fetchRealDateBtn.addEventListener('click', async () => {
+    const originalText = fetchRealDateBtn.textContent;
+    fetchRealDateBtn.disabled = true;
+    fetchRealDateBtn.textContent = 'Fetching…';
+    try {
+      const res = await fetch('/api/image/{{ item.slug }}/fetch-real-date', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || 'Failed to fetch real date');
+      window.location.reload(); // simplest way to reflect the corrected Published date
+    } catch (err) {
+      fetchRealDateBtn.disabled = false;
+      fetchRealDateBtn.textContent = originalText;
+      alert(err.message);
+    }
+  });
+}
+
 const rotateBtn = document.getElementById('rotate-btn');
 if (rotateBtn) {
   rotateBtn.addEventListener('click', async () => {

@@ -803,7 +803,9 @@ def api_delete_all():
     Development convenience while content/schema are still in flux, not a
     feature meant to stick around once the site has real content worth
     protecting."""
-    rows = db.search(limit=100000)
+    # include_redacted (#282): search() hides redacted rows by default;
+    # a full reset has to take them too or they'd survive as orphans.
+    rows = db.search(limit=100000, include_redacted=True)
     for row in rows:
         if row.get("stored_filename"):
             storage.delete_files(row["slug"], row["stored_filename"])
@@ -989,6 +991,18 @@ def api_get_audit_log(limit: int = 100):
             }
         )
     return JSONResponse(result)
+
+
+@app.get("/api/redacted")
+def api_list_redacted():
+    """#282: every currently-redacted row, for the admin pane's "Redacted
+    items" list. Redacted rows are hidden from every list/search/project/
+    tag query, so this is the only way to find one again without already
+    knowing its slug. Same card shape as the gallery (_to_public -- thumb_url
+    is always None here, the file is gone) plus the direct /object link,
+    which keeps working for a redacted row."""
+    items = [{**_to_public(row), "link": f"/object/{row['slug']}"} for row in db.list_redacted()]
+    return JSONResponse({"count": len(items), "items": items})
 
 
 @app.get("/upload")
@@ -1704,6 +1718,23 @@ def api_redact_image(request: Request, slug: str):
         raise HTTPException(status_code=400, detail="This row has no uploaded file to redact")
     storage.delete_files(slug, row["stored_filename"])
     updated = db.mark_redacted(slug)
+    return JSONResponse(_to_public(updated))
+
+
+@app.post("/api/image/{slug}/unredact")
+def api_unredact_image(request: Request, slug: str):
+    """#282: reverse of /redact -- clears the flag so the row rejoins
+    ordinary browsing/search. Can't bring the file back: /redact deleted it
+    from storage before setting the flag, so the row stays a file-less
+    metadata record; it's just findable again. 409 rather than a silent
+    no-op on a row that isn't redacted, so a stale admin-pane list can't
+    misreport success."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if not row["redacted"]:
+        raise HTTPException(status_code=409, detail="This row isn't redacted")
+    updated = db.unmark_redacted(slug)
     return JSONResponse(_to_public(updated))
 
 

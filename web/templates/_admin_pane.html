@@ -63,6 +63,25 @@
       </div>
     </div>
     <div class="admin-pane-divider"></div>
+    <!-- Redacted items (#282) — every row whose file was removed via the
+         detail page's "Remove file, keep info" button (POST
+         /api/image/{slug}/redact) or the constructicon_redact MCP tool.
+         Since #282 those rows are hidden from every list, search, project
+         page and tag walk and reachable only by direct /object/<slug> link,
+         so this is the one place to find them again. "Un-redact" (POST
+         /api/image/{slug}/unredact) only clears the flag so the row rejoins
+         normal browsing — the file itself was deleted at redaction time and
+         can't come back. Always rendered (with an empty state), unlike the
+         pending-decision queue above, so the feature is discoverable before
+         anything has been redacted. -->
+    <div class="admin-row">
+      <div>
+        <div class="admin-row-label">Redacted items <span id="admin-redacted-count" class="apikey-status"></span></div>
+        <div class="admin-row-hint">Hidden from every list and search, reachable by direct link only (#282). Un-redacting puts the row back in browsing — the removed file itself can't come back.</div>
+      </div>
+    </div>
+    <div id="admin-redacted-list" class="admin-redacted-list"></div>
+    <div class="admin-pane-divider"></div>
     <!-- API Keys (#55) — general secrets store for the app itself, starting
          with a YouTube Data API key (real view/like/comment counts, full
          descriptions, tags, duration — see #54) rather than wiring a key in
@@ -474,6 +493,68 @@
   }
   loadPendingDecisions();
   document.addEventListener('constructicon:pending-decisions-changed', loadPendingDecisions);
+
+  // Redacted items (#282) — see the markup comment above. Loaded with the
+  // pane like the pending queue, and re-fetched after every un-redact so a
+  // row drops out of this list the moment it's back in normal browsing.
+  // Per-row error text reuses the .backup-status pattern the other admin
+  // actions use; success needs no message — the row simply disappears.
+  const redactedList = document.getElementById('admin-redacted-list');
+  const redactedCount = document.getElementById('admin-redacted-count');
+
+  function renderRedacted(data) {
+    const items = (data && data.items) || [];
+    redactedCount.textContent = items.length ? `(${items.length})` : '';
+    redactedList.innerHTML = '';
+    if (items.length === 0) {
+      redactedList.innerHTML = '<div class="audit-log-empty">Nothing redacted</div>';
+      return;
+    }
+    for (const item of items) {
+      const el = document.createElement('div');
+      el.className = 'redacted-item';
+      el.dataset.slug = item.slug;
+      const meta = [item.type_label, item.filename].filter(Boolean).join(' · ');
+      el.innerHTML = `
+        <div class="redacted-item-head">
+          <span class="pending-decision-thumb pending-decision-thumb-icon">${escapeHtml(item.type_icon || '')}</span>
+          <div class="redacted-item-text">
+            <a class="pending-decision-title" href="${escapeHtml(item.link)}" title="${escapeHtml(item.display_name)}">${escapeHtml(item.display_name)}</a>
+            <div class="redacted-item-meta">${escapeHtml(meta)}</div>
+          </div>
+          <button type="button" class="btn-ms redacted-item-unredact"
+                  title="Clear the redacted flag so this row shows up in lists and search again. The removed file does not come back.">Un-redact</button>
+        </div>
+        <span class="backup-status redacted-item-msg"></span>`;
+      const btn = el.querySelector('.redacted-item-unredact');
+      const msg = el.querySelector('.redacted-item-msg');
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = 'Un-redacting…';
+        try {
+          const res = await fetch(`/api/image/${encodeURIComponent(item.slug)}/unredact`, { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || `Failed (${res.status})`);
+          loadRedacted();
+        } catch (err) {
+          msg.textContent = err.message || 'Failed';
+          msg.className = 'backup-status backup-status-error redacted-item-msg';
+          btn.disabled = false;
+          btn.textContent = 'Un-redact';
+        }
+      });
+      redactedList.appendChild(el);
+    }
+  }
+
+  async function loadRedacted() {
+    try {
+      const res = await fetch('/api/redacted');
+      if (!res.ok) return;
+      renderRedacted(await res.json());
+    } catch (err) { /* leave whatever's shown */ }
+  }
+  loadRedacted();
 
   // Audit log (#122) — recent mutating API calls for debugging/recovery
   const auditLogContainer = document.getElementById('admin-audit-log-container');

@@ -458,6 +458,19 @@ body.delete-mode-on .card-select-row { display: flex; }
 .pending-decision-actions { display: flex; align-items: center; gap: 8px; }
 .pending-decision-actions .btn-ms { width: auto; padding: 6px 12px; font-size: 12px; }
 
+/* Redacted items (#282) — admin-pane list of hidden rows, each with an un-redact button.
+   Same card bones as .pending-decision, neutral left rule instead of the hazard one
+   (nothing here is asking for a decision). */
+.admin-redacted-list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+.redacted-item {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
+  background: var(--background); border: 1px solid var(--border); border-left: 2px solid var(--text-3); border-radius: 4px;
+}
+.redacted-item-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.redacted-item-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.redacted-item-meta { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.redacted-item-unredact { width: auto; padding: 6px 12px; font-size: 12px; flex-shrink: 0; }
+
 /* API Keys row (#55) */
 .admin-apikey-row { flex-direction: column; align-items: stretch; gap: 8px; }
 .admin-apikey-label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

@@ -567,8 +567,11 @@ def update_tags(slug, description=None, tags=None, client=None):
     conn.close()
     if tags is not None:
         # #213 fix: pass the previous free-text tags so we can diff only against those,
-        # not against the entire tag tree (which includes tags from projects/MCP/etc.)
-        previous_tags = json.loads(existing["tags"]) if existing.get("tags") else []
+        # not against the entire tag tree (which includes tags from projects/MCP/etc.).
+        # #269: `existing` came from get_by_slug -> _row_to_dict, which already
+        # json.loads'd the tags column -- it's a list here, not a JSON string,
+        # so re-parsing it crashes for any row with a non-empty tags list.
+        previous_tags = existing["tags"] if existing.get("tags") else []
         sync_real_tags_for_post(slug, tags, previous_tags=previous_tags)
     return get_by_slug(slug)
 

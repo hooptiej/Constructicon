@@ -649,6 +649,16 @@ body.delete-mode-on .card-select-row { display: flex; }
 .audio-preview audio::-webkit-media-controls-time-remaining-display { color: var(--text-2); }
 .audio-preview audio::-webkit-media-controls-timeline,
 .audio-preview audio::-webkit-media-controls-volume-slider { accent-color: var(--accent); }
+/* The play button and the timeline/volume thumbs are drawn from their own
+   internal icon/thumb assets, not the track fill accent-color above --
+   color targets the play icon in case it's drawn via currentColor (some
+   Chrome versions do, some don't); the explicit ::-webkit-slider-thumb
+   overrides go after the plain accent-color rule above so they win on
+   specificity where supported. */
+.audio-preview audio::-webkit-media-controls-play-button,
+.audio-preview audio::-webkit-media-controls-mute-button { color: var(--accent); }
+.audio-preview audio::-webkit-media-controls-timeline::-webkit-slider-thumb,
+.audio-preview audio::-webkit-media-controls-volume-slider::-webkit-slider-thumb { background-color: var(--accent); }
 /* #290: the file's own tags in the preview (title/artist headline, then the
    labelled rest), or an explicit empty state. */
 .audio-tags { display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center; max-width: 520px; min-width: 0; }

@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "imagerepo.db"
@@ -256,8 +257,12 @@ def list_clients():
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    # timeout=30: wait up to 30 seconds if DB is locked by another writer (default 5s).
+    # check_same_thread=False: safe here since we create a fresh connection per call.
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # Enable WAL (Write-Ahead Logging) for better concurrency.
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 

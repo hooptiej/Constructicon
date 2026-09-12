@@ -39,15 +39,30 @@ class TimelineRail {
 
     const sorted = this._sorted();
     let lastYear = null;
+    let lastMonthKey = null;
+    const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
     sorted.forEach((entry) => {
-      const year = new Date(entry.date * 1000).getFullYear();
+      const d = new Date(entry.date * 1000);
+      const year = d.getFullYear();
+      const monthKey = `${year}-${d.getMonth()}`;
       if (year !== lastYear) {
         const marker = document.createElement('div');
         marker.className = 'timeline-year-marker';
         marker.textContent = year;
         this._track.appendChild(marker);
         lastYear = year;
+        lastMonthKey = monthKey;
+      } else if (monthKey !== lastMonthKey) {
+        // Between year boundaries, a month marker is the only other
+        // chronology cue -- without it, real data spanning just one or
+        // two years (common early on) shows almost no temporal texture at
+        // all beyond a couple of year labels at the top of the list.
+        const marker = document.createElement('div');
+        marker.className = 'timeline-month-marker';
+        marker.textContent = MONTH_NAMES[d.getMonth()];
+        this._track.appendChild(marker);
+        lastMonthKey = monthKey;
       }
 
       const row = document.createElement('div');

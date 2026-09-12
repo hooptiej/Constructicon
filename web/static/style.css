@@ -1131,6 +1131,31 @@ body.delete-mode-on .card-select-row { display: flex; }
   background: var(--accent);
   transform: translateY(-50%);
 }
+.timeline-month-marker {
+  /* Medium tier, between the year marker and a bare entry tick -- the
+     chronology cue within a year (or a year with no marker of its own
+     yet, since real data can span just one or two years, where year
+     markers alone give almost no temporal texture). */
+  position: relative;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+.timeline-month-marker::before {
+  /* medium tick: same idea as the year tick, smaller. .timeline-rail's
+     border-left sits 18px to the left of this element's own box (2px
+     border + 16px padding) -- left:-21px/width:11px spans -3px to +8px
+     relative to it, straddling the border (0-2px). */
+  content: '';
+  position: absolute;
+  left: -21px;
+  top: 50%;
+  width: 11px;
+  height: 2px;
+  background: var(--text-3);
+  transform: translateY(-50%);
+}
 .timeline-entry-row {
   position: relative;
   display: flex;

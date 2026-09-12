@@ -174,8 +174,12 @@ def _load_for_ocr(image_path):
 
     #237: also runs the image through _preprocess_for_ocr first — the PNG
     round-trip below is still purely a format fix, the quality work
-    happens in that step."""
-    img = _preprocess_for_ocr(Image.open(image_path).convert("RGB"))
+    happens in that step.
+
+    #288: the EXIF Orientation tag is applied first (storage.exif_upright)
+    so tesseract sees the photo the way a person does -- it reads rotated
+    text about as well as anyone reads a page turned on its side."""
+    img = _preprocess_for_ocr(storage.exif_upright(Image.open(image_path)).convert("RGB"))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

@@ -271,6 +271,12 @@ def init_db():
     for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+    # display_date_override (Timeline feature): manual override for an object's
+    # position on the timeline. NULL means "use the computed default" — see
+    # core/timeline.py's resolve_item_date.
+    for column, ddl_type in (("display_date_override", "REAL"),):
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
     # media_type is a loose classifier ('image' | 'youtube' | 'document', or anything else a
     # caller wants) — deliberately no CHECK constraint. See core/object_types.py for the
     # registry that gives each value a real spec (thumbnail strategy, OCR eligibility,
@@ -325,6 +331,13 @@ def init_db():
     # points at a capture_events.slug with no FK constraint.
     if "writeup_slug" not in existing_project_columns:
         conn.execute("ALTER TABLE projects ADD COLUMN writeup_slug TEXT")
+    # start_date_override/end_date_override (Timeline feature): a project is a
+    # span, not a moment — these manually override its computed start/end
+    # (derived from its items' effective dates otherwise). NULL means "use the
+    # computed default" — see core/timeline.py's resolve_project_span.
+    for column, ddl_type in (("start_date_override", "REAL"), ("end_date_override", "REAL")):
+        if column not in existing_project_columns:
+            conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
     # agent_notes (#206): reserved space for agent-authored working notes, separate
     # from owner-facing content. Used for Claude working state (e.g., "this is a
     # Fusion 360 screenshot, not user-facing" or "already inventoried, skip on re-run").
@@ -1201,6 +1214,51 @@ def update_project(id_or_slug, title=None, description=None, cover_slug=None, st
             now,
             existing["id"],
         ),
+    )
+    conn.commit()
+    conn.close()
+    return get_project(existing["id"])
+
+
+def set_display_date_override(slug, value):
+    """value=None clears the override, reverting to the computed default
+    (content_date, falling back to timestamp — see core/timeline.py)."""
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET display_date_override = ? WHERE slug = ?", (value, slug))
+    conn.commit()
+    conn.close()
+
+
+def set_content_date(slug, value):
+    """Sets the content's own real-world date directly (distinct from
+    display_date_override, which is a manual override of the *displayed*
+    date on top of this — see core/timeline.py's resolve_item_date chain).
+    Added so a correction/backfill script with a real known date (e.g. a
+    YouTube video's publishedAt) can persist it via the HTTP API rather
+    than writing to the DB directly — see scripts/full_youtube_channel_sync.py's
+    correct_content_row, which previously fetched this from the API on
+    every correction pass but had no way to actually write it back for an
+    already-imported row."""
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET content_date = ? WHERE slug = ?", (value, slug))
+    conn.commit()
+    conn.close()
+
+
+def set_project_date_overrides(project_id, start=..., end=...):
+    """start/end=None clears that override; the ... sentinel (default) means
+    "leave this one alone" — same three-state convention as update_project's
+    writeup_slug param, needed because a plain None-means-unchanged
+    convention can't also express "clear it"."""
+    existing = get_project(project_id)
+    if existing is None:
+        return None
+    conn = get_conn()
+    new_start = existing.get("start_date_override") if start is ... else start
+    new_end = existing.get("end_date_override") if end is ... else end
+    conn.execute(
+        "UPDATE projects SET start_date_override = ?, end_date_override = ? WHERE id = ?",
+        (new_start, new_end, existing["id"]),
     )
     conn.commit()
     conn.close()

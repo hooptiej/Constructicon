@@ -288,17 +288,24 @@ def build_type_metadata(meta, owner_channel_title):
 
 
 def existing_youtube_rows():
-    """video_id -> slug for every existing media_type='youtube' row, read
-    directly from the target's own database — no HTTP endpoint exposes
-    external_url in its JSON shape, same constraint #22's script
-    documents."""
+    """video_id -> list of slugs for every existing media_type='youtube'
+    row, read directly from the target's own database — no HTTP endpoint
+    exposes external_url in its JSON shape, same constraint #22's script
+    documents.
+
+    A list, not a single slug: real duplicate rows exist for the same
+    video (confirmed 2026-09-11 — the same video imported once directly
+    into a parent project and again independently into a child project),
+    and a plain video_id -> slug dict silently drops every duplicate but
+    the last one iterated, leaving it permanently uncorrected on every
+    future run."""
     mapping = {}
     for row in db.search(limit=1000000):
         if row.get("media_type") != "youtube":
             continue
         video_id = object_types.extract_youtube_id(row.get("external_url"))
         if video_id:
-            mapping[video_id] = row["slug"]
+            mapping.setdefault(video_id, []).append(row["slug"])
     return mapping
 
 
@@ -337,12 +344,20 @@ def create_content_row(base_url, **fields):
     return _http_call("POST", f"{base_url.rstrip('/')}/api/content", payload)
 
 
-def correct_content_row(base_url, slug, current, content_description, type_metadata):
+def correct_content_row(base_url, slug, current, content_description, type_metadata, content_date=None):
     """POST /api/image/{slug} — resubmits the row's CURRENT
     description/tags/client verbatim (see get_current_row) so
     this only actually changes content_description + type_metadata, per
     api_update_image's "always applies description/tags/client"
-    contract."""
+    contract.
+
+    content_date (#265 follow-up): the real publishedAt date was already
+    being fetched from the API on every correction pass but had nowhere
+    to go -- api_update_image now accepts it directly (core.db.set_content_date).
+    Passed unconditionally, same as the import path below always sets it;
+    re-asserting the same real value on a re-run is the same safe-no-op
+    idempotence this function's docstring already relies on for the other
+    fields."""
     payload = {
         "description": current.get("description") or "",
         "tags": json.dumps(current.get("tags") or []),
@@ -350,6 +365,8 @@ def correct_content_row(base_url, slug, current, content_description, type_metad
         "content_description": content_description,
         "type_metadata": json.dumps(type_metadata),
     }
+    if content_date is not None:
+        payload["content_date"] = content_date
     return _http_call("POST", f"{base_url.rstrip('/')}/api/image/{slug}", payload)
 
 
@@ -405,8 +422,9 @@ def main():
     existing = existing_youtube_rows()
     to_correct = [v for v in all_video_ids if v in existing and v in metadata]
     to_import = [v for v in all_video_ids if v not in existing and v in metadata]
+    to_correct_row_count = sum(len(existing[v]) for v in to_correct)
 
-    print(f"Already present in this instance (will correct): {len(to_correct)}")
+    print(f"Already present in this instance (will correct): {len(to_correct)} video(s), {to_correct_row_count} row(s) incl. duplicates")
     print(f"Not present in this instance (will import):       {len(to_import)}")
     print("=" * 70)
 
@@ -415,7 +433,7 @@ def main():
         print("Sample corrections (existing rows -> real title):")
         for video_id in to_correct[:8]:
             m = metadata[video_id]
-            print(f"  {video_id} (slug {existing[video_id]}): {m['title']!r}")
+            print(f"  {video_id} (slug(s) {existing[video_id]}): {m['title']!r}")
         if len(to_correct) > 8:
             print(f"  ... and {len(to_correct) - 8} more")
         print("\nSample new imports:")
@@ -429,15 +447,19 @@ def main():
     corrected = 0
     for video_id in to_correct:
         m = metadata[video_id]
-        slug = existing[video_id]
-        current = get_current_row(args.base_url, slug)
-        if current is None:
-            print(f"  WARNING: slug {slug} (video {video_id}) not found via the API — skipping correction")
-            continue
-        type_md = build_type_metadata(m, owner_channel_title)
-        correct_content_row(args.base_url, slug, current, m["title"], type_md)
-        corrected += 1
-        print(f"Corrected {video_id} -> slug {slug}: {m['title']!r}")
+        # A video_id can map to more than one slug -- real duplicate rows
+        # exist (see existing_youtube_rows' docstring). Correct every one,
+        # not just the first, or duplicates stay permanently stale.
+        for slug in existing[video_id]:
+            current = get_current_row(args.base_url, slug)
+            if current is None:
+                print(f"  WARNING: slug {slug} (video {video_id}) not found via the API — skipping correction")
+                continue
+            type_md = build_type_metadata(m, owner_channel_title)
+            correct_content_row(args.base_url, slug, current, m["title"], type_md,
+                                 content_date=_parse_published(m["published_at"]))
+            corrected += 1
+            print(f"Corrected {video_id} -> slug {slug}: {m['title']!r}")
 
     imported = []
     for video_id in to_import:

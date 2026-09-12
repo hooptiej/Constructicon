@@ -22,11 +22,6 @@
   {% endif %}
 
   <div class="project-detail-header">
-    {% if cover_url %}
-    <div class="project-cover" style="height:200px;border-radius:12px;border:1px solid var(--border)">
-      <img src="{{ cover_url }}" alt="">
-    </div>
-    {% endif %}
     <div>
       {# #241: click the title (or the pencil) to rename in place — see the
          title-edit script at the bottom, same immediate-effect pattern as
@@ -53,6 +48,40 @@
       </select>
     </div>
     <div class="hazard-stripe" style="width:64px"></div>
+    {% if cover_url %}
+    <div class="project-cover" style="height:200px;border-radius:12px;border:1px solid var(--border)">
+      <img src="{{ cover_url }}" alt="">
+    </div>
+    {% endif %}
+    {% if timeline_children or timeline_items %}
+    <div class="project-video-timeline-panel-label">Project Timeline</div>
+    <div class="project-video-timeline-panel">
+      <div class="project-video-timeline" id="project-video-timeline"></div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div style="margin-top:12px;display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
+    <div>
+      <label style="display:block;margin-bottom:4px">TIMELINE START</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="input" type="datetime-local" id="start-date-input" value="{{ start_date_input or '' }}">
+        <button type="button" class="btn-secondary" id="start-date-reset">Reset</button>
+      </div>
+      <div style="font-size:12px;color:var(--placeholder);margin-top:4px">
+        {% if project.start_date_override %}Manually set.{% else %}Computed: {{ effective_start_display }}{% endif %}
+      </div>
+    </div>
+    <div>
+      <label style="display:block;margin-bottom:4px">TIMELINE END</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="input" type="datetime-local" id="end-date-input" value="{{ end_date_input or '' }}">
+        <button type="button" class="btn-secondary" id="end-date-reset">Reset</button>
+      </div>
+      <div style="font-size:12px;color:var(--placeholder);margin-top:4px">
+        {% if project.end_date_override %}Manually set.{% else %}Computed: {{ effective_end_display }}{% endif %}
+      </div>
+    </div>
   </div>
 
   {% if writeup_body %}
@@ -90,6 +119,34 @@
   </div>
   {% else %}
   <p class="empty-state">This project has no items yet.</p>
+  {% endif %}
+
+  {% if timeline_children or timeline_items %}
+  <script src="/static/js/project-video-timeline.js"></script>
+  <script>
+  (function () {
+    const timelineChildren = {{ timeline_children | tojson }};
+    const timelineItems = {{ timeline_items | tojson }};
+    new ProjectVideoTimeline(document.getElementById('project-video-timeline'), {
+      blocks: timelineChildren.map((c) => ({
+        id: c.id,
+        label: c.title,
+        start: c.effective_start,
+        end: c.effective_end,
+        dateLabel: `${new Date(c.effective_start * 1000).toLocaleDateString()} – ${new Date(c.effective_end * 1000).toLocaleDateString()}`,
+        openUrl: `/project/${c.slug}`,
+      })),
+      events: timelineItems.map((it) => ({
+        id: it.slug,
+        label: it.title,
+        date: it.effective_date,
+        thumbUrl: it.thumb_url,
+        dateLabel: new Date(it.effective_date * 1000).toLocaleDateString(),
+        openUrl: `/object/${it.slug}?from=project:{{ project.slug }}`,
+      })),
+    });
+  })();
+  </script>
   {% endif %}
 
   {% if child_projects %}
@@ -183,6 +240,39 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
     }
   });
 });
+
+// Timeline start/end overrides: same immediate-effect POST pattern as the
+// status selector below, one field each so setting start doesn't disturb end.
+function wireTimelineDateField(inputId, resetId, fieldName, resetFieldName) {
+  const input = document.getElementById(inputId);
+  const resetBtn = document.getElementById(resetId);
+  input.addEventListener('change', async function () {
+    if (!this.value) return;
+    const response = await fetch(`/api/projects/${projectId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `${fieldName}=${encodeURIComponent(this.value)}`,
+    });
+    if (!response.ok) {
+      console.error(`Failed to update ${fieldName}:`, response.status);
+    }
+  });
+  resetBtn.addEventListener('click', async function () {
+    const response = await fetch(`/api/projects/${projectId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `${resetFieldName}=true`,
+    });
+    if (response.ok) {
+      input.value = '';
+      window.location.reload();
+    } else {
+      alert('Reset failed');
+    }
+  });
+}
+wireTimelineDateField('start-date-input', 'start-date-reset', 'start_date', 'reset_start_date');
+wireTimelineDateField('end-date-input', 'end-date-reset', 'end_date', 'reset_end_date');
 
 // Status selector (#160-followup): active/archived, same immediate-effect
 // pattern as the cover/writeup selectors above.

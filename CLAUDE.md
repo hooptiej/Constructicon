@@ -300,17 +300,30 @@ Two containers run side by side on that box:
   same discipline for any script that writes data or hits a real external
   API (YouTube, etc.) — default to testing against `constructicon-test`
   first, never assume production is the right target.
-  **Checkout may be ahead of `main`, deliberately**: `constructicon-test`'s
-  bind-mounted checkout can be left on a feature branch between sessions
-  when that branch is the one the *next* piece of work builds on. As of
-  2026-09-03, its served files were reset to a clean current-`main`
-  baseline (371e03e) ahead of the #103/#95/#88+#90/#92+#93 batch — the
-  previous breadcrumb here (`cleanup/halo-ticket-client-text-imagerepo-naming`)
-  is stale, that work has since merged to `main` via #109. Check `git -C
-  "/mnt/Storage Pool/home/hoop/hoop/constructicon-test" log -1` (or just
-  read its `core/`/`web/` files) before assuming this container reflects
-  `main` — don't silently reset it to `main` without checking whether it's
-  intentionally parked on something else first.
+  **Reset to clean `main` right after prod verification (standing step,
+  2026-09-12+)**: once a branch has merged and its production deploy is
+  verified, the *next* thing to do — as part of that same merge-deploy
+  pipeline, not a separate later chore — is reset `constructicon-test`'s
+  checkout to clean `origin/main` (`./scripts/deploy.sh` from inside it)
+  and restart the container, **then also restart `constructicon-test-mcp`**
+  so its bind mount picks up the same clean baseline rather than serving
+  stale files from whatever was there before (see gotcha #7 below — this
+  sidecar's mount has gone stale on its own before, independent of
+  `constructicon-test` itself). The point of this whole step is to leave
+  the dev MCP tools (`mcp__constructicon-test-mcp__*`) actually ready to
+  exercise live edits the moment the next round of work starts, not just
+  the HTTP container. This replaced the older habit of leaving the
+  checkout parked on whatever branch was just tested, on the theory that
+  it'd carry into the next piece of work: in practice that just meant
+  every new session started by wading through a dead branch and stale
+  served files instead of a clean baseline. Land on `main` unless the
+  *very next* task is already scoped and its branch already exists — in
+  that case say so explicitly and park it there instead of resetting,
+  rather than resetting reflexively.
+  Check `git -C "/mnt/Storage Pool/home/hoop/hoop/constructicon-test"
+  log -1` (or just read its `core/`/`web/` files) before assuming this
+  container reflects `main` if you're picking up a session that predates
+  this rule or one where it wasn't followed.
   **`git` inside that checkout works now** (fixed alongside #71,
   2026-09-06 — same deploy-key SSH remote as `constructicon-web`, see the
   Deployment section above). `scripts/deploy.sh` works here too. The

@@ -5,7 +5,11 @@
 {% include "_gallery_drawer.html" %}
 {% include "_admin_pane.html" %}
 
-<div class="app-main">
+{% if timeline_projects %}
+<aside class="timeline-rail" id="gallery-timeline-rail"></aside>
+{% endif %}
+
+<div class="app-main{% if timeline_projects %} app-main-shifted{% endif %}">
   <div>
     <h1 class="page-title">Constructicon</h1>
     <p class="page-subtitle">Curated projects below — gallery and upload live behind the tab on the right (hover, or drag a file over it).</p>
@@ -122,6 +126,34 @@
       <p class="empty-state">
         {% if selected_tag_slug %}No projects tagged under this category yet.{% else %}No projects yet.{% endif %}
       </p>
+      {% endif %}
+
+      {% if timeline_projects %}
+      <script src="/static/js/timeline-rail.js"></script>
+      <script>
+      (function () {
+        const rail = document.getElementById('gallery-timeline-rail');
+        const timelineProjects = {{ timeline_projects | tojson }};
+        if (timelineProjects.length) {
+          new TimelineRail(
+            rail,
+            timelineProjects.map((p) => ({
+              id: p.id,
+              thumbUrl: p.cover_url,
+              label: p.title,
+              date: p.effective_start,
+              endDate: p.effective_end,
+              isChild: p.is_child,
+              dateLabel: new Date(p.effective_start * 1000).toLocaleDateString(),
+              openUrl: `/project/${p.slug}`,
+            })),
+            {
+              onOpen: (entry) => { window.location.href = entry.openUrl; },
+            }
+          );
+        }
+      })();
+      </script>
       {% endif %}
     </div>
 

@@ -1062,3 +1062,371 @@ body.delete-mode-on .card-select-row { display: flex; }
   align-items: center; justify-content: center; cursor: pointer; z-index: 51;
 }
 .lightbox-close:hover { border-color: var(--accent); }
+
+/* Timeline feature: shared rail used on the gallery page (project spans)
+   and a project detail page (item points). See
+   docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
+
+   No card, no background of its own -- a real vertical axis with a small
+   perpendicular tick at every entry and larger ticks + labels at year and
+   month boundaries, floating directly on the page. Fixed to the viewport
+   (doesn't scroll with the page) and fit to the full window height via
+   flex space-between, so the whole chronology is visible with no
+   scrollbar. .app-main-shifted (added to the page's main content when the
+   rail is present) pushes the rest of the page over so there's real empty
+   space behind the rail instead of page content running underneath it.
+
+   Every year between the earliest and latest entry gets a marker, even
+   ones with zero entries -- a real chronology has to show the gaps
+   between activity, not just the years something happened (a version
+   before this only emitted a marker for years that actually had an
+   entry, so a real 2017-to-2026 span read as two labels back to back with
+   no sense that 9 quiet years separated them).
+
+   Hovering an entry shows a lightweight popover positioned next to it (no
+   backdrop -- meant for glancing while moving through the list); clicking
+   navigates straight to the real page. An earlier version had this
+   backwards (click opened a heavier modal-with-backdrop, no hover at
+   all). */
+.timeline-rail {
+  position: fixed;
+  left: 12px;
+  top: 68px; /* .app-header's height (56px) + a little breathing room */
+  bottom: 12px;
+  width: 110px;
+  z-index: 45;
+  background: transparent;
+  border-left: 2px solid var(--border-strong);
+  padding: 0 0 0 16px;
+  box-sizing: border-box;
+  overflow: visible;
+}
+.app-main-shifted {
+  margin-left: 70px;
+}
+.timeline-track {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+}
+.timeline-year-marker {
+  position: relative;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.03em;
+}
+.timeline-year-marker::before {
+  /* the year tick: a perpendicular mark crossing the axis, bigger than a
+     per-entry tick. .timeline-rail's border-left sits 18px to the left of
+     this element's own box (2px border + 16px padding) -- left:-24px/
+     width:14px spans -6px to +8px relative to it, straddling the border
+     (0-2px) with 6px sticking out past it into the page margin, like a
+     ruler's major tick. */
+  content: '';
+  position: absolute;
+  left: -24px;
+  top: 50%;
+  width: 14px;
+  height: 2px;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+.timeline-month-marker {
+  /* Medium tier, between the year marker and a bare entry tick -- the
+     chronology cue within a year (or a year with no marker of its own
+     yet, since real data can span just one or two years, where year
+     markers alone give almost no temporal texture). */
+  position: relative;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+.timeline-month-marker::before {
+  /* medium tick: same idea as the year tick, smaller. .timeline-rail's
+     border-left sits 18px to the left of this element's own box (2px
+     border + 16px padding) -- left:-21px/width:11px spans -3px to +8px
+     relative to it, straddling the border (0-2px). */
+  content: '';
+  position: absolute;
+  left: -21px;
+  top: 50%;
+  width: 11px;
+  height: 2px;
+  background: var(--text-3);
+  transform: translateY(-50%);
+}
+.timeline-entry-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.timeline-entry-row::before {
+  /* the per-entry tick: same idea as the year tick, smaller (minor tick). */
+  content: '';
+  position: absolute;
+  left: -20px;
+  top: 50%;
+  width: 8px;
+  height: 1px;
+  background: var(--border-strong);
+  transform: translateY(-50%);
+}
+.timeline-entry {
+  /* Time is the primary content of a row now, not the item itself -- this
+     is a month/day label, not a thumbnail. Hover shows .timeline-popover
+     (the "what was this" preview); click navigates straight to the real
+     page. */
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  box-sizing: border-box;
+  font-size: 10px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.timeline-entry:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.timeline-entry-span {
+  border-width: 2px;
+}
+.timeline-entry-child {
+  opacity: 0.75;
+}
+.timeline-popover {
+  /* No backdrop -- meant to be glanced at while moving through the list,
+     not a modal dialog. Position (left/top) is set by JS per hover,
+     placed to the entry's right. */
+  position: fixed;
+  z-index: 50;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  width: 220px;
+  background: var(--card);
+  border: 1px solid var(--border-stronger);
+  border-radius: 8px;
+  box-shadow: 2px 2px 12px rgba(0,0,0,0.4);
+  padding: 10px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.timeline-popover.visible {
+  display: flex;
+}
+.timeline-popover-cover {
+  width: 100%;
+  max-height: 120px;
+  object-fit: cover;
+  border-radius: 5px;
+}
+.timeline-popover-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+.timeline-popover-date {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+/* Project detail page: horizontal, video-editor-style in-page timeline
+   (distinct from the gallery page's vertical rail above). Sub-projects
+   are blocks on a track (they're spans); this project's own items are
+   point events below the track. Position is continuous/proportional --
+   workable here since one project's own blocks/events are a single
+   coherent time range, unlike the gallery's whole multi-decade spread.
+   Reuses .timeline-popover/-cover/-title/-date from above for its hover
+   preview -- same shape, just positioned above the hovered element
+   instead of to its right (see project-video-timeline.js).
+
+   Unlike the gallery rail (deliberately no card/background), this one
+   gets a real contrasting panel with a label -- it's an embedded page
+   element, not something floating over the viewport, and needs to read
+   as its own distinct "timescale" instrument at a glance. */
+.project-video-timeline-panel {
+  /* Old radio tuner look, per owner's request: near-black chassis, a
+     faint blue backlight glow (ambient + a soft inset wash), an orange
+     indicator line/needle for the axis, phosphor-blue glowing readouts
+     for the dates -- see the scale-line/-label/event-time rules below. */
+  margin-top: 10px;
+  padding: 18px 26px 16px;
+  background: #0a0d12;
+  border: 1px solid #232a36;
+  border-radius: 8px;
+  box-shadow: 0 0 28px rgba(70, 150, 255, 0.10), inset 0 0 46px rgba(70, 150, 255, 0.05);
+  /* Extra top/side padding plus a hard clip below give the diagonal time
+     flags room to run at a steep angle without escaping the chassis --
+     only a flag genuinely anchored at the very edge (the timeline's first
+     or last event) ever reaches this crop, and it reads as the readout
+     running behind the tuner's own bezel rather than a layout bug. */
+  overflow: hidden;
+}
+.project-video-timeline-panel-label {
+  /* Lives above the chassis now, against the page's own background --
+     not inside it -- so it doesn't have to compete with the radio-tuner
+     panel's near-black fill and glow for contrast. */
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin: 12px 0 6px;
+}
+.project-video-timeline {
+  position: relative;
+}
+.project-video-timeline-blocks {
+  position: relative;
+  height: 32px;
+}
+.project-video-timeline-block {
+  all: unset;
+  position: absolute;
+  top: 0;
+  height: 32px;
+  box-sizing: border-box;
+  background: var(--purple);
+  border: 2px solid var(--purple-hover);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 28px;
+  padding: 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.project-video-timeline-block:hover {
+  border-color: var(--accent);
+}
+.project-video-timeline-scale {
+  position: relative;
+  height: 28px;
+  margin: 10px 0;
+}
+.project-video-timeline-scale-line {
+  /* The tuner's indicator needle -- the whole axis reads as one solid
+     orange line, glowing faintly like a lit dial. */
+  position: absolute;
+  top: 8px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #ff8a1f;
+  box-shadow: 0 0 6px rgba(255, 138, 31, 0.7);
+}
+.project-video-timeline-scale-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.project-video-timeline-scale-mark {
+  width: 2px;
+  height: 8px;
+  background: #ff8a1f;
+  box-shadow: 0 0 4px rgba(255, 138, 31, 0.5);
+}
+.project-video-timeline-scale-label {
+  /* Phosphor-blue glowing readout, like an old CRT/VFD tuner display. */
+  font-size: 17.5px; /* 1.75x the original 10px, per owner's readability pass */
+  color: #7ec8ff;
+  text-shadow: 0 0 4px rgba(126, 200, 255, 0.85), 0 0 12px rgba(126, 200, 255, 0.35);
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.project-video-timeline-events {
+  position: relative;
+  height: 20px;
+}
+.project-video-timeline-event-wrap {
+  /* Everything -- flagpole, time flag, and diamond -- is tied to this
+     one anchor point, so clustered same-day events stay individually
+     readable instead of collapsing into one indistinguishable diamond. */
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+}
+.project-video-timeline-event-pole {
+  /* Reaches from the diamond (this wrap's own top, since the pole is
+     bottom:100% of the wrap) up through the gap and into
+     .project-video-timeline-scale to cross its axis line. Measured, not
+     guessed: wrap's own top offset (4px) + the gap between the scale and
+     events rows (.scale's margin: 10px 0, so 10px) + the line's distance
+     from .scale's own bottom edge (.scale is 28px tall, line sits at
+     top:8px, so 28-8=20px) = 34px to land exactly on the line; 40px
+     overlaps a few px past it, on purpose. */
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 2px;
+  height: 40px;
+  background: #ff8a1f; /* matches the scale needle/line -- reads as the same indicator reaching up to its readout */
+  box-shadow: 0 0 4px rgba(255, 138, 31, 0.6);
+  transform: translateX(-50%);
+}
+.project-video-timeline-event-time {
+  /* Anchored at the pole's top (bottom: 100% of the wrap + the pole's own
+     height), not the diamond directly -- reads up and to the right so it
+     doesn't collide with a neighboring flag immediately. Steep (-65deg,
+     near-vertical) rather than the original -40deg specifically to keep
+     its horizontal reach small enough to stay inside the chassis for
+     ordinary timelines. */
+  position: absolute;
+  bottom: calc(100% + 40px);
+  left: 50%;
+  font-size: 15.75px; /* 1.75x the original 9px, per owner's readability pass */
+  color: #7ec8ff; /* phosphor-blue glowing readout, matching the ruler labels */
+  text-shadow: 0 0 4px rgba(126, 200, 255, 0.85), 0 0 12px rgba(126, 200, 255, 0.35);
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  transform-origin: bottom left;
+  transform: rotate(-65deg);
+}
+.project-video-timeline-event-time--end {
+  /* The timeline's true last event sits at the range's right edge, so
+     its flag is the one guaranteed to run toward the chassis wall no
+     matter how steep the angle -- mirror it to lean up-and-left instead,
+     same way a tooltip flips near a screen edge, rather than relying on
+     the panel's overflow:hidden crop for the common case. */
+  left: auto;
+  right: 50%;
+  transform-origin: bottom right;
+  transform: rotate(65deg);
+}
+.project-video-timeline-event {
+  /* A video-editor-style keyframe diamond, not a bare dot -- sized and
+     contrasted to read clearly against the axis, not blend into it. */
+  all: unset;
+  display: block;
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  cursor: pointer;
+  transform: rotate(45deg);
+  transform-origin: center;
+  box-sizing: border-box;
+  box-shadow: 0 0 0 1px var(--border-stronger);
+}
+.project-video-timeline-event:hover {
+  background: var(--accent-hover);
+  transform: rotate(45deg) scale(1.3);
+}

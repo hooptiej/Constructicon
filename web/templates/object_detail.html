@@ -236,6 +236,16 @@
           <label>DESCRIPTION</label>
           <textarea class="input" name="description" rows="3" placeholder="What does this show?">{{ item.description }}</textarea>
         </div>
+        <div class="field" style="margin-top:15px">
+          <label>TIMELINE DATE</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input class="input" type="datetime-local" id="timeline-date-input" name="display_date" value="{{ item.display_date_override_input or '' }}">
+            <button type="button" class="btn-secondary" id="timeline-date-reset">Reset</button>
+          </div>
+          <div style="font-size:12px;color:var(--placeholder);margin-top:4px">
+            {% if item.display_date_override %}Manually set.{% else %}Computed: {{ item.effective_date_display }}{% endif %}
+          </div>
+        </div>
         {% if item.media_type == 'document' %}
         <div class="field" style="margin-top:15px">
           <label>WRITE-UP</label>
@@ -809,6 +819,18 @@ document.getElementById('delete-btn').addEventListener('click', async () => {
   }
 });
 
+document.getElementById('timeline-date-reset').addEventListener('click', async () => {
+  const form = new FormData();
+  form.append('reset_display_date', 'true');
+  const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
+  if (res.ok) {
+    document.getElementById('timeline-date-input').value = '';
+    window.location.reload();
+  } else {
+    alert('Reset failed');
+  }
+});
+
 document.getElementById('detail-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const saveError = document.getElementById('save-error');
@@ -818,6 +840,10 @@ document.getElementById('detail-form').addEventListener('submit', async (e) => {
   const form = new FormData();
   form.append('description', e.target.description.value);
   form.append('tags', JSON.stringify(tags));
+  const timelineDateInput = document.getElementById('timeline-date-input');
+  if (timelineDateInput && timelineDateInput.value) {
+    form.append('display_date', timelineDateInput.value);
+  }
   // #47: Client is no longer editable here (replaced by the Projects
   // editor above) — client/GET /api/clients/sync_clients.py are left
   // alone per #1's decision, this just stops the detail page's save form

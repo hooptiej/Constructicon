@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, db, object_types, ocr, storage, thumbnails
+from core import backup, db, object_types, ocr, storage, thumbnails, timeline
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
@@ -46,10 +46,16 @@ def _to_public(row):
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
         "artifact_link": f"{BASE_URL}{row['artifact_link']}" if row["artifact_link"] else None,
+        "timestamp": row["timestamp"],
+        "content_date": row.get("content_date"),
+        "display_date_override": row.get("display_date_override"),
+        "effective_date": timeline.resolve_item_date(row),
     }
 
 
 def _to_public_project(project):
+    items = db.list_project_items(project["id"])
+    effective_start, effective_end = timeline.resolve_project_span(project, items)
     return {
         "id": project["id"],
         "slug": project["slug"],
@@ -59,6 +65,11 @@ def _to_public_project(project):
         "cover_slug": project.get("cover_slug"),
         "writeup_slug": project.get("writeup_slug"),
         "parent_id": project.get("parent_id"),
+        "created_at": project["created_at"],
+        "start_date_override": project.get("start_date_override"),
+        "end_date_override": project.get("end_date_override"),
+        "effective_start": effective_start,
+        "effective_end": effective_end,
     }
 
 
@@ -165,8 +176,10 @@ def constructicon_download(slug: str) -> dict | None:
 @mcp.tool()
 def constructicon_update(slug: str, description: str | None = None, tags: list[str] | None = None,
                    display_name: str | None = None, icon: str | None = None,
-                   type_metadata: dict | None = None) -> dict | None:
-    """Update an object's metadata: description, tags, display name, icon, and/or type-specific fields.
+                   type_metadata: dict | None = None, display_date: float | None = None,
+                   reset_display_date: bool = False) -> dict | None:
+    """Update an object's metadata: description, tags, display name, icon, type-specific fields,
+    and/or its timeline display date.
 
     Pass None for any field you don't want to change. type_metadata is replaced wholesale, not
     merged — read the object's current type_metadata first if you only want to change one key.
@@ -174,6 +187,12 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
     content_description (e.g. a YouTube video's title) isn't exposed through this tool yet —
     db.update_content_metadata / POST /api/image/{slug} can change it, this tool just doesn't
     take that parameter.
+
+    display_date sets a manual override for this object's position on the Constructicon
+    timeline (unix timestamp, e.g. what time.time() or a datetime's .timestamp() returns).
+    reset_display_date=True clears the override, reverting to the computed default
+    (content_date, falling back to the upload timestamp) — it wins over display_date if both
+    are passed.
 
     Returns the updated object, or None if not found.
     """
@@ -186,6 +205,12 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
         row = db.rename_object(slug, display_name=display_name, icon=icon)
     if type_metadata is not None:
         db.set_type_metadata(slug, type_metadata)
+        row = db.get_by_slug(slug)
+    if reset_display_date:
+        db.set_display_date_override(slug, None)
+        row = db.get_by_slug(slug)
+    elif display_date is not None:
+        db.set_display_date_override(slug, display_date)
         row = db.get_by_slug(slug)
     return _to_public(row) if row else None
 
@@ -357,13 +382,27 @@ def constructicon_create_project(title: str, description: str = "", cover_slug: 
 @mcp.tool()
 def constructicon_update_project(project_id: str | int, title: str | None = None,
                                  description: str | None = None, cover_slug: str | None = None,
-                                 status: str | None = None) -> dict | None:
-    """Update a project's metadata.
+                                 status: str | None = None, start_date: float | None = None,
+                                 reset_start_date: bool = False, end_date: float | None = None,
+                                 reset_end_date: bool = False) -> dict | None:
+    """Update a project's metadata, including its timeline span.
+
+    start_date/end_date set manual overrides for this project's position on the Constructicon
+    timeline (unix timestamps). reset_start_date/reset_end_date each clear that one override,
+    reverting it to the computed default (earliest/latest item date, falling back to the
+    project's created_at when it has no items) — a reset flag wins over its corresponding
+    date param if both are passed.
 
     Returns the updated project, or None if not found.
     """
     project = db.update_project(project_id, title=title, description=description,
                                 cover_slug=cover_slug, status=status)
+    if project is None:
+        return None
+    if reset_start_date or reset_end_date or start_date is not None or end_date is not None:
+        new_start = None if reset_start_date else (start_date if start_date is not None else ...)
+        new_end = None if reset_end_date else (end_date if end_date is not None else ...)
+        project = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
     return _to_public_project(project) if project else None
 
 

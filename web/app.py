@@ -25,7 +25,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, db, imgur_import, object_types, ocr, similarity, storage, thumbnails
+from core import automatch, backup, captions, db, imgur_import, object_types, ocr, similarity, storage, thumbnails, timeline
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -308,6 +308,16 @@ def _friendly_datetime(epoch):
     return f"{_friendly_date(epoch)} at {hour12}:{dt.minute:02d} {ampm}"
 
 
+def _datetime_local_value(epoch):
+    """'%Y-%m-%dT%H:%M'-shaped string an <input type="datetime-local">
+    accepts as its value attribute. None when epoch is None, so an unset
+    override renders as an empty (placeholder-only) field rather than
+    Jan 1 1970."""
+    if epoch is None:
+        return None
+    return datetime.fromtimestamp(epoch).strftime("%Y-%m-%dT%H:%M")
+
+
 def _friendly_file_size(size_bytes):
     """Convert a file size in bytes to a human-readable string (e.g.,
     '1.2 MB', '340 KB', '12 B'). Returns None if size_bytes is None."""
@@ -421,6 +431,15 @@ def _to_object_detail(row):
         # a second layer of safety matching core/ocr.py/core/thumbnails.py's
         # defensive-call pattern).
         "properties": _call_properties_fn(spec, row),
+        # Timeline feature: manual override for this object's position on
+        # the Constructicon timeline. display_date_override is the raw
+        # epoch (None if unset); *_input is pre-formatted for the
+        # datetime-local field's value attribute; effective_date_display
+        # is what the timeline actually uses today (override, else
+        # content_date, else uploaded_at) — see core/timeline.py.
+        "display_date_override": row.get("display_date_override"),
+        "display_date_override_input": _datetime_local_value(row.get("display_date_override")),
+        "effective_date_display": _friendly_datetime(timeline.resolve_item_date(row)),
     }
 
 
@@ -479,6 +498,23 @@ def _to_project_card(project):
         # exposed to this card shape before.
         "created_at": project["created_at"],
         "writeup_excerpt": writeup_excerpt,
+    }
+
+
+def _to_timeline_project(project):
+    """Shape for one entry on the gallery timeline rail (web/static/js/timeline-rail.js).
+    Unlike _to_project_card, this includes children (is_child) -- the rail
+    shows every project, the grid deliberately doesn't (#149)."""
+    items = db.list_project_items(project["id"])
+    effective_start, effective_end = timeline.resolve_project_span(project, items)
+    return {
+        "id": project["id"],
+        "slug": project["slug"],
+        "title": project["title"],
+        "cover_url": _project_cover_url(project.get("cover_slug")),
+        "effective_start": effective_start,
+        "effective_end": effective_end,
+        "is_child": project.get("parent_id") is not None,
     }
 
 
@@ -693,6 +729,11 @@ def home_page(request: Request, tag: str = "", scope: str = "top"):
         mt: [_to_public(r) for r in rows]
         for mt, rows in db.list_recent_items_by_type(limit_per_type=10000).items()
     }
+    # Timeline feature: the gallery rail shows every project (including
+    # children, with an is_child flag) in date order -- deliberately built
+    # from all_projects, not the top-level-only `projects` local above that
+    # #149 scoped to the grid.
+    timeline_projects = [_to_timeline_project(p) for p in all_projects]
     return templates.TemplateResponse(
         request, "home.html",
         {
@@ -705,6 +746,7 @@ def home_page(request: Request, tag: str = "", scope: str = "top"):
             "owner_initials": _owner_initials,
             "unfiled_slugs": unfiled_slugs,
             "files_by_type": files_by_type,
+            "timeline_projects": timeline_projects,
         },
     )
 
@@ -924,7 +966,11 @@ def project_detail_page(request: Request, slug: str):
     project = db.get_project(slug)
     if project is None:
         raise HTTPException(status_code=404, detail="not found")
-    items = [_to_content_public(r, project_slug=slug) for r in db.list_project_items(project["id"])]
+    # raw_items feeds both the card grid (via _to_content_public below) and
+    # the Timeline feature's span resolution (core/timeline.py), which needs
+    # the raw capture_events fields _to_content_public's card shape drops.
+    raw_items = db.list_project_items(project["id"])
+    items = [_to_content_public(r, project_slug=slug) for r in raw_items]
     child_projects = db.list_child_projects(project["id"])
     ancestors = db.list_project_ancestors(project["id"])
     # #156: fetch the writeup document and pass its body to the template
@@ -933,6 +979,41 @@ def project_detail_page(request: Request, slug: str):
         writeup_doc = db.get_by_slug(project["writeup_slug"])
         if writeup_doc:
             writeup_body = writeup_doc.get("type_metadata", {}).get("body", "")
+    effective_start, effective_end = timeline.resolve_project_span(project, raw_items)
+    # Timeline feature: per-item effective dates for this project's own
+    # content rail -- single points (no endDate), unlike the gallery
+    # rail's project spans. Built from raw_items, not `items`, since
+    # _to_content_public's card shape drops the raw date columns. The
+    # write-up itself is excluded -- same reasoning as
+    # core.timeline.resolve_project_span: it's not a chronological event,
+    # it's documentation of the project, generated whenever someone got
+    # around to writing it up. Still a normal browsable item in the grid
+    # above, just not a timeline event.
+    timeline_items = [
+        {
+            "slug": r["slug"],
+            "thumb_url": f"/f/{r['slug']}/thumb" if _has_thumbnail(r) and not r.get("redacted") else None,
+            "title": r.get("content_description") or r.get("description") or r.get("filename") or r["slug"],
+            "effective_date": timeline.resolve_item_date(r),
+        }
+        for r in raw_items
+        if r["slug"] != project.get("writeup_slug")
+    ]
+    # Horizontal in-page timeline (distinct from the gallery's vertical
+    # rail): sub-projects render as blocks (they're spans), this project's
+    # own items render as point events -- each child needs its own
+    # resolved span, same as the gallery rail's per-project computation.
+    timeline_children = []
+    for child in child_projects:
+        child_items = db.list_project_items(child["id"])
+        child_start, child_end = timeline.resolve_project_span(child, child_items)
+        timeline_children.append({
+            "id": child["id"],
+            "slug": child["slug"],
+            "title": child["title"],
+            "effective_start": child_start,
+            "effective_end": child_end,
+        })
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
@@ -942,6 +1023,12 @@ def project_detail_page(request: Request, slug: str):
             "child_projects": child_projects,
             "ancestors": ancestors,
             "writeup_body": writeup_body,
+            "start_date_input": _datetime_local_value(project.get("start_date_override")),
+            "end_date_input": _datetime_local_value(project.get("end_date_override")),
+            "effective_start_display": _friendly_datetime(effective_start),
+            "effective_end_display": _friendly_datetime(effective_end),
+            "timeline_items": timeline_items,
+            "timeline_children": timeline_children,
         },
     )
 
@@ -1407,6 +1494,9 @@ def api_update_image(
     icon: str | None = Form(None),
     content_description: str | None = Form(None),
     type_metadata: str | None = Form(None),
+    content_date: float | None = Form(None),
+    display_date: str | None = Form(None),
+    reset_display_date: bool = Form(False),
 ):
     # #213 / A5 fix: only parse and pass tags if they were actually provided
     # in the form. Defaults of None mean "don't touch this field", allowing
@@ -1442,6 +1532,23 @@ def api_update_image(
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="type_metadata must be valid JSON")
         row = db.update_content_metadata(slug, content_description=content_description, type_metadata=parsed_metadata)
+    # content_date (Timeline feature, #265): a correction/backfill script
+    # with a real known date (e.g. a YouTube video's publishedAt, already
+    # fetched on every scripts/full_youtube_channel_sync.py correction
+    # pass but previously had no way to write it back) sets it directly —
+    # a real value, not a manual override like display_date below.
+    if content_date is not None:
+        db.set_content_date(slug, content_date)
+        row = db.get_by_slug(slug)
+    # Timeline feature: reset_display_date wins over a stray display_date
+    # value if a client somehow sends both (mirrors the MCP tools' same
+    # reset-flag convention in mcp_server/server.py).
+    if reset_display_date:
+        db.set_display_date_override(slug, None)
+        row = db.get_by_slug(slug)
+    elif display_date:
+        db.set_display_date_override(slug, datetime.fromisoformat(display_date).timestamp())
+        row = db.get_by_slug(slug)
     return JSONResponse(_to_public(row))
 
 
@@ -1769,6 +1876,10 @@ def api_update_project(
     status: str = Form(None),
     parent_id: str = Form(None),
     writeup_slug: str = Form(None),
+    start_date: str = Form(None),
+    reset_start_date: bool = Form(False),
+    end_date: str = Form(None),
+    reset_end_date: bool = Form(False),
 ):
     """Updates a project's properties (issue #103). Allows setting any
     combination of title, description, cover_slug (slug of an attached item
@@ -1820,6 +1931,15 @@ def api_update_project(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Timeline feature: each reset_*_date flag wins over its corresponding
+    # *_date value if a client somehow sends both (mirrors the object edit
+    # endpoint and the MCP tools' same reset-flag convention). start/end are
+    # independent -- clearing one doesn't touch the other.
+    if reset_start_date or reset_end_date or start_date or end_date:
+        new_start = None if reset_start_date else (datetime.fromisoformat(start_date).timestamp() if start_date else ...)
+        new_end = None if reset_end_date else (datetime.fromisoformat(end_date).timestamp() if end_date else ...)
+        updated = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
 
     return JSONResponse(updated or {})
 

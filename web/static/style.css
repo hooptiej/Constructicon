@@ -630,14 +630,25 @@ body.delete-mode-on .card-select-row { display: flex; }
    scrubber track, volume slider, timestamps) in dark colors instead of the
    light default it otherwise assumes absent a page-level color-scheme --
    <audio controls> is a closed shadow-root widget the rest of this
-   stylesheet can't reach any other way. accent-color re-tints the
-   scrubber/volume fill to the app's own accent instead of the browser's
-   default blue, same idiom already used for this app's <input type=range>
-   sliders (e.g. .admin-caption-slider, .cropper-controls). Support for
-   theming <audio> specifically (rather than just <input type=range>) is
-   Chromium-only as of this writing; Firefox/Safari fall back to their own
-   native player unstyled, which is an acceptable degrade, not a bug. */
+   stylesheet can't reach any other way. accent-color on the <audio>
+   element itself only reaches a stray part of the control (observed:
+   just a focus-ring-ish shadow, not the actual scrubber/volume fill) --
+   kept anyway as a harmless fallback for browsers that DO honor it more
+   fully, but the real effect comes from targeting the internal parts
+   directly below. */
 .audio-preview audio { width: 100%; max-width: 520px; color-scheme: dark; accent-color: var(--accent); }
+/* Chromium-specific, non-standard pseudo-elements into <audio controls>'s
+   shadow tree -- the only way to actually recolor the scrubber/volume
+   fill to the app's own accent instead of the browser default. Fragile by
+   nature (unprefixed equivalents don't exist; a future Chrome could
+   rename/restructure these) and Firefox/Safari have no equivalent at all,
+   so they just keep their own native player unstyled -- an acceptable
+   degrade, not a bug, on either front. */
+.audio-preview audio::-webkit-media-controls-panel { background-color: var(--card); }
+.audio-preview audio::-webkit-media-controls-current-time-display,
+.audio-preview audio::-webkit-media-controls-time-remaining-display { color: var(--text-2); }
+.audio-preview audio::-webkit-media-controls-timeline,
+.audio-preview audio::-webkit-media-controls-volume-slider { accent-color: var(--accent); }
 /* #290: the file's own tags in the preview (title/artist headline, then the
    labelled rest), or an explicit empty state. */
 .audio-tags { display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center; max-width: 520px; min-width: 0; }

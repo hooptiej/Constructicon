@@ -993,6 +993,21 @@ def project_detail_page(request: Request, slug: str):
         }
         for r in raw_items
     ]
+    # Horizontal in-page timeline (distinct from the gallery's vertical
+    # rail): sub-projects render as blocks (they're spans), this project's
+    # own items render as point events -- each child needs its own
+    # resolved span, same as the gallery rail's per-project computation.
+    timeline_children = []
+    for child in child_projects:
+        child_items = db.list_project_items(child["id"])
+        child_start, child_end = timeline.resolve_project_span(child, child_items)
+        timeline_children.append({
+            "id": child["id"],
+            "slug": child["slug"],
+            "title": child["title"],
+            "effective_start": child_start,
+            "effective_end": child_end,
+        })
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
@@ -1007,6 +1022,7 @@ def project_detail_page(request: Request, slug: str):
             "effective_start_display": _friendly_datetime(effective_start),
             "effective_end_display": _friendly_datetime(effective_end),
             "timeline_items": timeline_items,
+            "timeline_children": timeline_children,
         },
     )
 

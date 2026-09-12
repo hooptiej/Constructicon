@@ -4,10 +4,7 @@
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_admin_pane.html" %}
-{% if timeline_items %}
-<aside class="timeline-rail" id="project-timeline-rail"></aside>
-{% endif %}
-<div class="app-main{% if timeline_items %} app-main-shifted{% endif %}">
+<div class="app-main">
   <a class="back-link" href="/">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
     Back to projects
@@ -29,6 +26,9 @@
     <div class="project-cover" style="height:200px;border-radius:12px;border:1px solid var(--border)">
       <img src="{{ cover_url }}" alt="">
     </div>
+    {% endif %}
+    {% if timeline_children or timeline_items %}
+    <div class="project-video-timeline" id="project-video-timeline"></div>
     {% endif %}
     <div>
       {# #241: click the title (or the pencil) to rename in place — see the
@@ -118,28 +118,30 @@
   <p class="empty-state">This project has no items yet.</p>
   {% endif %}
 
-  {% if timeline_items %}
-  <script src="/static/js/timeline-rail.js"></script>
+  {% if timeline_children or timeline_items %}
+  <script src="/static/js/project-video-timeline.js"></script>
   <script>
   (function () {
-    const rail = document.getElementById('project-timeline-rail');
+    const timelineChildren = {{ timeline_children | tojson }};
     const timelineItems = {{ timeline_items | tojson }};
-    if (timelineItems.length) {
-      new TimelineRail(
-        rail,
-        timelineItems.map((it) => ({
-          id: it.slug,
-          thumbUrl: it.thumb_url,
-          label: it.title,
-          date: it.effective_date,
-          dateLabel: new Date(it.effective_date * 1000).toLocaleDateString(),
-          openUrl: `/object/${it.slug}?from=project:{{ project.slug }}`,
-        })),
-        {
-          onOpen: (entry) => { window.location.href = entry.openUrl; },
-        }
-      );
-    }
+    new ProjectVideoTimeline(document.getElementById('project-video-timeline'), {
+      blocks: timelineChildren.map((c) => ({
+        id: c.id,
+        label: c.title,
+        start: c.effective_start,
+        end: c.effective_end,
+        dateLabel: `${new Date(c.effective_start * 1000).toLocaleDateString()} – ${new Date(c.effective_end * 1000).toLocaleDateString()}`,
+        openUrl: `/project/${c.slug}`,
+      })),
+      events: timelineItems.map((it) => ({
+        id: it.slug,
+        label: it.title,
+        date: it.effective_date,
+        thumbUrl: it.thumb_url,
+        dateLabel: new Date(it.effective_date * 1000).toLocaleDateString(),
+        openUrl: `/object/${it.slug}?from=project:{{ project.slug }}`,
+      })),
+    });
   })();
   </script>
   {% endif %}

@@ -85,7 +85,7 @@ class TimelineRail {
     // -- it was dead space the mouse could wander into and lose hover
     // entirely before ever reaching the popover.
     const scaledRight = nodeRect.left + nodeRect.width * ENTRY_HOVER_SCALE;
-    popover.style.left = `${scaledRight - 10}px`;
+    popover.style.left = `${scaledRight - 13}px`;
     popover.style.top = `${top}px`;
   }
 

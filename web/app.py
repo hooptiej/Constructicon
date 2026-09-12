@@ -1332,8 +1332,9 @@ def api_imgur_import(background_tasks: BackgroundTasks):
     """Issue #200: the upload drawer's "Import from Imgur" button. Runs
     core.imgur_import.sync_public_gallery() synchronously — a personal
     gallery's submission count is small enough that one request/response
-    round trip is fine, no background job needed — then schedules OCR for
-    each newly created row the same way /api/content does."""
+    round trip is fine, no background job needed — then schedules OCR (and,
+    #249, an auto-caption) for each newly created row the same way
+    /api/content does."""
     try:
         summary = imgur_import.sync_public_gallery()
     except imgur_import.ImgurImportError as e:
@@ -1344,6 +1345,9 @@ def api_imgur_import(background_tasks: BackgroundTasks):
             row = db.get_by_slug(slug)
             if row and row["ocr_status"] == "pending":
                 background_tasks.add_task(ocr.run_ocr, slug)
+    if captions.should_caption(spec):
+        for slug in summary["slugs"]:
+            background_tasks.add_task(captions.run_caption, slug)  # #249, see /api/upload
     return JSONResponse(summary)
 
 
@@ -1367,6 +1371,8 @@ def api_imgur_import_url(background_tasks: BackgroundTasks, url: str = Form(...)
     row = db.get_by_slug(slug)
     if spec.ocr_capable and row["ocr_status"] == "pending":
         background_tasks.add_task(ocr.run_ocr, slug)
+    if captions.should_caption(spec):
+        background_tasks.add_task(captions.run_caption, slug)  # #249, see /api/upload
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 

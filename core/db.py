@@ -664,10 +664,12 @@ def sync_real_tags_for_post(post_slug, tag_names, previous_tags=None):
                 continue
             # Look up the previous tag — it should already exist (we're only
             # diffing against what was there before), but use None default
-            # to be safe in case of data inconsistency.
-            tag = _find_tag_by_name(name)
-            if tag and tag["parent_id"] is None:
-                # Only include root-level tags from the previous list
+            # to be safe in case of data inconsistency. #280: must be the
+            # root-scoped lookup, not _find_tag_by_name -- a same-named
+            # CHILD tag elsewhere in the tree would otherwise come back
+            # instead of the real root tag, silently failing to detach it.
+            tag = _find_root_tag_by_name(name)
+            if tag:
                 previous_ids.add(tag["id"])
 
     # Attach new tags
@@ -1055,11 +1057,36 @@ def _find_tag_by_name(name):
     """Search the entire tag tree for a tag with the given name, regardless
     of parent. Returns the first match, or None if not found. Used to prevent
     creating duplicate root-level tags when a child tag with the same name
-    already exists (#213)."""
+    already exists (#213).
+
+    Do NOT use this to resolve a free-text tag name back to "the" root tag
+    it refers to (sync_real_tags_for_post's previous-tag detach check needs
+    exactly that) -- with no parent filter, this can return a same-named
+    CHILD tag instead of the root one, which then fails that function's
+    `tag["parent_id"] is None` eligibility check and silently leaves a
+    stale post_tags row behind (#280). Use _find_root_tag_by_name for that."""
     conn = get_conn()
     try:
         row = conn.execute(
             "SELECT * FROM blog_tags WHERE name = ?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def _find_root_tag_by_name(name):
+    """Root-level-only counterpart to _find_tag_by_name (#280) -- the free-
+    text tags column can only ever reference a root-level tag (see
+    sync_real_tags_for_post), so resolving a previously-typed name back to
+    "the" tag it refers to must be scoped to parent_id IS NULL, not the
+    whole tree. Read-only (unlike get_or_create_tag, which creates one if
+    missing -- wrong side effect for this "was this actually attached"
+    check). Returns None if no root-level tag has this name."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM blog_tags WHERE name = ? AND parent_id IS NULL", (name,)
         ).fetchone()
         return dict(row) if row else None
     finally:

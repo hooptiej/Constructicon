@@ -3,7 +3,46 @@ See docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
 
 Objects (capture_events rows) are a single point in time. Projects are a
 span: they took time, they aren't moments.
+
+Also home to the one timezone convention the date fields share (see
+source_datetime_to_epoch): every stored date is UTC unix seconds, and a
+real-world date read from a source that carries no timezone of its own is
+interpreted as Mountain Time before it becomes one.
 """
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# The timezone a naive (timezone-less) real-world source date is taken to
+# be in: an EXIF DateTimeOriginal ("2017:10:16 18:31:47" — the camera's
+# wall clock, no offset unless the file also carries OffsetTimeOriginal),
+# a blog post's bare "Jul 31, 2017", and whatever the next backfill finds.
+# Decided 2026-09-12 during the Desk Build project's date backfill (see
+# CLAUDE.md's non-obvious gotchas): the owner's cameras and calendar have
+# always lived here, so this — DST-aware via zoneinfo, not a fixed
+# offset — is the interpretation that makes those dates land on the right
+# day. UTC was the first attempt and was wrong; scripts/
+# backfill_from_hooptiej_site.py's bare-date-as-UTC-midnight parsing
+# predates this decision and is the superseded convention, not a model.
+LOCAL_TIMEZONE = "America/Denver"
+
+
+def source_datetime_to_epoch(dt):
+    """A datetime read from a source (file metadata, a blog date) -> UTC
+    unix seconds, the form content_date/timestamp are stored in. A naive
+    datetime is interpreted as LOCAL_TIMEZONE; one that already carries
+    tzinfo (an ffprobe creation_time's Z suffix, an EXIF OffsetTimeOriginal)
+    is trusted as-is — the file knew better than the convention does.
+
+    The zone is resolved on each call rather than at import so a machine
+    with no tz database (a Windows checkout without the `tzdata` package —
+    zoneinfo raises ZoneInfoNotFoundError there) still imports this module
+    and the rest of the app; only the naive-date path fails, loudly, inside
+    the best-effort hook that called it. zoneinfo caches the ZoneInfo
+    object itself, so this costs nothing after the first call."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo(LOCAL_TIMEZONE))
+    return dt.timestamp()
 
 
 def resolve_item_date(row):

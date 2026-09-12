@@ -91,18 +91,22 @@ class ObjectTypeSpec:
     # result to the template for generic iteration (no per-type template
     # branches needed).
     properties_fn: object = None
-    # Issue #255: (path: pathlib.Path) -> dict of metadata the uploaded file
-    # itself carries — an audio file's ID3/Vorbis/RIFF tags today — read
-    # once at upload time to seed the row's content-side fields. Return
-    # shape: {"content_description": str, "type_metadata": {key: value}},
-    # either key omitted when the file has nothing usable for it, {} when it
-    # has nothing at all. Consumed only by core/embedded_metadata.py, which
-    # owns the never-overwrite fill rule and dispatches off this hook the
-    # way core/ocr.py dispatches off text_extract_fn — a new type with
-    # embedded metadata registers a function here, nothing else grows a
-    # media_type branch. Same best-effort contract as properties_fn: never
-    # raise, print a warning and return {} on any failure. The keys a type
-    # writes into type_metadata belong in its metadata_fields.
+    # Issue #255/#265: (path: pathlib.Path) -> dict of metadata the uploaded
+    # file itself carries — an audio file's ID3/Vorbis/RIFF tags, a photo's
+    # EXIF capture timestamp, a video's container creation_time — read once
+    # at upload time to seed the row's content-side fields. Return shape:
+    # {"content_description": str, "type_metadata": {key: value},
+    # "content_date": float (UTC unix seconds)}, any key omitted when the
+    # file has nothing usable for it, {} when it has nothing at all.
+    # Consumed only by core/embedded_metadata.py, which owns the
+    # never-overwrite fill rule (and the plausibility gate on content_date)
+    # and dispatches off this hook the way core/ocr.py dispatches off
+    # text_extract_fn — a new type with embedded metadata registers a
+    # function here, nothing else grows a media_type branch. Same
+    # best-effort contract as properties_fn: never raise, print a warning
+    # and return {} on any failure. The keys a type writes into
+    # type_metadata belong in its metadata_fields; a naive source date
+    # goes through core/timeline.py's source_datetime_to_epoch.
     embedded_metadata_fn: object = None
     # Issue #12: what the "file kind" badge shown on gallery tiles and the
     # object detail page looks like for this type. badge_icon is a single

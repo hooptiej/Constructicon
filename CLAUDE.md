@@ -71,21 +71,30 @@ exist yet.
   `CAPTION_DISABLED=1` to skip captioning entirely. Tune with the admin
   pane's "Caption tuning" panel (`POST /api/captions/test`) before
   changing the defaults in that module.
-- **`core/embedded_metadata.py`** (#255) — metadata the uploaded file
-  itself carries (an audio file's ID3/Vorbis/RIFF tags today, read via
-  the already-present `ffprobe` — deliberately no `mutagen` dependency,
-  see `core/object_types/audio.py`'s docstring for the real-file check
-  behind that), read *synchronously* at upload time via
-  `ObjectTypeSpec.embedded_metadata_fn` and seeded into
-  `content_description` + `display_name` (the title — both, because the
-  display-name fallback chain puts `filename` ahead of
-  `content_description`, so a title stored only there would never show on
-  a tile) and `type_metadata` (artist/album/track/year/genre). Strictly
-  fill-only-missing — never overwrites a value already on the row — so
-  it's also safe as a backfill over pre-#255 audio rows. Called from both
-  `/api/upload` and the MCP `constructicon_upload` tool (which bypasses
-  the HTTP route and calls `db.insert_upload` directly — any future
-  post-insert step needs wiring in both places, not just the route).
+- **`core/embedded_metadata.py`** (#255, #265) — metadata the uploaded
+  file itself carries, read *synchronously* at upload time via
+  `ObjectTypeSpec.embedded_metadata_fn`: an audio file's ID3/Vorbis/RIFF
+  tags (via the already-present `ffprobe` — deliberately no `mutagen`
+  dependency, see `core/object_types/audio.py`'s docstring for the
+  real-file check behind that), seeded into `content_description` +
+  `display_name` (the title — both, because the display-name fallback
+  chain puts `filename` ahead of `content_description`, so a title stored
+  only there would never show on a tile) and `type_metadata`
+  (artist/album/track/year/genre); and, since #265, **`content_date`** —
+  an image's EXIF `DateTimeOriginal` (Pillow, `core/object_types/image.py`)
+  and a video's container `creation_time` (ffprobe,
+  `core/object_types/video.py`), gated by a plausibility window (1980 to
+  now) that drops metadata sentinels like QuickTime's 1904 epoch. Naive
+  source dates go through `core/timeline.py`'s
+  `source_datetime_to_epoch` (the Mountain Time convention below).
+  Strictly fill-only-missing — never overwrites a value already on the
+  row — so it's also safe as a backfill over rows that predate a type's
+  hook: `scripts/backfill_content_dates.py` runs the same extraction over
+  every undated image/video row and writes through `POST /api/image/{slug}`.
+  Called from both `/api/upload` and the MCP `constructicon_upload` tool
+  (which bypasses the HTTP route and calls `db.insert_upload` directly —
+  any future post-insert step needs wiring in both places, not just the
+  route).
 - **`core/backup.py`** — standalone `POST /api/backup` backup-to-zip
   (DB snapshot + `storage/`). Deliberately **not** wired into any delete
   path (a past incident wiped storage while only the DB got backed up).
@@ -560,7 +569,13 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
   attempt used UTC by mistake (matching `backfill_from_hooptiej_site.py`'s
   older convention, which parses a bare calendar date as UTC midnight);
   redone with Mountain Time once corrected. A future backfill script
-  should follow Mountain Time, not copy the older UTC convention.
+  should follow Mountain Time, not copy the older UTC convention — and
+  should do it by calling `core/timeline.py`'s `source_datetime_to_epoch`
+  (the one implementation of this rule since #265; a tz-aware datetime
+  passes through untouched, a naive one gets `America/Denver`), not by
+  re-deriving it. `zoneinfo` needs a tz database: the Debian-based
+  container has one, a Windows checkout does not — `tzdata` is in
+  `requirements.txt` for that reason.
 - **Projects are curated, not auto-generated.** Don't "fix" the Projects
   section to auto-derive from tags — that was the original design and was
   explicitly rejected in favor of manual curation via the `projects` /

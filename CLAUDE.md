@@ -69,7 +69,7 @@ exist yet.
   for the restart. Without the socket it degrades to Ollama's own
   `keep_alive: 0` model unload and logs a warning per image; set
   `CAPTION_DISABLED=1` to skip captioning entirely. Tune with the admin
-  pane's "Caption tuning" panel (`POST /api/captions/test`) before
+  page's (`/admin`) "Caption tuning" panel (`POST /api/captions/test`) before
   changing the defaults in that module.
 - **`core/embedded_metadata.py`** (#255, #265) — metadata the uploaded
   file itself carries, read *synchronously* at upload time via
@@ -162,7 +162,7 @@ exist yet.
     `list_recent_items_by_type`, `list_project_items`,
     `list_posts_for_tag`, `list_recent_posts`, and `list_uploaders`'
     totals) and reachable only by its direct `/object/<slug>` link, the
-    admin pane's "Redacted items" list (`GET /api/redacted` /
+    admin page's (`/admin`) "Redacted items" list (`GET /api/redacted` /
     `db.list_redacted()`) or the MCP `constructicon_list_redacted` tool.
     `POST /api/image/{slug}/unredact` / `constructicon_unredact` flips it
     back — visibility only, the file is gone for good.
@@ -199,8 +199,10 @@ exist yet.
   resolved_at}`. Only `kind='project_match'` exists today — written by
   `core/automatch.py` when an upload's filename/folder name matches more
   than one project title (one match auto-adds, tag-name matches always
-  auto-apply). Surfaces in the admin pane ("Needs your input", badge on
-  the trigger) via `GET /api/pending-decisions`; resolved with checkboxes
+  auto-apply). Surfaces on the admin page (`/admin`, "Needs your input";
+  the header's gear link carries the count badge on every page — it was a
+  bottom-right pop-out until #295) via `GET /api/pending-decisions`;
+  resolved with checkboxes
   via `POST /api/pending-decisions/{id}/resolve`. Resolved rows are kept
   (resolution stored in `payload.resolution`). A future "ask, don't guess"
   case adds a new `kind` + payload shape, not a table.
@@ -352,7 +354,7 @@ Two containers run side by side on that box:
   hit the live YouTube Data API without touching production data. If it's
   ever missing/rotated: `sudo docker exec constructicon-web python3 -c
   "import core.db as db; db.init_db(); print(db.get_setting('youtube_data_api_key'))"`
-  to read it off production, then either the admin pane's API Keys "Set"
+  to read it off production, then either the admin page's API Keys "Set"
   field on `constructicon-test`, or `db.set_setting('youtube_data_api_key',
   '<value>')` the same way via `docker exec` into `constructicon-test`, to
   copy it over.

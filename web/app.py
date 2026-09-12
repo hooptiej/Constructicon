@@ -881,11 +881,11 @@ def api_backup():
     return JSONResponse(info)
 
 
-# API Keys (#55) — the admin pane's allowlist of settings keys it knows how
+# API Keys (#55) — the admin page's allowlist of settings keys it knows how
 # to display/accept. A secret's storage/endpoints (below, and
 # core.db.get_setting/has_setting/set_setting) are generic key/value, so a
 # future second key (or any other app-level setting) only needs an entry
-# here plus a labeled row in _admin_pane.html, not a schema change.
+# here plus a labeled row in admin.html, not a schema change.
 # thingiverse_app_token (#62): read-only Thingiverse API access token for
 # pulling the owner's own public models — no user-auth flow needed on
 # Thingiverse's side, so this is exactly the same "paste one static secret"
@@ -907,7 +907,7 @@ KNOWN_SETTINGS = {
 def api_get_settings():
     """Presence-only view of every known setting — never the actual value.
     {"youtube_data_api_key": true} means a key is stored, not what it is.
-    This is deliberately the only way the admin pane's UI learns whether a
+    This is deliberately the only way the admin page's UI learns whether a
     setting exists; the real value is never sent to the browser, on this
     route or any other, after it's been saved (see api_set_setting)."""
     return JSONResponse({key: db.has_setting(key) for key in KNOWN_SETTINGS})
@@ -930,7 +930,7 @@ def api_set_setting(key: str = Form(...), value: str = Form("")):
 
 @app.get("/api/pending-decisions")
 def api_list_pending_decisions():
-    """#240: every open "ask, don't guess" question for the admin pane's
+    """#240: every open "ask, don't guess" question for the admin page's
     queue — today only kind="project_match" (an upload whose name matched
     more than one project). Each entry carries the object it's about (slim
     card shape) and, for project_match, the resolved candidate projects.
@@ -1018,7 +1018,7 @@ def api_get_audit_log(limit: int = 100):
 
 @app.get("/api/redacted")
 def api_list_redacted():
-    """#282: every currently-redacted row, for the admin pane's "Redacted
+    """#282: every currently-redacted row, for the admin page's "Redacted
     items" list. Redacted rows are hidden from every list/search/project/
     tag query, so this is the only way to find one again without already
     knowing its slug. Same card shape as the gallery (_to_public -- thumb_url
@@ -1178,6 +1178,17 @@ def image_detail_redirect(slug: str):
 @app.get("/account", response_class=HTMLResponse)
 def account_page(request: Request):
     return templates.TemplateResponse(request, "account.html", {})
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(request: Request):
+    """#295: the admin surface as its own full page. It was a bottom-right
+    pop-out (_admin_pane.html) included on every page until it outgrew a
+    320px column; every panel on it still talks to the same /api/* routes
+    it always did (settings, pending-decisions, redacted, audit-log,
+    captions/test, backup, delete-all) -- the page itself carries no data,
+    the JS fetches it, so there's nothing to pass in here."""
+    return templates.TemplateResponse(request, "admin.html", {})
 
 
 # --- API ---
@@ -1515,7 +1526,7 @@ def api_fetch_real_date(slug: str):
         raise HTTPException(status_code=400, detail="Couldn't determine this item's YouTube video id")
     api_key = db.get_setting("youtube_data_api_key")
     if not api_key:
-        raise HTTPException(status_code=400, detail="No YouTube Data API key is set (see the admin pane's API Keys section)")
+        raise HTTPException(status_code=400, detail="No YouTube Data API key is set (see the admin page's API Keys section)")
     try:
         published_at = _fetch_youtube_published_date(video_id, api_key)
     except RuntimeError as e:
@@ -1586,7 +1597,7 @@ def api_mark_caption_used(slug: str):
 
 @app.get("/api/captions/defaults")
 def api_caption_defaults():
-    """#239: what the pipeline actually runs with, so the admin pane's
+    """#239: what the pipeline actually runs with, so the admin page's
     tuning panel starts from production's real values rather than its own
     copy of them."""
     return JSONResponse({
@@ -1606,7 +1617,7 @@ def api_caption_test(
     num_predict: int = Form(captions.DEFAULT_NUM_PREDICT),
     prompt: str = Form(""),
 ):
-    """#239: the admin pane's live tuning panel — one synchronous model call
+    """#239: the admin page's live tuning panel — one synchronous model call
     against an existing object's real preview image with the given
     settings, WITHOUT writing anything to the row. Goes through the exact
     same caption_once() cycle as the pipeline (lock + post-call Ollama
@@ -1684,7 +1695,7 @@ async def api_update_image(
     raw_icon = form_data.get("icon") if "icon" in form_data else None
 
     # display_name/icon (#11) — no dedicated UI yet (see #24's "Coming soon
-    # (#11)" admin-pane stub), but the field/endpoint exists so a "rename"
+    # (#11)" admin-page stub), but the field/endpoint exists so a "rename"
     # or "set icon" is at least possible by hand (a form POST here).
     if "display_name" in form_data or "icon" in form_data:
         row = db.rename_object(slug, display_name=raw_display_name, icon=raw_icon)
@@ -1750,7 +1761,7 @@ def api_unredact_image(request: Request, slug: str):
     ordinary browsing/search. Can't bring the file back: /redact deleted it
     from storage before setting the flag, so the row stays a file-less
     metadata record; it's just findable again. 409 rather than a silent
-    no-op on a row that isn't redacted, so a stale admin-pane list can't
+    no-op on a row that isn't redacted, so a stale admin-page list can't
     misreport success."""
     row = db.get_by_slug(slug)
     if row is None:

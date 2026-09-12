@@ -3,7 +3,6 @@
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
-{% include "_admin_pane.html" %}
 
 <div class="app-main">
   <div>
@@ -254,9 +253,11 @@ document.getElementById('clear-selection-btn').addEventListener('click', () => {
   updateSelectionBar();
 });
 
-// "Delete mode" now lives in the admin pane (#24) rather than always-on
-// checkboxes — when it's switched off, drop any in-flight selection so it
-// can't linger invisibly and reappear stale next time delete mode is on.
+// "Delete mode" (#24) — listens for the switch that used to live in the
+// admin pop-out. NOTE: since #295 that pop-out is gone and no page renders
+// this template any more (app.py's /gallery is a 308 to /), so nothing
+// fires this event here; user_gallery.html carries the live version of
+// this toggle + listener pair.
 document.addEventListener('constructicon:delete-mode-change', (e) => {
   if (!e.detail.enabled) {
     selectedSlugs.clear();

@@ -13,6 +13,9 @@ describes, per type:
     on demand — see ThumbnailSource)
   - whether that representative image should be run through OCR the same
     way an uploaded screenshot already is
+  - what descriptive metadata the uploaded file itself carries (an audio
+    file's ID3 tags — #255, see embedded_metadata_fn) and should seed the
+    row's content fields with at upload time
 
 core/thumbnails.py and core/ocr.py both dispatch purely off the spec
 returned by get_object_type() — neither one should ever grow a literal
@@ -88,6 +91,19 @@ class ObjectTypeSpec:
     # result to the template for generic iteration (no per-type template
     # branches needed).
     properties_fn: object = None
+    # Issue #255: (path: pathlib.Path) -> dict of metadata the uploaded file
+    # itself carries — an audio file's ID3/Vorbis/RIFF tags today — read
+    # once at upload time to seed the row's content-side fields. Return
+    # shape: {"content_description": str, "type_metadata": {key: value}},
+    # either key omitted when the file has nothing usable for it, {} when it
+    # has nothing at all. Consumed only by core/embedded_metadata.py, which
+    # owns the never-overwrite fill rule and dispatches off this hook the
+    # way core/ocr.py dispatches off text_extract_fn — a new type with
+    # embedded metadata registers a function here, nothing else grows a
+    # media_type branch. Same best-effort contract as properties_fn: never
+    # raise, print a warning and return {} on any failure. The keys a type
+    # writes into type_metadata belong in its metadata_fields.
+    embedded_metadata_fn: object = None
     # Issue #12: what the "file kind" badge shown on gallery tiles and the
     # object detail page looks like for this type. badge_icon is a single
     # glyph/emoji for the compact tile-corner badge; badge_text is a short

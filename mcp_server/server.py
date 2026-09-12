@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, db, object_types, ocr, storage, thumbnails, timeline
+from core import backup, db, embedded_metadata, object_types, ocr, storage, thumbnails, timeline
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
@@ -98,6 +98,11 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
     OCR (for OCR-capable types) runs in the background, same as the web app's
     /api/upload: the returned object has ocr_status "pending" -- call
     constructicon_get on the slug later to read extracted_text once it's "done".
+
+    An audio file's own tags (#255) are read synchronously, same as /api/upload:
+    the tag title becomes the object's display_name/content_description and
+    artist/album/track/year/genre land in type_metadata, so the returned object
+    already reflects them. A tagless file simply gets none of that.
     """
     content = base64.b64decode(content_base64)
     dupe = db.find_duplicate(filename, len(content), source_modified_at)
@@ -115,6 +120,12 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
                       file_size=len(content), source_modified_at=source_modified_at,
                       media_type=media_type,
                       ocr_status="pending" if spec.ocr_capable else None)
+    # #255: this tool bypasses /api/upload and calls db.insert_upload
+    # directly, so it has to make the same post-insert call the route does
+    # or MCP-uploaded audio would silently miss its tags. Synchronous for
+    # the same reason as there — one ffprobe header read, and the object
+    # returned below should already carry the title.
+    embedded_metadata.fill_missing(slug)
     if spec.ocr_capable:
         # Background thread, not inline (#225): tesseract (up to
         # OCR_TIMEOUT_SECONDS) plus a cold sentence-transformers load used to

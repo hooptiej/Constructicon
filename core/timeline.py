@@ -45,6 +45,19 @@ def source_datetime_to_epoch(dt):
     return dt.timestamp()
 
 
+def epoch_to_local(epoch):
+    """The inverse of source_datetime_to_epoch: a stored UTC unix
+    timestamp -> a LOCAL_TIMEZONE-aware datetime, for anywhere a date gets
+    shown to or edited by the owner (web/app.py's _friendly_date/
+    _friendly_datetime/_datetime_local_value). `datetime.fromtimestamp(
+    epoch)` with no tz argument uses the process's own system timezone —
+    UTC inside this app's container — which is why an 18:31 MDT photo
+    used to display as "Oct 17" instead of "Oct 16" before this existed.
+    Always call this rather than a bare fromtimestamp() for anything the
+    owner will read as a calendar date."""
+    return datetime.fromtimestamp(epoch, tz=ZoneInfo(LOCAL_TIMEZONE))
+
+
 def resolve_item_date(row):
     """row is a capture_events dict (core.db.get_by_slug/_row_to_dict
     shape). timestamp is NOT NULL in the schema, so this always resolves.

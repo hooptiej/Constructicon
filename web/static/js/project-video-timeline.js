@@ -45,9 +45,13 @@ class ProjectVideoTimeline {
 
   _scaleTicks(range) {
     // Regular calendar-aligned ticks (a real ruler), independent of where
-    // blocks/events actually fall -- yearly for a multi-year span, monthly
-    // for a span of a few months to two years, weekly for anything
-    // tighter than that.
+    // blocks/events actually fall. Graduated to the actual span so a
+    // short project gets real granularity instead of two bare endpoints:
+    // yearly beyond 2 years, monthly from 2 months to 2 years, weekly
+    // from 2 to 8 weeks, daily under that -- a week-long project (a
+    // single weekly tick covering it would just be its two endpoints)
+    // gets one tick per day, matching what a ruler at that zoom level
+    // should show.
     const spanDays = (range.max - range.min) / 86400;
     const minDate = new Date(range.min * 1000);
     const ticks = [];
@@ -60,7 +64,7 @@ class ProjectVideoTimeline {
         if (t >= range.min) ticks.push({ date: t, label: String(year) });
         year++;
       }
-    } else if (spanDays > 45) {
+    } else if (spanDays > 60) {
       let year = minDate.getFullYear();
       let month = minDate.getMonth();
       while (true) {
@@ -70,8 +74,14 @@ class ProjectVideoTimeline {
         month++;
         if (month > 11) { month = 0; year++; }
       }
-    } else {
+    } else if (spanDays > 14) {
       const dayMs = 7 * 86400;
+      for (let t = range.min; t <= range.max; t += dayMs) {
+        const d = new Date(t * 1000);
+        ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[d.getMonth()]} ${d.getDate()}` });
+      }
+    } else {
+      const dayMs = 86400;
       for (let t = range.min; t <= range.max; t += dayMs) {
         const d = new Date(t * 1000);
         ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[d.getMonth()]} ${d.getDate()}` });

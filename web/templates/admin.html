@@ -1,68 +1,57 @@
-<!-- Admin pane (#24) — pop-out surface for admin/destructive/meta actions
-     that used to live as loose buttons scattered across the gallery chrome
-     and header ("Delete mode" checkboxes from #19, "Delete all" from
-     user_gallery.html, "Back up now" from _header.html). Included wherever
-     _upload_drawer.html is, matching the app's existing pattern for a
-     shared always-available pop-out control.
+{% extends "base.html" %}
+{% block title %}Admin — Constructicon{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+<!-- Admin page (#295) — the full-page home of every admin/destructive/meta
+     control. This started life as #24's small bottom-right pop-out
+     (_admin_pane.html, included on every page); by the time the pending
+     -decision queue (#240), caption tuning (#239), the audit log (#122),
+     four API-key rows and the redacted-items list (#282) had all landed in
+     it, a 320px column couldn't hold them, and the site-wide 110% zoom
+     (#292) pushed the rest off-screen. So it's a real route now
+     (GET /admin, reached from the gear in _header.html) with a widget grid
+     that gives each panel its own card and lets the two that need width
+     (caption tuning, audit log) take a full row.
 
-     No drag-hover/tab pattern exists yet to copy — #17 (gallery-widget-
-     replace) hasn't been built. This is a deliberately simple fixed trigger
-     + CSS-transition panel; if #17 lands a shared pop-out interaction later,
-     this is a candidate to unify with it rather than the other way around. -->
-<button type="button" class="admin-pane-trigger" id="admin-pane-trigger" title="Admin functions" aria-label="Admin functions">
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-    <path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="#ECE8DA" stroke-width="1.6"/>
-    <path d="M19.4 13.5a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V19.5a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H4.5a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H10a1.65 1.65 0 001-1.51V4.5a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V10a1.65 1.65 0 001.51 1h.09a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="#ECE8DA" stroke-width="1.3"/>
-  </svg>
-  <!-- #240: count of open "needs your input" decisions; hidden at zero -->
-  <span class="admin-pane-badge" id="admin-pane-badge" hidden>0</span>
-</button>
-<div class="admin-pane" id="admin-pane">
-  <div class="admin-pane-header">
-    <h2>Admin</h2>
-    <button type="button" class="modal-close" id="admin-pane-close">&times;</button>
+     The one thing that did NOT move here is "Delete mode": that's a
+     page-scoped body class consumed by user_gallery.html's tiles, so it
+     lives on that page now (next to its sort control) rather than on a page
+     it can't affect. Everything else keeps its endpoint and behavior
+     exactly as before -- this is a layout change, not a feature change. -->
+<div class="app-main">
+  <div>
+    <h1 class="page-title">Admin</h1>
+    <p class="page-subtitle">Decisions waiting on you, hidden items, integration keys, caption tuning, recent activity and maintenance.</p>
   </div>
-  <div class="admin-pane-body">
+
+  <!-- Grid order + grid-auto-flow: dense (see style.css .admin-grid): the
+       four single-track panels come first, then the two full-row ones, with
+       Maintenance last in DOM so dense packing can pull it back up into a
+       hole in the first row at 4-column widths while at 3 columns the one
+       ragged cell lands at the bottom of the page instead of mid-page. -->
+  <div class="admin-grid">
+
     <!-- Needs your input (#240) — the pending-decision queue. Today the only
          kind is "project_match": an upload whose filename/folder matched
          MORE THAN ONE existing project's title, so the auto-match step
          (core/automatch.py) queued the question instead of guessing. Each
          entry lists every candidate with a checkbox; Apply adds the item to
          whichever are ticked (zero, one, or several) and clears the entry.
-         Rendered first, above everything else, and hidden entirely when the
-         queue is empty — the badge on the trigger button is the "N uploads
-         need your input" signal. -->
-    <div id="admin-pending-section" hidden>
-      <div class="admin-row">
+         The pop-out hid this section entirely when the queue was empty (it
+         was fighting for column space); on a full page it stays put with an
+         empty state, and the header badge is still the cross-page "N
+         uploads need your input" signal. -->
+    <section class="admin-panel" id="admin-pending-section">
+      <div class="admin-panel-header">
         <div>
-          <div class="admin-row-label">Needs your input <span id="admin-pending-count" class="apikey-status"></span></div>
+          <h2>Needs your input <span id="admin-pending-count" class="apikey-status"></span></h2>
           <div class="admin-row-hint">Uploads whose name matched more than one project (#240)</div>
         </div>
       </div>
       <div id="admin-pending-list" class="admin-pending-list"></div>
-      <div class="admin-pane-divider"></div>
-    </div>
-    <div class="admin-row">
-      <div>
-        <div class="admin-row-label">Delete mode</div>
-        <div class="admin-row-hint">Show selection checkboxes on gallery tiles</div>
-      </div>
-      <label class="admin-toggle">
-        <input type="checkbox" id="admin-delete-mode-toggle">
-        <span class="admin-toggle-track"><span class="admin-toggle-thumb"></span></span>
-      </label>
-    </div>
-    <!-- Stub for the "set display name and icon" popup referenced in #11
-         (MCP tools parity) — that editing UI doesn't exist anywhere yet, so
-         this is just a placeholder row anticipating where it belongs once
-         it's built, not a functional control. -->
-    <div class="admin-row admin-row-stub" title="Not built yet — see issue #11">
-      <div>
-        <div class="admin-row-label">Display name &amp; icon</div>
-        <div class="admin-row-hint">Coming soon (#11)</div>
-      </div>
-    </div>
-    <div class="admin-pane-divider"></div>
+    </section>
+
     <!-- Redacted items (#282) — every row whose file was removed via the
          detail page's "Remove file, keep info" button (POST
          /api/image/{slug}/redact) or the constructicon_redact MCP tool.
@@ -71,103 +60,102 @@
          so this is the one place to find them again. "Un-redact" (POST
          /api/image/{slug}/unredact) only clears the flag so the row rejoins
          normal browsing — the file itself was deleted at redaction time and
-         can't come back. Always rendered (with an empty state), unlike the
-         pending-decision queue above, so the feature is discoverable before
-         anything has been redacted. -->
-    <div class="admin-row">
-      <div>
-        <div class="admin-row-label">Redacted items <span id="admin-redacted-count" class="apikey-status"></span></div>
-        <div class="admin-row-hint">Hidden from every list and search, reachable by direct link only (#282). Un-redacting puts the row back in browsing — the removed file itself can't come back.</div>
+         can't come back. -->
+    <section class="admin-panel">
+      <div class="admin-panel-header">
+        <div>
+          <h2>Redacted items <span id="admin-redacted-count" class="apikey-status"></span></h2>
+          <div class="admin-row-hint">Hidden from every list and search, reachable by direct link only (#282). Un-redacting puts the row back in browsing — the removed file itself can't come back.</div>
+        </div>
       </div>
-    </div>
-    <div id="admin-redacted-list" class="admin-redacted-list"></div>
-    <div class="admin-pane-divider"></div>
+      <div id="admin-redacted-list" class="admin-redacted-list"></div>
+    </section>
+
     <!-- API Keys (#55) — general secrets store for the app itself, starting
          with a YouTube Data API key (real view/like/comment counts, full
          descriptions, tags, duration — see #54) rather than wiring a key in
          from outside the app via a docker-compose env var. Storage is a
          generic key/value settings table (core/db.py's app_settings,
          get_setting/has_setting/set_setting) and GET /api/settings only ever
-         reports presence, never the real value — so this input is always
+         reports presence, never the real value — so each input is always
          left blank on load/save, same as a normal password field never
          redisplaying what you last typed. Add another labeled row here (and
          to web/app.py's KNOWN_SETTINGS, and the JS API_KEY_SETTINGS array
          below) for each additional integration that needs a key — see the
-         thingiverse_app_token row (#62) for the second one. -->
-    <div class="admin-row admin-apikey-row">
-      <div class="admin-apikey-label-row">
+         thingiverse_app_token row (#62) for the second one, and the Imgur
+         pair (#200: a real Client ID secret plus a non-secret username that
+         rides the same mechanism rather than a one-off config path). -->
+    <section class="admin-panel">
+      <div class="admin-panel-header">
         <div>
-          <div class="admin-row-label">YouTube Data API Key</div>
-          <div class="admin-row-hint">Used for real view/like/comment counts (#54)</div>
+          <h2>API keys</h2>
+          <div class="admin-row-hint">Stored server-side; only "set / not set" is ever shown here</div>
         </div>
-        <span id="admin-apikey-status-youtube_data_api_key" class="apikey-status">…</span>
       </div>
-      <div class="admin-apikey-input-row">
-        <input type="password" class="input admin-apikey-input" id="admin-apikey-input-youtube_data_api_key"
-               placeholder="Enter to set" autocomplete="off">
-        <button type="button" class="btn-ms admin-apikey-save" data-key="youtube_data_api_key">Save</button>
-      </div>
-      <span id="admin-apikey-msg-youtube_data_api_key" class="backup-status"></span>
-    </div>
-    <!-- Thingiverse App Token (#62) — read-only Thingiverse API access for
-         pulling the owner's own public models (account: hooptieJ), no user
-         auth flow needed on Thingiverse's side. Same shape/markup as the
-         YouTube row above; the label spells out "App Token" (not just
-         "Thingiverse") so it isn't ambiguous with a future Client ID/Secret
-         pair if Thingiverse's OAuth app credentials ever get stored too. -->
-    <div class="admin-row admin-apikey-row">
-      <div class="admin-apikey-label-row">
-        <div>
-          <div class="admin-row-label">Thingiverse App Token</div>
-          <div class="admin-row-hint">Read-only access to the owner's own Thingiverse models</div>
+      <div class="admin-row admin-apikey-row">
+        <div class="admin-apikey-label-row">
+          <div>
+            <div class="admin-row-label">YouTube Data API Key</div>
+            <div class="admin-row-hint">Used for real view/like/comment counts (#54)</div>
+          </div>
+          <span id="admin-apikey-status-youtube_data_api_key" class="apikey-status">…</span>
         </div>
-        <span id="admin-apikey-status-thingiverse_app_token" class="apikey-status">…</span>
-      </div>
-      <div class="admin-apikey-input-row">
-        <input type="password" class="input admin-apikey-input" id="admin-apikey-input-thingiverse_app_token"
-               placeholder="Enter to set" autocomplete="off">
-        <button type="button" class="btn-ms admin-apikey-save" data-key="thingiverse_app_token">Save</button>
-      </div>
-      <span id="admin-apikey-msg-thingiverse_app_token" class="backup-status"></span>
-    </div>
-    <!-- Imgur Client ID / Username (#200) — public-gallery-only Imgur
-         import (account/{username}/submissions), Client-ID auth, no OAuth.
-         Two rows this time: the Client ID is a real app credential (same
-         "paste one static secret" shape as the two rows above), Username
-         isn't a secret at all but rides the same generic settings
-         mechanism/markup rather than a one-off config path — see
-         core/imgur_import.py for how both get used together. -->
-    <div class="admin-row admin-apikey-row">
-      <div class="admin-apikey-label-row">
-        <div>
-          <div class="admin-row-label">Imgur Client ID</div>
-          <div class="admin-row-hint">Public-gallery-only import, no OAuth (#200)</div>
+        <div class="admin-apikey-input-row">
+          <input type="password" class="input admin-apikey-input" id="admin-apikey-input-youtube_data_api_key"
+                 placeholder="Enter to set" autocomplete="off">
+          <button type="button" class="btn-ms admin-apikey-save" data-key="youtube_data_api_key">Save</button>
         </div>
-        <span id="admin-apikey-status-imgur_client_id" class="apikey-status">…</span>
+        <span id="admin-apikey-msg-youtube_data_api_key" class="backup-status"></span>
       </div>
-      <div class="admin-apikey-input-row">
-        <input type="password" class="input admin-apikey-input" id="admin-apikey-input-imgur_client_id"
-               placeholder="Enter to set" autocomplete="off">
-        <button type="button" class="btn-ms admin-apikey-save" data-key="imgur_client_id">Save</button>
-      </div>
-      <span id="admin-apikey-msg-imgur_client_id" class="backup-status"></span>
-    </div>
-    <div class="admin-row admin-apikey-row">
-      <div class="admin-apikey-label-row">
-        <div>
-          <div class="admin-row-label">Imgur Username</div>
-          <div class="admin-row-hint">Whose public gallery to import from</div>
+      <div class="admin-divider"></div>
+      <div class="admin-row admin-apikey-row">
+        <div class="admin-apikey-label-row">
+          <div>
+            <div class="admin-row-label">Thingiverse App Token</div>
+            <div class="admin-row-hint">Read-only access to the owner's own Thingiverse models</div>
+          </div>
+          <span id="admin-apikey-status-thingiverse_app_token" class="apikey-status">…</span>
         </div>
-        <span id="admin-apikey-status-imgur_username" class="apikey-status">…</span>
+        <div class="admin-apikey-input-row">
+          <input type="password" class="input admin-apikey-input" id="admin-apikey-input-thingiverse_app_token"
+                 placeholder="Enter to set" autocomplete="off">
+          <button type="button" class="btn-ms admin-apikey-save" data-key="thingiverse_app_token">Save</button>
+        </div>
+        <span id="admin-apikey-msg-thingiverse_app_token" class="backup-status"></span>
       </div>
-      <div class="admin-apikey-input-row">
-        <input type="text" class="input admin-apikey-input" id="admin-apikey-input-imgur_username"
-               placeholder="Enter to set" autocomplete="off">
-        <button type="button" class="btn-ms admin-apikey-save" data-key="imgur_username">Save</button>
+      <div class="admin-divider"></div>
+      <div class="admin-row admin-apikey-row">
+        <div class="admin-apikey-label-row">
+          <div>
+            <div class="admin-row-label">Imgur Client ID</div>
+            <div class="admin-row-hint">Public-gallery-only import, no OAuth (#200)</div>
+          </div>
+          <span id="admin-apikey-status-imgur_client_id" class="apikey-status">…</span>
+        </div>
+        <div class="admin-apikey-input-row">
+          <input type="password" class="input admin-apikey-input" id="admin-apikey-input-imgur_client_id"
+                 placeholder="Enter to set" autocomplete="off">
+          <button type="button" class="btn-ms admin-apikey-save" data-key="imgur_client_id">Save</button>
+        </div>
+        <span id="admin-apikey-msg-imgur_client_id" class="backup-status"></span>
       </div>
-      <span id="admin-apikey-msg-imgur_username" class="backup-status"></span>
-    </div>
-    <div class="admin-pane-divider"></div>
+      <div class="admin-row admin-apikey-row">
+        <div class="admin-apikey-label-row">
+          <div>
+            <div class="admin-row-label">Imgur Username</div>
+            <div class="admin-row-hint">Whose public gallery to import from</div>
+          </div>
+          <span id="admin-apikey-status-imgur_username" class="apikey-status">…</span>
+        </div>
+        <div class="admin-apikey-input-row">
+          <input type="text" class="input admin-apikey-input" id="admin-apikey-input-imgur_username"
+                 placeholder="Enter to set" autocomplete="off">
+          <button type="button" class="btn-ms admin-apikey-save" data-key="imgur_username">Save</button>
+        </div>
+        <span id="admin-apikey-msg-imgur_username" class="backup-status"></span>
+      </div>
+    </section>
+
     <!-- Caption tuning (#239) — live sliders for the local vision model
          (moondream via Ollama) run against a real existing object's preview
          image, showing the model's actual output for each setting. Same
@@ -176,86 +164,97 @@
          through the exact pipeline cycle (POST /api/captions/test →
          core/captions.py caption_once: lock, one call, Ollama restart), so
          the timings shown are what production will see. Nothing here
-         writes to the object. -->
-    <div class="admin-row admin-apikey-row admin-caption-tuning">
-      <div class="admin-apikey-label-row">
+         writes to the object. Full-row panel: controls on the left, the
+         preview image and model output on the right, so a long caption has
+         real width to wrap into instead of a 300px column. -->
+    <section class="admin-panel admin-panel-wide admin-caption-tuning">
+      <div class="admin-panel-header">
         <div>
-          <div class="admin-row-label">Caption tuning</div>
+          <h2>Caption tuning</h2>
           <div class="admin-row-hint">Live moondream output vs. temperature / token cap (#239)</div>
         </div>
         <span id="admin-caption-ollama-status" class="apikey-status">…</span>
       </div>
-      <div class="admin-apikey-input-row">
-        <input type="text" class="input admin-apikey-input mono" id="admin-caption-slug"
-               placeholder="Slug of a test image" autocomplete="off">
-        <button type="button" class="btn-ms admin-apikey-save" id="admin-caption-run">Run</button>
+      <div class="admin-caption-layout">
+        <div class="admin-caption-controls">
+          <div class="admin-apikey-input-row">
+            <input type="text" class="input admin-apikey-input mono" id="admin-caption-slug"
+                   placeholder="Slug of a test image" autocomplete="off">
+            <button type="button" class="btn-ms admin-apikey-save" id="admin-caption-run">Run</button>
+          </div>
+          <label class="admin-caption-slider">
+            <span>Temperature <b id="admin-caption-temp-val">0.10</b></span>
+            <input type="range" id="admin-caption-temp" min="0" max="1" step="0.05" value="0.1">
+          </label>
+          <label class="admin-caption-slider">
+            <span>Token cap <b id="admin-caption-tokens-val">120</b></span>
+            <input type="range" id="admin-caption-tokens" min="20" max="300" step="10" value="120">
+          </label>
+          <textarea class="input admin-caption-prompt" id="admin-caption-prompt" rows="6" placeholder="Prompt"></textarea>
+        </div>
+        <div class="admin-caption-results">
+          <img id="admin-caption-preview" class="admin-caption-preview" alt="" style="display:none">
+          <pre class="admin-caption-output mono" id="admin-caption-output">Enter a slug and run.</pre>
+          <span id="admin-caption-timing" class="backup-status"></span>
+        </div>
       </div>
-      <img id="admin-caption-preview" class="admin-caption-preview" alt="" style="display:none">
-      <label class="admin-caption-slider">
-        <span>Temperature <b id="admin-caption-temp-val">0.10</b></span>
-        <input type="range" id="admin-caption-temp" min="0" max="1" step="0.05" value="0.1">
-      </label>
-      <label class="admin-caption-slider">
-        <span>Token cap <b id="admin-caption-tokens-val">120</b></span>
-        <input type="range" id="admin-caption-tokens" min="20" max="300" step="10" value="120">
-      </label>
-      <textarea class="input admin-caption-prompt" id="admin-caption-prompt" rows="4" placeholder="Prompt"></textarea>
-      <pre class="admin-caption-output mono" id="admin-caption-output">Enter a slug and run.</pre>
-      <span id="admin-caption-timing" class="backup-status"></span>
-    </div>
-    <div class="admin-pane-divider"></div>
-    <div class="admin-row">
-      <div>
-        <div class="admin-row-label">Recent activity</div>
-        <div class="admin-row-hint">Audit log of recent mutating API calls (#122)</div>
+    </section>
+
+    <!-- Audit log (#122) — recent mutating API calls, for debugging and
+         recovery. Full-row panel because each entry is itself a five-column
+         grid (method / path / status / affected slugs / time) that only
+         reads well with real horizontal room. -->
+    <section class="admin-panel admin-panel-wide">
+      <div class="admin-panel-header">
+        <div>
+          <h2>Recent activity</h2>
+          <div class="admin-row-hint">Audit log of recent mutating API calls (#122)</div>
+        </div>
       </div>
-    </div>
-    <div id="admin-audit-log-container" class="admin-audit-log-container"></div>
-    <div class="admin-pane-divider"></div>
-    <button type="button" class="btn-danger admin-full-btn" id="admin-delete-all-btn"
-            title="Development convenience while content is still in flux">Delete all</button>
-    <button type="button" class="btn-ms admin-full-btn" id="admin-backup-btn"
-            title="Zips the current DB and storage files to a timestamped archive on the share. Independent of any delete action.">
-      Back up now
-    </button>
-    <span id="admin-backup-status" class="backup-status"></span>
+      <div id="admin-audit-log-container" class="admin-audit-log-container"></div>
+    </section>
+
+    <!-- Maintenance — the original #24 contents that weren't a list or a
+         form: "Back up now" (relocated from _header.html back then) and the
+         "Delete all" development convenience (relocated from
+         user_gallery.html, since the endpoint wipes everything regardless of
+         which page it's clicked from), plus the #11 display-name/icon stub.
+         That stub is still a placeholder: no editing UI exists anywhere yet,
+         it just marks where one belongs once built. -->
+    <section class="admin-panel">
+      <div class="admin-panel-header">
+        <div>
+          <h2>Maintenance</h2>
+          <div class="admin-row-hint">Backups and the whole-library reset</div>
+        </div>
+      </div>
+      <div class="admin-row admin-row-stub" title="Not built yet — see issue #11">
+        <div>
+          <div class="admin-row-label">Display name &amp; icon</div>
+          <div class="admin-row-hint">Coming soon (#11)</div>
+        </div>
+      </div>
+      <div class="admin-divider"></div>
+      <button type="button" class="btn-ms admin-full-btn" id="admin-backup-btn"
+              title="Zips the current DB and storage files to a timestamped archive on the share. Independent of any delete action.">
+        Back up now
+      </button>
+      <span id="admin-backup-status" class="backup-status"></span>
+      <div class="admin-divider"></div>
+      <button type="button" class="btn-danger admin-full-btn" id="admin-delete-all-btn"
+              title="Development convenience while content is still in flux">Delete all</button>
+    </section>
   </div>
 </div>
 <script>
 (function () {
-  const trigger = document.getElementById('admin-pane-trigger');
-  const pane = document.getElementById('admin-pane');
-  const closeBtn = document.getElementById('admin-pane-close');
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
 
-  function openPane() { pane.classList.add('open'); trigger.classList.add('active'); }
-  function closePane() { pane.classList.remove('open'); trigger.classList.remove('active'); }
-  trigger.addEventListener('click', () => {
-    pane.classList.contains('open') ? closePane() : openPane();
-  });
-  closeBtn.addEventListener('click', closePane);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePane(); });
-  document.addEventListener('click', (e) => {
-    if (!pane.classList.contains('open')) return;
-    if (pane.contains(e.target) || trigger.contains(e.target)) return;
-    closePane();
-  });
-
-  // "Delete mode" toggle — replaces the always-on selective-delete
-  // checkboxes/action-bar from #19. Pages that render those (gallery.html,
-  // user_gallery.html) listen for this event and toggle a body class that
-  // the CSS uses to show/hide `.card-select` checkboxes; toggling off also
-  // clears any in-progress selection so it can't linger invisibly.
-  const deleteModeToggle = document.getElementById('admin-delete-mode-toggle');
-  deleteModeToggle.addEventListener('change', () => {
-    const enabled = deleteModeToggle.checked;
-    document.body.classList.toggle('delete-mode-on', enabled);
-    document.dispatchEvent(new CustomEvent('constructicon:delete-mode-change', { detail: { enabled } }));
-  });
-
-  // "Delete all" — relocated from user_gallery.html. The endpoint deletes
-  // every upload/tag/project regardless of which page you're on, so it
-  // being available globally from the admin pane (rather than only from a
-  // single user's gallery view) matches what it actually does.
+  // "Delete all" — the endpoint deletes every upload/tag/project regardless
+  // of which page you're on, so it lives here with the other global actions
+  // rather than on any one gallery view.
   document.getElementById('admin-delete-all-btn').addEventListener('click', async () => {
     if (!confirm('Delete EVERYTHING — every upload, tag, and project? This cannot be undone.')) return;
     const res = await fetch('/api/delete-all', { method: 'POST' });
@@ -270,9 +269,8 @@
 
   // API Keys (#55) — presence-only status, and a save that never echoes the
   // real value back. KNOWN_SETTINGS is web/app.py's allowlist; this array is
-  // just the admin pane's UI-side list of which of those keys get a labeled
-  // row — add an entry here (plus the matching markup above) for a future
-  // second key.
+  // just this page's UI-side list of which of those keys get a labeled row —
+  // add an entry here (plus the matching markup above) for a future key.
   const API_KEY_SETTINGS = ['youtube_data_api_key', 'thingiverse_app_token', 'imgur_client_id', 'imgur_username'];
 
   function setApiKeyStatus(key, isSet) {
@@ -313,7 +311,7 @@
     msg.className = 'backup-status' + (ok === true ? ' backup-status-ok' : ok === false ? ' backup-status-error' : '');
   }
 
-  document.querySelectorAll('.admin-apikey-save').forEach((btn) => {
+  document.querySelectorAll('.admin-apikey-save[data-key]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const key = btn.dataset.key;
       const input = document.getElementById(`admin-apikey-input-${key}`);
@@ -419,25 +417,22 @@
   capTokens.addEventListener('change', runCaptionTest);
   capSlug.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runCaptionTest(); } });
 
-  // Pending decisions (#240) — see the markup comment above. Loaded on
-  // every page (the pane is included wherever the upload drawer is), and
-  // refreshed when the drawer signals a finished batch.
-  const pendingSection = document.getElementById('admin-pending-section');
+  // Pending decisions (#240) — see the markup comment above. Resolving one
+  // doesn't re-fetch directly: it dispatches the same
+  // constructicon:pending-decisions-changed event ingest.js fires after an
+  // upload batch, so this queue AND the header gear's badge (_header.html
+  // listens for it too) refresh together from one signal.
   const pendingList = document.getElementById('admin-pending-list');
   const pendingCount = document.getElementById('admin-pending-count');
-  const pendingBadge = document.getElementById('admin-pane-badge');
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
 
   function renderPendingDecisions(data) {
     const items = (data && data.items) || [];
-    pendingBadge.textContent = items.length;
-    pendingBadge.hidden = items.length === 0;
-    pendingSection.hidden = items.length === 0;
     pendingCount.textContent = items.length ? `(${items.length})` : '';
     pendingList.innerHTML = '';
+    if (items.length === 0) {
+      pendingList.innerHTML = '<div class="audit-log-empty">Nothing waiting on you</div>';
+      return;
+    }
     for (const item of items) {
       const el = document.createElement('div');
       el.className = 'pending-decision';
@@ -469,7 +464,7 @@
           const res = await fetch(`/api/pending-decisions/${item.id}/resolve`, { method: 'POST', body });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.detail || `Failed (${res.status})`);
-          loadPendingDecisions();
+          document.dispatchEvent(new CustomEvent('constructicon:pending-decisions-changed'));
         } catch (err) {
           msg.textContent = err.message || 'Failed';
           msg.className = 'backup-status backup-status-error pending-decision-msg';
@@ -494,11 +489,11 @@
   loadPendingDecisions();
   document.addEventListener('constructicon:pending-decisions-changed', loadPendingDecisions);
 
-  // Redacted items (#282) — see the markup comment above. Loaded with the
-  // pane like the pending queue, and re-fetched after every un-redact so a
-  // row drops out of this list the moment it's back in normal browsing.
-  // Per-row error text reuses the .backup-status pattern the other admin
-  // actions use; success needs no message — the row simply disappears.
+  // Redacted items (#282) — see the markup comment above. Re-fetched after
+  // every un-redact so a row drops out of this list the moment it's back in
+  // normal browsing. Per-row error text reuses the .backup-status pattern
+  // the other admin actions use; success needs no message — the row simply
+  // disappears.
   const redactedList = document.getElementById('admin-redacted-list');
   const redactedCount = document.getElementById('admin-redacted-count');
 
@@ -556,32 +551,33 @@
   }
   loadRedacted();
 
-  // Audit log (#122) — recent mutating API calls for debugging/recovery
+  // Audit log (#122) — recent mutating API calls for debugging/recovery.
+  // 50 rows here vs. the pop-out's 20: a full-row panel has the room, and
+  // the endpoint's `limit` param already existed for exactly this.
   const auditLogContainer = document.getElementById('admin-audit-log-container');
   async function loadAuditLog() {
     try {
-      const res = await fetch('/api/audit-log?limit=20');
+      const res = await fetch('/api/audit-log?limit=50');
       if (!res.ok) return;
       const rows = await res.json();
       if (!rows || rows.length === 0) {
         auditLogContainer.innerHTML = '<div class="audit-log-empty">No activity yet</div>';
         return;
       }
-      // Render a simple table-like view
       let html = '<div class="audit-log-list">';
       for (const row of rows) {
         const statusClass = row.status_code >= 200 && row.status_code < 300 ? 'success' : row.status_code >= 400 ? 'error' : 'other';
-        const errorDetail = row.error_detail ? ` (${row.error_detail})` : '';
+        const errorDetail = row.error_detail ? ` (${escapeHtml(row.error_detail)})` : '';
         const slugs = row.affected_slugs && row.affected_slugs.length > 0
-          ? row.affected_slugs.join(', ')
+          ? escapeHtml(row.affected_slugs.join(', '))
           : '-';
         html += `
           <div class="audit-log-entry">
-            <div class="audit-log-method">${row.method}</div>
-            <div class="audit-log-path">${row.path}</div>
+            <div class="audit-log-method">${escapeHtml(row.method)}</div>
+            <div class="audit-log-path" title="${escapeHtml(row.path)}">${escapeHtml(row.path)}</div>
             <div class="audit-log-status audit-log-status-${statusClass}">${row.status_code}${errorDetail}</div>
-            <div class="audit-log-slugs">${slugs}</div>
-            <div class="audit-log-time">${row.timestamp_friendly || '-'}</div>
+            <div class="audit-log-slugs" title="${slugs}">${slugs}</div>
+            <div class="audit-log-time">${escapeHtml(row.timestamp_friendly || '-')}</div>
           </div>
         `;
       }
@@ -593,7 +589,7 @@
   }
   loadAuditLog();
 
-  // "Back up now" — relocated from _header.html, same /api/backup call.
+  // "Back up now" — same /api/backup call it's always made.
   const backupBtn = document.getElementById('admin-backup-btn');
   const backupStatus = document.getElementById('admin-backup-status');
   backupBtn.addEventListener('click', async () => {
@@ -622,3 +618,4 @@
   });
 })();
 </script>
+{% endblock %}

@@ -3,7 +3,6 @@
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
-{% include "_admin_pane.html" %}
 <div class="app-main">
   <a class="back-link" href="/">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -393,7 +392,7 @@
 
   // .card-select is display:none by default app-wide, only shown via
   // body.delete-mode-on (see web/static/style.css) — normally toggled by
-  // _admin_pane.html's "Delete mode" checkbox. This page's whole purpose is
+  // user_gallery.html's "Delete mode" switch. This page's whole purpose is
   // bulk selection, so it's always "on" here rather than needing its own
   // toggle; reusing the existing CSS gate rather than adding a parallel one.
   document.body.classList.add('delete-mode-on');

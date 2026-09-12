@@ -9,15 +9,13 @@
      account.html, object_detail.html, project_detail.html, user_gallery.html)
      are unaffected — they keep the click-triggered _upload_drawer.html.
 
-     Timing/easing (0.2s ease, transform+opacity) is picked to sit between
-     _upload_drawer.html's original slide (0.22s ease) and _admin_pane.html's
-     popover (#24, 0.18s ease) so the two pop-out surfaces on this page read
-     as one family despite different shapes/triggers: admin pane is a small
-     click-toggled popover bottom-right, this is a hover/drag-revealed full
-     -height edge panel on the right-middle. No shared backdrop dim, matching
-     admin pane's no-backdrop convention (a full-page dim on every mouse
-     hover would be obnoxious) — closing happens on mouse-leave, drag-leave,
-     Escape, or (once opened by a click) an outside click. -->
+     Timing/easing (0.2s ease, transform+opacity) was picked to sit between
+     _upload_drawer.html's original slide (0.22s ease) and the old admin
+     popover's 0.18s (#24's bottom-right pop-out, which #295 turned into the
+     /admin page -- this is the only pop-out surface on the home page now).
+     No backdrop dim (a full-page dim on every mouse hover would be
+     obnoxious) — closing happens on mouse-leave, drag-leave, Escape, or
+     (once opened by a click) an outside click. -->
 <div class="gallery-drawer-tab" id="gallery-drawer-tab" title="Upload" role="button" tabindex="0">
   <div class="gallery-drawer-avatar">{{ owner_initials }}</div>
   <span class="gallery-drawer-name">{{ owner_name }}</span>

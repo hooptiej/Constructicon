@@ -3,7 +3,6 @@
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
-{% include "_admin_pane.html" %}
 <div class="app-main">
   <a class="back-link" href="/gallery">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -14,13 +13,28 @@
       <h1 class="page-title">{{ uploader_display }}</h1>
       <p class="page-subtitle">{{ items | length }} upload{{ 's' if items|length != 1 else '' }}</p>
     </div>
-    <div class="sort-control">
-      <label for="gallery-sort" class="sort-label">Sort</label>
-      <select class="filter-select" id="gallery-sort">
-        <option value="newest">Newest</option>
-        <option value="oldest">Oldest</option>
-        <option value="az">A–Z</option>
-      </select>
+    <div class="user-gallery-controls">
+      <!-- Delete mode (#24) — was a toggle in the admin pop-out, which was
+           included on every page; since #295 the admin surface is its own
+           page (/admin), and this is a page-scoped mode (a body class that
+           only these tiles' .card-select checkboxes read), so it lives on
+           the page it acts on. Same switch markup (.admin-toggle), same
+           body class, same event as before — just relocated. -->
+      <label class="delete-mode-control" title="Show selection checkboxes on the tiles">
+        <span class="sort-label">Delete mode</span>
+        <span class="admin-toggle">
+          <input type="checkbox" id="delete-mode-toggle">
+          <span class="admin-toggle-track"><span class="admin-toggle-thumb"></span></span>
+        </span>
+      </label>
+      <div class="sort-control">
+        <label for="gallery-sort" class="sort-label">Sort</label>
+        <select class="filter-select" id="gallery-sort">
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="az">A–Z</option>
+        </select>
+      </div>
     </div>
   </div>
   <div class="selection-bar" id="selection-bar">
@@ -165,9 +179,17 @@ document.getElementById('clear-selection-btn').addEventListener('click', () => {
   updateSelectionBar();
 });
 
-// "Delete mode" now lives in the admin pane (#24) rather than always-on
-// checkboxes — when it's switched off, drop any in-flight selection so it
+// "Delete mode" (#24) — the toggle in the title row above replaces the
+// always-on checkboxes from #19: it sets a body class the CSS gates
+// .card-select on (see style.css) and announces the change so the selection
+// bar can react. When it's switched off, drop any in-flight selection so it
 // can't linger invisibly and reappear stale next time delete mode is on.
+const deleteModeToggle = document.getElementById('delete-mode-toggle');
+deleteModeToggle.addEventListener('change', () => {
+  const enabled = deleteModeToggle.checked;
+  document.body.classList.toggle('delete-mode-on', enabled);
+  document.dispatchEvent(new CustomEvent('constructicon:delete-mode-change', { detail: { enabled } }));
+});
 document.addEventListener('constructicon:delete-mode-change', (e) => {
   if (!e.detail.enabled) {
     selectedSlugs.clear();

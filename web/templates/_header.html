@@ -10,6 +10,41 @@
       Upload
     </button>
     <a class="btn-ms" href="/account" style="width:auto;padding:8px 14px">Desktop uploader</a>
+    <!-- Admin (#24 → #295): the gear used to be a fixed bottom-right button
+         that popped open _admin_pane.html, included on every page. That
+         surface is its own page now (/admin, admin.html), so the gear is a
+         plain link here in the one include every page already carries —
+         same purple-circle look, same #240 badge ("N uploads need your
+         input", hidden at zero) so the cross-page signal survives the move. -->
+    <a class="admin-link{% if request.url.path == '/admin' %} active{% endif %}" href="/admin" title="Admin" aria-label="Admin">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="#ECE8DA" stroke-width="1.6"/>
+        <path d="M19.4 13.5a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V19.5a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H4.5a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H10a1.65 1.65 0 001-1.51V4.5a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V10a1.65 1.65 0 001.51 1h.09a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="#ECE8DA" stroke-width="1.3"/>
+      </svg>
+      <span class="admin-badge" id="admin-badge" hidden>0</span>
+    </a>
   </div>
 </div>
 <div class="hazard-stripe app-header-stripe"></div>
+<script>
+// #240 badge on the admin gear above: one presence check per page load
+// (exactly what the old pop-out did from every page), refreshed on the same
+// constructicon:pending-decisions-changed event ingest.js fires after an
+// upload batch and admin.html fires after resolving a decision.
+(function () {
+  const badge = document.getElementById('admin-badge');
+  if (!badge) return;
+  async function refreshAdminBadge() {
+    try {
+      const res = await fetch('/api/pending-decisions');
+      if (!res.ok) return;
+      const data = await res.json();
+      const n = Array.isArray(data.items) ? data.items.length : (data.count || 0);
+      badge.textContent = n;
+      badge.hidden = n === 0;
+    } catch (err) { /* leave whatever's shown */ }
+  }
+  refreshAdminBadge();
+  document.addEventListener('constructicon:pending-decisions-changed', refreshAdminBadge);
+})();
+</script>

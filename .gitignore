@@ -26,3 +26,7 @@ hudu_clients.json
 
 # OS
 .DS_Store
+
+# Claude Code agent worktree scratch space — created per background agent,
+# cleaned up after merge; never meant to be tracked
+.claude/worktrees/

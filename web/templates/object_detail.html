@@ -28,7 +28,7 @@
             <span class="label">File removed — sensitive content. Metadata kept for correlation.</span>
           </div>
         {% elif item.is_image_file %}
-          <img id="preview-img" src="{{ item.url }}" alt="{{ item.filename }}" title="Click to view full size">
+          <img id="preview-img" src="{{ item.url }}" alt="{{ item.filename }}" title="Click to view full size"{% if item.type_metadata.rotation %} style="transform:rotate({{ item.type_metadata.rotation }}deg)"{% endif %}>
         {% elif item.media_type == 'youtube' and item.youtube_embed_url %}
           <div class="video-embed-wrap">
             <iframe src="{{ item.youtube_embed_url }}" title="{{ item.display_name }}" allowfullscreen loading="lazy"></iframe>
@@ -58,7 +58,7 @@
              thumbnail concept that isn't the uploaded file itself and isn't
              a YouTube embed lands here, with zero per-type branching. #}
           <div class="capture-preview">
-            <img id="preview-img" src="{{ item.thumb_url }}" alt="{{ item.display_name }}" title="Click to view full size">
+            <img id="preview-img" src="{{ item.thumb_url }}" alt="{{ item.display_name }}" title="Click to view full size"{% if item.type_metadata.rotation %} style="transform:rotate({{ item.type_metadata.rotation }}deg)"{% endif %}>
             {% if item.url %}
             <a href="{{ item.url }}" class="external-link-btn">
               View original {{ item.type_label }}
@@ -85,6 +85,16 @@
           </div>
         {% endif %}
       </div>
+
+      {% if item.is_image_file or item.thumb_url %}
+      {# #266: display-only rotation (0/90/180/270), stored in
+         type_metadata.rotation -- never touches the stored file, just how
+         #preview-img (and gallery/project cards elsewhere, via
+         cardRotationStyle in each card-rendering template) renders it. #}
+      <div class="detail-meta" style="margin-top:6px">
+        <button type="button" class="ocr-retry-btn" id="rotate-btn" title="Rotate 90°">⟳ Rotate</button>
+      </div>
+      {% endif %}
 
       {% if item.media_type == 'youtube' or item.content_description or item.content_date_display or item.external_url %}
       <div class="content-meta-panel">
@@ -309,6 +319,30 @@ const IS_OCR_CAPABLE = {{ item.ocr_capable | tojson }};
 const IS_FILE = {{ item.is_file | tojson }};
 let ocrStatus = {{ item.ocr_status | tojson }};
 let ocrText = {{ item.extracted_text | tojson }};
+
+// #266: display-only rotation (0/90/180/270) -- never touches the stored
+// file, just how #preview-img renders. Persisted via type_metadata (merge
+// semantics, same endpoint content_description/other type_metadata fields
+// already use), so it survives a reload and shows up on cards too (see
+// cardRotationStyle in each card-rendering template).
+let currentRotation = {{ (item.type_metadata.get('rotation') or 0) | tojson }};
+const rotateBtn = document.getElementById('rotate-btn');
+if (rotateBtn) {
+  rotateBtn.addEventListener('click', async () => {
+    const nextRotation = (currentRotation + 90) % 360;
+    const previewImg = document.getElementById('preview-img');
+    if (previewImg) previewImg.style.transform = nextRotation ? `rotate(${nextRotation}deg)` : '';
+    const form = new FormData();
+    form.append('type_metadata', JSON.stringify({ rotation: nextRotation }));
+    const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
+    if (res.ok) {
+      currentRotation = nextRotation;
+    } else if (previewImg) {
+      // Revert the optimistic UI update on failure.
+      previewImg.style.transform = currentRotation ? `rotate(${currentRotation}deg)` : '';
+    }
+  });
+}
 
 // #239: suggested-caption panel state. Mirrors the OCR panel below; the
 // "status" is type_metadata.auto_caption_status (pending/done/failed, or
@@ -1104,6 +1138,7 @@ const previewImg = document.getElementById('preview-img');
 if (previewImg) {
   previewImg.addEventListener('click', () => {
     lightboxImg.src = previewImg.src;
+    lightboxImg.style.transform = previewImg.style.transform; // #266: carry rotation into the lightbox pop-out
     lightboxBackdrop.classList.add('active');
   });
 }

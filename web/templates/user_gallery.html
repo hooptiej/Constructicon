@@ -69,6 +69,14 @@ const FILE_ICON = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none">
   <path d="M3 16L8.5 11.5L13 15L16.5 12L21 16" stroke="#3F4530" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
+// #266: display-only rotation override (0/90/180/270), stored in
+// type_metadata.rotation -- never touches the stored file itself, just
+// how a card's thumbnail image renders.
+function cardRotationStyle(item) {
+  const deg = item.type_metadata && item.type_metadata.rotation;
+  return deg ? `transform:rotate(${deg}deg)` : '';
+}
+
 const selectedSlugs = new Set();
 function toggleCardSelect(cb) {
   if (cb.checked) selectedSlugs.add(cb.dataset.slug);
@@ -89,7 +97,7 @@ function cardHtml(item) {
   return `
     <a href="/object/${item.slug}?from=${fromParam}" class="gallery-card">
       <div class="gallery-thumb${item.redacted ? ' redacted-thumb' : ''}">
-        ${item.redacted ? LOCK_ICON : (isImage ? `<img src="${item.thumb_url}" loading="lazy">` : FILE_ICON)}
+        ${item.redacted ? LOCK_ICON : (isImage ? `<img src="${item.thumb_url}" loading="lazy" style="${cardRotationStyle(item)}">` : FILE_ICON)}
         ${item.type_icon ? `<span class="type-badge-corner" title="${escapeHtml(item.type_label || item.type_badge || '')}">${item.type_icon}</span>` : ''}
         <input type="checkbox" class="card-select" data-slug="${item.slug}" title="Select for deletion"
           onclick="event.stopPropagation()" onchange="toggleCardSelect(this)" ${selectedSlugs.has(item.slug) ? 'checked' : ''}>

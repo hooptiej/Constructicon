@@ -93,7 +93,8 @@ DEFAULT_NUM_PREDICT = 120
 # heat, in small linear moves that stay well under the ~0.3 mark where
 # #239's tuning saw invented objects. Two jobs use the same ladder —
 # run_caption() cascades through it automatically on an empty response
-# (upload/import pipeline), and a manual "Regenerate" click advances
+# (or, #262, a letter-free degenerate one — see _is_garbage) in the
+# upload/import pipeline, and a manual "Regenerate" click advances
 # exactly one step at a time (see api_retry_caption in web/app.py) so
 # repeated clicks give real variety instead of repeating the same greedy
 # default. 3-5 steps total, then wraps back to 0 — not a pyramid.
@@ -290,6 +291,32 @@ def should_caption(spec):
     return bool(spec.caption_capable) and not DISABLED
 
 
+def _is_garbage(caption):
+    """#262: True when a model response is empty *or* degenerate — no
+    alphabetic character anywhere in it. moondream occasionally emits a long
+    run of '!!!!!...' (the same failure the STL exclusion in object_types
+    guards against, but seen on a perfectly ordinary photo too); that's
+    non-empty, so the plain `not caption` check let it through as a false
+    "done". run_caption treats both cases identically: cascade to the next
+    STEPS rung, or mark failed if the ladder runs out.
+
+    Deliberately the issue's literal spec and nothing more: a caption with
+    even one real word (however much punctuation surrounds it) is NOT
+    garbage — it's a weak suggestion the owner can see and Regenerate,
+    whereas a hidden retry costs a full Ollama restart cycle per rung and
+    risks skipping past a usable caption. str.isalpha is Unicode-aware, so
+    real letters in any script count."""
+    return not any(ch.isalpha() for ch in (caption or ""))
+
+
+def _bad_response_label(caption):
+    """Log wording for a response _is_garbage rejected — tells the owner
+    reading `docker logs` whether the model said nothing or said '!!!!'."""
+    if not caption:
+        return "empty response"
+    return f"degenerate response {caption[:20]!r}{'…' if len(caption) > 20 else ''} ({len(caption)} chars, no letters)"
+
+
 def run_caption(slug, start_step=0, cascade=True):
     """Background task, mirrors ocr.run_ocr: best-effort end to end, writes
     the result (or a failed marker) into type_metadata, never raises.
@@ -321,14 +348,14 @@ def run_caption(slug, start_step=0, cascade=True):
         result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature)
         if cascade:
             for next_index in range(step_index + 1, len(STEPS)):
-                if result["error"] or result["caption"]:
+                if result["error"] or not _is_garbage(result["caption"]):
                     break
                 step_prompt, step_temperature = STEPS[next_index]
-                print(f"caption empty for {slug} — retrying with prompt {step_prompt!r} at temperature {step_temperature}", flush=True)
+                print(f"caption {_bad_response_label(result['caption'])} for {slug} — retrying with prompt {step_prompt!r} at temperature {step_temperature}", flush=True)
                 result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature)
                 step_index = next_index
-        if result["error"] or not result["caption"]:
-            print(f"caption failed for {slug} at step {step_index}: {result['error'] or 'empty response'}", flush=True)
+        if result["error"] or _is_garbage(result["caption"]):
+            print(f"caption failed for {slug} at step {step_index}: {result['error'] or _bad_response_label(result['caption'])}", flush=True)
             db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed", STEP_KEY: step_index})
             return
         db.update_content_metadata(slug, type_metadata={

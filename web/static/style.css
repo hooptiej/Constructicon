@@ -1334,24 +1334,46 @@ body.delete-mode-on .card-select-row { display: flex; }
 .project-video-timeline-events {
   position: relative;
   height: 20px;
+  margin-top: 20px; /* room for the angled time flags above the diamonds */
+}
+.project-video-timeline-event-wrap {
+  /* Everything -- time flag and diamond -- is tied to this one anchor
+     point, so clustered same-day events stay individually readable
+     instead of collapsing into one indistinguishable diamond. */
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.project-video-timeline-event-time {
+  /* A small flag reading up and to the right from the diamond, not a
+     horizontal label that would collide with its neighbors immediately. */
+  font-size: 9px;
+  color: var(--text-2);
+  white-space: nowrap;
+  transform-origin: bottom left;
+  transform: rotate(-40deg);
+  margin-bottom: 12px;
+  margin-left: 4px;
 }
 .project-video-timeline-event {
   /* A video-editor-style keyframe diamond, not a bare dot -- sized and
      contrasted to read clearly against the axis, not blend into it. */
   all: unset;
-  position: absolute;
-  top: 4px;
+  display: block;
   width: 14px;
   height: 14px;
   background: var(--accent);
   border: 2px solid var(--bg);
   cursor: pointer;
-  transform: translateX(-50%) rotate(45deg);
+  transform: rotate(45deg);
   transform-origin: center;
   box-sizing: border-box;
   box-shadow: 0 0 0 1px var(--border-stronger);
 }
 .project-video-timeline-event:hover {
   background: var(--accent-hover);
-  transform: translateX(-50%) rotate(45deg) scale(1.3);
+  transform: rotate(45deg) scale(1.3);
 }

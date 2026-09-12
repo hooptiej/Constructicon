@@ -177,14 +177,30 @@ class ProjectVideoTimeline {
     const eventRow = document.createElement('div');
     eventRow.className = 'project-video-timeline-events';
     this.events.forEach((event) => {
+      // Wrapper carries the position; a diamond with an angled time
+      // "flag" above it, anchored at the diamond -- events clustered on
+      // the same day (or the same few minutes, from a batch import) are
+      // still individually identifiable instead of just overlapping into
+      // one indistinguishable diamond (see .project-video-timeline-event-time's
+      // rotation in style.css).
+      const wrap = document.createElement('div');
+      wrap.className = 'project-video-timeline-event-wrap';
+      wrap.style.left = `${this._percent(event.date, range)}%`;
+
+      const time = document.createElement('span');
+      time.className = 'project-video-timeline-event-time';
+      time.textContent = new Date(event.date * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      wrap.appendChild(time);
+
       const el = document.createElement('button');
       el.type = 'button';
       el.className = 'project-video-timeline-event';
-      el.style.left = `${this._percent(event.date, range)}%`;
       el.addEventListener('mouseenter', () => this._showPopover(event, el));
       el.addEventListener('mouseleave', () => this._hidePopover());
       el.addEventListener('click', () => { window.location.href = event.openUrl; });
-      eventRow.appendChild(el);
+      wrap.appendChild(el);
+
+      eventRow.appendChild(wrap);
     });
     this.container.appendChild(eventRow);
   }

@@ -2,9 +2,9 @@
 searchable indexing.
 
 Source code files (PHP, Python, JavaScript, shell scripts, JSON, YAML, HTML,
-CSS, SQL) are stored as-is with their raw UTF-8 text content extracted and
-indexed for search. No visual thumbnail concept — code files are NONE-sourced,
-same as written posts or archives.
+CSS, SQL, Lua — #297) are stored as-is with their raw UTF-8 text content
+extracted and indexed for search. No visual thumbnail concept — code files
+are NONE-sourced, same as written posts or archives.
 
 Text extraction reads the file as UTF-8 with best-effort error handling
 (corrupt/legacy encodings are replaced rather than erroring), returning the
@@ -55,7 +55,7 @@ register(ObjectTypeSpec(
     label="Source code",
     thumbnail_source=ThumbnailSource.NONE,
     ocr_capable=True,  # Enable OCR background task so text_extract_fn gets called (no actual OCR since no thumbnail)
-    extensions=frozenset({".php", ".py", ".js", ".sh", ".json", ".yaml", ".yml", ".html", ".css", ".sql"}),
+    extensions=frozenset({".php", ".py", ".js", ".sh", ".json", ".yaml", ".yml", ".html", ".css", ".sql", ".lua"}),
     text_extract_fn=extract_text_for_row,
     badge_icon="💻",
     badge_text="CODE",

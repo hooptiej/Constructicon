@@ -1104,6 +1104,14 @@ body.delete-mode-on .card-select-row { display: flex; }
 .app-main-shifted {
   margin-left: 70px;
 }
+.brand-shifted {
+  /* Only set on the gallery/home page (see _header.html), where the fixed
+     timeline rail occupies the same left column below this header --
+     shifted the same 70px as .app-main-shifted so the brand lines up with
+     the content that's actually making room for the rail, instead of
+     sitting above the rail's own empty tick-mark gutter. */
+  margin-left: 70px;
+}
 .timeline-track {
   display: flex;
   flex-direction: column;

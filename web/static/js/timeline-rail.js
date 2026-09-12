@@ -22,7 +22,10 @@ class TimelineRail {
     this.entries = entries;
     this.onOpen = options.onOpen || function () {};
     this._popover = null;
+    this._rows = [];
     this._render();
+    this._onResize = () => this._layout();
+    window.addEventListener('resize', this._onResize);
   }
 
   _sorted() {
@@ -77,6 +80,7 @@ class TimelineRail {
     this._track = document.createElement('div');
     this._track.className = 'timeline-track';
     this.container.appendChild(this._track);
+    this._rows = [];
 
     const sorted = this._sorted();
     if (sorted.length === 0) return;
@@ -91,6 +95,7 @@ class TimelineRail {
       yearMarker.className = 'timeline-year-marker';
       yearMarker.textContent = year;
       this._track.appendChild(yearMarker);
+      this._rows.push({ el: yearMarker, kind: 'year' });
 
       let lastMonth = null;
       while (entryIndex < sorted.length && new Date(sorted[entryIndex].date * 1000).getFullYear() === year) {
@@ -101,6 +106,7 @@ class TimelineRail {
           monthMarker.className = 'timeline-month-marker';
           monthMarker.textContent = MONTH_NAMES[d.getMonth()];
           this._track.appendChild(monthMarker);
+          this._rows.push({ el: monthMarker, kind: 'month' });
           lastMonth = d.getMonth();
         }
 
@@ -121,8 +127,45 @@ class TimelineRail {
 
         row.appendChild(node);
         this._track.appendChild(row);
+        this._rows.push({ el: row, kind: 'entry', button: node });
         entryIndex++;
       }
     }
+
+    this._layout();
+  }
+
+  _layout() {
+    // Fit every row (year/month markers + entry rows alike) into exactly
+    // the rail's real available height, whatever that is -- no scrollbar,
+    // ever (per owner's explicit call), and no reliance on flexbox's
+    // natural content sizing + space-between, which only spaces existing
+    // content out evenly and does nothing once there are enough rows to
+    // overflow the container. Recomputed on every render (entry count can
+    // grow between page loads) and on window resize (the viewport itself
+    // can change height without a reload).
+    const total = this._rows.length;
+    if (total === 0) return;
+    const availableHeight = this.container.clientHeight;
+    const rowHeight = availableHeight / total;
+
+    this._rows.forEach(({ el, kind, button }) => {
+      el.style.height = `${rowHeight}px`;
+      el.style.display = 'flex';
+      el.style.alignItems = 'center';
+      el.style.overflow = 'hidden';
+      if (kind === 'year') {
+        el.style.fontSize = `${Math.max(7, Math.min(11, rowHeight * 0.85))}px`;
+      } else if (kind === 'month') {
+        el.style.fontSize = `${Math.max(6, Math.min(10, rowHeight * 0.75))}px`;
+      } else {
+        // Entry row: shrink the pill itself, not just its row, so it never
+        // sticks out past a compressed row into its neighbors.
+        const buttonHeight = Math.max(6, Math.min(18, rowHeight - 2));
+        button.style.height = `${buttonHeight}px`;
+        button.style.fontSize = `${Math.max(5, Math.min(10, buttonHeight * 0.55))}px`;
+        button.style.minWidth = `${Math.max(14, Math.min(28, buttonHeight * 1.6))}px`;
+      }
+    });
   }
 }

@@ -555,27 +555,35 @@ def find_duplicate(filename, file_size, source_modified_at):
 
 
 def update_tags(slug, description=None, tags=None, client=None):
-    existing = get_by_slug(slug)
-    if existing is None:
-        return None
+    # #227: wrap read-modify-write in a transaction to prevent lost updates when
+    # concurrent writers (OCR thread, user saves, MCP) race on the same row.
     conn = get_conn()
-    conn.execute(
-        "UPDATE capture_events SET description = ?, tags = ?, client = ? WHERE slug = ?",
-        (
-            description if description is not None else existing["description"],
-            json.dumps(tags) if tags is not None else json.dumps(existing["tags"]),
-            client if client is not None else existing["client"],
-            slug,
-        ),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT description, tags, client FROM capture_events WHERE slug = ?", (slug,)).fetchone()
+        if row is None:
+            conn.commit()
+            return None
+        existing = dict(row)
+        # Convert tags from JSON string to list for the comparison logic below
+        existing["tags"] = json.loads(existing.get("tags") or "[]")
+
+        conn.execute(
+            "UPDATE capture_events SET description = ?, tags = ?, client = ? WHERE slug = ?",
+            (
+                description if description is not None else existing["description"],
+                json.dumps(tags) if tags is not None else json.dumps(existing["tags"]),
+                client if client is not None else existing["client"],
+                slug,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
     if tags is not None:
         # #213 fix: pass the previous free-text tags so we can diff only against those,
         # not against the entire tag tree (which includes tags from projects/MCP/etc.).
-        # #269: `existing` came from get_by_slug -> _row_to_dict, which already
-        # json.loads'd the tags column -- it's a list here, not a JSON string,
-        # so re-parsing it crashes for any row with a non-empty tags list.
         previous_tags = existing["tags"] if existing.get("tags") else []
         sync_real_tags_for_post(slug, tags, previous_tags=previous_tags)
     return get_by_slug(slug)
@@ -724,17 +732,26 @@ def set_setting(key, value):
 def add_tags(slug, new_tags):
     """Merge new_tags into the row's existing tags (deduped) instead of
     replacing them — for auto-tagging, so it never clobbers tags a person
-    already set by hand."""
-    existing = get_by_slug(slug)
-    if existing is None:
-        return
-    merged = existing["tags"] + [t for t in new_tags if t not in existing["tags"]]
-    if merged == existing["tags"]:
-        return
+    already set by hand.
+
+    #227: wrap read-modify-write in a transaction to prevent lost updates when
+    concurrent writers (OCR thread, user saves) race on the same row."""
     conn = get_conn()
-    conn.execute("UPDATE capture_events SET tags = ? WHERE slug = ?", (json.dumps(merged), slug))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT tags FROM capture_events WHERE slug = ?", (slug,)).fetchone()
+        if row is None:
+            conn.commit()
+            return
+        existing_tags = json.loads(row["tags"] or "[]")
+        merged = existing_tags + [t for t in new_tags if t not in existing_tags]
+        if merged == existing_tags:
+            conn.commit()
+            return
+        conn.execute("UPDATE capture_events SET tags = ? WHERE slug = ?", (json.dumps(merged), slug))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def set_client_if_empty(slug, client):

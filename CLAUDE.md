@@ -528,6 +528,18 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
   `content_date`.** Easy to grab the wrong one of each pair — they mean
   different things (uploader metadata vs. the content's own
   description/date). See the `capture_events` notes above.
+- **Backfilling a `content_date` from a naive/timezone-less real-world
+  date (EXIF `DateTimeOriginal`, a blog post's "Jul 31, 2017" with no
+  time) — interpret it as Mountain Time (`America/Denver`, DST-aware via
+  `zoneinfo`), not UTC.** `content_date`/`timestamp` are stored as UTC
+  unix seconds either way; this is only about which timezone a naive
+  source date gets treated as before converting. Decided 2026-09-12
+  during the Desk Build project's date backfill (owner: "we should have
+  written down our preference here is Mountain time") — the first
+  attempt used UTC by mistake (matching `backfill_from_hooptiej_site.py`'s
+  older convention, which parses a bare calendar date as UTC midnight);
+  redone with Mountain Time once corrected. A future backfill script
+  should follow Mountain Time, not copy the older UTC convention.
 - **Projects are curated, not auto-generated.** Don't "fix" the Projects
   section to auto-derive from tags — that was the original design and was
   explicitly rejected in favor of manual curation via the `projects` /

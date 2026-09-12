@@ -636,18 +636,41 @@ body.delete-mode-on .card-select-row { display: flex; }
    scrubber/volume fill), kept anyway as a harmless no-op fallback for a
    browser that might honor it more fully.
 
-   Went further than this, live-tested on constructicon-test, and rolled
-   it back: Chromium's ::-webkit-media-controls-* pseudo-elements
-   (panel/timeline/volume-slider/play-button/::-webkit-slider-thumb) are
-   long-undocumented and this browser's version doesn't map them the way
-   older references describe -- targeting the play button, the scrubber/
-   volume thumbs, and the track fill all produced zero visible change on
-   real testing. Not worth carrying speculative, unverifiable CSS for --
-   dark background + the app's own tag panel above it is where this
-   stops; the native control's own default (light) scrubber/icons on a
-   dark background is the accepted limitation, not a bug to keep
-   chasing. */
+   A first attempt targeting Chromium's ::-webkit-media-controls-* parts
+   directly (panel/timeline/play-button/::-webkit-slider-thumb) produced
+   zero visible change and was rolled back -- but that was written from
+   memory against possibly-stale references. Inspecting a real rendered
+   player's UA shadow tree (DevTools "Show user agent shadow DOM",
+   constructicon-test, 2026-09-12) confirmed the pseudo names ARE exactly
+   -webkit-media-controls-panel/-play-button/-timeline/-current-time-
+   display/-time-remaining-display on THIS Chrome version -- so the
+   selectors below aren't a guess, they're read straight off the real DOM.
+   Two things could still be why accent-color alone didn't visibly land:
+   the play button's icon is a browser-drawn background-image, not
+   currentColor text (color can never touch it -- filter can, since it
+   recolors whatever's drawn regardless of how); and Chrome's own internal
+   UA stylesheet for -webkit-media-controls-timeline may simply out-
+   specificity a plain author-level accent-color, which !important is the
+   correct escape hatch for. Live-test both before trusting either. */
 .audio-preview audio { width: 100%; max-width: 520px; color-scheme: dark; accent-color: var(--accent); }
+.audio-preview audio::-webkit-media-controls-panel {
+  background-color: var(--card);
+  /* filter composites the whole rendered subtree, not just this element's
+     own box -- one declaration here tints every white bit inside the
+     panel at once (timestamps, volume icon, overflow-menu dots, the
+     scrubber) instead of chasing each pseudo-element individually.
+     sepia+hue-rotate(22deg) is tuned to land on the app's own olive
+     accent rather than a generic green (45deg overshot into green). */
+  filter: sepia(1) saturate(4) hue-rotate(22deg) brightness(1.1);
+}
+.audio-preview audio::-webkit-media-controls-timeline { accent-color: var(--accent) !important; }
+.audio-preview audio::-webkit-media-controls-play-button {
+  /* Same filter again, stacked on top of the panel's: this element's
+     already-tinted output gets filtered a second time as part of the
+     panel's own composite, giving the active play/pause indicator a
+     visibly deeper tint than the rest of the row. */
+  filter: sepia(1) saturate(4) hue-rotate(22deg) brightness(1.1);
+}
 /* #290: the file's own tags in the preview (title/artist headline, then the
    labelled rest), or an explicit empty state. */
 .audio-tags { display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center; max-width: 520px; min-width: 0; }

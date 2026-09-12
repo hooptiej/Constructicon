@@ -22,17 +22,6 @@
   {% endif %}
 
   <div class="project-detail-header">
-    {% if cover_url %}
-    <div class="project-cover" style="height:200px;border-radius:12px;border:1px solid var(--border)">
-      <img src="{{ cover_url }}" alt="">
-    </div>
-    {% endif %}
-    {% if timeline_children or timeline_items %}
-    <div class="project-video-timeline-panel">
-      <div class="project-video-timeline-panel-label">Project Timeline</div>
-      <div class="project-video-timeline" id="project-video-timeline"></div>
-    </div>
-    {% endif %}
     <div>
       {# #241: click the title (or the pencil) to rename in place — see the
          title-edit script at the bottom, same immediate-effect pattern as
@@ -59,6 +48,17 @@
       </select>
     </div>
     <div class="hazard-stripe" style="width:64px"></div>
+    {% if cover_url %}
+    <div class="project-cover" style="height:200px;border-radius:12px;border:1px solid var(--border)">
+      <img src="{{ cover_url }}" alt="">
+    </div>
+    {% endif %}
+    {% if timeline_children or timeline_items %}
+    <div class="project-video-timeline-panel-label">Project Timeline</div>
+    <div class="project-video-timeline-panel">
+      <div class="project-video-timeline" id="project-video-timeline"></div>
+    </div>
+    {% endif %}
   </div>
 
   <div style="margin-top:12px;display:flex;gap:24px;flex-wrap:wrap;font-size:13px">

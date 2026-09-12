@@ -45,6 +45,13 @@ def _to_public(row):
         "source": row["source"],
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
+        # #261: per-type metadata bag (auto_caption/auto_caption_status,
+        # YouTube view/like/comment counts, ID3 tags, ...) -- previously
+        # invisible through every MCP tool. Same "always a dict, never
+        # None/missing" contract as web/app.py's _to_object_detail;
+        # core/db.py's _row_to_dict already parses the JSON column, so
+        # this is only a guard against a stored JSON null.
+        "type_metadata": row.get("type_metadata") or {},
         "artifact_link": f"{BASE_URL}{row['artifact_link']}" if row["artifact_link"] else None,
         "timestamp": row["timestamp"],
         "content_date": row.get("content_date"),

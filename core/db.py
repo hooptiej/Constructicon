@@ -4,7 +4,6 @@ import json
 import re
 import sqlite3
 import time
-from contextlib import closing
 from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "imagerepo.db"
@@ -162,10 +161,12 @@ def source_group(tech):
 
 def ensure_special_clients():
     conn = get_conn()
-    for name in SPECIAL_CLIENTS:
-        conn.execute("INSERT OR IGNORE INTO clients (name, category) VALUES (?, 'special')", (name,))
-    conn.commit()
-    conn.close()
+    try:
+        for name in SPECIAL_CLIENTS:
+            conn.execute("INSERT OR IGNORE INTO clients (name, category) VALUES (?, 'special')", (name,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def sync_hudu_clients(companies):
@@ -180,29 +181,31 @@ def sync_hudu_clients(companies):
     typically the company's website plus any Cloudflare-managed zones.
     """
     conn = get_conn()
-    conn.execute("DELETE FROM client_domains WHERE client_name IN (SELECT name FROM clients WHERE category = 'hudu')")
-    conn.execute("DELETE FROM clients WHERE category = 'hudu'")
-    rows, domain_rows = [], []
-    for c in companies:
-        if isinstance(c, str):
-            rows.append((c, None))
-            continue
-        name = c["name"]
-        rows.append((name, c.get("nickname") or None))
-        for domain in c.get("domains") or []:
-            if domain:
-                domain_rows.append((name, domain.strip().lower()))
-    conn.executemany(
-        "INSERT OR IGNORE INTO clients (name, category, nickname) VALUES (?, 'hudu', ?)",
-        rows,
-    )
-    if domain_rows:
+    try:
+        conn.execute("DELETE FROM client_domains WHERE client_name IN (SELECT name FROM clients WHERE category = 'hudu')")
+        conn.execute("DELETE FROM clients WHERE category = 'hudu'")
+        rows, domain_rows = [], []
+        for c in companies:
+            if isinstance(c, str):
+                rows.append((c, None))
+                continue
+            name = c["name"]
+            rows.append((name, c.get("nickname") or None))
+            for domain in c.get("domains") or []:
+                if domain:
+                    domain_rows.append((name, domain.strip().lower()))
         conn.executemany(
-            "INSERT OR IGNORE INTO client_domains (client_name, domain) VALUES (?, ?)",
-            domain_rows,
+            "INSERT OR IGNORE INTO clients (name, category, nickname) VALUES (?, 'hudu', ?)",
+            rows,
         )
-    conn.commit()
-    conn.close()
+        if domain_rows:
+            conn.executemany(
+                "INSERT OR IGNORE INTO client_domains (client_name, domain) VALUES (?, ?)",
+                domain_rows,
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def add_test_client(name, nickname=None, domains=None):
@@ -213,23 +216,27 @@ def add_test_client(name, nickname=None, domains=None):
     call, which would silently delete a fake client the next time a real
     sync runs."""
     conn = get_conn()
-    conn.execute("INSERT OR IGNORE INTO clients (name, category, nickname) VALUES (?, 'test', ?)", (name, nickname))
-    if domains:
-        conn.executemany(
-            "INSERT OR IGNORE INTO client_domains (client_name, domain) VALUES (?, ?)",
-            [(name, d.strip().lower()) for d in domains if d],
-        )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("INSERT OR IGNORE INTO clients (name, category, nickname) VALUES (?, 'test', ?)", (name, nickname))
+        if domains:
+            conn.executemany(
+                "INSERT OR IGNORE INTO client_domains (client_name, domain) VALUES (?, ?)",
+                [(name, d.strip().lower()) for d in domains if d],
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_client_domains():
     """(client_name, domain) pairs — a client can have more than one, so this
     is flat rows rather than one-per-client like list_client_aliases."""
     conn = get_conn()
-    rows = conn.execute("SELECT client_name, domain FROM client_domains").fetchall()
-    conn.close()
-    return [(r["client_name"], r["domain"]) for r in rows]
+    try:
+        rows = conn.execute("SELECT client_name, domain FROM client_domains").fetchall()
+        return [(r["client_name"], r["domain"]) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_client_aliases():
@@ -238,22 +245,26 @@ def list_client_aliases():
     dropdown (list_clients handles that, and keeps test clients visually
     separate)."""
     conn = get_conn()
-    rows = conn.execute("SELECT name, nickname FROM clients WHERE category IN ('hudu', 'test')").fetchall()
-    conn.close()
-    return [(r["name"], r["nickname"]) for r in rows]
+    try:
+        rows = conn.execute("SELECT name, nickname FROM clients WHERE category IN ('hudu', 'test')").fetchall()
+        return [(r["name"], r["nickname"]) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_clients():
     conn = get_conn()
-    specials = conn.execute("SELECT name FROM clients WHERE category = 'special' ORDER BY name").fetchall()
-    hudu = conn.execute("SELECT name FROM clients WHERE category = 'hudu' ORDER BY name").fetchall()
-    test = conn.execute("SELECT name FROM clients WHERE category = 'test' ORDER BY name").fetchall()
-    conn.close()
-    return {
-        "special": [r["name"] for r in specials],
-        "clients": [r["name"] for r in hudu],
-        "test": [r["name"] for r in test],
-    }
+    try:
+        specials = conn.execute("SELECT name FROM clients WHERE category = 'special' ORDER BY name").fetchall()
+        hudu = conn.execute("SELECT name FROM clients WHERE category = 'hudu' ORDER BY name").fetchall()
+        test = conn.execute("SELECT name FROM clients WHERE category = 'test' ORDER BY name").fetchall()
+        return {
+            "special": [r["name"] for r in specials],
+            "clients": [r["name"] for r in hudu],
+            "test": [r["name"] for r in test],
+        }
+    finally:
+        conn.close()
 
 
 def get_conn():
@@ -268,89 +279,91 @@ def get_conn():
 
 def init_db():
     conn = get_conn()
-    # Pre-generic-schema table from before the capture_events rework — sample
-    # data only, safe to drop rather than migrate. Confirmed with Jason 2026-08-27.
-    conn.execute("DROP TABLE IF EXISTS uploads")
-    conn.executescript(SCHEMA)
-    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(capture_events)")}
-    for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
-        if column not in existing_columns:
-            conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
-    # display_date_override (Timeline feature): manual override for an object's
-    # position on the timeline. NULL means "use the computed default" — see
-    # core/timeline.py's resolve_item_date.
-    for column, ddl_type in (("display_date_override", "REAL"),):
-        if column not in existing_columns:
-            conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
-    # media_type is a loose classifier ('image' | 'youtube' | 'document', or anything else a
-    # caller wants) — deliberately no CHECK constraint. See core/object_types.py for the
-    # registry that gives each value a real spec (thumbnail strategy, OCR eligibility,
-    # per-type metadata fields); a media_type with no registered spec just falls back to
-    # object_types.DEFAULT_SPEC rather than erroring. Existing rows predate this column and
-    # are all screenshots, so they default to 'image' below.
-    if "media_type" not in existing_columns:
-        conn.execute("ALTER TABLE capture_events ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'")
-    for column, ddl_type in (("external_url", "TEXT"), ("content_description", "TEXT"), ("content_date", "REAL")):
-        if column not in existing_columns:
-            conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
-    # type_metadata: a freeform JSON bag for per-object-type properties that
-    # don't fit the generic columns above (see core/object_types.py's
-    # MetadataField) — e.g. a future PDF's page count, an STL's dimensions.
-    # Deliberately one shared column rather than a new ALTER TABLE per type,
-    # so registering a new object type never requires a schema migration.
-    if "type_metadata" not in existing_columns:
-        conn.execute("ALTER TABLE capture_events ADD COLUMN type_metadata TEXT NOT NULL DEFAULT '{}'")
-    existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
-    if "nickname" not in existing_client_columns:
-        conn.execute("ALTER TABLE clients ADD COLUMN nickname TEXT")
-    # tag_id: links a project to a root-level blog_tags row of the same name
-    # (see create_project's tag_id param) so tagging an object with a project
-    # also surfaces it through the site's ordinary tag-based browsing (the
-    # home page's ?tag=<slug> filter over the Projects column, and any future
-    # consumer of list_posts_for_tag). Existing pre-#1 projects (e.g. the ones
-    # from scripts/seed_example_projects.py) predate this and simply have
-    # tag_id = NULL — they still work everywhere, they just aren't reachable
-    # via a tag filter until someone links one up by hand.
-    existing_project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
-    if "tag_id" not in existing_project_columns:
-        conn.execute("ALTER TABLE projects ADD COLUMN tag_id INTEGER REFERENCES blog_tags(id)")
-    # display_name/icon (#11): an optional per-object override so an object
-    # can be given a human-friendly label and a custom emoji independent of
-    # its filename and its media_type's generic badge_icon (see
-    # core/object_types.py). NULL for every existing row — _to_public/
-    # _to_object_detail in web/app.py fall back to the pre-existing
-    # filename/content_description/slug and spec.badge_icon behavior when
-    # unset, so this is purely additive.
-    for column, ddl_type in (("display_name", "TEXT"), ("icon", "TEXT")):
-        if column not in existing_columns:
-            conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
-    # parent_id (#133): support for nested projects — projects can now have a
-    # parent project, enabling a simple hierarchy. Mirrors the same self-referencing
-    # pattern as blog_tags.parent_id for consistency.
-    if "parent_id" not in existing_project_columns:
-        conn.execute("ALTER TABLE projects ADD COLUMN parent_id INTEGER REFERENCES projects(id)")
-    # Create the index after the column is guaranteed to exist
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id)")
-    # writeup_slug (#156): optional reference to a document-type capture_event that
-    # serves as the project's write-up/article. Follows the same pattern as cover_slug —
-    # points at a capture_events.slug with no FK constraint.
-    if "writeup_slug" not in existing_project_columns:
-        conn.execute("ALTER TABLE projects ADD COLUMN writeup_slug TEXT")
-    # start_date_override/end_date_override (Timeline feature): a project is a
-    # span, not a moment — these manually override its computed start/end
-    # (derived from its items' effective dates otherwise). NULL means "use the
-    # computed default" — see core/timeline.py's resolve_project_span.
-    for column, ddl_type in (("start_date_override", "REAL"), ("end_date_override", "REAL")):
-        if column not in existing_project_columns:
-            conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
-    # agent_notes (#206): reserved space for agent-authored working notes, separate
-    # from owner-facing content. Used for Claude working state (e.g., "this is a
-    # Fusion 360 screenshot, not user-facing" or "already inventoried, skip on re-run").
-    # Never exposed through public HTTP API — agent-only scratch space.
-    if "agent_notes" not in existing_columns:
-        conn.execute("ALTER TABLE capture_events ADD COLUMN agent_notes TEXT")
-    conn.commit()
-    conn.close()
+    try:
+        # Pre-generic-schema table from before the capture_events rework — sample
+        # data only, safe to drop rather than migrate. Confirmed with Jason 2026-08-27.
+        conn.execute("DROP TABLE IF EXISTS uploads")
+        conn.executescript(SCHEMA)
+        existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(capture_events)")}
+        for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
+            if column not in existing_columns:
+                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+        # display_date_override (Timeline feature): manual override for an object's
+        # position on the timeline. NULL means "use the computed default" — see
+        # core/timeline.py's resolve_item_date.
+        for column, ddl_type in (("display_date_override", "REAL"),):
+            if column not in existing_columns:
+                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+        # media_type is a loose classifier ('image' | 'youtube' | 'document', or anything else a
+        # caller wants) — deliberately no CHECK constraint. See core/object_types.py for the
+        # registry that gives each value a real spec (thumbnail strategy, OCR eligibility,
+        # per-type metadata fields); a media_type with no registered spec just falls back to
+        # object_types.DEFAULT_SPEC rather than erroring. Existing rows predate this column and
+        # are all screenshots, so they default to 'image' below.
+        if "media_type" not in existing_columns:
+            conn.execute("ALTER TABLE capture_events ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'")
+        for column, ddl_type in (("external_url", "TEXT"), ("content_description", "TEXT"), ("content_date", "REAL")):
+            if column not in existing_columns:
+                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+        # type_metadata: a freeform JSON bag for per-object-type properties that
+        # don't fit the generic columns above (see core/object_types.py's
+        # MetadataField) — e.g. a future PDF's page count, an STL's dimensions.
+        # Deliberately one shared column rather than a new ALTER TABLE per type,
+        # so registering a new object type never requires a schema migration.
+        if "type_metadata" not in existing_columns:
+            conn.execute("ALTER TABLE capture_events ADD COLUMN type_metadata TEXT NOT NULL DEFAULT '{}'")
+        existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
+        if "nickname" not in existing_client_columns:
+            conn.execute("ALTER TABLE clients ADD COLUMN nickname TEXT")
+        # tag_id: links a project to a root-level blog_tags row of the same name
+        # (see create_project's tag_id param) so tagging an object with a project
+        # also surfaces it through the site's ordinary tag-based browsing (the
+        # home page's ?tag=<slug> filter over the Projects column, and any future
+        # consumer of list_posts_for_tag). Existing pre-#1 projects (e.g. the ones
+        # from scripts/seed_example_projects.py) predate this and simply have
+        # tag_id = NULL — they still work everywhere, they just aren't reachable
+        # via a tag filter until someone links one up by hand.
+        existing_project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+        if "tag_id" not in existing_project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN tag_id INTEGER REFERENCES blog_tags(id)")
+        # display_name/icon (#11): an optional per-object override so an object
+        # can be given a human-friendly label and a custom emoji independent of
+        # its filename and its media_type's generic badge_icon (see
+        # core/object_types.py). NULL for every existing row — _to_public/
+        # _to_object_detail in web/app.py fall back to the pre-existing
+        # filename/content_description/slug and spec.badge_icon behavior when
+        # unset, so this is purely additive.
+        for column, ddl_type in (("display_name", "TEXT"), ("icon", "TEXT")):
+            if column not in existing_columns:
+                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+        # parent_id (#133): support for nested projects — projects can now have a
+        # parent project, enabling a simple hierarchy. Mirrors the same self-referencing
+        # pattern as blog_tags.parent_id for consistency.
+        if "parent_id" not in existing_project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN parent_id INTEGER REFERENCES projects(id)")
+        # Create the index after the column is guaranteed to exist
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id)")
+        # writeup_slug (#156): optional reference to a document-type capture_event that
+        # serves as the project's write-up/article. Follows the same pattern as cover_slug —
+        # points at a capture_events.slug with no FK constraint.
+        if "writeup_slug" not in existing_project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN writeup_slug TEXT")
+        # start_date_override/end_date_override (Timeline feature): a project is a
+        # span, not a moment — these manually override its computed start/end
+        # (derived from its items' effective dates otherwise). NULL means "use the
+        # computed default" — see core/timeline.py's resolve_project_span.
+        for column, ddl_type in (("start_date_override", "REAL"), ("end_date_override", "REAL")):
+            if column not in existing_project_columns:
+                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+        # agent_notes (#206): reserved space for agent-authored working notes, separate
+        # from owner-facing content. Used for Claude working state (e.g., "this is a
+        # Fusion 360 screenshot, not user-facing" or "already inventoried, skip on re-run").
+        # Never exposed through public HTTP API — agent-only scratch space.
+        if "agent_notes" not in existing_columns:
+            conn.execute("ALTER TABLE capture_events ADD COLUMN agent_notes TEXT")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _row_to_dict(row):
@@ -375,24 +388,26 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
     core/object_types.py's MetadataField and set_type_metadata below.
     """
     conn = get_conn()
-    now = time.time()
-    conn.execute(
-        "INSERT INTO capture_events (slug, source, client, timestamp, tech, description, "
-        "extracted_text, artifact_link, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
-        "media_type, external_url, content_description, content_date, type_metadata) "
-        "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (slug, source, client, now, uploaded_by, description,
-         f"/f/{slug}", json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
-         now if ocr_status == "pending" else None,
-         media_type, external_url, content_description, content_date, json.dumps(type_metadata or {})),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        now = time.time()
+        conn.execute(
+            "INSERT INTO capture_events (slug, source, client, timestamp, tech, description, "
+            "extracted_text, artifact_link, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
+            "media_type, external_url, content_description, content_date, type_metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (slug, source, client, now, uploaded_by, description,
+             f"/f/{slug}", json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
+             now if ocr_status == "pending" else None,
+             media_type, external_url, content_description, content_date, json.dumps(type_metadata or {})),
+        )
+        conn.commit()
 
-    # #228: sync free-text tags to the real tag tree on insert, not just on update.
-    # For a new row, previous_tags is empty since it just got created with no prior state.
-    if tags:
-        sync_real_tags_for_post(slug, tags, previous_tags=[])
+        # #228: sync free-text tags to the real tag tree on insert, not just on update.
+        # For a new row, previous_tags is empty since it just got created with no prior state.
+        if tags:
+            sync_real_tags_for_post(slug, tags, previous_tags=[])
+    finally:
+        conn.close()
 
 
 def insert_content(slug, uploaded_by, media_type, external_url=None, content_description=None, content_date=None,
@@ -420,9 +435,11 @@ def set_type_metadata(slug, metadata):
     """Replaces a row's type_metadata dict wholesale — callers that want to
     merge should read get_by_slug(slug)["type_metadata"] first."""
     conn = get_conn()
-    conn.execute("UPDATE capture_events SET type_metadata = ? WHERE slug = ?", (json.dumps(metadata or {}), slug))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("UPDATE capture_events SET type_metadata = ? WHERE slug = ?", (json.dumps(metadata or {}), slug))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def update_content_metadata(slug, content_description=None, type_metadata=None):
@@ -461,13 +478,15 @@ def update_content_metadata(slug, content_description=None, type_metadata=None):
     else:
         merged = existing.get("type_metadata") or {}
     conn = get_conn()
-    conn.execute(
-        "UPDATE capture_events SET content_description = ?, type_metadata = ? WHERE slug = ?",
-        (new_content_description, json.dumps(merged), slug),
-    )
-    conn.commit()
-    conn.close()
-    return get_by_slug(slug)
+    try:
+        conn.execute(
+            "UPDATE capture_events SET content_description = ?, type_metadata = ? WHERE slug = ?",
+            (new_content_description, json.dumps(merged), slug),
+        )
+        conn.commit()
+        return get_by_slug(slug)
+    finally:
+        conn.close()
 
 
 def list_pending_ocr():
@@ -475,9 +494,11 @@ def list_pending_ocr():
     but a process restart while a background OCR task was queued or running
     leaves a row stuck here forever unless something re-triggers it."""
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM capture_events WHERE ocr_status = 'pending'").fetchall()
-    conn.close()
-    return [_row_to_dict(r) for r in rows]
+    try:
+        rows = conn.execute("SELECT * FROM capture_events WHERE ocr_status = 'pending'").fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def set_ocr_status(slug, status):
@@ -485,12 +506,14 @@ def set_ocr_status(slug, status):
     watchdog measure how long the *current* attempt has been running,
     independent of how old the upload itself is."""
     conn = get_conn()
-    if status == "pending":
-        conn.execute("UPDATE capture_events SET ocr_status = ?, ocr_started_at = ? WHERE slug = ?", (status, time.time(), slug))
-    else:
-        conn.execute("UPDATE capture_events SET ocr_status = ? WHERE slug = ?", (status, slug))
-    conn.commit()
-    conn.close()
+    try:
+        if status == "pending":
+            conn.execute("UPDATE capture_events SET ocr_status = ?, ocr_started_at = ? WHERE slug = ?", (status, time.time(), slug))
+        else:
+            conn.execute("UPDATE capture_events SET ocr_status = ? WHERE slug = ?", (status, slug))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_stale_pending_ocr(older_than_seconds):
@@ -498,26 +521,32 @@ def list_stale_pending_ocr(older_than_seconds):
     watchdog re-fires these rather than assuming they're just queued behind
     a big batch forever."""
     conn = get_conn()
-    cutoff = time.time() - older_than_seconds
-    rows = conn.execute(
-        "SELECT * FROM capture_events WHERE ocr_status = 'pending' AND ocr_started_at < ?", (cutoff,)
-    ).fetchall()
-    conn.close()
-    return [_row_to_dict(r) for r in rows]
+    try:
+        cutoff = time.time() - older_than_seconds
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE ocr_status = 'pending' AND ocr_started_at < ?", (cutoff,)
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def set_perceptual_hash(slug, phash):
     conn = get_conn()
-    conn.execute("UPDATE capture_events SET perceptual_hash = ? WHERE slug = ?", (phash, slug))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("UPDATE capture_events SET perceptual_hash = ? WHERE slug = ?", (phash, slug))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def set_embedding(slug, embedding_bytes):
     conn = get_conn()
-    conn.execute("UPDATE capture_events SET embedding = ? WHERE slug = ?", (embedding_bytes, slug))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("UPDATE capture_events SET embedding = ? WHERE slug = ?", (embedding_bytes, slug))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_hash_and_embedding_candidates(exclude_slug):
@@ -525,20 +554,24 @@ def list_hash_and_embedding_candidates(exclude_slug):
     least one of the two signals — used for live similarity comparison,
     not cached, so there's nothing to invalidate as new rows come in."""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT slug, perceptual_hash, embedding FROM capture_events "
-        "WHERE slug != ? AND (perceptual_hash IS NOT NULL OR embedding IS NOT NULL)",
-        (exclude_slug,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT slug, perceptual_hash, embedding FROM capture_events "
+            "WHERE slug != ? AND (perceptual_hash IS NOT NULL OR embedding IS NOT NULL)",
+            (exclude_slug,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def get_by_slug(slug):
     conn = get_conn()
-    row = conn.execute("SELECT * FROM capture_events WHERE slug = ?", (slug,)).fetchone()
-    conn.close()
-    return _row_to_dict(row) if row else None
+    try:
+        row = conn.execute("SELECT * FROM capture_events WHERE slug = ?", (slug,)).fetchone()
+        return _row_to_dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def find_duplicate(filename, file_size, source_modified_at):
@@ -550,13 +583,15 @@ def find_duplicate(filename, file_size, source_modified_at):
     if not filename or file_size is None or source_modified_at is None:
         return None
     conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM capture_events WHERE filename = ? AND file_size = ? AND source_modified_at = ? "
-        "ORDER BY timestamp ASC LIMIT 1",
-        (filename, file_size, source_modified_at),
-    ).fetchone()
-    conn.close()
-    return _row_to_dict(row) if row else None
+    try:
+        row = conn.execute(
+            "SELECT * FROM capture_events WHERE filename = ? AND file_size = ? AND source_modified_at = ? "
+            "ORDER BY timestamp ASC LIMIT 1",
+            (filename, file_size, source_modified_at),
+        ).fetchone()
+        return _row_to_dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def update_tags(slug, description=None, tags=None, client=None):
@@ -661,17 +696,19 @@ def rename_object(slug, display_name=None, icon=None):
     if existing is None:
         return None
     conn = get_conn()
-    conn.execute(
-        "UPDATE capture_events SET display_name = ?, icon = ? WHERE slug = ?",
-        (
-            (display_name or None) if display_name is not None else existing.get("display_name"),
-            (icon or None) if icon is not None else existing.get("icon"),
-            slug,
-        ),
-    )
-    conn.commit()
-    conn.close()
-    return get_by_slug(slug)
+    try:
+        conn.execute(
+            "UPDATE capture_events SET display_name = ?, icon = ? WHERE slug = ?",
+            (
+                (display_name or None) if display_name is not None else existing.get("display_name"),
+                (icon or None) if icon is not None else existing.get("icon"),
+                slug,
+            ),
+        )
+        conn.commit()
+        return get_by_slug(slug)
+    finally:
+        conn.close()
 
 
 def set_agent_notes(slug, notes):
@@ -684,10 +721,12 @@ def set_agent_notes(slug, notes):
     if existing is None:
         return None
     conn = get_conn()
-    conn.execute("UPDATE capture_events SET agent_notes = ? WHERE slug = ?", (notes, slug))
-    conn.commit()
-    conn.close()
-    return get_by_slug(slug)
+    try:
+        conn.execute("UPDATE capture_events SET agent_notes = ? WHERE slug = ?", (notes, slug))
+        conn.commit()
+        return get_by_slug(slug)
+    finally:
+        conn.close()
 
 
 def get_setting(key):
@@ -701,9 +740,11 @@ def get_setting(key):
     the real value should only ever be read by the code that actually needs
     to use it (never logged, never handed back to a browser)."""
     conn = get_conn()
-    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
-    conn.close()
-    return row["value"] if row else None
+    try:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+    finally:
+        conn.close()
 
 
 def has_setting(key):
@@ -722,16 +763,18 @@ def set_setting(key, value):
     already-unauthenticated app (see web/app.py's module docstring); still
     never logged and never echoed back to a caller."""
     conn = get_conn()
-    if value:
-        conn.execute(
-            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (key, value),
-        )
-    else:
-        conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
-    conn.commit()
-    conn.close()
+    try:
+        if value:
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+        else:
+            conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def add_tags(slug, new_tags):
@@ -763,12 +806,14 @@ def set_client_if_empty(slug, client):
     """Only sets client if it's currently unset — auto-detection should
     never override a client a person already picked by hand."""
     conn = get_conn()
-    conn.execute(
-        "UPDATE capture_events SET client = ? WHERE slug = ? AND (client IS NULL OR client = '')",
-        (client, slug),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            "UPDATE capture_events SET client = ? WHERE slug = ? AND (client IS NULL OR client = '')",
+            (client, slug),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_uploaders(query=None, client=None):
@@ -783,77 +828,85 @@ def list_uploaders(query=None, client=None):
     slicing.
     """
     conn = get_conn()
-    clauses, params = [], []
-    if query:
-        clauses.append("(description LIKE ? OR filename LIKE ?)")
-        params += [f"%{query}%", f"%{query}%"]
-    if client:
-        clauses.append("client = ?")
-        params.append(client)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    rows = conn.execute(f"SELECT tech, timestamp FROM capture_events {where}", params).fetchall()
-    conn.close()
-    groups = {}
-    for r in rows:
-        key = source_group(r["tech"])
-        g = groups.setdefault(key, {"uploaded_by": key, "total": 0, "most_recent": 0})
-        g["total"] += 1
-        g["most_recent"] = max(g["most_recent"], r["timestamp"])
-    return sorted(groups.values(), key=lambda g: g["most_recent"], reverse=True)
+    try:
+        clauses, params = [], []
+        if query:
+            clauses.append("(description LIKE ? OR filename LIKE ?)")
+            params += [f"%{query}%", f"%{query}%"]
+        if client:
+            clauses.append("client = ?")
+            params.append(client)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(f"SELECT tech, timestamp FROM capture_events {where}", params).fetchall()
+        groups = {}
+        for r in rows:
+            key = source_group(r["tech"])
+            g = groups.setdefault(key, {"uploaded_by": key, "total": 0, "most_recent": 0})
+            g["total"] += 1
+            g["most_recent"] = max(g["most_recent"], r["timestamp"])
+        return sorted(groups.values(), key=lambda g: g["most_recent"], reverse=True)
+    finally:
+        conn.close()
 
 
 def search(query=None, tags=None, client=None, uploaded_by=None, limit=50):
     conn = get_conn()
-    clauses, params = [], []
-    if query:
-        clauses.append("(description LIKE ? OR filename LIKE ? OR extracted_text LIKE ?)")
-        params += [f"%{query}%", f"%{query}%", f"%{query}%"]
-    if client:
-        clauses.append("client = ?")
-        params.append(client)
-    if uploaded_by:
-        # Matches either the exact Source string or rows whose Source starts
-        # with `uploaded_by` as its group prefix (see source_group()) — lets
-        # callers filter by either a full Source string or the short grouping
-        # key the gallery views link with (e.g. "Hooptie J (me)").
-        clauses.append("(tech = ? OR tech LIKE ? OR tech LIKE ?)")
-        params += [uploaded_by, f"{uploaded_by} —%", f"{uploaded_by} -%"]
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    # #166: the tag filter runs in Python (tags is a JSON column, not
-    # queryable in SQL), so when it's present the row LIMIT must apply AFTER
-    # filtering, not before -- fetching only the `limit` most recent rows and
-    # THEN filtering by tag silently drops any older tagged match once
-    # `limit` newer, untagged rows exist. Only pay for the unbounded fetch
-    # when a tag filter is actually requested.
-    query_sql = f"SELECT * FROM capture_events {where} ORDER BY timestamp DESC"
-    query_params = list(params)
-    if not tags:
-        query_sql += " LIMIT ?"
-        query_params.append(limit)
-    rows = conn.execute(query_sql, query_params).fetchall()
-    conn.close()
-    results = [_row_to_dict(r) for r in rows]
-    if tags:
-        wanted = set(tags)
-        results = [r for r in results if wanted & set(r["tags"])]
-        results = results[:limit]
-    return results
+    try:
+        clauses, params = [], []
+        if query:
+            clauses.append("(description LIKE ? OR filename LIKE ? OR extracted_text LIKE ?)")
+            params += [f"%{query}%", f"%{query}%", f"%{query}%"]
+        if client:
+            clauses.append("client = ?")
+            params.append(client)
+        if uploaded_by:
+            # Matches either the exact Source string or rows whose Source starts
+            # with `uploaded_by` as its group prefix (see source_group()) — lets
+            # callers filter by either a full Source string or the short grouping
+            # key the gallery views link with (e.g. "Hooptie J (me)").
+            clauses.append("(tech = ? OR tech LIKE ? OR tech LIKE ?)")
+            params += [uploaded_by, f"{uploaded_by} —%", f"{uploaded_by} -%"]
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        # #166: the tag filter runs in Python (tags is a JSON column, not
+        # queryable in SQL), so when it's present the row LIMIT must apply AFTER
+        # filtering, not before -- fetching only the `limit` most recent rows and
+        # THEN filtering by tag silently drops any older tagged match once
+        # `limit` newer, untagged rows exist. Only pay for the unbounded fetch
+        # when a tag filter is actually requested.
+        query_sql = f"SELECT * FROM capture_events {where} ORDER BY timestamp DESC"
+        query_params = list(params)
+        if not tags:
+            query_sql += " LIMIT ?"
+            query_params.append(limit)
+        rows = conn.execute(query_sql, query_params).fetchall()
+        results = [_row_to_dict(r) for r in rows]
+        if tags:
+            wanted = set(tags)
+            results = [r for r in results if wanted & set(r["tags"])]
+            results = results[:limit]
+        return results
+    finally:
+        conn.close()
 
 
 def set_extracted_text(slug, text):
     conn = get_conn()
-    conn.execute("UPDATE capture_events SET extracted_text = ? WHERE slug = ?", (text, slug))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("UPDATE capture_events SET extracted_text = ? WHERE slug = ?", (text, slug))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def mark_redacted(slug):
     """File removed (sensitive content), metadata kept for future correlation."""
     conn = get_conn()
-    conn.execute("UPDATE capture_events SET redacted = 1 WHERE slug = ?", (slug,))
-    conn.commit()
-    conn.close()
-    return get_by_slug(slug)
+    try:
+        conn.execute("UPDATE capture_events SET redacted = 1 WHERE slug = ?", (slug,))
+        conn.commit()
+        return get_by_slug(slug)
+    finally:
+        conn.close()
 
 
 def delete_upload(slug):
@@ -868,15 +921,17 @@ def delete_upload(slug):
     nothing ever queries project_items/post_tags for a slug that no longer
     has a capture_events row)."""
     conn = get_conn()
-    conn.execute("DELETE FROM capture_events WHERE slug = ?", (slug,))
-    conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? OR slug_b = ?", (slug, slug))
-    conn.execute("DELETE FROM project_items WHERE post_slug = ?", (slug,))
-    conn.execute("DELETE FROM post_tags WHERE post_slug = ?", (slug,))
-    # #240: an open "which project?" question about a row that no longer
-    # exists is just noise in the admin pane's queue.
-    conn.execute("DELETE FROM pending_decisions WHERE post_slug = ?", (slug,))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("DELETE FROM capture_events WHERE slug = ?", (slug,))
+        conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? OR slug_b = ?", (slug, slug))
+        conn.execute("DELETE FROM project_items WHERE post_slug = ?", (slug,))
+        conn.execute("DELETE FROM post_tags WHERE post_slug = ?", (slug,))
+        # #240: an open "which project?" question about a row that no longer
+        # exists is just noise in the admin pane's queue.
+        conn.execute("DELETE FROM pending_decisions WHERE post_slug = ?", (slug,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def add_relation(slug_a, slug_b):
@@ -906,18 +961,20 @@ def add_relation(slug_a, slug_b):
     if slug_a == slug_b:
         return
     conn = get_conn()
-    now = time.time()
-    conn.execute(
-        "INSERT OR IGNORE INTO capture_event_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)",
-        (slug_a, slug_b, now),
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO capture_event_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)",
-        (slug_b, slug_a, now),
-    )
-    conn.commit()
-    conn.close()
-    _sync_relation_categorization(slug_a, slug_b)
+    try:
+        now = time.time()
+        conn.execute(
+            "INSERT OR IGNORE INTO capture_event_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)",
+            (slug_a, slug_b, now),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO capture_event_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)",
+            (slug_b, slug_a, now),
+        )
+        conn.commit()
+        _sync_relation_categorization(slug_a, slug_b)
+    finally:
+        conn.close()
 
 
 def _sync_relation_categorization(slug_a, slug_b):
@@ -947,21 +1004,25 @@ def _sync_relation_categorization(slug_a, slug_b):
 
 def remove_relation(slug_a, slug_b):
     conn = get_conn()
-    conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? AND slug_b = ?", (slug_a, slug_b))
-    conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? AND slug_b = ?", (slug_b, slug_a))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? AND slug_b = ?", (slug_a, slug_b))
+        conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? AND slug_b = ?", (slug_b, slug_a))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_related(slug):
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT ce.* FROM capture_event_relations r JOIN capture_events ce ON ce.slug = r.slug_b "
-        "WHERE r.slug_a = ? ORDER BY ce.timestamp DESC",
-        (slug,),
-    ).fetchall()
-    conn.close()
-    return [_row_to_dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT ce.* FROM capture_event_relations r JOIN capture_events ce ON ce.slug = r.slug_b "
+            "WHERE r.slug_a = ? ORDER BY ce.timestamp DESC",
+            (slug,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 # --- Blog tags ---
@@ -983,11 +1044,13 @@ def _find_tag_by_name(name):
     creating duplicate root-level tags when a child tag with the same name
     already exists (#213)."""
     conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM blog_tags WHERE name = ?", (name,)
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    try:
+        row = conn.execute(
+            "SELECT * FROM blog_tags WHERE name = ?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def get_or_create_tag(name, parent_id=None):
@@ -1001,60 +1064,67 @@ def get_or_create_tag(name, parent_id=None):
     creating a new one. This prevents creating a duplicate root-level tag
     when the user types a child tag's name into the free-text box."""
     conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM blog_tags WHERE name = ? AND parent_id IS ?", (name, parent_id)
-    ).fetchone()
-    if row:
+    try:
+        row = conn.execute(
+            "SELECT * FROM blog_tags WHERE name = ? AND parent_id IS ?", (name, parent_id)
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        # #213 fix: if we're creating a root-level tag, first check if this name
+        # exists anywhere in the tree. If so, reuse it instead of creating a duplicate.
+        if parent_id is None:
+            existing_tag = _find_tag_by_name(name)
+            if existing_tag:
+                return existing_tag
+
+        slug = _slugify(name)
+        base_slug = slug
+        n = 2
+        while conn.execute("SELECT 1 FROM blog_tags WHERE slug = ?", (slug,)).fetchone():
+            slug = f"{base_slug}-{n}"
+            n += 1
+        cur = conn.execute(
+            "INSERT INTO blog_tags (name, slug, parent_id) VALUES (?, ?, ?)", (name, slug, parent_id)
+        )
+        conn.commit()
+        tag_id = cur.lastrowid
+        return {"id": tag_id, "name": name, "slug": slug, "parent_id": parent_id}
+    finally:
         conn.close()
-        return dict(row)
-
-    # #213 fix: if we're creating a root-level tag, first check if this name
-    # exists anywhere in the tree. If so, reuse it instead of creating a duplicate.
-    if parent_id is None:
-        existing_tag = _find_tag_by_name(name)
-        if existing_tag:
-            return existing_tag
-
-    slug = _slugify(name)
-    base_slug = slug
-    n = 2
-    while conn.execute("SELECT 1 FROM blog_tags WHERE slug = ?", (slug,)).fetchone():
-        slug = f"{base_slug}-{n}"
-        n += 1
-    cur = conn.execute(
-        "INSERT INTO blog_tags (name, slug, parent_id) VALUES (?, ?, ?)", (name, slug, parent_id)
-    )
-    conn.commit()
-    tag_id = cur.lastrowid
-    conn.close()
-    return {"id": tag_id, "name": name, "slug": slug, "parent_id": parent_id}
 
 
 def attach_tags(post_slug, tag_ids):
     conn = get_conn()
-    conn.executemany(
-        "INSERT OR IGNORE INTO post_tags (post_slug, tag_id) VALUES (?, ?)",
-        [(post_slug, tag_id) for tag_id in tag_ids],
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.executemany(
+            "INSERT OR IGNORE INTO post_tags (post_slug, tag_id) VALUES (?, ?)",
+            [(post_slug, tag_id) for tag_id in tag_ids],
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def detach_tag(post_slug, tag_id):
     conn = get_conn()
-    conn.execute("DELETE FROM post_tags WHERE post_slug = ? AND tag_id = ?", (post_slug, tag_id))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("DELETE FROM post_tags WHERE post_slug = ? AND tag_id = ?", (post_slug, tag_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_tags_for_post(post_slug):
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT t.* FROM blog_tags t JOIN post_tags pt ON pt.tag_id = t.id WHERE pt.post_slug = ? ORDER BY t.name",
-        (post_slug,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT t.* FROM blog_tags t JOIN post_tags pt ON pt.tag_id = t.id WHERE pt.post_slug = ? ORDER BY t.name",
+            (post_slug,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_tag_tree():
@@ -1062,32 +1132,36 @@ def list_tag_tree():
     contents renders straight from this. Built in Python rather than a
     recursive CTE since the tree is small and this is far easier to read."""
     conn = get_conn()
-    rows = [dict(r) for r in conn.execute("SELECT * FROM blog_tags ORDER BY name").fetchall()]
-    conn.close()
-    by_id = {row["id"]: {**row, "children": []} for row in rows}
-    roots = []
-    for row in rows:
-        node = by_id[row["id"]]
-        if row["parent_id"] is not None and row["parent_id"] in by_id:
-            by_id[row["parent_id"]]["children"].append(node)
-        else:
-            roots.append(node)
-    return roots
+    try:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM blog_tags ORDER BY name").fetchall()]
+        by_id = {row["id"]: {**row, "children": []} for row in rows}
+        roots = []
+        for row in rows:
+            node = by_id[row["id"]]
+            if row["parent_id"] is not None and row["parent_id"] in by_id:
+                by_id[row["parent_id"]]["children"].append(node)
+            else:
+                roots.append(node)
+        return roots
+    finally:
+        conn.close()
 
 
 def _descendant_tag_ids(tag_id):
     conn = get_conn()
-    rows = conn.execute("SELECT id, parent_id FROM blog_tags").fetchall()
-    conn.close()
-    children_by_parent = {}
-    for r in rows:
-        children_by_parent.setdefault(r["parent_id"], []).append(r["id"])
-    ids = [tag_id]
-    frontier = [tag_id]
-    while frontier:
-        frontier = [child for parent in frontier for child in children_by_parent.get(parent, [])]
-        ids.extend(frontier)
-    return ids
+    try:
+        rows = conn.execute("SELECT id, parent_id FROM blog_tags").fetchall()
+        children_by_parent = {}
+        for r in rows:
+            children_by_parent.setdefault(r["parent_id"], []).append(r["id"])
+        ids = [tag_id]
+        frontier = [tag_id]
+        while frontier:
+            frontier = [child for parent in frontier for child in children_by_parent.get(parent, [])]
+            ids.extend(frontier)
+        return ids
+    finally:
+        conn.close()
 
 
 def list_posts_for_tag(tag_id, include_descendants=True, limit=50):
@@ -1098,24 +1172,28 @@ def list_posts_for_tag(tag_id, include_descendants=True, limit=50):
     tag_ids = _descendant_tag_ids(tag_id) if include_descendants else [tag_id]
     placeholders = ",".join("?" for _ in tag_ids)
     conn = get_conn()
-    rows = conn.execute(
-        f"SELECT DISTINCT ce.* FROM capture_events ce JOIN post_tags pt ON pt.post_slug = ce.slug "
-        f"WHERE pt.tag_id IN ({placeholders}) ORDER BY ce.timestamp DESC LIMIT ?",
-        tag_ids + [limit],
-    ).fetchall()
-    conn.close()
-    return [_row_to_dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            f"SELECT DISTINCT ce.* FROM capture_events ce JOIN post_tags pt ON pt.post_slug = ce.slug "
+            f"WHERE pt.tag_id IN ({placeholders}) ORDER BY ce.timestamp DESC LIMIT ?",
+            tag_ids + [limit],
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_recent_posts(limit=10):
     """Chronological feed — the Blog page uses this with a high limit, Home's
     highlights strip uses it with a small one. Same query either way."""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM capture_events WHERE redacted = 0 ORDER BY timestamp DESC LIMIT ?", (limit,)
-    ).fetchall()
-    conn.close()
-    return [_row_to_dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE redacted = 0 ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_external_urls_by_media_type(media_type):
@@ -1125,12 +1203,14 @@ def list_external_urls_by_media_type(media_type):
     it's already pulled in without re-fetching every row's full data —
     generic enough for any future external-content importer's dedup pass."""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT external_url FROM capture_events WHERE media_type = ? AND external_url IS NOT NULL",
-        (media_type,),
-    ).fetchall()
-    conn.close()
-    return [r["external_url"] for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT external_url FROM capture_events WHERE media_type = ? AND external_url IS NOT NULL",
+            (media_type,),
+        ).fetchall()
+        return [r["external_url"] for r in rows]
+    finally:
+        conn.close()
 
 
 # --- Projects ---
@@ -1153,34 +1233,36 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
     parent_id optionally links this project to a parent project (#133),
     enabling a simple hierarchy of nested projects."""
     conn = get_conn()
-    slug = _slugify(title)
-    base_slug = slug
-    n = 2
-    while conn.execute("SELECT 1 FROM projects WHERE slug = ?", (slug,)).fetchone():
-        slug = f"{base_slug}-{n}"
-        n += 1
-    now = time.time()
-    cur = conn.execute(
-        "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at, tag_id, parent_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (slug, title, description, cover_slug, status, now, now, tag_id, parent_id),
-    )
-    conn.commit()
-    project_id = cur.lastrowid
-    conn.close()
-    return {
-        "id": project_id,
-        "slug": slug,
-        "title": title,
-        "description": description,
-        "cover_slug": cover_slug,
-        "status": status,
-        "created_at": now,
-        "updated_at": now,
-        "tag_id": tag_id,
-        "parent_id": parent_id,
-        "writeup_slug": None,
-    }
+    try:
+        slug = _slugify(title)
+        base_slug = slug
+        n = 2
+        while conn.execute("SELECT 1 FROM projects WHERE slug = ?", (slug,)).fetchone():
+            slug = f"{base_slug}-{n}"
+            n += 1
+        now = time.time()
+        cur = conn.execute(
+            "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at, tag_id, parent_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (slug, title, description, cover_slug, status, now, now, tag_id, parent_id),
+        )
+        conn.commit()
+        project_id = cur.lastrowid
+        return {
+            "id": project_id,
+            "slug": slug,
+            "title": title,
+            "description": description,
+            "cover_slug": cover_slug,
+            "status": status,
+            "created_at": now,
+            "updated_at": now,
+            "tag_id": tag_id,
+            "parent_id": parent_id,
+            "writeup_slug": None,
+        }
+    finally:
+        conn.close()
 
 
 def get_project(id_or_slug):
@@ -1188,24 +1270,28 @@ def get_project(id_or_slug):
     likely be reached by slug in a URL, but internal callers (e.g.
     add_item_to_project) often already have the id."""
     conn = get_conn()
-    if isinstance(id_or_slug, int) or (isinstance(id_or_slug, str) and id_or_slug.isdigit()):
-        row = conn.execute("SELECT * FROM projects WHERE id = ?", (int(id_or_slug),)).fetchone()
-    else:
-        row = conn.execute("SELECT * FROM projects WHERE slug = ?", (id_or_slug,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    try:
+        if isinstance(id_or_slug, int) or (isinstance(id_or_slug, str) and id_or_slug.isdigit()):
+            row = conn.execute("SELECT * FROM projects WHERE id = ?", (int(id_or_slug),)).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM projects WHERE slug = ?", (id_or_slug,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def list_projects(status=None):
     conn = get_conn()
-    if status is not None:
-        rows = conn.execute(
-            "SELECT * FROM projects WHERE status = ? ORDER BY updated_at DESC", (status,)
-        ).fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        if status is not None:
+            rows = conn.execute(
+                "SELECT * FROM projects WHERE status = ? ORDER BY updated_at DESC", (status,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None, parent_id=..., writeup_slug=...):
@@ -1230,33 +1316,37 @@ def update_project(id_or_slug, title=None, description=None, cover_slug=None, st
             raise ValueError(f"Cannot set project {new_parent_id} as parent: it is already a descendant of this project")
 
     conn = get_conn()
-    now = time.time()
-    new_writeup_slug = writeup_slug if writeup_slug is not ... else existing.get("writeup_slug")
-    conn.execute(
-        "UPDATE projects SET title = ?, description = ?, cover_slug = ?, status = ?, parent_id = ?, writeup_slug = ?, updated_at = ? WHERE id = ?",
-        (
-            title if title is not None else existing["title"],
-            description if description is not None else existing["description"],
-            cover_slug if cover_slug is not None else existing["cover_slug"],
-            status if status is not None else existing["status"],
-            new_parent_id,
-            new_writeup_slug,
-            now,
-            existing["id"],
-        ),
-    )
-    conn.commit()
-    conn.close()
-    return get_project(existing["id"])
+    try:
+        now = time.time()
+        new_writeup_slug = writeup_slug if writeup_slug is not ... else existing.get("writeup_slug")
+        conn.execute(
+            "UPDATE projects SET title = ?, description = ?, cover_slug = ?, status = ?, parent_id = ?, writeup_slug = ?, updated_at = ? WHERE id = ?",
+            (
+                title if title is not None else existing["title"],
+                description if description is not None else existing["description"],
+                cover_slug if cover_slug is not None else existing["cover_slug"],
+                status if status is not None else existing["status"],
+                new_parent_id,
+                new_writeup_slug,
+                now,
+                existing["id"],
+            ),
+        )
+        conn.commit()
+        return get_project(existing["id"])
+    finally:
+        conn.close()
 
 
 def set_display_date_override(slug, value):
     """value=None clears the override, reverting to the computed default
     (content_date, falling back to timestamp — see core/timeline.py)."""
     conn = get_conn()
-    conn.execute("UPDATE capture_events SET display_date_override = ? WHERE slug = ?", (value, slug))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("UPDATE capture_events SET display_date_override = ? WHERE slug = ?", (value, slug))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def set_content_date(slug, value):
@@ -1270,9 +1360,11 @@ def set_content_date(slug, value):
     every correction pass but had no way to actually write it back for an
     already-imported row."""
     conn = get_conn()
-    conn.execute("UPDATE capture_events SET content_date = ? WHERE slug = ?", (value, slug))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("UPDATE capture_events SET content_date = ? WHERE slug = ?", (value, slug))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def set_project_date_overrides(project_id, start=..., end=...):
@@ -1284,15 +1376,17 @@ def set_project_date_overrides(project_id, start=..., end=...):
     if existing is None:
         return None
     conn = get_conn()
-    new_start = existing.get("start_date_override") if start is ... else start
-    new_end = existing.get("end_date_override") if end is ... else end
-    conn.execute(
-        "UPDATE projects SET start_date_override = ?, end_date_override = ? WHERE id = ?",
-        (new_start, new_end, existing["id"]),
-    )
-    conn.commit()
-    conn.close()
-    return get_project(existing["id"])
+    try:
+        new_start = existing.get("start_date_override") if start is ... else start
+        new_end = existing.get("end_date_override") if end is ... else end
+        conn.execute(
+            "UPDATE projects SET start_date_override = ?, end_date_override = ? WHERE id = ?",
+            (new_start, new_end, existing["id"]),
+        )
+        conn.commit()
+        return get_project(existing["id"])
+    finally:
+        conn.close()
 
 
 def _descendant_project_ids(project_id):
@@ -1300,29 +1394,33 @@ def _descendant_project_ids(project_id):
     for a given project — similar to _descendant_tag_ids but for projects.
     Used for cycle detection and for breadcrumb navigation."""
     conn = get_conn()
-    rows = conn.execute("SELECT id, parent_id FROM projects").fetchall()
-    conn.close()
-    children_by_parent = {}
-    for r in rows:
-        children_by_parent.setdefault(r["parent_id"], []).append(r["id"])
-    ids = [project_id]
-    frontier = [project_id]
-    while frontier:
-        frontier = [child for parent in frontier for child in children_by_parent.get(parent, [])]
-        ids.extend(frontier)
-    return ids
+    try:
+        rows = conn.execute("SELECT id, parent_id FROM projects").fetchall()
+        children_by_parent = {}
+        for r in rows:
+            children_by_parent.setdefault(r["parent_id"], []).append(r["id"])
+        ids = [project_id]
+        frontier = [project_id]
+        while frontier:
+            frontier = [child for parent in frontier for child in children_by_parent.get(parent, [])]
+            ids.extend(frontier)
+        return ids
+    finally:
+        conn.close()
 
 
 def list_child_projects(project_id):
     """Get the direct children of a project (not including grandchildren).
     Returns a list of project dicts, ordered by title."""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM projects WHERE parent_id = ? ORDER BY title",
-        (project_id,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT * FROM projects WHERE parent_id = ? ORDER BY title",
+            (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_project_ancestors(project_id):
@@ -1333,48 +1431,54 @@ def list_project_ancestors(project_id):
     current_id = project_id
     visited = set()
     conn = get_conn()
+    try:
 
-    while current_id is not None:
-        if current_id in visited:
-            # Cycle detected — shouldn't happen if set_project_parent's guard works
-            break
-        visited.add(current_id)
-        row = conn.execute("SELECT * FROM projects WHERE id = ?", (current_id,)).fetchone()
-        if row is None:
-            break
-        project = dict(row)
-        ancestors.append(project)
-        current_id = project.get("parent_id")
+        while current_id is not None:
+            if current_id in visited:
+                # Cycle detected — shouldn't happen if set_project_parent's guard works
+                break
+            visited.add(current_id)
+            row = conn.execute("SELECT * FROM projects WHERE id = ?", (current_id,)).fetchone()
+            if row is None:
+                break
+            project = dict(row)
+            ancestors.append(project)
+            current_id = project.get("parent_id")
 
-    conn.close()
-    # Reverse so root is first, and exclude the current project (first in list before reversing)
-    return list(reversed(ancestors))[:-1] if len(ancestors) > 1 else []
+        # Reverse so root is first, and exclude the current project (first in list before reversing)
+        return list(reversed(ancestors))[:-1] if len(ancestors) > 1 else []
+    finally:
+        conn.close()
 
 
 def add_item_to_project(project_id, post_slug, sort_order=None):
     """If sort_order isn't given, appends at the end (max existing
     sort_order + 1, or 0 if the project has no items yet)."""
     conn = get_conn()
-    if sort_order is None:
-        row = conn.execute(
-            "SELECT MAX(sort_order) AS m FROM project_items WHERE project_id = ?", (project_id,)
-        ).fetchone()
-        sort_order = (row["m"] + 1) if row["m"] is not None else 0
-    conn.execute(
-        "INSERT OR IGNORE INTO project_items (project_id, post_slug, sort_order) VALUES (?, ?, ?)",
-        (project_id, post_slug, sort_order),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        if sort_order is None:
+            row = conn.execute(
+                "SELECT MAX(sort_order) AS m FROM project_items WHERE project_id = ?", (project_id,)
+            ).fetchone()
+            sort_order = (row["m"] + 1) if row["m"] is not None else 0
+        conn.execute(
+            "INSERT OR IGNORE INTO project_items (project_id, post_slug, sort_order) VALUES (?, ?, ?)",
+            (project_id, post_slug, sort_order),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def remove_item_from_project(project_id, post_slug):
     conn = get_conn()
-    conn.execute(
-        "DELETE FROM project_items WHERE project_id = ? AND post_slug = ?", (project_id, post_slug)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            "DELETE FROM project_items WHERE project_id = ? AND post_slug = ?", (project_id, post_slug)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_project_items(project_id):
@@ -1382,26 +1486,30 @@ def list_project_items(project_id):
     capture_events so full post data comes back — mirrors how
     list_posts_for_tag joins post_tags to capture_events."""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT ce.* FROM project_items pi JOIN capture_events ce ON ce.slug = pi.post_slug "
-        "WHERE pi.project_id = ? ORDER BY pi.sort_order ASC",
-        (project_id,),
-    ).fetchall()
-    conn.close()
-    return [_row_to_dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT ce.* FROM project_items pi JOIN capture_events ce ON ce.slug = pi.post_slug "
+            "WHERE pi.project_id = ? ORDER BY pi.sort_order ASC",
+            (project_id,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_projects_for_post(post_slug):
     """Reverse lookup — which projects contain a given post. Uses
     idx_project_items_slug."""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT p.* FROM projects p JOIN project_items pi ON pi.project_id = p.id "
-        "WHERE pi.post_slug = ? ORDER BY p.updated_at DESC",
-        (post_slug,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT p.* FROM projects p JOIN project_items pi ON pi.project_id = p.id "
+            "WHERE pi.post_slug = ? ORDER BY p.updated_at DESC",
+            (post_slug,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_unfiled_items(limit=10000):
@@ -1430,14 +1538,16 @@ def list_unfiled_items(limit=10000):
     JOIN-based style just below.
     """
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-        "WHERE pi.post_slug IS NULL "
-        "ORDER BY ce.timestamp DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    conn.close()
-    return [_row_to_dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
+            "WHERE pi.post_slug IS NULL "
+            "ORDER BY ce.timestamp DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_recent_items_by_type(limit_per_type=10):
@@ -1455,22 +1565,24 @@ def list_recent_items_by_type(limit_per_type=10):
     while ensuring diverse per-type coverage even when one type has a burst.
     """
     conn = get_conn()
-    # Fetch all distinct media_types that have at least one row
-    media_type_rows = conn.execute(
-        "SELECT DISTINCT media_type FROM capture_events"
-    ).fetchall()
-
-    result = {}
-    for (media_type,) in media_type_rows:
-        rows = conn.execute(
-            "SELECT * FROM capture_events WHERE media_type = ? ORDER BY timestamp DESC LIMIT ?",
-            (media_type, limit_per_type),
+    try:
+        # Fetch all distinct media_types that have at least one row
+        media_type_rows = conn.execute(
+            "SELECT DISTINCT media_type FROM capture_events"
         ).fetchall()
-        if rows:
-            result[media_type] = [_row_to_dict(r) for r in rows]
 
-    conn.close()
-    return result
+        result = {}
+        for (media_type,) in media_type_rows:
+            rows = conn.execute(
+                "SELECT * FROM capture_events WHERE media_type = ? ORDER BY timestamp DESC LIMIT ?",
+                (media_type, limit_per_type),
+            ).fetchall()
+            if rows:
+                result[media_type] = [_row_to_dict(r) for r in rows]
+
+        return result
+    finally:
+        conn.close()
 
 
 # --- Audit log ---
@@ -1481,40 +1593,44 @@ def insert_audit_log(method, path, form_body, status_code, error_detail=None, af
     JSON-serialized). affected_slugs can be a list of slugs or None. Automatically
     records the current timestamp."""
     conn = get_conn()
-    now = time.time()
-    conn.execute(
-        "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            method,
-            path,
-            json.dumps(form_body),
-            json.dumps(affected_slugs or []),
-            status_code,
-            error_detail,
-            now,
-        ),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        now = time.time()
+        conn.execute(
+            "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                method,
+                path,
+                json.dumps(form_body),
+                json.dumps(affected_slugs or []),
+                status_code,
+                error_detail,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_recent_audit_logs(limit=100):
     """Fetch the most recent audit_log rows (most recent first). Returns a list
     of dicts with all columns. form_body and affected_slugs are parsed from JSON."""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?", (limit,)
-    ).fetchall()
-    conn.close()
-    return [
-        {
-            **dict(row),
-            "form_body": json.loads(row["form_body"]) if row["form_body"] else {},
-            "affected_slugs": json.loads(row["affected_slugs"]) if row["affected_slugs"] else [],
-        }
-        for row in rows
-    ]
+    try:
+        rows = conn.execute(
+            "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [
+            {
+                **dict(row),
+                "form_body": json.loads(row["form_body"]) if row["form_body"] else {},
+                "affected_slugs": json.loads(row["affected_slugs"]) if row["affected_slugs"] else [],
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
 
 
 # --- Pending decisions (#240) ---
@@ -1542,53 +1658,61 @@ def add_pending_decision(kind, post_slug, payload):
     queued (a re-upload / retry shouldn't ask the same question twice).
     Returns the decision id either way."""
     conn = get_conn()
-    existing = conn.execute(
-        "SELECT id FROM pending_decisions WHERE kind = ? AND post_slug = ? AND resolved_at IS NULL",
-        (kind, post_slug),
-    ).fetchone()
-    if existing:
-        conn.execute(
-            "UPDATE pending_decisions SET payload = ?, created_at = ? WHERE id = ?",
-            (json.dumps(payload or {}), time.time(), existing["id"]),
-        )
-        decision_id = existing["id"]
-    else:
-        cur = conn.execute(
-            "INSERT INTO pending_decisions (kind, post_slug, payload, created_at) VALUES (?, ?, ?, ?)",
-            (kind, post_slug, json.dumps(payload or {}), time.time()),
-        )
-        decision_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return decision_id
+    try:
+        existing = conn.execute(
+            "SELECT id FROM pending_decisions WHERE kind = ? AND post_slug = ? AND resolved_at IS NULL",
+            (kind, post_slug),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE pending_decisions SET payload = ?, created_at = ? WHERE id = ?",
+                (json.dumps(payload or {}), time.time(), existing["id"]),
+            )
+            decision_id = existing["id"]
+        else:
+            cur = conn.execute(
+                "INSERT INTO pending_decisions (kind, post_slug, payload, created_at) VALUES (?, ?, ?, ?)",
+                (kind, post_slug, json.dumps(payload or {}), time.time()),
+            )
+            decision_id = cur.lastrowid
+        conn.commit()
+        return decision_id
+    finally:
+        conn.close()
 
 
 def get_pending_decision(decision_id):
     conn = get_conn()
-    row = conn.execute("SELECT * FROM pending_decisions WHERE id = ?", (decision_id,)).fetchone()
-    conn.close()
-    return _pending_row(row) if row else None
+    try:
+        row = conn.execute("SELECT * FROM pending_decisions WHERE id = ?", (decision_id,)).fetchone()
+        return _pending_row(row) if row else None
+    finally:
+        conn.close()
 
 
 def list_pending_decisions(kind=None):
     """Every UNRESOLVED decision, oldest first (the owner should see what's
     been waiting longest at the top), optionally filtered by kind."""
     conn = get_conn()
-    if kind is None:
-        rows = conn.execute("SELECT * FROM pending_decisions WHERE resolved_at IS NULL ORDER BY created_at ASC").fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM pending_decisions WHERE resolved_at IS NULL AND kind = ? ORDER BY created_at ASC", (kind,)
-        ).fetchall()
-    conn.close()
-    return [_pending_row(r) for r in rows]
+    try:
+        if kind is None:
+            rows = conn.execute("SELECT * FROM pending_decisions WHERE resolved_at IS NULL ORDER BY created_at ASC").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM pending_decisions WHERE resolved_at IS NULL AND kind = ? ORDER BY created_at ASC", (kind,)
+            ).fetchall()
+        return [_pending_row(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def count_pending_decisions():
     conn = get_conn()
-    n = conn.execute("SELECT COUNT(*) AS n FROM pending_decisions WHERE resolved_at IS NULL").fetchone()["n"]
-    conn.close()
-    return n
+    try:
+        n = conn.execute("SELECT COUNT(*) AS n FROM pending_decisions WHERE resolved_at IS NULL").fetchone()["n"]
+        return n
+    finally:
+        conn.close()
 
 
 def resolve_pending_decision(decision_id, resolution=None):
@@ -1598,16 +1722,17 @@ def resolve_pending_decision(decision_id, resolution=None):
     are kept, not deleted, so the audit trail of what got auto-asked and
     what the owner answered survives. Returns the updated row, or None."""
     conn = get_conn()
-    row = conn.execute("SELECT * FROM pending_decisions WHERE id = ?", (decision_id,)).fetchone()
-    if row is None:
+    try:
+        row = conn.execute("SELECT * FROM pending_decisions WHERE id = ?", (decision_id,)).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row["payload"]) if row["payload"] else {}
+        payload["resolution"] = resolution
+        conn.execute(
+            "UPDATE pending_decisions SET resolved_at = ?, payload = ? WHERE id = ?",
+            (time.time(), json.dumps(payload), decision_id),
+        )
+        conn.commit()
+        return get_pending_decision(decision_id)
+    finally:
         conn.close()
-        return None
-    payload = json.loads(row["payload"]) if row["payload"] else {}
-    payload["resolution"] = resolution
-    conn.execute(
-        "UPDATE pending_decisions SET resolved_at = ?, payload = ? WHERE id = ?",
-        (time.time(), json.dumps(payload), decision_id),
-    )
-    conn.commit()
-    conn.close()
-    return get_pending_decision(decision_id)

@@ -617,9 +617,45 @@ body.delete-mode-on .card-select-row { display: flex; }
 .video-embed-wrap { position: relative; width: 100%; aspect-ratio: 16 / 9; }
 .video-embed-wrap iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .content-text-preview { padding: 32px; max-width: 520px; text-align: center; color: var(--text-2); font-size: 13.5px; line-height: 1.6; }
-.audio-preview { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 40px 24px; }
+/* #290: .audio-preview is a flex item of the centered .detail-preview row, so
+   without an explicit width it shrinks to fit its content -- and the <audio>'s
+   own `width: 100%` contributes nothing to that intrinsic size, so the whole
+   block collapsed to the 48px icon's width (measured: 114px block, 66px
+   player) and Chrome's native controls degraded to a lone play button. Giving
+   the block the full row width makes the percentage resolve against
+   something real. */
+.audio-preview { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 36px 24px; width: 100%; box-sizing: border-box; }
 .audio-preview-icon { font-size: 48px; line-height: 1; }
-.audio-preview audio { width: 100%; max-width: 420px; }
+/* color-scheme: dark tells the browser to draw its OWN native chrome in
+   dark colors instead of the light default it otherwise assumes absent a
+   page-level color-scheme -- <audio controls> is a closed shadow-root
+   widget the rest of this stylesheet can't reach any other way, and this
+   is the one part of the theming attempt that's confirmed genuinely
+   effective. accent-color on the <audio> element itself only reached a
+   stray part of the control (a focus-ring-ish shadow, not the actual
+   scrubber/volume fill), kept anyway as a harmless no-op fallback for a
+   browser that might honor it more fully.
+
+   Went further than this, live-tested on constructicon-test, and rolled
+   it back: Chromium's ::-webkit-media-controls-* pseudo-elements
+   (panel/timeline/volume-slider/play-button/::-webkit-slider-thumb) are
+   long-undocumented and this browser's version doesn't map them the way
+   older references describe -- targeting the play button, the scrubber/
+   volume thumbs, and the track fill all produced zero visible change on
+   real testing. Not worth carrying speculative, unverifiable CSS for --
+   dark background + the app's own tag panel above it is where this
+   stops; the native control's own default (light) scrubber/icons on a
+   dark background is the accepted limitation, not a bug to keep
+   chasing. */
+.audio-preview audio { width: 100%; max-width: 520px; color-scheme: dark; accent-color: var(--accent); }
+/* #290: the file's own tags in the preview (title/artist headline, then the
+   labelled rest), or an explicit empty state. */
+.audio-tags { display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center; max-width: 520px; min-width: 0; }
+.audio-tag-title { font-size: 16px; font-weight: 500; color: var(--text-2-bright); line-height: 1.35; overflow-wrap: anywhere; }
+.audio-tag-artist { font-size: 13.5px; color: var(--text-2); overflow-wrap: anywhere; }
+.audio-tag-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; margin-top: 4px; font-size: 12px; color: var(--text-2); }
+.audio-tag-label { font-size: 11px; font-weight: 500; color: var(--text-3); letter-spacing: 0.4px; text-transform: uppercase; margin-right: 5px; }
+.audio-tags-empty { font-size: 12.5px; color: var(--text-3); font-style: italic; }
 .video-preview { display: flex; align-items: center; justify-content: center; width: 100%; }
 .video-preview video { max-width: 100%; max-height: 70vh; display: block; }
 .capture-preview { display: flex; flex-direction: column; align-items: center; gap: 12px; }

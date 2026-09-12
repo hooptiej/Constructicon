@@ -389,6 +389,11 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
     conn.commit()
     conn.close()
 
+    # #228: sync free-text tags to the real tag tree on insert, not just on update.
+    # For a new row, previous_tags is empty since it just got created with no prior state.
+    if tags:
+        sync_real_tags_for_post(slug, tags, previous_tags=[])
+
 
 def insert_content(slug, uploaded_by, media_type, external_url=None, content_description=None, content_date=None,
                     description="", tags=None, client=None, source="external", type_metadata=None):

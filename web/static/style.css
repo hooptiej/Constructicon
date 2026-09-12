@@ -48,9 +48,35 @@
    the page (and get reported as a bug that isn't one). */
 img { border: 1px solid var(--border-stronger); }
 
+html {
+  /* Owner kept manually hitting ctrl+= for a permanent 110% browser zoom --
+     bake that in directly rather than relying on every visitor's own zoom
+     level. `zoom` (not `transform: scale`) specifically because this
+     stylesheet sizes almost everything in absolute px, not rem/em -- zoom
+     scales those the same way a real browser zoom does, and unlike
+     `transform` on a container, it doesn't create a new containing block
+     that would break position:fixed elements (the timeline rail, the
+     header) out from under it. */
+  zoom: 1.1;
+}
 body {
   margin: 0;
-  background: var(--bg);
+  /* Bottom-right ambient glow (owner's ask): a soft radial wash, anchored
+     to the viewport corner (fixed attachment, so it doesn't slide away
+     with page scroll) and deliberately capped at a 60%-of-viewport-sized
+     ellipse in each axis -- big enough to read as depth, not so big it
+     reaches the timeline rail's own column on the left and undermines its
+     "floating over the page" read. Warm cream (matches --text) rather than
+     plain white, so it reads as ambient light on this palette, not a cool
+     spotlight. */
+  background:
+    /* rgba(154,168,58,...) = --accent (#9AA83A), the palette's actual
+       yellow-green olive tone -- the original used --text's warm cream,
+       which is desaturated enough to read as plain grey once blended thin
+       over --bg instead of carrying any real hue. */
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(154, 168, 58, 0.16), transparent 100%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
@@ -120,6 +146,21 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
 .brand:hover .brand-name { color: var(--accent); }
 .brand-name { font-size: 14px; font-weight: 500; }
+.brand img {
+  /* #292: placeholder treatment until a real Constructicon logo replaces
+     the borrowed hooptiej dragon mark -- sized well past .app-header's own
+     56px band on purpose. align-self: flex-start (rather than the row's
+     default center) pins its top near the header's top edge so the excess
+     height hangs DOWN into the page below, instead of splitting evenly and
+     bleeding off above the viewport where nothing would ever be there to
+     see it. position + z-index give it its own stacking context so it
+     paints over .app-header-stripe and the page content it overlaps,
+     rather than being painted over by them per normal DOM order. */
+  align-self: flex-start;
+  position: relative;
+  z-index: 5;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5));
+}
 .nav { display: flex; align-items: center; gap: 28px; }
 .nav a { font-size: 13px; color: var(--text-2); }
 .nav a.active { color: var(--accent); font-weight: 500; }
@@ -843,7 +884,15 @@ body.delete-mode-on .card-select-row { display: flex; }
    the featured one instead of starting a new row underneath it. */
 .home-widget-primary .projects-container {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  /* #292: was minmax(300px, 1fr) — at normal desktop widths that collapsed
+     the grid to exactly 2 tracks, and #featured-project's own
+     grid-column: span 2 then ate both of them, leaving zero room for a
+     regular card beside it (that's the "always one step too large" feel).
+     220px (~73%, matching the owner's own 60-75% estimate) guarantees a
+     3rd track — i.e. at least one regular card next to the featured one —
+     at any width down to the existing 768px single-column breakpoint below,
+     the one deliberate exception. */
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 22px;
 }
 .home-widget-primary #featured-project { grid-column: span 2; grid-row: span 2; min-height: 0; }
@@ -1219,10 +1268,26 @@ body.delete-mode-on .card-select-row { display: flex; }
   font-size: 10px;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
+  /* #292: a real chronology packs rows down to just a few px tall
+     (timeline-rail.js's _layout() divides the rail's height by entry
+     count), leaving the date label unreadably small. transform: scale
+     grows the whole pill -- text included -- without disturbing the
+     JS-computed row layout underneath it (transform is paint-only, no
+     reflow), so neighboring rows don't jump when one entry magnifies.
+     transform-origin left instead of center: it grows away from the
+     rail's own tick axis (to its left, see .timeline-entry-row::before)
+     and into the page's open margin, rather than over the axis itself. */
+  position: relative;
+  transform-origin: left center;
+  transition: transform 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 .timeline-entry:hover {
   border-color: var(--accent);
   color: var(--accent);
+  background: var(--bg);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+  transform: scale(2.04);
+  z-index: 20;
 }
 .timeline-entry-span {
   border-width: 2px;
@@ -1233,7 +1298,13 @@ body.delete-mode-on .card-select-row { display: flex; }
 .timeline-popover {
   /* No backdrop -- meant to be glanced at while moving through the list,
      not a modal dialog. Position (left/top) is set by JS per hover,
-     placed to the entry's right. */
+     placed to the entry's right. Shared base class -- also used by
+     project-video-timeline.js's horizontal popover, which floats directly
+     over its own hovered element with no deliberate overlap and no
+     hover-bridging logic, so pointer-events stays `none` here (the
+     original, click/hover-through behavior both users were built against).
+     See .timeline-popover-hoverable below for the vertical rail's own
+     opt-in override. */
   position: fixed;
   z-index: 50;
   display: none;
@@ -1247,6 +1318,20 @@ body.delete-mode-on .card-select-row { display: flex; }
   padding: 10px;
   box-sizing: border-box;
   pointer-events: none;
+}
+.timeline-popover-hoverable {
+  /* #292: the vertical rail's popover deliberately overlaps its magnified
+     pill so they read as one object -- that only works if the popover can
+     itself catch mouseenter to keep itself open while the mouse crosses
+     from the pill onto the card (see timeline-rail.js's _ensurePopover/
+     _scheduleHidePopover). Its footprint sits to the right of the rail's
+     own entry column, so this doesn't intercept clicks on other entries.
+     Being a real hit-test target now also means a click on the card lands
+     on it instead of passing through to the pill underneath -- given its
+     own click handler (same navigate-to-entry as the pill) to match, so
+     cursor: pointer here isn't a false promise. */
+  pointer-events: auto;
+  cursor: pointer;
 }
 .timeline-popover.visible {
   display: flex;

@@ -16,12 +16,21 @@
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// Must match .timeline-entry:hover's transform: scale() in style.css (#292).
+// Kept as a constant rather than read off the live element because
+// getBoundingClientRect() inside the mouseenter handler below fires before
+// the CSS transition has animated anywhere close to this value -- the
+// popover would otherwise be placed against the pill's pre-scale width and
+// then watch the pill visually grow past it a moment later.
+const ENTRY_HOVER_SCALE = 2.04;
+
 class TimelineRail {
   constructor(container, entries, options = {}) {
     this.container = container;
     this.entries = entries;
     this.onOpen = options.onOpen || function () {};
     this._popover = null;
+    this._hideTimer = null;
     this._rows = [];
     this._render();
     this._onResize = () => this._layout();
@@ -35,18 +44,55 @@ class TimelineRail {
   _ensurePopover() {
     if (this._popover) return this._popover;
     const el = document.createElement('div');
-    el.className = 'timeline-popover';
+    el.className = 'timeline-popover timeline-popover-hoverable';
     el.innerHTML = `
       <img class="timeline-popover-cover" alt="">
       <div class="timeline-popover-title"></div>
       <div class="timeline-popover-date"></div>
     `;
+    // The popover overlaps the magnified pill on purpose (see _showPopover
+    // below) so they read as one connected object -- but overlap alone
+    // doesn't keep the popover open, since it used to be pointer-events:
+    // none (mouse events passed straight through it, so it could never
+    // itself see a mouseenter). It's now a real hover target: moving from
+    // the pill onto the card cancels the pending hide the pill's own
+    // mouseleave scheduled, instead of racing it.
+    el.addEventListener('mouseenter', () => this._cancelHidePopover());
+    el.addEventListener('mouseleave', () => this._scheduleHidePopover());
+    // Now that the popover is pointer-events: auto (see above), a click
+    // anywhere on it lands on this div instead of passing through to
+    // whatever pill happens to be underneath -- give it the same
+    // navigate-to-entry behavior as the pill itself, tracking whichever
+    // entry _showPopover most recently populated it with (the element is
+    // reused across hovers, not recreated per entry).
+    el.addEventListener('click', () => {
+      if (this._currentPopoverEntry) this.onOpen(this._currentPopoverEntry);
+    });
     document.body.appendChild(el);
     this._popover = el;
     return el;
   }
 
+  _cancelHidePopover() {
+    clearTimeout(this._hideTimer);
+    this._hideTimer = null;
+  }
+
+  _scheduleHidePopover() {
+    this._cancelHidePopover();
+    // Short grace period, not zero: even with the popover overlapping the
+    // pill, the mouse crosses a sliver of neither element's hit-box for a
+    // frame or two during a fast diagonal move between them -- long enough
+    // to otherwise trigger the pill's mouseleave before the popover's own
+    // mouseenter lands.
+    this._hideTimer = setTimeout(() => {
+      if (this._popover) this._popover.classList.remove('visible');
+    }, 150);
+  }
+
   _showPopover(entry, node) {
+    this._cancelHidePopover();
+    this._currentPopoverEntry = entry;
     const popover = this._ensurePopover();
     const cover = popover.querySelector('.timeline-popover-cover');
     if (entry.thumbUrl) {
@@ -61,16 +107,21 @@ class TimelineRail {
 
     popover.classList.add('visible');
     // Measure after making it visible (offsetHeight is 0 while display:none).
+    // nodeRect is still the pre-hover (unscaled) box at this point -- see
+    // ENTRY_HOVER_SCALE above -- so project where its right edge will end
+    // up once the hover transform finishes, growing from the left edge
+    // (matches transform-origin: left center), rather than using
+    // nodeRect.right directly.
     const nodeRect = node.getBoundingClientRect();
     const popoverRect = popover.getBoundingClientRect();
     let top = nodeRect.top + nodeRect.height / 2 - popoverRect.height / 2;
     top = Math.max(8, Math.min(top, window.innerHeight - popoverRect.height - 8));
-    popover.style.left = `${nodeRect.right + 10}px`;
+    // Deliberately overlaps the scaled pill by a few px rather than
+    // butting up against it, so the two read as one connected object
+    // instead of a card floating a gap away from its own label.
+    const scaledRight = nodeRect.left + nodeRect.width * ENTRY_HOVER_SCALE;
+    popover.style.left = `${scaledRight - 18}px`;
     popover.style.top = `${top}px`;
-  }
-
-  _hidePopover() {
-    if (this._popover) this._popover.classList.remove('visible');
   }
 
   _render() {
@@ -122,7 +173,7 @@ class TimelineRail {
         node.textContent = `${d.getMonth() + 1}/${d.getDate()}`;
 
         node.addEventListener('mouseenter', () => this._showPopover(entry, node));
-        node.addEventListener('mouseleave', () => this._hidePopover());
+        node.addEventListener('mouseleave', () => this._scheduleHidePopover());
         node.addEventListener('click', () => this.onOpen(entry));
 
         row.appendChild(node);
@@ -153,7 +204,11 @@ class TimelineRail {
       el.style.height = `${rowHeight}px`;
       el.style.display = 'flex';
       el.style.alignItems = 'center';
-      el.style.overflow = 'hidden';
+      // Entry rows stay visible so the hover-magnify transform (#292, see
+      // .timeline-entry:hover) isn't clipped by its own compressed row --
+      // year/month markers keep hidden since their own text truncation
+      // still matters and they don't magnify.
+      el.style.overflow = kind === 'entry' ? 'visible' : 'hidden';
       if (kind === 'year') {
         el.style.fontSize = `${Math.max(7, Math.min(11, rowHeight * 0.85))}px`;
       } else if (kind === 'month') {

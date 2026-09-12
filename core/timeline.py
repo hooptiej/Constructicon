@@ -8,11 +8,23 @@ span: they took time, they aren't moments.
 
 def resolve_item_date(row):
     """row is a capture_events dict (core.db.get_by_slug/_row_to_dict
-    shape). timestamp is NOT NULL in the schema, so this always resolves."""
+    shape). timestamp is NOT NULL in the schema, so this always resolves.
+
+    source_modified_at (the uploaded file's own last-modified time,
+    already captured on upload -- see core.db.insert_upload) sits between
+    content_date and timestamp: better than timestamp (which is only ever
+    "when this row was created in Constructicon" -- an earlier bulk import
+    of old phone videos used the import moment for every row, confirmed
+    against real data where a video's own filename and source_modified_at
+    independently agreed on a 2021 date while timestamp read as
+    essentially "today"), but content_date -- when set -- is a more
+    deliberate, verified real-world date and should still win."""
     if row.get("display_date_override") is not None:
         return row["display_date_override"]
     if row.get("content_date") is not None:
         return row["content_date"]
+    if row.get("source_modified_at") is not None:
+        return row["source_modified_at"]
     return row["timestamp"]
 
 

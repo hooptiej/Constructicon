@@ -1229,6 +1229,22 @@ def set_display_date_override(slug, value):
     conn.close()
 
 
+def set_content_date(slug, value):
+    """Sets the content's own real-world date directly (distinct from
+    display_date_override, which is a manual override of the *displayed*
+    date on top of this — see core/timeline.py's resolve_item_date chain).
+    Added so a correction/backfill script with a real known date (e.g. a
+    YouTube video's publishedAt) can persist it via the HTTP API rather
+    than writing to the DB directly — see scripts/full_youtube_channel_sync.py's
+    correct_content_row, which previously fetched this from the API on
+    every correction pass but had no way to actually write it back for an
+    already-imported row."""
+    conn = get_conn()
+    conn.execute("UPDATE capture_events SET content_date = ? WHERE slug = ?", (value, slug))
+    conn.commit()
+    conn.close()
+
+
 def set_project_date_overrides(project_id, start=..., end=...):
     """start/end=None clears that override; the ... sentinel (default) means
     "leave this one alone" — same three-state convention as update_project's

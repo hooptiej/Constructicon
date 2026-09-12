@@ -1494,6 +1494,7 @@ def api_update_image(
     icon: str | None = Form(None),
     content_description: str | None = Form(None),
     type_metadata: str | None = Form(None),
+    content_date: float | None = Form(None),
     display_date: str | None = Form(None),
     reset_display_date: bool = Form(False),
 ):
@@ -1531,6 +1532,14 @@ def api_update_image(
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="type_metadata must be valid JSON")
         row = db.update_content_metadata(slug, content_description=content_description, type_metadata=parsed_metadata)
+    # content_date (Timeline feature, #265): a correction/backfill script
+    # with a real known date (e.g. a YouTube video's publishedAt, already
+    # fetched on every scripts/full_youtube_channel_sync.py correction
+    # pass but previously had no way to write it back) sets it directly —
+    # a real value, not a manual override like display_date below.
+    if content_date is not None:
+        db.set_content_date(slug, content_date)
+        row = db.get_by_slug(slug)
     # Timeline feature: reset_display_date wins over a stray display_date
     # value if a client somehow sends both (mirrors the MCP tools' same
     # reset-flag convention in mcp_server/server.py).

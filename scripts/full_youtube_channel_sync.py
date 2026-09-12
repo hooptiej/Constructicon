@@ -337,12 +337,20 @@ def create_content_row(base_url, **fields):
     return _http_call("POST", f"{base_url.rstrip('/')}/api/content", payload)
 
 
-def correct_content_row(base_url, slug, current, content_description, type_metadata):
+def correct_content_row(base_url, slug, current, content_description, type_metadata, content_date=None):
     """POST /api/image/{slug} — resubmits the row's CURRENT
     description/tags/client verbatim (see get_current_row) so
     this only actually changes content_description + type_metadata, per
     api_update_image's "always applies description/tags/client"
-    contract."""
+    contract.
+
+    content_date (#265 follow-up): the real publishedAt date was already
+    being fetched from the API on every correction pass but had nowhere
+    to go -- api_update_image now accepts it directly (core.db.set_content_date).
+    Passed unconditionally, same as the import path below always sets it;
+    re-asserting the same real value on a re-run is the same safe-no-op
+    idempotence this function's docstring already relies on for the other
+    fields."""
     payload = {
         "description": current.get("description") or "",
         "tags": json.dumps(current.get("tags") or []),
@@ -350,6 +358,8 @@ def correct_content_row(base_url, slug, current, content_description, type_metad
         "content_description": content_description,
         "type_metadata": json.dumps(type_metadata),
     }
+    if content_date is not None:
+        payload["content_date"] = content_date
     return _http_call("POST", f"{base_url.rstrip('/')}/api/image/{slug}", payload)
 
 
@@ -435,7 +445,8 @@ def main():
             print(f"  WARNING: slug {slug} (video {video_id}) not found via the API — skipping correction")
             continue
         type_md = build_type_metadata(m, owner_channel_title)
-        correct_content_row(args.base_url, slug, current, m["title"], type_md)
+        correct_content_row(args.base_url, slug, current, m["title"], type_md,
+                             content_date=_parse_published(m["published_at"]))
         corrected += 1
         print(f"Corrected {video_id} -> slug {slug}: {m['title']!r}")
 

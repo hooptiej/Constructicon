@@ -16,11 +16,16 @@ db.DB_PATH = tempfile.mktemp(suffix=".db")
 db.init_db()
 
 
-def make_item(slug, timestamp, content_date=None, display_date_override=None):
+def make_item(slug, timestamp, content_date=None, source_modified_at=None, display_date_override=None):
     db.insert_upload(slug, None, None, "test", media_type="image")
     if content_date is not None:
         conn = db.get_conn()
         conn.execute("UPDATE capture_events SET content_date = ? WHERE slug = ?", (content_date, slug))
+        conn.commit()
+        conn.close()
+    if source_modified_at is not None:
+        conn = db.get_conn()
+        conn.execute("UPDATE capture_events SET source_modified_at = ? WHERE slug = ?", (source_modified_at, slug))
         conn.commit()
         conn.close()
     conn = db.get_conn()
@@ -45,6 +50,21 @@ def test_item_date_prefers_content_date_over_timestamp():
 def test_item_date_prefers_override_over_everything():
     row = make_item("t3", timestamp=1000.0, content_date=500.0, display_date_override=200.0)
     assert resolve_item_date(row) == 200.0, "override beats content_date and timestamp"
+
+
+def test_item_date_prefers_source_modified_at_over_timestamp():
+    # Real-world case that surfaced this (2026-09-11): an old phone video's
+    # bulk import set timestamp to the import moment ("today"), while
+    # source_modified_at (the file's own last-modified time, captured on
+    # upload) independently agreed with the filename's own embedded date --
+    # both years earlier than timestamp.
+    row = make_item("t8", timestamp=9999.0, source_modified_at=300.0)
+    assert resolve_item_date(row) == 300.0, "source_modified_at beats timestamp when content_date is unset"
+
+
+def test_item_date_prefers_content_date_over_source_modified_at():
+    row = make_item("t9", timestamp=9999.0, source_modified_at=300.0, content_date=150.0)
+    assert resolve_item_date(row) == 150.0, "content_date still wins over source_modified_at"
 
 
 def test_project_span_from_items():

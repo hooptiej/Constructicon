@@ -626,39 +626,28 @@ body.delete-mode-on .card-select-row { display: flex; }
    something real. */
 .audio-preview { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 36px 24px; width: 100%; box-sizing: border-box; }
 .audio-preview-icon { font-size: 48px; line-height: 1; }
-/* color-scheme: dark tells the browser to draw its OWN native chrome (the
-   scrubber track, volume slider, timestamps) in dark colors instead of the
-   light default it otherwise assumes absent a page-level color-scheme --
-   <audio controls> is a closed shadow-root widget the rest of this
-   stylesheet can't reach any other way. accent-color on the <audio>
-   element itself only reaches a stray part of the control (observed:
-   just a focus-ring-ish shadow, not the actual scrubber/volume fill) --
-   kept anyway as a harmless fallback for browsers that DO honor it more
-   fully, but the real effect comes from targeting the internal parts
-   directly below. */
+/* color-scheme: dark tells the browser to draw its OWN native chrome in
+   dark colors instead of the light default it otherwise assumes absent a
+   page-level color-scheme -- <audio controls> is a closed shadow-root
+   widget the rest of this stylesheet can't reach any other way, and this
+   is the one part of the theming attempt that's confirmed genuinely
+   effective. accent-color on the <audio> element itself only reached a
+   stray part of the control (a focus-ring-ish shadow, not the actual
+   scrubber/volume fill), kept anyway as a harmless no-op fallback for a
+   browser that might honor it more fully.
+
+   Went further than this, live-tested on constructicon-test, and rolled
+   it back: Chromium's ::-webkit-media-controls-* pseudo-elements
+   (panel/timeline/volume-slider/play-button/::-webkit-slider-thumb) are
+   long-undocumented and this browser's version doesn't map them the way
+   older references describe -- targeting the play button, the scrubber/
+   volume thumbs, and the track fill all produced zero visible change on
+   real testing. Not worth carrying speculative, unverifiable CSS for --
+   dark background + the app's own tag panel above it is where this
+   stops; the native control's own default (light) scrubber/icons on a
+   dark background is the accepted limitation, not a bug to keep
+   chasing. */
 .audio-preview audio { width: 100%; max-width: 520px; color-scheme: dark; accent-color: var(--accent); }
-/* Chromium-specific, non-standard pseudo-elements into <audio controls>'s
-   shadow tree -- the only way to actually recolor the scrubber/volume
-   fill to the app's own accent instead of the browser default. Fragile by
-   nature (unprefixed equivalents don't exist; a future Chrome could
-   rename/restructure these) and Firefox/Safari have no equivalent at all,
-   so they just keep their own native player unstyled -- an acceptable
-   degrade, not a bug, on either front. */
-.audio-preview audio::-webkit-media-controls-panel { background-color: var(--card); }
-.audio-preview audio::-webkit-media-controls-current-time-display,
-.audio-preview audio::-webkit-media-controls-time-remaining-display { color: var(--text-2); }
-.audio-preview audio::-webkit-media-controls-timeline,
-.audio-preview audio::-webkit-media-controls-volume-slider { accent-color: var(--accent); }
-/* The play button and the timeline/volume thumbs are drawn from their own
-   internal icon/thumb assets, not the track fill accent-color above --
-   color targets the play icon in case it's drawn via currentColor (some
-   Chrome versions do, some don't); the explicit ::-webkit-slider-thumb
-   overrides go after the plain accent-color rule above so they win on
-   specificity where supported. */
-.audio-preview audio::-webkit-media-controls-play-button,
-.audio-preview audio::-webkit-media-controls-mute-button { color: var(--accent); }
-.audio-preview audio::-webkit-media-controls-timeline::-webkit-slider-thumb,
-.audio-preview audio::-webkit-media-controls-volume-slider::-webkit-slider-thumb { background-color: var(--accent); }
 /* #290: the file's own tags in the preview (title/artist headline, then the
    labelled rest), or an explicit empty state. */
 .audio-tags { display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center; max-width: 520px; min-width: 0; }

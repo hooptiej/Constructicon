@@ -1200,6 +1200,62 @@ body.delete-mode-on .card-select-row { display: flex; }
   font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.3px; padding: 1px 7px; border-radius: 100px;
   background: var(--hazard-yellow); color: var(--hazard-black); font-weight: 600; display: inline-block;
 }
+/* #300: a sub-project rendered as a card inside the parent's item grid.
+   Same purple top edge .project-card uses on the home page (it IS a
+   project, so it gets the project color), a slightly different ground
+   (--surface vs the item cards' --card), and a labelled pill reusing the
+   archived-status pill's purple tint values — nothing outside the :root
+   palette. */
+.project-subproject-card {
+  background: var(--surface);
+  border-top: 3px solid var(--purple);
+}
+.project-subproject-card:hover { border-color: var(--border-stronger); border-top-color: var(--purple-bright); }
+.project-subproject-card .project-item-thumb { height: 107px; }
+.project-subproject-label {
+  align-self: flex-start;
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.4px; padding: 1px 7px; border-radius: 100px;
+  background: rgba(116,64,150,0.18); color: var(--purple-bright); border: 1px solid rgba(138,79,174,0.4);
+  font-weight: 600;
+}
+.project-subproject-desc {
+  font-size: 11px; color: var(--text-2); line-height: 1.4; overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+/* #300: the project's write-up as a featured widget inside the item grid
+   — the same 2x2-cell footprint home.html's #featured-project gets, with
+   the item/sub-project cards auto-placing around it. Not
+   .project-card-featured itself (that's a cover-image + blurb split); a
+   write-up is long-form text, so this is a reading column: an explicit
+   height (~two item-card rows plus the gap) so the spanning cell can't
+   inflate the rows it straddles, with the body scrolling inside and an
+   "Open document" link in the head for the full-page read. */
+.project-writeup-featured {
+  grid-column: span 2; grid-row: span 2;
+  height: 380px; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--card); border: 1px solid var(--border-strong); border-radius: 10px; overflow: hidden;
+}
+.project-writeup-featured .hazard-stripe { border-radius: 0; flex-shrink: 0; }
+.project-writeup-featured-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 14px 18px 10px; flex-shrink: 0;
+}
+.project-writeup-featured-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.project-writeup-featured-head a { font-size: 12px; }
+.project-writeup-featured-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 0 18px 18px;
+  font-size: 14px; line-height: 1.65; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: break-word;
+}
+/* Same single-column breakpoint as the home page's featured project:
+   nothing to span, so it becomes an ordinary full-width block that grows
+   with its text (capped so a long write-up still doesn't push the whole
+   grid off-screen). */
+@media (max-width: 768px) {
+  .project-writeup-featured { grid-column: auto; grid-row: auto; height: auto; max-height: 480px; }
+}
 
 /* --- Lightbox (full-size image pop-out) --- */
 .lightbox-backdrop { padding: 40px; cursor: zoom-out; }

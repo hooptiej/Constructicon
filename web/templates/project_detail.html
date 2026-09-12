@@ -83,37 +83,70 @@
     </div>
   </div>
 
-  {% if writeup_body %}
-  <div style="margin-top:32px;padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:8px">
-    <h2 style="font-size:16px;margin-bottom:12px;font-weight:500">Write-up</h2>
-    <div style="font-size:14px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-wrap:break-word">{{ writeup_body }}</div>
-  </div>
-  {% endif %}
-
-  {% if items %}
+  {# #300: ONE grid holds the featured write-up, this project's own items,
+     and its sub-projects. The write-up is the first grid item and spans
+     2x2 cells (same idea as home.html's #featured-project); everything
+     else auto-places around it in chronological order (grid_entries is
+     already sorted by the route — items by resolved effective date,
+     sub-projects by their effective_start). Sub-project cards get the
+     purple project treatment + a "Child project" label so they never
+     read as a regular content item. #}
+  {% if grid_entries or writeup_body %}
   <div class="project-item-grid">
-    {% for item in items %}
-    <div class="project-item-card-wrapper" data-slug="{{ item.slug }}">
-      <a class="project-item-card" href="{{ item.link }}">
+    {% if writeup_body %}
+    <div class="project-writeup-featured" id="project-writeup-featured">
+      <div class="hazard-stripe"></div>
+      <div class="project-writeup-featured-head">
+        <h2>Write-up</h2>
+        {% if project.writeup_slug %}
+        <a href="/object/{{ project.writeup_slug }}?from=project:{{ project.slug }}">Open document</a>
+        {% endif %}
+      </div>
+      <div class="project-writeup-featured-body">{{ writeup_body }}</div>
+    </div>
+    {% endif %}
+    {% for entry in grid_entries %}
+    {% if entry.kind == 'project' %}
+    <div class="project-item-card-wrapper project-subproject-wrapper" data-project-slug="{{ entry.slug }}">
+      <a class="project-item-card project-subproject-card" href="/project/{{ entry.slug }}">
         <div class="project-item-thumb">
-          {% if item.thumb_url %}
-            <img src="{{ item.thumb_url }}" loading="lazy" alt="">
+          {% if entry.cover_url %}
+            <img src="{{ entry.cover_url }}" loading="lazy" alt="">
           {% else %}
-            <span class="media-type-pill">{{ item.media_type }}</span>
+            <div class="project-cover-placeholder"></div>
           {% endif %}
         </div>
         <div class="project-item-body">
-          <div class="project-item-title">{{ item.title }}</div>
-          <div class="project-item-meta">{{ item.media_type }}</div>
+          <span class="project-subproject-label">Child project</span>
+          <div class="project-item-title">{{ entry.title }}</div>
+          {% if entry.description %}<div class="project-subproject-desc">{{ entry.description }}</div>{% endif %}
+          <div class="project-item-meta">{{ entry.item_count }} item{{ '' if entry.item_count == 1 else 's' }} · {{ entry.date_display }}</div>
+        </div>
+      </a>
+    </div>
+    {% else %}
+    <div class="project-item-card-wrapper" data-slug="{{ entry.slug }}">
+      <a class="project-item-card" href="{{ entry.link }}">
+        <div class="project-item-thumb">
+          {% if entry.thumb_url %}
+            <img src="{{ entry.thumb_url }}" loading="lazy" alt="">
+          {% else %}
+            <span class="media-type-pill">{{ entry.media_type }}</span>
+          {% endif %}
+        </div>
+        <div class="project-item-body">
+          <div class="project-item-title">{{ entry.title }}</div>
+          <div class="project-item-meta">{{ entry.media_type }} · {{ entry.date_display }}</div>
         </div>
       </a>
       <div class="project-item-selectors">
-        <input type="radio" class="project-cover-selector" name="cover" data-slug="{{ item.slug }}" title="Set as project cover" {% if item.slug == project.cover_slug %}checked{% endif %}>
-        {% if item.media_type == 'document' %}
-        <input type="radio" class="project-writeup-selector" name="writeup" data-slug="{{ item.slug }}" title="Set as write-up" {% if item.slug == project.writeup_slug %}checked{% endif %}>
+        <input type="radio" class="project-cover-selector" name="cover" data-slug="{{ entry.slug }}" title="Set as project cover" {% if entry.slug == project.cover_slug %}checked{% endif %}>
+        {% if entry.media_type == 'document' %}
+        <input type="radio" class="project-writeup-selector" name="writeup" data-slug="{{ entry.slug }}" title="Set as write-up" {% if entry.slug == project.writeup_slug %}checked{% endif %}>
         {% endif %}
       </div>
     </div>
+    {% endif %}
     {% endfor %}
   </div>
   {% else %}
@@ -146,22 +179,6 @@
     });
   })();
   </script>
-  {% endif %}
-
-  {% if child_projects %}
-  <div style="margin-top:40px;border-top:1px solid var(--border);padding-top:24px">
-    <h2 style="font-size:18px;margin-bottom:16px">Sub-projects</h2>
-    <div style="display:grid;gap:12px">
-      {% for child in child_projects %}
-      <a href="/project/{{ child.slug }}" style="display:flex;align-items:center;padding:12px;border:1px solid var(--border);border-radius:8px;text-decoration:none;color:inherit;transition:background 0.2s">
-        <div>
-          <div style="font-weight:500">{{ child.title }}</div>
-          {% if child.description %}<div style="font-size:12px;color:var(--text-muted);margin-top:4px">{{ child.description }}</div>{% endif %}
-        </div>
-      </a>
-      {% endfor %}
-    </div>
-  </div>
   {% endif %}
 </div>
 

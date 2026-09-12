@@ -1532,18 +1532,24 @@ async def api_update_image(
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
 
-    # #244: distinguish "field not provided" (None) from "field provided empty" ("")
-    # so we can clear overrides. FastAPI collapses empty form values to None, so we
-    # read the raw form to check key presence.
+    # #244: distinguish "field not provided" (None) from "field provided empty"
+    # ("") so we can clear overrides -- FastAPI's Form(None) collapses BOTH
+    # cases to the same None value, so read the raw form directly instead.
+    # Pass the raw string straight through to rename_object as-is ("" included)
+    # rather than normalizing "" back to None here -- rename_object's own
+    # contract already treats None as "leave unchanged" and "" as "clear back
+    # to the default fallback" (see its docstring); re-coercing "" to None
+    # before calling it would silently throw away that distinction and defeat
+    # the whole point of this fix (confirmed live: it did exactly that).
     form_data = await request.form()
-    rename_display_name = display_name if "display_name" not in form_data else (form_data.get("display_name") or None)
-    rename_icon = icon if "icon" not in form_data else (form_data.get("icon") or None)
+    raw_display_name = form_data.get("display_name") if "display_name" in form_data else None
+    raw_icon = form_data.get("icon") if "icon" in form_data else None
 
     # display_name/icon (#11) — no dedicated UI yet (see #24's "Coming soon
     # (#11)" admin-pane stub), but the field/endpoint exists so a "rename"
     # or "set icon" is at least possible by hand (a form POST here).
-    if rename_display_name is not None or rename_icon is not None or ("display_name" in form_data) or ("icon" in form_data):
-        row = db.rename_object(slug, display_name=rename_display_name, icon=rename_icon)
+    if "display_name" in form_data or "icon" in form_data:
+        row = db.rename_object(slug, display_name=raw_display_name, icon=raw_icon)
     # content_description/type_metadata (#54): lets a caller correct a
     # row's title-ish blurb and/or per-type metadata after creation — added
     # for scripts/full_youtube_channel_sync.py's correction pass (site-

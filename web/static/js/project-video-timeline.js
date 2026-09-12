@@ -130,12 +130,17 @@ class ProjectVideoTimeline {
   }
 
   _clusterEvents(sortedEvents, range) {
-    // Events within CLUSTER_THRESHOLD percent of each other get grouped;
-    // only the first and last member of a cluster gets a visible time
-    // flag (every diamond still renders and is still fully clickable/
-    // hoverable -- this only suppresses the flag label, which is what
-    // actually collides when several events land within a few minutes
-    // of each other, e.g. from one batch import).
+    // Events within CLUSTER_THRESHOLD percent of each other get grouped
+    // (chained -- each member just needs to be close to its neighbor, so
+    // a long run of closely-spaced events forms one cluster even if the
+    // cluster's own first-to-last span is wider than the threshold).
+    // Normally only the first and last member of a cluster gets a
+    // visible time flag; but if THOSE two are themselves still within
+    // the threshold of each other (a tight 2-3 item cluster, not a long
+    // chain), showing both would collide exactly the same way a single
+    // pair would -- so only one flag survives in that case. Every
+    // diamond still renders and is still fully clickable/hoverable
+    // regardless; this only ever suppresses the label.
     const CLUSTER_THRESHOLD = 3;
     const clusters = [];
     let current = null;
@@ -151,9 +156,21 @@ class ProjectVideoTimeline {
       lastPercent = percent;
     });
     const showFlag = new Set();
-    clusters.forEach((cluster) => {
-      showFlag.add(cluster[0]);
-      showFlag.add(cluster[cluster.length - 1]);
+    clusters.forEach((cluster, i) => {
+      const first = cluster[0];
+      const last = cluster[cluster.length - 1];
+      const spanPercent = this._percent(last.date, range) - this._percent(first.date, range);
+      if (last !== first && spanPercent > CLUSTER_THRESHOLD) {
+        // Wide enough that first and last don't collide -- show both.
+        showFlag.add(first);
+        showFlag.add(last);
+      } else {
+        // Collapses to one flag. Default to the cluster's first event,
+        // except for the very last cluster in the whole timeline: the
+        // timeline's actual endpoint should always be visible, not
+        // hidden behind "always pick first."
+        showFlag.add(i === clusters.length - 1 ? last : first);
+      }
     });
     return showFlag;
   }

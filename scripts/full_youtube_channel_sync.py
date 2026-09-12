@@ -398,6 +398,12 @@ def main():
              "/api/image/<slug> against (must share a database with this process)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Report what would change; make no writes.")
+    parser.add_argument(
+        "--no-import", action="store_true",
+        help="Correct existing rows only -- skip importing video ids not already present. "
+             "(#267: for a corrections-only pass, e.g. a content_date backfill, without also "
+             "pulling in whatever's been uploaded since the last full sync.)",
+    )
     args = parser.parse_args()
 
     db.init_db()
@@ -425,7 +431,10 @@ def main():
     to_correct_row_count = sum(len(existing[v]) for v in to_correct)
 
     print(f"Already present in this instance (will correct): {len(to_correct)} video(s), {to_correct_row_count} row(s) incl. duplicates")
-    print(f"Not present in this instance (will import):       {len(to_import)}")
+    if args.no_import:
+        print(f"Not present in this instance (--no-import: will NOT import): {len(to_import)}")
+    else:
+        print(f"Not present in this instance (will import):       {len(to_import)}")
     print("=" * 70)
 
     if args.dry_run:
@@ -436,12 +445,15 @@ def main():
             print(f"  {video_id} (slug(s) {existing[video_id]}): {m['title']!r}")
         if len(to_correct) > 8:
             print(f"  ... and {len(to_correct) - 8} more")
-        print("\nSample new imports:")
-        for video_id in to_import[:8]:
-            m = metadata[video_id]
-            print(f"  {video_id}: {m['title']!r}")
-        if len(to_import) > 8:
-            print(f"  ... and {len(to_import) - 8} more")
+        if args.no_import:
+            print("\n(--no-import set: new videos above would not be imported even without --dry-run.)")
+        else:
+            print("\nSample new imports:")
+            for video_id in to_import[:8]:
+                m = metadata[video_id]
+                print(f"  {video_id}: {m['title']!r}")
+            if len(to_import) > 8:
+                print(f"  ... and {len(to_import) - 8} more")
         return
 
     corrected = 0
@@ -462,7 +474,7 @@ def main():
             print(f"Corrected {video_id} -> slug {slug}: {m['title']!r}")
 
     imported = []
-    for video_id in to_import:
+    for video_id in ([] if args.no_import else to_import):
         m = metadata[video_id]
         type_md = build_type_metadata(m, owner_channel_title)
         row = create_content_row(
@@ -478,7 +490,11 @@ def main():
         print(f"Imported {video_id} -> slug {row['slug']}: {m['title']!r}")
 
     print("=" * 70)
-    print(f"Done. Corrected {corrected} existing row(s), imported {len(imported)} new row(s).")
+    if args.no_import and to_import:
+        print(f"Done. Corrected {corrected} existing row(s). "
+              f"Skipped {len(to_import)} new video(s) (--no-import).")
+    else:
+        print(f"Done. Corrected {corrected} existing row(s), imported {len(imported)} new row(s).")
 
     ok, project_count, counts, total = verify_project_groupings()
     print("=" * 70)

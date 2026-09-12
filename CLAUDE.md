@@ -300,6 +300,17 @@ Two containers run side by side on that box:
   same discipline for any script that writes data or hits a real external
   API (YouTube, etc.) — default to testing against `constructicon-test`
   first, never assume production is the right target.
+  **`constructicon-test` has its own real `youtube_data_api_key` in
+  `app_settings`** (confirmed 2026-09-12 via `core.db.get_setting`) — it's
+  a genuinely separate key/value, not shared with `constructicon-web`'s,
+  so a real (non-dry-run) sync script can be run against it and actually
+  hit the live YouTube Data API without touching production data. If it's
+  ever missing/rotated: `sudo docker exec constructicon-web python3 -c
+  "import core.db as db; db.init_db(); print(db.get_setting('youtube_data_api_key'))"`
+  to read it off production, then either the admin pane's API Keys "Set"
+  field on `constructicon-test`, or `db.set_setting('youtube_data_api_key',
+  '<value>')` the same way via `docker exec` into `constructicon-test`, to
+  copy it over.
   **Reset to clean `main` right after prod verification (standing step,
   2026-09-12+)**: once a branch has merged and its production deploy is
   verified, the *next* thing to do — as part of that same merge-deploy

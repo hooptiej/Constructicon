@@ -1089,14 +1089,32 @@ body.delete-mode-on .card-select-row { display: flex; }
    backwards (click opened a heavier modal-with-backdrop, no hover at
    all). */
 .timeline-rail {
+  /* Spans the FULL viewport height, header included -- not just the area
+     below it. It's positioned/z-indexed above the header (which is plain
+     unpositioned flow, so a fixed+z-indexed element already paints over
+     it regardless of DOM order) and its own content -- just tick marks
+     poking left of it now, no border -- sits entirely inside the header's
+     empty left margin (32px padding, and the shifted brand text starts
+     well past that at 102px), so it runs harmlessly behind/through the
+     header bar rather than covering anything in it.
+     Width is capped at 90px specifically so its right edge (left:12 +
+     width) stays clear of x=102px -- where .app-main-shifted's own
+     margin+padding puts the real page content's left edge -- so the
+     rail's mask background (below) can't creep over the Projects card
+     the way it did at the old 110px width. */
   position: fixed;
   left: 12px;
-  top: 68px; /* .app-header's height (56px) + a little breathing room */
+  top: 12px;
   bottom: 12px;
-  width: 110px;
+  width: 84px;
   z-index: 45;
-  background: transparent;
-  border-left: 2px solid var(--border-strong);
+  /* Solid, matching the page's own background rather than transparent --
+     since this now runs up through the header/hazard-tape (see above),
+     a solid fill acts as a mask over whatever's behind it there, reading
+     as a clean cutout rather than the rail overlapping the tape. No
+     border anymore either, per the same "cut a section out" look --
+     the tick marks (below) still carry the axis on their own. */
+  background: var(--bg);
   padding: 0 0 0 16px;
   box-sizing: border-box;
   overflow: visible;
@@ -1127,11 +1145,11 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .timeline-year-marker::before {
   /* the year tick: a perpendicular mark crossing the axis, bigger than a
-     per-entry tick. .timeline-rail's border-left sits 18px to the left of
-     this element's own box (2px border + 16px padding) -- left:-24px/
-     width:14px spans -6px to +8px relative to it, straddling the border
-     (0-2px) with 6px sticking out past it into the page margin, like a
-     ruler's major tick. */
+     per-entry tick. .timeline-rail's padding-box edge (no border anymore --
+     the rail's own background masks the axis now, see .timeline-rail) sits
+     16px to the left of this element's own box -- left:-24px/width:14px
+     spans -8px to +6px past that edge, like a ruler's major tick poking
+     out past the rail into the page margin. */
   content: '';
   position: absolute;
   left: -24px;
@@ -1153,10 +1171,7 @@ body.delete-mode-on .card-select-row { display: flex; }
   letter-spacing: 0.02em;
 }
 .timeline-month-marker::before {
-  /* medium tick: same idea as the year tick, smaller. .timeline-rail's
-     border-left sits 18px to the left of this element's own box (2px
-     border + 16px padding) -- left:-21px/width:11px spans -3px to +8px
-     relative to it, straddling the border (0-2px). */
+  /* medium tick: same idea as the year tick, smaller. */
   content: '';
   position: absolute;
   left: -21px;

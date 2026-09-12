@@ -283,6 +283,11 @@ def _to_public(row):
         "tags": row["tags"],
         "client": row["client"],
         "uploaded_at": row["timestamp"],
+        # content_date (#265): the content's own real-world date (EXIF
+        # capture time, a video's creation_time, a YouTube publishedAt),
+        # distinct from uploaded_at above — omitted here until now, even
+        # though the MCP server's equivalent shape already included it.
+        "content_date": row.get("content_date"),
         # uploaded_by keeps the exact Source string (identity/filter key —
         # used by /api/gallery and search); uploaded_by_display is the short
         # grouping label (see core/db.py's source_group()) for compact card
@@ -322,17 +327,22 @@ def _youtube_embed_url(external_url):
 def _friendly_date(epoch):
     """'%-d'-style formatting (no leading zero) without relying on the
     platform-specific %-d/%-e strftime extension, which isn't available on
-    Windows — this runs cross-platform."""
+    Windows — this runs cross-platform.
+
+    Renders in timeline.LOCAL_TIMEZONE (Mountain Time), not the process's
+    own system timezone (UTC inside this app's container) — a bare
+    datetime.fromtimestamp(epoch) here previously showed an 18:31 MDT photo
+    as the next calendar day."""
     if not epoch:
         return None
-    dt = datetime.fromtimestamp(epoch)
+    dt = timeline.epoch_to_local(epoch)
     return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
 
 
 def _friendly_datetime(epoch):
     if not epoch:
         return None
-    dt = datetime.fromtimestamp(epoch)
+    dt = timeline.epoch_to_local(epoch)
     hour12 = dt.hour % 12 or 12
     ampm = "AM" if dt.hour < 12 else "PM"
     return f"{_friendly_date(epoch)} at {hour12}:{dt.minute:02d} {ampm}"
@@ -342,10 +352,13 @@ def _datetime_local_value(epoch):
     """'%Y-%m-%dT%H:%M'-shaped string an <input type="datetime-local">
     accepts as its value attribute. None when epoch is None, so an unset
     override renders as an empty (placeholder-only) field rather than
-    Jan 1 1970."""
+    Jan 1 1970.
+
+    Mountain Time, same as _friendly_date — the owner reads and edits
+    dates in their own timezone, not the container's."""
     if epoch is None:
         return None
-    return datetime.fromtimestamp(epoch).strftime("%Y-%m-%dT%H:%M")
+    return timeline.epoch_to_local(epoch).strftime("%Y-%m-%dT%H:%M")
 
 
 def _friendly_file_size(size_bytes):
@@ -1670,7 +1683,12 @@ async def api_update_image(
         db.set_display_date_override(slug, None)
         row = db.get_by_slug(slug)
     elif display_date:
-        db.set_display_date_override(slug, datetime.fromisoformat(display_date).timestamp())
+        # The <input type="datetime-local"> this comes from is pre-filled
+        # by _datetime_local_value in Mountain Time (see there) — parse the
+        # owner's typed value the same way, not as the container's own
+        # system timezone (UTC), or a no-op re-save would silently shift
+        # the stored time by several hours.
+        db.set_display_date_override(slug, timeline.source_datetime_to_epoch(datetime.fromisoformat(display_date)))
         row = db.get_by_slug(slug)
     return JSONResponse(_to_public(row))
 
@@ -2060,8 +2078,11 @@ def api_update_project(
     # endpoint and the MCP tools' same reset-flag convention). start/end are
     # independent -- clearing one doesn't touch the other.
     if reset_start_date or reset_end_date or start_date or end_date:
-        new_start = None if reset_start_date else (datetime.fromisoformat(start_date).timestamp() if start_date else ...)
-        new_end = None if reset_end_date else (datetime.fromisoformat(end_date).timestamp() if end_date else ...)
+        # Same Mountain-Time convention as the per-item display_date override
+        # above — these <input type="datetime-local"> fields are pre-filled
+        # in Mountain Time too (see start_date_input/end_date_input above).
+        new_start = None if reset_start_date else (timeline.source_datetime_to_epoch(datetime.fromisoformat(start_date)) if start_date else ...)
+        new_end = None if reset_end_date else (timeline.source_datetime_to_epoch(datetime.fromisoformat(end_date)) if end_date else ...)
         updated = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
 
     return JSONResponse(updated or {})

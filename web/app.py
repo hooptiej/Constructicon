@@ -293,6 +293,13 @@ def _to_public(row):
         "source": row["source"],
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
+        # #248: lets the gallery/list cards' caption lamp tell "captionable
+        # but never attempted" (grey dot) apart from "not a captionable type"
+        # (no dot at all). ocr_status already carries that distinction for
+        # OCR via None-means-not-capable (set at insert time); captions keep
+        # their status in type_metadata, where absent is ambiguous without
+        # this. Same gate the detail page's caption panel uses.
+        "caption_capable": captions.should_caption(spec),
         "artifact_link": row["artifact_link"],
         "type_metadata": row.get("type_metadata", {}),
     }

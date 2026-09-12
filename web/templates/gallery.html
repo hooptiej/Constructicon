@@ -71,6 +71,28 @@ function ocrLampHtml(item) {
   return `<span class="ocr-lamp" style="background:${meta.color}" title="${escapeHtml(title)}"></span>`;
 }
 
+// #248: sibling to the OCR lamp above -- same dot, same colors as the
+// detail page's CAPTION_LAMP_META, so caption progress reads at a glance
+// across a whole gallery instead of only per object. Absent status on a
+// caption-capable type = "naked"/never attempted (grey, not red: captions
+// are a suggestion pipeline, not a required pass like OCR); a type that
+// can't be captioned at all (caption_capable false -- STL, documents) gets
+// no dot, same as ocrLampHtml's null check.
+const CAPTION_LAMP_META = {
+  pending: { color: '#BA7517', title: 'Captioning…' },
+  done:    { color: '#7FA37C', title: null }, // filled with the caption text below
+  failed:  { color: '#E24B4A', title: 'Captioning failed' },
+  none:    { color: '#6E6B57', title: 'No caption yet' },
+};
+function captionLampHtml(item) {
+  if (!item.caption_capable) return '';
+  const tm = item.type_metadata || {};
+  const status = tm.auto_caption_status || 'none';
+  const meta = CAPTION_LAMP_META[status] || CAPTION_LAMP_META.none;
+  const title = status === 'done' ? (tm.auto_caption || 'Caption came back empty') : meta.title;
+  return `<span class="ocr-lamp" style="background:${meta.color}" title="${escapeHtml(title)}"></span>`;
+}
+
 const LOCK_ICON = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none">
   <rect x="5" y="11" width="14" height="9" rx="2" stroke="#6E6B57" stroke-width="1.4"/>
   <path d="M8 11V8C8 5.79086 9.79086 4 12 4C14.2091 4 16 5.79086 16 8V11" stroke="#6E6B57" stroke-width="1.4"/>
@@ -115,7 +137,7 @@ function cardHtml(item) {
       </div>
       <div class="gallery-body">
         <div>
-          <span class="gallery-filename mono">${escapeHtml(item.display_name)}</span> ${ocrLampHtml(item)}
+          <span class="gallery-filename mono">${escapeHtml(item.display_name)}</span> ${ocrLampHtml(item)}${captionLampHtml(item)}
           <div class="gallery-date">${new Date(item.uploaded_at * 1000).toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'})} · <span class="uploader-label">${item.uploaded_by_display}</span></div>
         </div>
         <div class="gallery-tags">${item.tags.map(t => `<span class="chip">${t}</span>`).join('')}</div>

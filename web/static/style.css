@@ -1102,7 +1102,7 @@ body.delete-mode-on .card-select-row { display: flex; }
   overflow: visible;
 }
 .app-main-shifted {
-  margin-left: 140px; /* .timeline-rail's left(12) + width(110) + a gap */
+  margin-left: 70px;
 }
 .timeline-track {
   display: flex;

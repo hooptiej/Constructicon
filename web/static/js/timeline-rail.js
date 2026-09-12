@@ -110,7 +110,7 @@ class TimelineRail {
     // butting up against it, so the two read as one connected object
     // instead of a card floating a gap away from its own label.
     const scaledRight = nodeRect.left + nodeRect.width * ENTRY_HOVER_SCALE;
-    popover.style.left = `${scaledRight - 15}px`;
+    popover.style.left = `${scaledRight - 18}px`;
     popover.style.top = `${top}px`;
   }
 

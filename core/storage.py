@@ -11,7 +11,7 @@ import secrets
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 
@@ -23,10 +23,30 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".tiff", ".
 MAX_BYTES = 25 * 1024 * 1024
 THUMB_MAX_DIM = 400
 THUMB_BG = (20, 23, 15)  # matches the app's dark page background, for flattened transparency
+EXIF_ORIENTATION_TAG = 0x0112
 
 
 def make_slug():
     return secrets.token_urlsafe(9)
+
+
+def exif_upright(img):
+    """#288: apply the file's EXIF Orientation tag to the pixels before any
+    resize/crop derives a new image from them. A phone/camera JPEG is usually
+    stored sensor-side-up with a "rotate 90° to display" tag that browsers
+    and OS viewers honor silently -- Pillow doesn't, so .thumbnail()/.crop()
+    on the raw layout produce a sideways result (and the derived JPEG drops
+    the tag that would have let a browser fix it on display). Returns the
+    image unchanged for the untagged majority (screenshots, renders, fetched
+    thumbnails): guarded rather than calling exif_transpose unconditionally
+    because that always returns a fully decoded copy, which would throw away
+    the DCT-scaled draft decode .thumbnail() otherwise gets for large JPEGs."""
+    try:
+        if img.getexif().get(EXIF_ORIENTATION_TAG, 1) == 1:
+            return img
+    except Exception:
+        return img
+    return ImageOps.exif_transpose(img)
 
 
 def thumb_path_for(slug):
@@ -42,7 +62,7 @@ def save_thumbnail_from_bytes(slug, image_bytes):
     there's exactly one place that resizes/flattens/encodes a thumbnail.
     """
     try:
-        img = Image.open(BytesIO(image_bytes))
+        img = exif_upright(Image.open(BytesIO(image_bytes)))
         img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM))
         if img.mode in ("RGBA", "LA", "P"):
             flattened = Image.new("RGB", img.size, THUMB_BG)
@@ -104,7 +124,7 @@ def normalize_avatar(content):
     the client sent — the client-side cropper already exports a square
     AVATAR_SIZE PNG, but this makes that a server-enforced guarantee rather
     than a trusted assumption. A no-op on already-correct input."""
-    img = Image.open(BytesIO(content))
+    img = exif_upright(Image.open(BytesIO(content)))
     img = img.convert("RGBA") if img.mode in ("RGBA", "LA", "P") else img.convert("RGB")
     w, h = img.size
     side = min(w, h)

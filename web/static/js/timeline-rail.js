@@ -22,7 +22,7 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 // the CSS transition has animated anywhere close to this value -- the
 // popover would otherwise be placed against the pill's pre-scale width and
 // then watch the pill visually grow past it a moment later.
-const ENTRY_HOVER_SCALE = 2.4;
+const ENTRY_HOVER_SCALE = 2.04;
 
 class TimelineRail {
   constructor(container, entries, options = {}) {

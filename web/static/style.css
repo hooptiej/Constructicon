@@ -1286,7 +1286,7 @@ body.delete-mode-on .card-select-row { display: flex; }
   color: var(--accent);
   background: var(--bg);
   box-shadow: 0 2px 10px rgba(0,0,0,0.45);
-  transform: scale(2.4);
+  transform: scale(2.04);
   z-index: 20;
 }
 .timeline-entry-span {

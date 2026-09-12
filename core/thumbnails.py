@@ -18,6 +18,28 @@ from . import object_types, storage
 
 FETCH_TIMEOUT_SECONDS = 10
 
+# #284: i.imgur.com answers HTTP 429 (Retry-After: 0, empty body, no
+# Cloudflare ray id) to any request that doesn't carry a browser-like
+# User-Agent -- UA-based bot blocking dressed up as a rate limit, not a real
+# quota. httpx's default `python-httpx/x.y` UA trips it, which silently took
+# down the whole Imgur -> thumbnail -> OCR -> caption chain from the box.
+# A Chrome-style UA flips that to a clean 200 with real image bytes. Accept
+# is kept to `image/*` (no avif/webp advertised) so a CDN has no reason to
+# content-negotiate into a format Pillow might not decode.
+#
+# Sent on every FETCH_URL fetch, not just Imgur's: this dispatcher is
+# deliberately type-agnostic (see module docstring), and YouTube's static
+# thumbnail host serves browser UAs all day, so there's nothing to gain from
+# special-casing -- and a per-type header would need exactly the
+# `if media_type == ...` branch this module is meant never to grow.
+FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    ),
+    "Accept": "image/*,*/*;q=0.8",
+}
+
 
 def ensure_thumbnail(row):
     """Generates and saves a thumbnail for `row` if its type has one and it
@@ -62,7 +84,7 @@ def _from_fetch(row, spec):
     url = spec.thumbnail_url_fn(row.get("external_url"))
     if not url:
         return False
-    resp = httpx.get(url, timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=True)
+    resp = httpx.get(url, headers=FETCH_HEADERS, timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=True)
     resp.raise_for_status()
     storage.save_thumbnail_from_bytes(row["slug"], resp.content)
     return storage.thumb_path_for(row["slug"]).exists()

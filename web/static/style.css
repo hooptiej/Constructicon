@@ -328,6 +328,9 @@ body.delete-mode-on .card-select-row { display: flex; }
   display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   cursor: default; box-shadow: 0 0 0 2px var(--card);
 }
+/* #248: a card can carry more than one lamp in a row (OCR + caption, plus
+   the home page's unfiled marker) -- keep sibling dots from touching. */
+.ocr-lamp + .ocr-lamp { margin-left: 3px; }
 
 /* --- Upload drawer (slides in from the right) --- */
 .upload-trigger {

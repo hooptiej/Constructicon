@@ -1256,11 +1256,16 @@ body.delete-mode-on .card-select-row { display: flex; }
    element, not something floating over the viewport, and needs to read
    as its own distinct "timescale" instrument at a glance. */
 .project-video-timeline-panel {
+  /* Old radio tuner look, per owner's request: near-black chassis, a
+     faint blue backlight glow (ambient + a soft inset wash), an orange
+     indicator line/needle for the axis, phosphor-blue glowing readouts
+     for the dates -- see the scale-line/-label/event-time rules below. */
   margin-top: 10px;
   padding: 12px 14px 16px;
-  background: var(--card);
-  border: 1px solid var(--border-stronger);
+  background: #0a0d12;
+  border: 1px solid #232a36;
   border-radius: 8px;
+  box-shadow: 0 0 28px rgba(70, 150, 255, 0.10), inset 0 0 46px rgba(70, 150, 255, 0.05);
 }
 .project-video-timeline-panel-label {
   font-size: 11px;
@@ -1305,12 +1310,15 @@ body.delete-mode-on .card-select-row { display: flex; }
   margin: 10px 0;
 }
 .project-video-timeline-scale-line {
+  /* The tuner's indicator needle -- the whole axis reads as one solid
+     orange line, glowing faintly like a lit dial. */
   position: absolute;
   top: 8px;
   left: 0;
   right: 0;
   height: 2px;
-  background: var(--border-strong);
+  background: #ff8a1f;
+  box-shadow: 0 0 6px rgba(255, 138, 31, 0.7);
 }
 .project-video-timeline-scale-tick {
   position: absolute;
@@ -1323,11 +1331,15 @@ body.delete-mode-on .card-select-row { display: flex; }
 .project-video-timeline-scale-mark {
   width: 2px;
   height: 8px;
-  background: var(--text-2);
+  background: #ff8a1f;
+  box-shadow: 0 0 4px rgba(255, 138, 31, 0.5);
 }
 .project-video-timeline-scale-label {
-  font-size: 10px;
-  color: var(--text-2);
+  /* Phosphor-blue glowing readout, like an old CRT/VFD tuner display. */
+  font-size: 17.5px; /* 1.75x the original 10px, per owner's readability pass */
+  color: #7ec8ff;
+  text-shadow: 0 0 4px rgba(126, 200, 255, 0.85), 0 0 12px rgba(126, 200, 255, 0.35);
+  font-family: 'JetBrains Mono', monospace;
   white-space: nowrap;
   margin-top: 2px;
 }
@@ -1357,7 +1369,8 @@ body.delete-mode-on .card-select-row { display: flex; }
   left: 50%;
   width: 2px;
   height: 40px;
-  background: var(--accent);
+  background: #ff8a1f; /* matches the scale needle/line -- reads as the same indicator reaching up to its readout */
+  box-shadow: 0 0 4px rgba(255, 138, 31, 0.6);
   transform: translateX(-50%);
 }
 .project-video-timeline-event-time {
@@ -1367,8 +1380,10 @@ body.delete-mode-on .card-select-row { display: flex; }
   position: absolute;
   bottom: calc(100% + 40px);
   left: 50%;
-  font-size: 9px;
-  color: var(--text-2);
+  font-size: 15.75px; /* 1.75x the original 9px, per owner's readability pass */
+  color: #7ec8ff; /* phosphor-blue glowing readout, matching the ruler labels */
+  text-shadow: 0 0 4px rgba(126, 200, 255, 0.85), 0 0 12px rgba(126, 200, 255, 0.35);
+  font-family: 'JetBrains Mono', monospace;
   white-space: nowrap;
   transform-origin: bottom left;
   transform: rotate(-40deg);

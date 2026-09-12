@@ -59,6 +59,15 @@ class TimelineRail {
     // mouseleave scheduled, instead of racing it.
     el.addEventListener('mouseenter', () => this._cancelHidePopover());
     el.addEventListener('mouseleave', () => this._scheduleHidePopover());
+    // Now that the popover is pointer-events: auto (see above), a click
+    // anywhere on it lands on this div instead of passing through to
+    // whatever pill happens to be underneath -- give it the same
+    // navigate-to-entry behavior as the pill itself, tracking whichever
+    // entry _showPopover most recently populated it with (the element is
+    // reused across hovers, not recreated per entry).
+    el.addEventListener('click', () => {
+      if (this._currentPopoverEntry) this.onOpen(this._currentPopoverEntry);
+    });
     document.body.appendChild(el);
     this._popover = el;
     return el;
@@ -83,6 +92,7 @@ class TimelineRail {
 
   _showPopover(entry, node) {
     this._cancelHidePopover();
+    this._currentPopoverEntry = entry;
     const popover = this._ensurePopover();
     const cover = popover.querySelector('.timeline-popover-cover');
     if (entry.thumbUrl) {

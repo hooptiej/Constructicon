@@ -1325,8 +1325,13 @@ body.delete-mode-on .card-select-row { display: flex; }
      itself catch mouseenter to keep itself open while the mouse crosses
      from the pill onto the card (see timeline-rail.js's _ensurePopover/
      _scheduleHidePopover). Its footprint sits to the right of the rail's
-     own entry column, so this doesn't intercept clicks on other entries. */
+     own entry column, so this doesn't intercept clicks on other entries.
+     Being a real hit-test target now also means a click on the card lands
+     on it instead of passing through to the pill underneath -- given its
+     own click handler (same navigate-to-entry as the pill) to match, so
+     cursor: pointer here isn't a false promise. */
   pointer-events: auto;
+  cursor: pointer;
 }
 .timeline-popover.visible {
   display: flex;

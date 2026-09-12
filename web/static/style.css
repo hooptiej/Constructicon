@@ -70,7 +70,7 @@ body {
      plain white, so it reads as ambient light on this palette, not a cool
      spotlight. */
   background:
-    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(236, 230, 210, 0.05), transparent 100%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(236, 230, 210, 0.14), transparent 100%),
     var(--bg);
   background-attachment: fixed;
   color: var(--text);

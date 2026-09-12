@@ -16,6 +16,14 @@
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// Must match .timeline-entry:hover's transform: scale() in style.css (#292).
+// Kept as a constant rather than read off the live element because
+// getBoundingClientRect() inside the mouseenter handler below fires before
+// the CSS transition has animated anywhere close to this value -- the
+// popover would otherwise be placed against the pill's pre-scale width and
+// then watch the pill visually grow past it a moment later.
+const ENTRY_HOVER_SCALE = 2.4;
+
 class TimelineRail {
   constructor(container, entries, options = {}) {
     this.container = container;
@@ -61,11 +69,17 @@ class TimelineRail {
 
     popover.classList.add('visible');
     // Measure after making it visible (offsetHeight is 0 while display:none).
+    // nodeRect is still the pre-hover (unscaled) box at this point -- see
+    // ENTRY_HOVER_SCALE above -- so project where its right edge will end
+    // up once the hover transform finishes, growing from the left edge
+    // (matches transform-origin: left center), rather than using
+    // nodeRect.right directly.
     const nodeRect = node.getBoundingClientRect();
     const popoverRect = popover.getBoundingClientRect();
     let top = nodeRect.top + nodeRect.height / 2 - popoverRect.height / 2;
     top = Math.max(8, Math.min(top, window.innerHeight - popoverRect.height - 8));
-    popover.style.left = `${nodeRect.right + 10}px`;
+    const scaledRight = nodeRect.left + nodeRect.width * ENTRY_HOVER_SCALE;
+    popover.style.left = `${scaledRight + 6}px`;
     popover.style.top = `${top}px`;
   }
 

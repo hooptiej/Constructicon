@@ -2084,6 +2084,17 @@ def _attach_to_project(slug, project_id):
     resolve to a real project (bad/stale value) is silently ignored rather
     than failing the whole upload over a cosmetic mismatch.
 
+    #274: also merges the tag's own name into the row's free-text `tags`
+    column (db.add_tags — same merge path a person typing a tag by hand
+    goes through), not just post_tags. Before this, a project-linked tag
+    surfaced the item in tag-tree browsing but never showed up as a chip
+    in the item's own TAGS box on its detail page — an inconsistent, easy
+    to miss picture of "what tags does this item actually have." Once
+    merged in this way it's indistinguishable from a typed tag (by
+    design, per the owner's call on #274) — removing it later from the
+    free-text box fully detaches it, independent of project membership,
+    same as any other typed tag.
+
     Also auto-sets the project's cover_slug to this item's slug if the
     project currently has no cover (issue #103) — fires only once per
     project, on the first item it receives."""
@@ -2095,6 +2106,9 @@ def _attach_to_project(slug, project_id):
     db.add_item_to_project(project["id"], slug)
     if project.get("tag_id"):
         db.attach_tags(slug, [project["tag_id"]])
+        tag = db.get_tag(project["tag_id"])
+        if tag:
+            db.add_tags(slug, [tag["name"]])
     # Auto-set cover to first item if project has no cover yet
     if not project.get("cover_slug"):
         db.update_project(project["id"], cover_slug=slug)

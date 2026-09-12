@@ -1038,6 +1038,19 @@ def _slugify(name):
     return slug or "tag"
 
 
+def get_tag(tag_id):
+    """Look up one blog_tags row by id. Added for #274: a project's
+    linked tag_id needs to be resolved to its real name so
+    web/app.py's _attach_to_project can also merge that name into the
+    row's own free-text tags column (see that function's docstring)."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM blog_tags WHERE id = ?", (tag_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def _find_tag_by_name(name):
     """Search the entire tag tree for a tag with the given name, regardless
     of parent. Returns the first match, or None if not found. Used to prevent

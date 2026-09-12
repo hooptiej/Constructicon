@@ -1334,29 +1334,44 @@ body.delete-mode-on .card-select-row { display: flex; }
 .project-video-timeline-events {
   position: relative;
   height: 20px;
-  margin-top: 20px; /* room for the angled time flags above the diamonds */
 }
 .project-video-timeline-event-wrap {
-  /* Everything -- time flag and diamond -- is tied to this one anchor
-     point, so clustered same-day events stay individually readable
-     instead of collapsing into one indistinguishable diamond. */
+  /* Everything -- flagpole, time flag, and diamond -- is tied to this
+     one anchor point, so clustered same-day events stay individually
+     readable instead of collapsing into one indistinguishable diamond. */
   position: absolute;
   top: 4px;
   transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+}
+.project-video-timeline-event-pole {
+  /* Reaches from the diamond (this wrap's own top, since the pole is
+     bottom:100% of the wrap) up through the gap and into
+     .project-video-timeline-scale to cross its axis line. Measured, not
+     guessed: wrap's own top offset (4px) + the gap between the scale and
+     events rows (.scale's margin: 10px 0, so 10px) + the line's distance
+     from .scale's own bottom edge (.scale is 28px tall, line sits at
+     top:8px, so 28-8=20px) = 34px to land exactly on the line; 40px
+     overlaps a few px past it, on purpose. */
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 2px;
+  height: 40px;
+  background: var(--accent);
+  transform: translateX(-50%);
 }
 .project-video-timeline-event-time {
-  /* A small flag reading up and to the right from the diamond, not a
-     horizontal label that would collide with its neighbors immediately. */
+  /* Anchored at the pole's top (bottom: 100% of the wrap + the pole's own
+     height), not the diamond directly -- reads up and to the right so it
+     doesn't collide with a neighboring flag immediately. */
+  position: absolute;
+  bottom: calc(100% + 40px);
+  left: 50%;
   font-size: 9px;
   color: var(--text-2);
   white-space: nowrap;
   transform-origin: bottom left;
   transform: rotate(-40deg);
-  margin-bottom: 12px;
-  margin-left: 4px;
 }
 .project-video-timeline-event {
   /* A video-editor-style keyframe diamond, not a bare dot -- sized and

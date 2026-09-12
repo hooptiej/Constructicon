@@ -129,6 +129,35 @@ class ProjectVideoTimeline {
     if (this._popover) this._popover.classList.remove('visible');
   }
 
+  _clusterEvents(sortedEvents, range) {
+    // Events within CLUSTER_THRESHOLD percent of each other get grouped;
+    // only the first and last member of a cluster gets a visible time
+    // flag (every diamond still renders and is still fully clickable/
+    // hoverable -- this only suppresses the flag label, which is what
+    // actually collides when several events land within a few minutes
+    // of each other, e.g. from one batch import).
+    const CLUSTER_THRESHOLD = 3;
+    const clusters = [];
+    let current = null;
+    let lastPercent = null;
+    sortedEvents.forEach((event) => {
+      const percent = this._percent(event.date, range);
+      if (current && percent - lastPercent <= CLUSTER_THRESHOLD) {
+        current.push(event);
+      } else {
+        current = [event];
+        clusters.push(current);
+      }
+      lastPercent = percent;
+    });
+    const showFlag = new Set();
+    clusters.forEach((cluster) => {
+      showFlag.add(cluster[0]);
+      showFlag.add(cluster[cluster.length - 1]);
+    });
+    return showFlag;
+  }
+
   _render() {
     this.container.innerHTML = '';
     this.container.classList.add('project-video-timeline');
@@ -176,21 +205,30 @@ class ProjectVideoTimeline {
 
     const eventRow = document.createElement('div');
     eventRow.className = 'project-video-timeline-events';
-    this.events.forEach((event) => {
-      // Wrapper carries the position; a diamond with an angled time
-      // "flag" above it, anchored at the diamond -- events clustered on
-      // the same day (or the same few minutes, from a batch import) are
-      // still individually identifiable instead of just overlapping into
-      // one indistinguishable diamond (see .project-video-timeline-event-time's
-      // rotation in style.css).
+    const sortedEvents = [...this.events].sort((a, b) => a.date - b.date);
+    const showFlag = this._clusterEvents(sortedEvents, range);
+    sortedEvents.forEach((event) => {
+      // Wrapper carries the position; a diamond with a flagpole reaching
+      // up past the scale line and an angled time flag at its top,
+      // everything anchored at the diamond. Only the first/last event of
+      // a tight cluster (see _clusterEvents) gets a pole+flag -- every
+      // diamond still renders and is still clickable/hoverable, this just
+      // stops several events a few minutes apart from producing a pile of
+      // overlapping angled labels.
       const wrap = document.createElement('div');
       wrap.className = 'project-video-timeline-event-wrap';
       wrap.style.left = `${this._percent(event.date, range)}%`;
 
-      const time = document.createElement('span');
-      time.className = 'project-video-timeline-event-time';
-      time.textContent = new Date(event.date * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      wrap.appendChild(time);
+      if (showFlag.has(event)) {
+        const pole = document.createElement('span');
+        pole.className = 'project-video-timeline-event-pole';
+        wrap.appendChild(pole);
+
+        const time = document.createElement('span');
+        time.className = 'project-video-timeline-event-time';
+        time.textContent = new Date(event.date * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        wrap.appendChild(time);
+      }
 
       const el = document.createElement('button');
       el.type = 'button';

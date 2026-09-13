@@ -1084,6 +1084,22 @@ def project_detail_page(request: Request, slug: str):
     # own items render as point events -- each child needs its own
     # resolved span, same as the gallery rail's per-project computation.
     timeline_children = []
+    # #300: the card grid mixes this project's own items and its
+    # sub-projects into ONE chronological sequence (no separate
+    # "Sub-projects" section). Each entry carries a `kind` the template
+    # branches on and a `sort_date`: an item's resolved effective date, a
+    # sub-project's effective_start (the natural "when did this begin"
+    # moment for a span). One stable sort over the merged list keeps
+    # list_project_items' own sort_order tie-break for same-instant items.
+    grid_entries = []
+    for raw, public in zip(raw_items, items):
+        effective_date = timeline.resolve_item_date(raw)
+        grid_entries.append({
+            "kind": "item",
+            "sort_date": effective_date,
+            "date_display": _friendly_date(effective_date),
+            **public,
+        })
     for child in child_projects:
         child_items = db.list_project_items(child["id"])
         child_start, child_end = timeline.resolve_project_span(child, child_items)
@@ -1094,13 +1110,26 @@ def project_detail_page(request: Request, slug: str):
             "effective_start": child_start,
             "effective_end": child_end,
         })
+        start_display = _friendly_date(child_start)
+        end_display = _friendly_date(child_end)
+        grid_entries.append({
+            "kind": "project",
+            "sort_date": child_start,
+            "slug": child["slug"],
+            "title": child["title"],
+            "description": child.get("description"),
+            "status": child.get("status"),
+            "cover_url": _project_cover_url(child.get("cover_slug")),
+            "item_count": len(child_items),
+            "date_display": start_display if start_display == end_display else f"{start_display} – {end_display}",
+        })
+    grid_entries.sort(key=lambda entry: entry["sort_date"])
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
             "project": project,
             "cover_url": _project_cover_url(project.get("cover_slug")),
-            "items": items,
-            "child_projects": child_projects,
+            "grid_entries": grid_entries,
             "ancestors": ancestors,
             "writeup_body": writeup_body,
             "start_date_input": _datetime_local_value(project.get("start_date_override")),

@@ -6,6 +6,10 @@ import sqlite3
 import time
 from pathlib import Path
 
+# timeline is pure (no DB access — see its module docstring), so this
+# direction of import can't cycle; it's here for list_project_items' sort.
+from . import timeline
+
 DB_PATH = Path(__file__).resolve().parent.parent / "imagerepo.db"
 
 SCHEMA = """
@@ -1592,9 +1596,22 @@ def remove_item_from_project(project_id, post_slug):
 
 
 def list_project_items(project_id):
-    """The posts in a project, ordered by sort_order, joined with
-    capture_events so full post data comes back — mirrors how
-    list_posts_for_tag joins post_tags to capture_events."""
+    """The posts in a project, joined with capture_events so full post data
+    comes back — mirrors how list_posts_for_tag joins post_tags to
+    capture_events.
+
+    Ordered by each item's real-world chronology (#300): the same
+    effective-date chain core/timeline.py's resolve_item_date establishes
+    for the Timeline feature (display_date_override → content_date →
+    source_modified_at → timestamp), oldest first, so the project page
+    reads as the project actually happened rather than in the order things
+    were filed. Resolved in Python rather than inlined into SQL so there's
+    exactly one implementation of that chain. The SQL still orders by
+    project_items.sort_order and the Python sort is stable, so sort_order
+    remains the tie-break for items resolving to the same instant — the
+    column itself, and the manual-curation discipline behind project
+    membership, are untouched (see CLAUDE.md's "Projects are curated, not
+    auto-generated")."""
     conn = get_conn()
     try:
         rows = conn.execute(
@@ -1602,7 +1619,9 @@ def list_project_items(project_id):
             "WHERE pi.project_id = ? AND ce.redacted = 0 ORDER BY pi.sort_order ASC",
             (project_id,),
         ).fetchall()
-        return [_row_to_dict(r) for r in rows]
+        items = [_row_to_dict(r) for r in rows]
+        items.sort(key=timeline.resolve_item_date)
+        return items
     finally:
         conn.close()
 

@@ -339,7 +339,17 @@ Two containers run side by side on that box:
 - **`constructicon-web`** — the real production instance.
 - **`constructicon-test`** — an isolated instance with its own DB/storage,
   used to test changes (e.g. new sync scripts, schema-affecting work)
-  before pointing them at production. `scripts/full_youtube_channel_sync.py`'s
+  before pointing them at production. **Its browser tab currently reads
+  the same as production's ("Constructicon") — it's supposed to read
+  `DEV-Constructicon`** (standing convention across all of hooptiej's
+  projects, see `~/.claude/CLAUDE.md`'s dev-env-tab-label rule: a `DEV-`
+  *prefix*, not a suffix, so it survives a squeezed-down tab). Not
+  implemented yet — filed as hooptiej/Constructicon#310 (needs a
+  `CONSTRUCTICON_ENV` var mirroring quest-log's `QUEST_LOG_ENV` pattern,
+  wired into `base.html`'s `<title>` block). Check this is actually fixed
+  before assuming a dev/test session can visually tell its tab apart from
+  prod at a glance.
+  `scripts/full_youtube_channel_sync.py`'s
   own docstring is explicit about this discipline: its issue's
   implementation work was scoped to "testing against the isolated
   constructicon-test container," with running against the real production

@@ -50,6 +50,17 @@
       <div id="curator-project-scores" class="project-scores-list"></div>
     </section>
 
+    <!-- Top needs (#343) — compact read-only view of the top 10 ranked nudges.
+         Full dismiss/snooze controls are on the admin page; this is just a
+         quick scan to see what the system is asking for. -->
+    <section class="curator-panel full-width">
+      <div class="curator-panel-header">
+        <h2>Top needs</h2>
+        <div class="curator-row-hint">What the system needs right now, ranked by impact</div>
+      </div>
+      <div id="curator-top-needs" class="curator-top-needs-list"></div>
+    </section>
+
   </div>
 </div>
 
@@ -257,6 +268,59 @@
 .project-score-fill.red {
   background: #f44336;
 }
+
+/* Top needs (#343) — compact nudge display on the dashboard */
+.curator-top-needs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.curator-top-need-item {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.75rem;
+  background: var(--panel-bg, #f9f9f9);
+  border-radius: 4px;
+  border-left: 3px solid #ccc;
+  font-size: 0.9rem;
+}
+
+.curator-top-need-severity {
+  font-size: 1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.curator-top-need-severity.high {
+  color: #f44336;
+}
+
+.curator-top-need-severity.medium {
+  color: #ff9800;
+}
+
+.curator-top-need-severity.low {
+  color: #4caf50;
+}
+
+.curator-top-need-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.curator-top-need-link {
+  flex-shrink: 0;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.curator-top-need-link:hover {
+  text-decoration: underline;
+}
 </style>
 
 <script>
@@ -336,6 +400,75 @@ function renderCuratorDashboard(data) {
 
 // Load on page load
 document.addEventListener('DOMContentLoaded', loadCuratorDashboard);
+
+// Top needs (#343) — compact read-only view of the top 10 ranked nudges
+async function loadTopNeeds() {
+  try {
+    const response = await fetch('/api/curator/needs?limit=10');
+    if (!response.ok) return;
+    const needs = await response.json();
+    renderTopNeeds(needs);
+  } catch (error) {
+    console.error('Failed to load top needs:', error);
+  }
+}
+
+function renderTopNeeds(needs) {
+  const container = document.getElementById('curator-top-needs');
+  if (!needs || needs.length === 0) {
+    container.innerHTML = '<div class="audit-log-empty">All clear — nothing needs your attention.</div>';
+    return;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function getActionHref(action) {
+    if (!action) return '#';
+    switch (action.type) {
+      case 'set_cover':
+      case 'draft_writeup':
+      case 'add_captions':
+      case 'add_dates':
+      case 'add_related_or_tags':
+      case 'add_highlight':
+      case 'set_status':
+      case 'acknowledge':
+        return `/project/${encodeURIComponent(action.project_slug || '')}`;
+      case 'file_unfiled':
+        return '/unfiled';
+      case 'review_automatch':
+      case 'review_captions':
+        return '/admin';
+      default:
+        return '#';
+    }
+  }
+
+  function getSeverityClass(priority) {
+    if (priority >= 18) return 'high';
+    if (priority >= 8) return 'medium';
+    return 'low';
+  }
+
+  let html = '';
+  for (const need of needs) {
+    const severity = getSeverityClass(need.priority);
+    const href = getActionHref(need.action);
+    html += `
+      <div class="curator-top-need-item">
+        <span class="curator-top-need-severity ${severity}" title="Priority: ${need.priority}">●</span>
+        <div class="curator-top-need-title" title="${escapeHtml(need.summary || '')}">${escapeHtml(need.title)}</div>
+        <a href="${escapeHtml(href)}" class="btn-ms curator-top-need-link">Open</a>
+      </div>
+    `;
+  }
+  container.innerHTML = html;
+}
+
+document.addEventListener('DOMContentLoaded', loadTopNeeds);
+document.addEventListener('constructicon:needs-changed', loadTopNeeds);
 </script>
 
 {% endblock %}

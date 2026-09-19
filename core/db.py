@@ -146,6 +146,14 @@ CREATE TABLE IF NOT EXISTS blog_entry_items (
     PRIMARY KEY (entry_id, post_slug)
 );
 CREATE INDEX IF NOT EXISTS idx_blog_entry_items_slug ON blog_entry_items(post_slug);
+CREATE TABLE IF NOT EXISTS curator_dismissals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nudge_key TEXT NOT NULL UNIQUE,
+    action TEXT NOT NULL,
+    snooze_until REAL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_curator_dismissals_nudge_key ON curator_dismissals(nudge_key);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -1951,6 +1959,53 @@ def resolve_pending_decision(decision_id, resolution=None):
         )
         conn.commit()
         return get_pending_decision(decision_id)
+    finally:
+        conn.close()
+
+
+# --- Curator dismissals (Stage 3) ---
+# Suppression of nudges: a nudge is derived on-demand (never stored), but
+# dismissals (and snoozes) are stored so they persist across sessions.
+
+def add_curator_dismissal(nudge_key, action, snooze_until=None):
+    """Add or replace a dismissal for a nudge. action is 'dismiss' (permanent)
+    or 'snooze' (temporary, until snooze_until epoch). If a dismissal for
+    this nudge_key already exists, it's deleted and replaced (new decision
+    supersedes the old)."""
+    conn = get_conn()
+    try:
+        # Delete any existing row for this nudge_key
+        conn.execute("DELETE FROM curator_dismissals WHERE nudge_key = ?", (nudge_key,))
+        # Insert the new one
+        conn.execute(
+            "INSERT INTO curator_dismissals (nudge_key, action, snooze_until, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (nudge_key, action, snooze_until, time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_active_curator_dismissals():
+    """Return a dict {nudge_key: {...dismissal dict...}} of dismissals that are
+    still in effect. A 'dismiss' action always suppresses; a 'snooze' action
+    only suppresses if snooze_until > now. Expired snoozes do NOT suppress."""
+    conn = get_conn()
+    try:
+        rows = conn.execute("SELECT * FROM curator_dismissals").fetchall()
+        result = {}
+        now = time.time()
+        for row in rows:
+            d = dict(row)
+            # Check if this dismissal is still active
+            if d["action"] == "dismiss":
+                result[d["nudge_key"]] = d
+            elif d["action"] == "snooze" and d["snooze_until"] is not None:
+                if d["snooze_until"] > now:
+                    result[d["nudge_key"]] = d
+                # else: snooze is expired, don't include it
+        return result
     finally:
         conn.close()
 

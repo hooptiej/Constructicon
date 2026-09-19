@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, db, embedded_metadata, object_types, ocr, storage, thumbnails, timeline
+from core import backup, curator_needs, db, embedded_metadata, object_types, ocr, storage, thumbnails, timeline
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
@@ -902,6 +902,58 @@ def constructicon_set_project_status(id_or_slug: str, status: str) -> dict | Non
     if project is None:
         return None
     return _to_public_project(project)
+
+
+# --- Curator Stage 3a: Nudges ---
+
+@mcp.tool()
+def constructicon_list_needs(kind: str | None = None, limit: int | None = None) -> list[dict]:
+    """Curator Stage 3a: list current nudges (actionable needs).
+
+    Returns a ranked list of nudges, sorted by priority DESC. Each nudge includes:
+        - nudge_key: stable id for dismissal
+        - kind: nudge type (missing_cover, unfiled_objects, confirm_automatch, etc.)
+        - target_type: 'project' or 'global'
+        - target_id, target_slug: project id/slug or None for global nudges
+        - title, summary: human-readable text
+        - priority: computed score (base_impact * status_weight)
+        - base_impact, status_weight: components of priority
+        - action: descriptor dict (type, project_slug, etc.) for the UI/agent to interpret
+
+    Optional filters:
+        - kind: filter by nudge kind (e.g., 'missing_cover', 'unfiled_objects')
+        - limit: cap the result count (default: all)
+
+    Nudges are filtered by active dismissals — dismissed or snoozed nudges
+    are excluded automatically.
+    """
+    needs = curator_needs.list_needs()
+
+    # Filter by kind if requested
+    if kind is not None:
+        needs = [n for n in needs if n["kind"] == kind]
+
+    # Limit if requested
+    if limit is not None:
+        needs = needs[:limit]
+
+    return needs
+
+
+@mcp.tool()
+def constructicon_dismiss_need(nudge_key: str, snooze_until: float | None = None) -> dict:
+    """Dismiss or snooze a nudge.
+
+    nudge_key: the nudge_key from constructicon_list_needs (stable id).
+    snooze_until: optional unix epoch timestamp (float). If omitted or None,
+        the nudge is permanently dismissed. If provided, the nudge is snoozed
+        until that time.
+
+    Returns {ok: true} on success.
+    """
+    action = "snooze" if snooze_until is not None else "dismiss"
+    db.add_curator_dismissal(nudge_key, action, snooze_until=snooze_until)
+    return {"ok": True}
 
 
 if __name__ == "__main__":

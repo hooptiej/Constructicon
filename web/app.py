@@ -26,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, curator, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
+from core import automatch, backup, captions, curator, curator_needs, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES
 
 app = FastAPI()
@@ -2282,6 +2282,72 @@ def api_curator_dashboard(request: Request):
         - all_project_scores: detailed scoring for every project
     """
     return JSONResponse(curator.score_all_projects())
+
+
+# --- Curator Stage 3a: Nudges ---
+
+@app.get("/api/curator/needs")
+def api_curator_list_needs(request: Request, kind: str | None = None, limit: int | None = None):
+    """Curator Stage 3a: list current nudges (actionable needs).
+
+    Returns a list of nudge dicts, sorted by priority DESC. Each nudge has:
+        - nudge_key: stable id for dismissal
+        - kind: nudge type (missing_cover, unfiled_objects, etc.)
+        - target_type: 'project' or 'global'
+        - target_id, target_slug: project id/slug or None for global nudges
+        - title, summary: human-readable text
+        - priority: computed score (base_impact * status_weight)
+        - base_impact, status_weight: components of priority
+        - action: descriptor dict for UI/agent to interpret
+
+    Optional query params:
+        - kind: filter by nudge kind (e.g., 'missing_cover')
+        - limit: cap the result count (default: all)
+    """
+    needs = curator_needs.list_needs()
+
+    # Filter by kind if requested
+    if kind is not None:
+        needs = [n for n in needs if n["kind"] == kind]
+
+    # Limit if requested
+    if limit is not None:
+        needs = needs[:limit]
+
+    return JSONResponse(needs)
+
+
+@app.post("/api/curator/needs/dismiss")
+def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | float | None = Form(None)):
+    """Dismiss or snooze a nudge.
+
+    nudge_key: the nudge to suppress (from the nudges list).
+    snooze_until: optional epoch timestamp (float) or ISO 8601 datetime string.
+        If omitted or None, the nudge is permanently dismissed.
+        If provided, the nudge is snoozed until that time.
+
+    Returns {ok: true} on success.
+    """
+    action = "snooze" if snooze_until is not None else "dismiss"
+    snooze_epoch = None
+
+    if snooze_until is not None:
+        if isinstance(snooze_until, (int, float)):
+            snooze_epoch = float(snooze_until)
+        else:
+            # Form values always arrive as strings; accept either an epoch
+            # timestamp ("1789856789.1") or an ISO 8601 datetime.
+            s = str(snooze_until).strip()
+            try:
+                snooze_epoch = float(s)
+            except ValueError:
+                try:
+                    snooze_epoch = datetime.fromisoformat(s).timestamp()
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="snooze_until must be an epoch timestamp or ISO 8601 datetime")
+
+    db.add_curator_dismissal(nudge_key, action, snooze_until=snooze_epoch)
+    return JSONResponse({"ok": True})
 
 
 # --- Blog Entries API ---

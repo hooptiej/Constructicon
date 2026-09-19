@@ -44,6 +44,47 @@
       <button type="button" id="export-preview-btn" class="btn-secondary" style="width: 100%; margin-top: 12px">
         Preview in New Tab
       </button>
+
+      <!-- Publish section (shown after successful build) -->
+      <div id="export-publish-section" class="export-publish-section" style="display: none">
+        <div class="export-section">
+          <h3>PUBLISH</h3>
+
+          <!-- Target selector -->
+          <div class="field">
+            <label>TARGET</label>
+            <select id="export-publish-target" class="input">
+              <!-- Options populated by renderPublish() -->
+            </select>
+          </div>
+
+          <!-- Publish button -->
+          <button type="button" id="export-publish-btn" class="btn-primary">
+            Publish to Pages
+          </button>
+
+          <!-- Token missing hint (shown if token not configured) -->
+          <div id="export-publish-token-hint" class="export-publish-hint" style="display: none">
+            GitHub Pages token not configured. Visit admin settings to add it.
+          </div>
+
+          <!-- Publish result (shown after successful publish) -->
+          <div id="export-publish-result" class="export-publish-result" style="display: none">
+            <div class="export-publish-result-title">Published</div>
+            <div class="export-stat"><strong>Commit:</strong> <code id="export-publish-commit" class="mono"></code></div>
+            <div class="export-stat">
+              <strong>Pages:</strong>
+              <a id="export-publish-url" class="export-publish-url" target="_blank" href=""></a>
+            </div>
+          </div>
+
+          <!-- Publish error (shown on failure) -->
+          <div id="export-publish-error" class="export-publish-error" style="display: none">
+            <div class="export-publish-error-title">Publish Failed</div>
+            <div id="export-publish-error-detail" class="export-publish-error-detail"></div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -64,6 +105,10 @@
     projects: [],
     blogEntries: [],
     buildInProgress: false,
+    publishTargets: {},
+    selectedPublishTarget: 'test',
+    publishTokenConfigured: false,
+    publishInProgress: false,
   };
 
   const backdrop = document.getElementById('export-builder-backdrop');
@@ -77,6 +122,15 @@
   const reportStats = document.getElementById('export-report-stats');
   const reportWarnings = document.getElementById('export-report-warnings');
   const previewBtn = document.getElementById('export-preview-btn');
+  const publishSection = document.getElementById('export-publish-section');
+  const publishTargetSelect = document.getElementById('export-publish-target');
+  const publishBtn = document.getElementById('export-publish-btn');
+  const publishTokenHint = document.getElementById('export-publish-token-hint');
+  const publishResult = document.getElementById('export-publish-result');
+  const publishCommit = document.getElementById('export-publish-commit');
+  const publishUrl = document.getElementById('export-publish-url');
+  const publishError = document.getElementById('export-publish-error');
+  const publishErrorDetail = document.getElementById('export-publish-error-detail');
 
   function esc(t) { const d = document.createElement('div'); d.textContent = (t == null ? '' : t); return d.innerHTML; }
 
@@ -143,6 +197,25 @@
       titleInput.value = state.site.title;
       taglineInput.value = state.site.tagline;
 
+      // Load publish targets (object of {target: {repo, branch, ...}})
+      const targetsRes = await fetch('/api/export/targets');
+      if (targetsRes.ok) {
+        const targets = await targetsRes.json(); // OBJECT
+        state.publishTargets = (typeof targets === 'object' && targets !== null) ? targets : {};
+        // Default to 'test' if available
+        if (!state.publishTargets[state.selectedPublishTarget]) {
+          const firstTarget = Object.keys(state.publishTargets)[0];
+          state.selectedPublishTarget = firstTarget || 'test';
+        }
+      }
+
+      // Load settings to check if token is configured
+      const settingsRes = await fetch('/api/settings');
+      if (settingsRes.ok) {
+        const settings = await settingsRes.json();
+        state.publishTokenConfigured = !!(settings && settings.pages_publish_token);
+      }
+
       renderProjects();
       renderBlogEntries();
     } catch (err) {
@@ -196,6 +269,35 @@
     });
   }
 
+  function renderPublish() {
+    // Populate target select from state.publishTargets
+    publishTargetSelect.innerHTML = '';
+    Object.keys(state.publishTargets).forEach(targetName => {
+      const target = state.publishTargets[targetName];
+      const option = document.createElement('option');
+      option.value = targetName;
+      option.textContent = `${targetName} — ${esc(target.repo || targetName)}`;
+      if (targetName === state.selectedPublishTarget) option.selected = true;
+      publishTargetSelect.appendChild(option);
+    });
+
+    // Clear result and error displays
+    publishResult.style.display = 'none';
+    publishError.style.display = 'none';
+
+    // Show/hide token hint and enable/disable publish button
+    if (!state.publishTokenConfigured) {
+      publishTokenHint.style.display = 'block';
+      publishBtn.disabled = true;
+    } else {
+      publishTokenHint.style.display = 'none';
+      publishBtn.disabled = false;
+    }
+
+    // Make sure publish section is visible
+    publishSection.style.display = 'block';
+  }
+
   titleInput.addEventListener('input', (e) => {
     state.site.title = e.target.value;
   });
@@ -243,6 +345,7 @@
       }
 
       report.style.display = 'block';
+      renderPublish();
     } catch (err) {
       console.error('build failed', err);
       alert('Error building site: ' + err.message);
@@ -255,6 +358,64 @@
 
   previewBtn.addEventListener('click', () => {
     window.open('/preview/', '_blank');
+  });
+
+  publishTargetSelect.addEventListener('change', (e) => {
+    state.selectedPublishTarget = e.target.value;
+  });
+
+  publishBtn.addEventListener('click', async () => {
+    if (state.publishInProgress) return;
+
+    const target = state.selectedPublishTarget;
+    const targetInfo = state.publishTargets[target];
+    if (!targetInfo) {
+      alert('No target selected');
+      return;
+    }
+
+    // Confirm dialog naming the exact target repo
+    const confirmMsg = `Publish the current build to ${esc(targetInfo.repo)} (${target})? ${
+      target === 'live' ? 'This updates the public site.' : ''
+    }`;
+    if (!confirm(confirmMsg)) return;
+
+    state.publishInProgress = true;
+    publishBtn.disabled = true;
+    publishBtn.textContent = 'Publishing…';
+
+    try {
+      const res = await fetch('/api/export/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.detail || `Publish failed: ${res.status}`);
+      }
+
+      const result = await res.json();
+
+      // Show success result
+      publishResult.style.display = 'block';
+      publishError.style.display = 'none';
+      publishCommit.textContent = (result.commit || 'N/A').substring(0, 7);
+      publishUrl.href = result.pages_url || '#';
+      publishUrl.textContent = result.pages_url || 'View';
+
+    } catch (err) {
+      console.error('publish failed', err);
+      // Show error
+      publishResult.style.display = 'none';
+      publishError.style.display = 'block';
+      publishErrorDetail.textContent = err.message || 'Unknown error';
+    } finally {
+      state.publishInProgress = false;
+      publishBtn.disabled = !state.publishTokenConfigured;
+      publishBtn.textContent = 'Publish to Pages';
+    }
   });
 })();
 </script>

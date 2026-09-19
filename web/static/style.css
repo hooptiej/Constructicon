@@ -1919,3 +1919,41 @@ body.delete-mode-on .card-select-row { display: flex; }
 .export-warning {
   color: var(--text-2); padding-left: 4px;
 }
+
+.export-publish-section {
+  display: flex; flex-direction: column; gap: 8px; margin-top: 12px;
+  border-top: 1px solid var(--border); padding-top: 12px;
+}
+
+.export-publish-hint {
+  font-size: 11px; color: var(--text-3); padding: 8px; background: rgba(226, 214, 150, 0.04);
+  border-radius: 4px; line-height: 1.4;
+}
+
+.export-publish-result {
+  border: 1px solid var(--accent); border-radius: 8px; padding: 10px;
+  background: rgba(154, 168, 58, 0.08); display: flex; flex-direction: column; gap: 8px;
+}
+
+.export-publish-result-title {
+  font-size: 11px; font-weight: 500; color: var(--accent); text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.export-publish-url {
+  word-break: break-all; color: var(--accent);
+}
+
+.export-publish-error {
+  border: 1px solid #C97A5E; border-radius: 8px; padding: 10px;
+  background: rgba(201, 122, 94, 0.08); display: flex; flex-direction: column; gap: 8px;
+}
+
+.export-publish-error-title {
+  font-size: 11px; font-weight: 500; color: #C97A5E; text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.export-publish-error-detail {
+  font-size: 11px; color: var(--text-2); line-height: 1.4;
+}

@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS capture_events (
     type_metadata TEXT NOT NULL DEFAULT '{}',
     display_name TEXT,
     icon TEXT,
-    agent_notes TEXT
+    agent_notes TEXT,
+    provenance TEXT,
+    highlight INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_capture_events_source ON capture_events(source);
 CREATE INDEX IF NOT EXISTS idx_capture_events_client ON capture_events(client);
@@ -147,6 +149,16 @@ CREATE INDEX IF NOT EXISTS idx_blog_entry_items_slug ON blog_entry_items(post_sl
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
+
+# --- Provenance (capture_events.provenance) — #341 ---
+# Controlled vocab for object provenance (how an object came to be captured).
+# Loose (no DB CHECK), extensible — trim in use as patterns emerge.
+PROVENANCE_TYPES = ["found", "created", "documented", "result", "failure", "reference", "design"]
+
+# --- Project statuses (projects.status) — #341 ---
+# Controlled vocab for project lifecycle stage. Loose, no DB CHECK. Existing
+# rows have status='active' — treat as 'wip' (work in progress).
+PROJECT_STATUSES = ["wip", "complete", "shelved", "means-to-an-end", "abandoned", "idea", "published", "reference-only"]
 
 # --- Source (capture_events.tech) ---
 # `tech` used to record which technician uploaded a screenshot in imagerepo
@@ -392,6 +404,13 @@ def init_db():
         # Never exposed through public HTTP API — agent-only scratch space.
         if "agent_notes" not in existing_columns:
             conn.execute("ALTER TABLE capture_events ADD COLUMN agent_notes TEXT")
+        # provenance + highlight (#341): Curator Stage 1 data model. provenance is a
+        # controlled-vocab extensible field describing how the object came to be (found,
+        # created, documented, result, failure, reference, design). highlight is a boolean
+        # flag for "cool/unique" objects, featured in export.
+        for column, ddl_type in (("provenance", "TEXT"), ("highlight", "INTEGER NOT NULL DEFAULT 0")):
+            if column not in existing_columns:
+                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
         conn.commit()
     finally:
         conn.close()
@@ -756,6 +775,41 @@ def set_agent_notes(slug, notes):
     conn = get_conn()
     try:
         conn.execute("UPDATE capture_events SET agent_notes = ? WHERE slug = ?", (notes, slug))
+        conn.commit()
+        return get_by_slug(slug)
+    finally:
+        conn.close()
+
+
+def set_provenance(slug, provenance):
+    """Sets or clears an object's provenance classification (#341).
+
+    provenance: one of PROVENANCE_TYPES, or None to clear.
+    Controlled vocab (loose, extensible).
+    Returns the updated row, or None if not found."""
+    existing = get_by_slug(slug)
+    if existing is None:
+        return None
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE capture_events SET provenance = ? WHERE slug = ?", (provenance, slug))
+        conn.commit()
+        return get_by_slug(slug)
+    finally:
+        conn.close()
+
+
+def set_highlight(slug, on: bool):
+    """Sets or clears an object's highlight flag (#341).
+
+    on: True to mark as highlighted, False to clear.
+    Returns the updated row, or None if not found."""
+    existing = get_by_slug(slug)
+    if existing is None:
+        return None
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE capture_events SET highlight = ? WHERE slug = ?", (1 if on else 0, slug))
         conn.commit()
         return get_by_slug(slug)
     finally:

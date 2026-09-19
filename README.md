@@ -1,76 +1,143 @@
 # Constructicon
 
-Named after the Transformers Decepticon that assembles itself out of
-smaller robots — not because this app itself was assembled from other
-codebases (it was forked and repurposed from
+Named after the Transformers Decepticon that assembles itself out of smaller
+robots — because of what this app is *for*: pulling in individual pieces of
+content (uploads, posts, links) and assembling them into something bigger — a
+**Project**, a **Blog entry**, and ultimately a whole **website**. (It was
+forked and repurposed from
 [imagerepo](https://github.com/ComputerCats-Jason/imagerepo), but that's
-incidental), but because of what it's *for*: pulling in individual pieces
-of content (uploads, posts, links) and assembling them into something
-bigger — a **Project** — out of the smaller parts.
+incidental — vestiges of that origin still echo through some field names.)
 
-## What it does right now
+## What it is
 
-A self-hosted media gallery and personal content store, running as a
-FastAPI/Starlette app (`web/app.py`) backed by SQLite (`core/db.py`), on a
-LAN-only home server (`10.0.1.78`) with no port forward and no login —
-the network perimeter is the security boundary.
+A self-hosted **media gallery + content store** that doubles as the **control
+room for a static personal site** ([hooptiej.com](https://hooptiej.com)). You
+ingest content, curate it into Projects and Blog entries, then **export a
+self-contained static website** and preview it — and, when you're ready,
+**publish it to GitHub Pages**.
 
-- **Upload and browse** — drag-and-drop upload (`/upload`, `/api/upload`),
-  a gallery view (`/`, `/gallery`), per-item detail pages
-  (`/object/<slug>`), and per-uploader views (`/gallery/user/<uploader>`).
-- **A desktop uploader app** (`desktop_app/`) — a separate downloadable
-  app that talks to the same `/api/upload`/`/api/content` HTTP API,
-  distributed as a zip from `/downloads/...`.
-- **OCR and text extraction** — screenshots and other images get OCR'd
-  (`tesseract`); PDFs try their embedded text layer first. Extracted text
-  is searchable (`/api/search`).
-- **"Related items"** — perceptual-hash and embedding similarity
-  (`sentence-transformers`) surface related uploads on an item's detail
-  page.
-- **Tags** — a nestable tag tree (`blog_tags`/`post_tags`) items can
-  attach to at any depth, any number of tags at once.
-- **Projects** — hand-curated portfolio collections (`projects`/
-  `project_items`), distinct from tags: a project is a deliberately
-  assembled set of items with manual ordering, shown on the home page's
-  Projects column (`/project/<slug>`). Dropping a folder onto the upload
-  drawer creates one flattened project named after the folder — every
-  file inside (subfolders included) lands in that single project.
-- **Project write-ups, drafted by Claude** — a project can carry a
-  write-up document (`projects.writeup_slug`). Point Claude at a
-  project's files (photos, STLs, videos, whatever's there) and it
-  reconstructs a plausible build chronology from what's actually
-  in the evidence — file timestamps, thumbnails/renders, OCR'd text,
-  video frames — then drafts the write-up, flagging its own guesses for
-  a quick correction pass before anything's finalized. This is the
-  standout feature for turning a pile of old project files into an
-  actual readable history, not just a sorted gallery.
-- **Imgur import** — pull in the owner's own public Imgur gallery
-  (Client-ID auth, no OAuth, so only ever public content), or paste a
-  single Imgur post/album URL into the same link field the YouTube/any
-  URL field already uses.
-- **A live MCP server** (`constructicon-mcp`) — list/search/tag/project
-  tools for driving the app from an agent session, including a
-  one-call `get_project` (items + tags + cover + write-up body) and a
-  reserved `agent_notes` field per item for an agent's own working
-  notes, separate from the owner's actual content.
-- **Project export** — `GET /api/projects/{id}/export.zip` bundles one
-  project's metadata and files for offline/agent analysis, without a
-  round trip per file.
-- **Backup** — `POST /api/backup` snapshots the DB and file storage to a
-  zip on demand.
+It runs as a FastAPI/Starlette app (`web/app.py`) backed by SQLite
+(`core/db.py`, no ORM) on a LAN-only home server with **no login** — the
+network perimeter is the security boundary, not an auth gate. Constructicon
+itself always stays private; only the *exported* static site is ever public.
 
-**Not yet built:** the blog itself. `capture_events` (the item table) has
-everything a blog post needs — description, tags, timestamp, extracted
-text — but there's no `/blog` route, no post authoring UI, and no
-title/body split yet. Posting today means using the gallery/upload flow;
-"blog" is still just a data-model plan, not a page you can visit.
+## How it works
+
+The whole pipeline, from a dropped file to a published page:
+
+```mermaid
+flowchart TD
+    subgraph ingest [Ingest]
+        U[Web upload / drag-drop or folder]
+        D[Desktop uploader app]
+        L[Paste any URL — YouTube / Imgur / web]
+        IM[Imgur gallery import]
+    end
+    U --> CE
+    D --> CE
+    L --> CE
+    IM --> CE
+    CE[("capture_events — every object<br/>image, video, STL, PDF, PSD, SVG,<br/>audio, YouTube link, …")]
+    CE --> ENRICH[OCR · perceptual/embedding similarity · auto-caption · thumbnail]
+    CE --> TAGS[Nestable tag tree]
+    CE --> PROJ["Projects<br/>curated collections + a write-up"]
+    CE --> BLOG["Blog entries<br/>attach projects AND objects, with notes"]
+    PROJ --> EXPORT
+    BLOG --> EXPORT
+    EXPORT["Export engine<br/>core/site_export.build_site()"] --> BUILD["exports/current/<br/>self-contained flat site<br/>(relative links, bundled media + thumbnails)"]
+    BUILD --> PREVIEW["/preview/ — served verbatim<br/>(WYSIWYG, no DB)"]
+    BUILD --> PUBLISH["Publish → git push<br/>test or live target"]
+    PUBLISH --> PAGES[["GitHub Pages → hooptiej.com"]]
+```
+
+**The key idea:** `capture_events` holds *every* object. **Projects** and
+**Blog entries** are hand-curated ways those objects come together. The
+**export engine** flattens whatever you select into a static site whose
+`/preview/` is the exact bytes that would ship — so previewing *is* the QA.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Browser -->|HTTP| Web["constructicon-web<br/>FastAPI/Starlette (web/app.py)"]
+    Agent["Claude / MCP client"] -->|MCP| MCP["constructicon-mcp<br/>(mcp_server/server.py)"]
+    Web --> DB[("SQLite — imagerepo.db<br/>core/db.py, raw SQL")]
+    MCP --> DB
+    Web --> STORE[["storage/ — files + thumbnails"]]
+    Web --> EXP[["exports/ — site builds (keep last 2)"]]
+    Web -->|"git push (token)"| GH[("GitHub Pages repo")]
+```
+
+- **`web/app.py`** — every HTTP route: page routes (Jinja2 templates in
+  `web/templates/`), the `/api/*` JSON+form API the templates' JS calls, the
+  public `/f/<slug>` hotlink/thumbnail routes, and the `/preview/` static mount.
+- **`core/db.py`** — the schema source of truth and all SQLite access (no ORM).
+- **`core/object_types/`** — a registry of per-type specs (thumbnailing, OCR
+  eligibility, metadata). Adding a file type is one spec, not edits across the app.
+- **`core/site_export.py`** — the export engine (gather → render the Jinja
+  templates in `web/export_templates/` → bundle media → build report; plus the
+  git publish).
+- **`core/ocr.py` / `core/similarity.py` / `core/captions.py`** — text
+  extraction, "related items", and local-vision auto-captions.
+- **`mcp_server/server.py`** — the live `constructicon-mcp` tool surface for
+  driving the app from an agent.
+
+## The content model
+
+| Table | What it is |
+|---|---|
+| `capture_events` | **Every object** — one row per image/video/STL/PDF/link/etc. `slug` is the unguessable URL id; `media_type` classifies it; files live in `storage/` (or `external_url` for links). |
+| `blog_tags` / `post_tags` | A tag tree (nestable to any depth) and its many-to-many join to objects. |
+| `projects` / `project_items` | Hand-curated collections of objects with manual ordering, plus an optional `writeup_slug` pointing at a write-up document. |
+| `blog_entries` / `blog_entry_projects` / `blog_entry_items` | Dated narratives that attach **both projects and objects**, each with a per-attachment note and sort order. The unit the export turns into blog pages. |
+| `app_settings` | Generic key/value store for secrets/config (API keys, the Pages publish token + targets) — surfaced presence-only, never echoed back. |
+
+```mermaid
+erDiagram
+    capture_events ||--o{ post_tags : "tagged"
+    blog_tags ||--o{ post_tags : "in"
+    blog_tags ||--o{ blog_tags : "parent_id"
+    projects ||--o{ project_items : "contains"
+    capture_events ||--o{ project_items : "post_slug"
+    projects ||--o{ projects : "parent_id"
+    blog_entries ||--o{ blog_entry_projects : "references"
+    projects ||--o{ blog_entry_projects : "in"
+    blog_entries ||--o{ blog_entry_items : "references"
+    capture_events ||--o{ blog_entry_items : "post_slug"
+```
+
+## Features
+
+- **Ingest** — drag-and-drop upload (a folder drop becomes a Project), a
+  separate **desktop uploader app** (`desktop_app/`), pasting any URL
+  (YouTube / Imgur / generic web page, classified server-side), and a
+  one-click **Imgur gallery import**.
+- **OCR & search** — images are OCR'd (`tesseract`), PDFs use their text layer;
+  everything is searchable.
+- **Related items** — perceptual-hash + sentence-transformer similarity surface
+  related objects on a detail page.
+- **Auto-captions** — optional local vision model (`moondream` via Ollama) drafts
+  caption *suggestions*.
+- **Projects & write-ups** — curate objects into a Project, then point Claude at
+  its files and it reconstructs a plausible build chronology (from timestamps,
+  renders, OCR text, video frames) and drafts a write-up for a quick correction
+  pass. Turning a pile of old files into a readable history is the standout
+  feature.
+- **Blog entries** — dated narratives that pull together one or more projects
+  *and* loose objects, each attachment carrying its own note.
+- **Export → preview → publish** — build a self-contained static site from any
+  selection of projects/blog entries; preview it verbatim at `/preview/`; publish
+  it to a **test** or **live** GitHub Pages repo with one click (fine-grained PAT
+  in admin settings; CNAME preserved, `.nojekyll` written, builds kept for
+  rollback).
+- **A live MCP server** — list/search/tag/project/blog tools for driving the app
+  from an agent session, plus a per-item `agent_notes` field.
+- **Backup** — `POST /api/backup` snapshots the DB + storage to a zip on demand.
 
 ## Supported file types
 
-Whatever a file's extension maps to in `core/object_types/` — each type
-is a self-contained module (thumbnailing, OCR-eligibility, metadata)
-registered into a shared dispatch table, so adding a new type doesn't
-touch the rest of the app. Currently registered:
+Each type is a self-contained module in `core/object_types/` (thumbnailing,
+OCR-eligibility, metadata) registered into a shared dispatch table.
 
 | Type | Extensions |
 |---|---|
@@ -88,47 +155,52 @@ touch the rest of the app. Currently registered:
 | Source code | `.php` `.py` `.js` `.sh` `.json` `.yaml` `.yml` `.html` `.css` `.sql` |
 | Archive | `.zip` `.7z` |
 
-Plus non-file content types with no upload: **YouTube video** and
-**Imgur upload** (both a URL, classified automatically), generic **web
-page** (any other URL), **live stream**, and a plain **written post**
-(no attached file — this is also the type project write-up documents
-use).
+Plus non-file content types (a URL, no upload): **YouTube video**, **Imgur
+upload**, generic **web page**, **live stream**, and a plain **written post**
+(the type project write-up documents use). Unrecognized extensions still store
+fine — they just get no thumbnail/OCR until a spec is added.
 
-Anything with an unrecognized extension still stores fine — it just gets
-no thumbnail and no OCR (`DEFAULT_SPEC`) until a real type spec is added
-for it.
+## Export & publish, in detail
 
-## Roadmap
+1. **Build** — the export builder (a drawer in the app) lets you pick which
+   projects and blog entries to include plus site title/tagline, then
+   `build_site()` gathers them, renders the `web/export_templates/` Jinja
+   templates to flat HTML with **all-relative links**, and bundles each object's
+   original file *and* its rendered thumbnail into `media/`. Output goes to
+   `exports/<timestamp>/`, mirrored to `exports/current/`, pruned to the last 2.
+2. **Preview** — `/preview/` is a `StaticFiles` mount over `exports/current/`, so
+   you're looking at the exact bytes that would ship — no DB, no re-render.
+3. **Publish** — pushes `exports/current/` to a configured GitHub Pages repo
+   (a **test** target and a **live** target), preserving the target's `CNAME`
+   and adding `.nojekyll`. Auth is a fine-grained PAT stored in admin settings;
+   it's used only as an ephemeral push credential, never written to `.git/config`
+   or logged.
 
-The pipeline, as it's actually shaping up:
+## Deployment
 
-1. **Sort content into Projects.** Already works — uploads get grouped by
-   hand, or in bulk via a folder drop.
-2. **Draft a write-up per project.** Already works — Claude reconstructs
-   a chronology from a project's own files and drafts the write-up,
-   saved to that project's `writeup_slug` document.
-3. **Blog UI** — post authoring, a `/blog` route, a title/body split on
-   `capture_events`. **Not built yet.** Once it exists, project
-   write-ups are the natural source material to backfill posts from,
-   rather than starting blog content from scratch.
-4. **Static export** — a template that funnels Projects + blog posts
-   into a static site, since Constructicon itself always stays
-   private/internal (the dynamic app with the database and editing
-   tooling, never exposed directly). **Not built yet** — no code in
-   this repo generates a static site today. Destination is a personal
-   static site elsewhere (GitHub Pages).
+Runs on a shared home server as two plain `docker compose` containers —
+`constructicon-web` and `constructicon-mcp` — with `core/`, `web/`, and
+`mcp_server/` bind-mounted (a code deploy is a `git pull` + restart; only
+`requirements.txt`/Dockerfile changes need `--build`). Isolated
+`constructicon-test` / `constructicon-test-mcp` siblings mirror it for testing
+changes before production. See [`CLAUDE.md`](CLAUDE.md) for the full deployment
+runbook, data-model notes, and gotchas.
 
-Steps 1 and 2 are real and already load-bearing; 3 and 4 are the
-remaining unbuilt work, in that order.
+## Running locally
+
+```bash
+pip install -r requirements.txt
+uvicorn web.app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Needs `tesseract-ocr`, `libcairo2`, and `ghostscript` for OCR / SVG / EPS
+thumbnailing (missing them degrades those features rather than crashing), and
+`git` for the publish step. `imagerepo.db` and `storage/` are created at the repo
+root on first run (both gitignored).
 
 ## Palette
 
-`web/static/style.css`'s `:root` custom properties are a
-Transformers-Constructicons palette (construction-vehicle yellow-green
-body color, deep purple accents, dark chassis, sparing yellow/black
-hazard-stripe accents) rather than a generic dark theme. Swap the
-`--accent`/`--purple*`/`--hazard-*` variables there to retheme; nothing
-else in the CSS should need to change.
-
-See [`CLAUDE.md`](CLAUDE.md) for the full architecture/data-model
-writeup and deployment details.
+`web/static/style.css`'s `:root` custom properties are a Transformers-
+Constructicons palette (construction-vehicle yellow-green, deep purple accents,
+dark chassis, hazard-stripe yellow/black) — swap `--accent` / `--purple*` /
+`--hazard-*` to retheme; nothing else should need to change.

@@ -43,10 +43,11 @@
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:8px">
-      <select id="project-status-select" class="project-status-pill{% if project.status == 'archived' %} archived{% endif %}" style="width:fit-content;border:none;cursor:pointer">
-        <option value="active" {% if project.status == 'active' %}selected{% endif %}>active</option>
-        <option value="archived" {% if project.status == 'archived' %}selected{% endif %}>archived</option>
+      <select id="project-status-select" class="project-status-pill" style="width:fit-content;border:none;cursor:pointer">
+        {% for status in PROJECT_STATUSES %}<option value="{{ status }}" {% if project.status == status %}selected{% endif %}>{{ status }}</option>{% endfor %}
+        {% if project.status not in PROJECT_STATUSES %}<option value="{{ project.status }}" selected>{{ project.status }} (legacy)</option>{% endif %}
       </select>
+      <p class="status-confirm" id="status-confirm" style="display:none;font-size:12px;color:#6E6B57;margin:0">Saved.</p>
     </div>
     <div class="hazard-stripe" style="width:64px"></div>
     {% if cover_url %}
@@ -295,9 +296,11 @@ wireTimelineDateField('end-date-input', 'end-date-reset', 'end_date', 'reset_end
 // Status selector (#160-followup): active/archived, same immediate-effect
 // pattern as the cover/writeup selectors above.
 const statusSelect = document.getElementById('project-status-select');
+const statusConfirm = document.getElementById('status-confirm');
 let currentStatus = {{ project.status | tojson }};
 statusSelect.addEventListener('change', async function() {
   const value = this.value;
+  statusConfirm.style.display = 'none';
   try {
     const response = await fetch(`/api/projects/${projectId}`, {
       method: 'POST',
@@ -306,7 +309,8 @@ statusSelect.addEventListener('change', async function() {
     });
     if (response.ok) {
       currentStatus = value;
-      statusSelect.classList.toggle('archived', value === 'archived');
+      statusConfirm.style.display = 'block';
+      setTimeout(() => { statusConfirm.style.display = 'none'; }, 2000);
     } else {
       console.error('Failed to update status:', response.status);
       statusSelect.value = currentStatus;

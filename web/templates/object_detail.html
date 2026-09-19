@@ -310,6 +310,21 @@
           </select>
           <input class="input mono" id="detail-new-project-input" placeholder="New project name" style="display:none;margin-top:6px">
         </div>
+        <div class="field" style="margin-top:15px">
+          <label>PROVENANCE <span class="optional">(optional)</span></label>
+          <select class="input" id="provenance-select">
+            <option value="">— unset —</option>
+            {% for prov in PROVENANCE_TYPES %}<option value="{{ prov }}">{{ prov }}</option>{% endfor %}
+          </select>
+          <p class="save-confirm" id="provenance-confirm" style="display:none;margin-top:8px;font-size:12px">Saved.</p>
+        </div>
+        <div class="field" style="margin-top:15px">
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="highlight-checkbox">
+            <span>HIGHLIGHT <span class="optional">(featured item)</span></span>
+          </label>
+          <p class="save-confirm" id="highlight-confirm" style="display:none;margin-top:8px;font-size:12px">Saved.</p>
+        </div>
         <p class="error-text" id="save-error" style="display:none;margin-top:15px"></p>
         <p class="save-confirm" id="save-confirm" style="display:none;margin-top:15px">Saved.</p>
         <button class="btn-primary" type="submit" style="margin-top:15px">Save changes</button>
@@ -948,6 +963,54 @@ document.getElementById('detail-form').addEventListener('submit', async (e) => {
     saveError.style.display = 'block';
   }
 });
+
+// #341: Provenance selector — save immediately on change
+const provenanceSelect = document.getElementById('provenance-select');
+const provenanceConfirm = document.getElementById('provenance-confirm');
+if (provenanceSelect) {
+  provenanceSelect.value = {{ item.provenance | tojson }} || '';
+  provenanceSelect.addEventListener('change', async () => {
+    provenanceConfirm.style.display = 'none';
+    const form = new FormData();
+    form.append('provenance', provenanceSelect.value);
+    try {
+      const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
+      if (res.ok) {
+        provenanceConfirm.style.display = 'block';
+        setTimeout(() => { provenanceConfirm.style.display = 'none'; }, 2000);
+      } else {
+        alert('Failed to save provenance');
+      }
+    } catch (err) {
+      alert('Failed to save provenance');
+    }
+  });
+}
+
+// #341: Highlight toggle — save immediately on change
+const highlightCheckbox = document.getElementById('highlight-checkbox');
+const highlightConfirm = document.getElementById('highlight-confirm');
+if (highlightCheckbox) {
+  highlightCheckbox.checked = {{ item.highlight | tojson }};
+  highlightCheckbox.addEventListener('change', async () => {
+    highlightConfirm.style.display = 'none';
+    const form = new FormData();
+    // Always send the field so the backend (which acts on "highlight" being
+    // present) can CLEAR it when unchecked, not just set it when checked.
+    form.append('highlight', highlightCheckbox.checked ? 'true' : '');
+    try {
+      const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
+      if (res.ok) {
+        highlightConfirm.style.display = 'block';
+        setTimeout(() => { highlightConfirm.style.display = 'none'; }, 2000);
+      } else {
+        alert('Failed to save highlight');
+      }
+    } catch (err) {
+      alert('Failed to save highlight');
+    }
+  });
+}
 
 document.addEventListener('constructicon:upload-complete', (e) => {
   if (!e.detail.failures.length) location.reload();

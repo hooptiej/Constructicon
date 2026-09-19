@@ -9,11 +9,29 @@ import json
 import shutil
 import subprocess
 import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core import db, storage
+
+
+def _youtube_embed_url(url):
+    """Return a YouTube /embed/<id> URL for a watch / youtu.be / embed link, or
+    None if the URL isn't a recognizable YouTube link. The templates must NOT
+    parse this themselves — the naive split() approach produced /embed/watch for
+    the common youtube.com/watch?v=<id> form (#331)."""
+    if not url or ("youtube.com" not in url and "youtu.be" not in url):
+        return None
+    parsed = urllib.parse.urlparse(url)
+    if "youtu.be" in (parsed.netloc or ""):
+        vid = parsed.path.lstrip("/").split("/")[0]
+    elif "/embed/" in (parsed.path or ""):
+        vid = parsed.path.split("/embed/")[-1].split("/")[0]
+    else:
+        vid = (urllib.parse.parse_qs(parsed.query or "").get("v") or [None])[0]
+    return f"https://www.youtube.com/embed/{vid}" if vid else None
 
 
 EXPORTS_DIR = Path(__file__).resolve().parent.parent / "exports"
@@ -98,6 +116,12 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         entry_items[entry_id] = db.list_entry_items(entry_id)
         if not entry_items[entry_id]:
             warnings.append(f"Blog entry '{blog_entries_dict[entry_id]['slug']}' has no attachments")
+
+    # Enrich every rendered item with a ready YouTube embed URL so the templates
+    # don't have to parse links themselves (#331). None for non-YouTube items.
+    for _item_list in list(project_items.values()) + list(entry_items.values()):
+        for _it in _item_list:
+            _it["embed_url"] = _youtube_embed_url(_it.get("external_url"))
 
     # Create media directory
     media_dir = out_dir / "media"

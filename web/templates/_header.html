@@ -35,24 +35,26 @@
 </div>
 <div class="hazard-stripe app-header-stripe"></div>
 <script>
-// #240 badge on the admin gear above: one presence check per page load
-// (exactly what the old pop-out did from every page), refreshed on the same
-// constructicon:pending-decisions-changed event ingest.js fires after an
-// upload batch and admin.html fires after resolving a decision.
+// Admin badge (#240, #343) — reflects the full nudge queue count (pending-decisions
+// are now represented in the curator needs queue). Refreshed on both the older
+// constructicon:pending-decisions-changed event (for backward compat with existing
+// admin.html triggers) and the new constructicon:needs-changed event (fired by
+// curator nudge dismiss/snooze actions).
 (function () {
   const badge = document.getElementById('admin-badge');
   if (!badge) return;
   async function refreshAdminBadge() {
     try {
-      const res = await fetch('/api/pending-decisions');
+      const res = await fetch('/api/curator/needs');
       if (!res.ok) return;
       const data = await res.json();
-      const n = Array.isArray(data.items) ? data.items.length : (data.count || 0);
+      const n = Array.isArray(data) ? data.length : 0;
       badge.textContent = n;
       badge.hidden = n === 0;
     } catch (err) { /* leave whatever's shown */ }
   }
   refreshAdminBadge();
   document.addEventListener('constructicon:pending-decisions-changed', refreshAdminBadge);
+  document.addEventListener('constructicon:needs-changed', refreshAdminBadge);
 })();
 </script>

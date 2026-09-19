@@ -1,0 +1,260 @@
+<!-- Export builder (#314 farm 2) — self-contained drawer for building and configuring
+     a static website export. Vanilla JS IIFE with client-side state as the single
+     source of truth, matching _blog_builder.html pattern. -->
+
+<div class="drawer-backdrop" id="export-builder-backdrop"></div>
+<div class="export-builder" id="export-builder">
+  <div class="export-builder-header">
+    <h2>Export Site</h2>
+    <button type="button" class="modal-close" id="export-builder-close">&times;</button>
+  </div>
+
+  <div class="export-builder-content">
+    <!-- Site metadata -->
+    <div class="field">
+      <label>SITE TITLE</label>
+      <input class="input" id="export-site-title" placeholder="Site title (e.g. 'My Portfolio')" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label>TAGLINE</label>
+      <input class="input" id="export-site-tagline" placeholder="Short tagline or description" autocomplete="off">
+    </div>
+
+    <!-- Projects checklist -->
+    <div class="export-section">
+      <h3>PROJECTS</h3>
+      <div id="export-projects-list" class="export-checklist"></div>
+    </div>
+
+    <!-- Blog entries checklist -->
+    <div class="export-section">
+      <h3>BLOG ENTRIES</h3>
+      <div id="export-blog-entries-list" class="export-checklist"></div>
+    </div>
+
+    <!-- Build button -->
+    <button type="button" id="export-build-btn" class="btn-primary" style="margin-top: 16px">Build Site</button>
+
+    <!-- Build report (initially hidden) -->
+    <div id="export-report" class="export-report" style="display: none">
+      <div class="export-report-title">Build Report</div>
+      <div id="export-report-stats" class="export-report-stats"></div>
+      <div id="export-report-warnings" class="export-report-warnings"></div>
+      <button type="button" id="export-preview-btn" class="btn-secondary" style="width: 100%; margin-top: 12px">
+        Preview in New Tab
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Export builder — client state is the single source of truth. State holds:
+// - site: {title, tagline}
+// - selectedProjects: Set of project SLUGS (the config field is project_slugs)
+// - selectedBlogEntries: Set of blog entry slugs
+// - projects: array of {id, title, ...} for rendering
+// - blogEntries: array of {slug, title, status, ...} for rendering
+// DOM is rendered FROM state, never scraped back into it.
+(function () {
+  const state = {
+    site: { title: '', tagline: '' },
+    selectedProjects: new Set(),
+    selectedBlogEntries: new Set(),
+    projects: [],
+    blogEntries: [],
+    buildInProgress: false,
+  };
+
+  const backdrop = document.getElementById('export-builder-backdrop');
+  const builder = document.getElementById('export-builder');
+  const titleInput = document.getElementById('export-site-title');
+  const taglineInput = document.getElementById('export-site-tagline');
+  const projectsList = document.getElementById('export-projects-list');
+  const blogEntriesList = document.getElementById('export-blog-entries-list');
+  const buildBtn = document.getElementById('export-build-btn');
+  const report = document.getElementById('export-report');
+  const reportStats = document.getElementById('export-report-stats');
+  const reportWarnings = document.getElementById('export-report-warnings');
+  const previewBtn = document.getElementById('export-preview-btn');
+
+  function esc(t) { const d = document.createElement('div'); d.textContent = (t == null ? '' : t); return d.innerHTML; }
+
+  function openBuilder() {
+    builder.classList.add('open');
+    backdrop.classList.add('open');
+    loadData();
+  }
+  function closeBuilder() {
+    builder.classList.remove('open');
+    backdrop.classList.remove('open');
+    report.style.display = 'none';
+  }
+
+  const trigger = document.getElementById('export-builder-trigger');
+  if (trigger) trigger.addEventListener('click', openBuilder);
+  document.getElementById('export-builder-close').addEventListener('click', closeBuilder);
+  backdrop.addEventListener('click', closeBuilder);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && builder.classList.contains('open')) closeBuilder();
+  });
+
+  async function loadData() {
+    try {
+      // Load saved config
+      const cfgRes = await fetch('/api/export/config');
+      let savedConfig = {};
+      if (cfgRes.ok) {
+        const data = await cfgRes.json();
+        if (data && typeof data === 'object') savedConfig = data;
+      }
+
+      // Load projects (plain array)
+      const projRes = await fetch('/api/projects');
+      if (projRes.ok) {
+        const projects = await projRes.json(); // ARRAY
+        state.projects = projects || [];
+        // Pre-select from saved config or default to all
+        const saved = (savedConfig.project_slugs || []);
+        state.selectedProjects = new Set(
+          saved.length > 0 ? saved : state.projects.map(p => p.slug)
+        );
+      }
+
+      // Load blog entries (plain array)
+      const blogRes = await fetch('/api/blog-entries');
+      if (blogRes.ok) {
+        const entries = await blogRes.json(); // ARRAY
+        state.blogEntries = entries || [];
+        // Pre-select from saved config or default to "ready" ones
+        const saved = (savedConfig.blog_entry_slugs || []);
+        if (saved.length > 0) {
+          state.selectedBlogEntries = new Set(saved);
+        } else {
+          state.selectedBlogEntries = new Set(
+            state.blogEntries.filter(e => e.status === 'ready').map(e => e.slug)
+          );
+        }
+      }
+
+      // Pre-fill site meta from saved config
+      state.site.title = savedConfig.site?.title || '';
+      state.site.tagline = savedConfig.site?.tagline || '';
+      titleInput.value = state.site.title;
+      taglineInput.value = state.site.tagline;
+
+      renderProjects();
+      renderBlogEntries();
+    } catch (err) {
+      console.error('loadData failed', err);
+    }
+  }
+
+  function renderProjects() {
+    projectsList.innerHTML = '';
+    state.projects.forEach(proj => {
+      const el = document.createElement('div');
+      el.className = 'export-checklist-item';
+      const checked = state.selectedProjects.has(proj.slug);
+      el.innerHTML = `
+        <label>
+          <input type="checkbox" ${checked ? 'checked' : ''}>
+          <span>${esc(proj.title || proj.name || 'Project')}</span>
+        </label>
+      `;
+      const input = el.querySelector('input');
+      input.addEventListener('change', (e) => {
+        if (e.target.checked) state.selectedProjects.add(proj.slug);
+        else state.selectedProjects.delete(proj.slug);
+      });
+      projectsList.appendChild(el);
+    });
+  }
+
+  function renderBlogEntries() {
+    blogEntriesList.innerHTML = '';
+    state.blogEntries.forEach(entry => {
+      const el = document.createElement('div');
+      el.className = 'export-checklist-item';
+      const checked = state.selectedBlogEntries.has(entry.slug);
+      const badge = entry.status === 'ready'
+        ? '<span class="export-status-badge ready">Ready</span>'
+        : '<span class="export-status-badge draft">Draft</span>';
+      el.innerHTML = `
+        <label>
+          <input type="checkbox" ${checked ? 'checked' : ''}>
+          <span>${esc(entry.title || entry.slug)}</span>
+          ${badge}
+        </label>
+      `;
+      const input = el.querySelector('input');
+      input.addEventListener('change', (e) => {
+        if (e.target.checked) state.selectedBlogEntries.add(entry.slug);
+        else state.selectedBlogEntries.delete(entry.slug);
+      });
+      blogEntriesList.appendChild(el);
+    });
+  }
+
+  titleInput.addEventListener('input', (e) => {
+    state.site.title = e.target.value;
+  });
+  taglineInput.addEventListener('input', (e) => {
+    state.site.tagline = e.target.value;
+  });
+
+  buildBtn.addEventListener('click', async () => {
+    if (state.buildInProgress) return;
+    state.buildInProgress = true;
+    buildBtn.disabled = true;
+    buildBtn.textContent = 'Building…';
+
+    try {
+      const config = {
+        project_slugs: Array.from(state.selectedProjects),
+        blog_entry_slugs: Array.from(state.selectedBlogEntries),
+        site: {
+          title: state.site.title,
+          tagline: state.site.tagline,
+        },
+      };
+
+      const res = await fetch('/api/export/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+
+      if (!res.ok) throw new Error('Build failed: ' + res.status);
+      const result = await res.json();
+
+      // Display report
+      reportStats.innerHTML = `
+        <div class="export-stat"><strong>${result.projects || 0}</strong> projects</div>
+        <div class="export-stat"><strong>${result.blog_entries || 0}</strong> blog entries</div>
+        <div class="export-stat"><strong>${result.media_files || 0}</strong> media files</div>
+      `;
+
+      if (result.warnings && result.warnings.length > 0) {
+        reportWarnings.innerHTML = '<div class="export-warnings-title">Warnings:</div>' +
+          result.warnings.map(w => `<div class="export-warning">• ${esc(w)}</div>`).join('');
+      } else {
+        reportWarnings.innerHTML = '';
+      }
+
+      report.style.display = 'block';
+    } catch (err) {
+      console.error('build failed', err);
+      alert('Error building site: ' + err.message);
+    } finally {
+      state.buildInProgress = false;
+      buildBtn.disabled = false;
+      buildBtn.textContent = 'Build Site';
+    }
+  });
+
+  previewBtn.addEventListener('click', () => {
+    window.open('/preview/', '_blank');
+  });
+})();
+</script>

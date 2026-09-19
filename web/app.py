@@ -8,6 +8,7 @@ network perimeter is the security boundary, not a login gate.
 import asyncio
 import io
 import json
+import os
 import sys
 import threading
 import time
@@ -66,6 +67,14 @@ def static_version(relative_path):
 
 
 templates.env.globals["static_version"] = static_version
+
+# #310: environment awareness for the browser tab title. constructicon-test
+# sets CONSTRUCTICON_ENV=dev in its compose so its tab reads "DEV-..." and is
+# distinguishable from production (which defaults to prod → no prefix). Mirrors
+# quest-log's QUEST_LOG_ENV pattern. Read once at startup; injected as a Jinja
+# global so base.html can prefix the title without threading it through routes.
+_IS_DEV = os.getenv("CONSTRUCTICON_ENV", "prod").strip().lower() == "dev"
+templates.env.globals["is_dev"] = _IS_DEV
 
 
 # --- Audit logging middleware ---

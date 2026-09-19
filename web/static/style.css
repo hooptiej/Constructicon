@@ -1151,6 +1151,29 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .project-status-pill.archived { background: rgba(116,64,150,0.18); color: var(--purple-bright); border-color: rgba(138,79,174,0.4); }
 
+/* --- Projects widget: active/done zone split (#362) --- */
+/* Zone headings for active and done project sections */
+.zone-heading { font-size: 13px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px; margin: 18px 0 12px 0; }
+/* Scrollbox for done/finished projects — reuses the files-scroll pattern with grid layout */
+.projects-done-scroll { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; overflow-y: auto; padding-right: 4px; min-height: 0; max-height: 400px; }
+/* Compact project card for done zone — smaller version of full project card */
+.project-compact-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  display: flex; flex-direction: column; color: inherit; text-decoration: none;
+  border-left: 3px solid var(--purple);
+}
+.project-compact-card:hover { border-color: var(--border-stronger); border-left-color: var(--purple-bright); color: inherit; }
+/* Compact cover: smaller aspect ratio for thumbnail-like appearance */
+.project-compact-cover { height: 100px; background: var(--surface); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.project-compact-cover img { width: 100%; height: 100%; object-fit: cover; }
+/* Compact body: minimal padding and font sizing */
+.project-compact-body { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.project-compact-title { font-size: 12px; font-weight: 500; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* Mobile: adjust scrollbox max-height to match files-scroll pattern */
+@media (max-width: 768px) {
+  .projects-done-scroll { max-height: 420px; }
+}
+
 /* --- Project detail page --- */
 .project-detail-header { display: flex; flex-direction: column; gap: 10px; }
 .project-item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }

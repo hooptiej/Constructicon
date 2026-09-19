@@ -610,6 +610,116 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
     }
 
 
+# --- Hobbies (#360) ---
+
+@mcp.tool()
+def constructicon_list_hobbies() -> list[dict]:
+    """List all hobbies (tags marked is_hobby=1) with their metadata and project counts.
+
+    Returns a list of hobby tag dicts, ordered by name."""
+    hobbies = db.list_hobbies()
+    return [
+        {
+            "id": h["id"],
+            "name": h["name"],
+            "slug": h["slug"],
+            "status": h.get("hobby_status"),
+            "project_count": h.get("project_count", 0),
+        }
+        for h in hobbies
+    ]
+
+
+@mcp.tool()
+def constructicon_convert_project_to_hobby(project_slug: str) -> dict | None:
+    """Convert an existing project into a hobby (DESTRUCTIVE).
+
+    The project is converted into a hobby tag, its child projects are moved to the hobby
+    via project_hobbies, its items are tagged with the hobby, and the project row is deleted.
+
+    This is a one-way operation — to undo, the hobby would need to be converted back
+    manually.
+
+    Returns the new hobby tag dict with a summary of what was moved, or None if the
+    project doesn't exist."""
+    project = db.get_project(project_slug)
+    if project is None:
+        return None
+
+    # Get counts before conversion for the summary
+    children_count = len(db.list_child_projects(project["id"]))
+    items_count = len(db.list_project_items(project["id"]))
+
+    hobby = db.convert_project_to_hobby(project["id"])
+
+    if hobby is None:
+        return None
+
+    return {
+        "id": hobby["id"],
+        "name": hobby["name"],
+        "slug": hobby["slug"],
+        "status": hobby.get("hobby_status"),
+        "summary": {
+            "children_moved": children_count,
+            "items_moved": items_count,
+        },
+    }
+
+
+@mcp.tool()
+def constructicon_add_project_to_hobby(project_slug: str, hobby_slug: str) -> dict | None:
+    """Add a project to a hobby's many-to-many relation.
+
+    Both project_slug and hobby_slug are resolved to their respective ids.
+    Returns the updated hobby with its project count, or None if either doesn't exist."""
+    project = db.get_project(project_slug)
+    if project is None:
+        raise ValueError("project not found")
+
+    hobby = db.get_hobby(hobby_slug)
+    if hobby is None:
+        raise ValueError("hobby not found")
+
+    db.add_project_to_hobby(project["id"], hobby["id"])
+
+    # Return the updated hobby
+    updated_hobby = db.get_hobby(hobby["id"])
+    projects = db.list_projects_for_hobby(hobby["id"])
+
+    return {
+        "id": updated_hobby["id"],
+        "name": updated_hobby["name"],
+        "slug": updated_hobby["slug"],
+        "status": updated_hobby.get("hobby_status"),
+        "project_count": len(projects),
+    }
+
+
+@mcp.tool()
+def constructicon_set_hobby_status(hobby_slug: str, status: str) -> dict | None:
+    """Update a hobby's status (active/dormant/abandoned).
+
+    Returns the updated hobby dict, or None if not found.
+    Raises ValueError if the status is invalid."""
+    hobby = db.get_hobby(hobby_slug)
+    if hobby is None:
+        return None
+
+    try:
+        db.set_hobby_status(hobby["id"], status)
+    except ValueError as e:
+        raise ValueError(str(e))
+
+    updated = db.get_hobby(hobby["id"])
+    return {
+        "id": updated["id"],
+        "name": updated["name"],
+        "slug": updated["slug"],
+        "status": updated.get("hobby_status"),
+    }
+
+
 @mcp.tool()
 def constructicon_list_blog_entries(status: str | None = None) -> list[dict]:
     """List all blog entries, optionally filtered by status (e.g. 'draft', 'published').

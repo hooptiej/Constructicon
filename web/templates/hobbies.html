@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Hobbies — Constructicon{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+{% include "_blog_builder.html" %}
+{% include "_export_builder.html" %}
+<div class="app-main">
+  <a class="back-link" href="/">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Back to projects
+  </a>
+
+  <div class="home-col-header">
+    <div>
+      <h1 class="page-title">Hobbies</h1>
+      <p class="page-subtitle">Collections organized by hobby interest.</p>
+    </div>
+  </div>
+
+  <div id="hobbies-grid" class="gallery-grid"></div>
+  <p id="hobbies-empty" class="empty-state" style="display:none">No hobbies yet.</p>
+</div>
+
+<script>
+async function loadHobbies() {
+  try {
+    const res = await fetch('/api/hobbies');
+    if (!res.ok) return;
+    const hobbies = await res.json();
+
+    const grid = document.getElementById('hobbies-grid');
+    const empty = document.getElementById('hobbies-empty');
+
+    if (!hobbies.length) {
+      empty.style.display = 'block';
+      return;
+    }
+
+    grid.innerHTML = hobbies.map(hobby => `
+      <div class="project-item-card-wrapper">
+        <a class="project-item-card" href="/hobby/${encodeURIComponent(hobby.slug)}">
+          <div class="project-item-thumb">
+            <div class="project-cover-placeholder"></div>
+          </div>
+          <div class="project-item-body">
+            <div class="project-item-title">${encodeHtml(hobby.name)}</div>
+            <div class="project-item-meta">
+              <span style="display:inline-block;padding:2px 6px;background:rgba(127,163,124,0.2);border-radius:2px;font-size:11px;color:#7FA37C;margin-right:4px">${encodeHtml(hobby.hobby_status || 'active')}</span>
+              ${hobby.project_count || 0} project${hobby.project_count === 1 ? '' : 's'}
+            </div>
+          </div>
+        </a>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('Failed to load hobbies:', err);
+  }
+}
+
+function encodeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[c]));
+}
+
+loadHobbies();
+</script>
+
+{% endblock %}

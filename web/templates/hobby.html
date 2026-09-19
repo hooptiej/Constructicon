@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}{{ hobby.name }} — Hobby — Constructicon{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+{% include "_blog_builder.html" %}
+{% include "_export_builder.html" %}
+<div class="app-main">
+  <a class="back-link" href="/">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Back to hobbies
+  </a>
+
+  <div class="project-detail-header">
+    <div>
+      <h1 class="page-title">{{ hobby.name }}</h1>
+      <div style="margin-top:12px;display:flex;align-items:center;gap:12px;font-size:13px">
+        <label>Status:</label>
+        <select id="hobby-status-select" class="project-status-pill" style="width:fit-content;border:none;cursor:pointer">
+          <option value="active" {% if hobby.status == 'active' %}selected{% endif %}>active</option>
+          <option value="dormant" {% if hobby.status == 'dormant' %}selected{% endif %}>dormant</option>
+          <option value="abandoned" {% if hobby.status == 'abandoned' %}selected{% endif %}>abandoned</option>
+        </select>
+        <p class="status-confirm" id="status-confirm" style="display:none;font-size:12px;color:#6E6B57;margin:0">Saved.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Member Projects Section -->
+  <div style="margin-top:24px">
+    <h2 style="font-size:16px;font-weight:600;margin-bottom:12px">Member Projects</h2>
+    <div id="hobby-projects-box"></div>
+    <div style="margin-top:12px">
+      <select id="hobby-add-project-select" class="input">
+        <option value="">+ Add project to hobby…</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Attached Objects Section -->
+  <div style="margin-top:24px">
+    <h2 style="font-size:16px;font-weight:600;margin-bottom:12px">Attached Objects</h2>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">Objects are tagged with this hobby from their detail page.</p>
+    <div id="hobby-items-box" class="gallery-grid"></div>
+    <p id="hobby-items-empty" class="empty-state" style="display:none">No objects yet.</p>
+  </div>
+</div>
+
+<script>
+const hobbyId = {{ hobby.id | tojson }};
+const hobbySlug = {{ hobby.slug | tojson }};
+let currentStatus = {{ hobby.status | tojson }};
+let currentProjects = {{ hobby.projects | tojson }};
+let currentItems = {{ hobby['items'] | tojson }};
+
+// Status selector: active/dormant/abandoned
+const statusSelect = document.getElementById('hobby-status-select');
+const statusConfirm = document.getElementById('status-confirm');
+
+statusSelect.addEventListener('change', async function() {
+  const value = this.value;
+  statusConfirm.style.display = 'none';
+  try {
+    const form = new FormData();
+    form.append('status', value);
+    const response = await fetch(`/api/hobby/${hobbyId}/status`, {
+      method: 'POST',
+      body: form
+    });
+    if (response.ok) {
+      currentStatus = value;
+      statusConfirm.style.display = 'block';
+      setTimeout(() => { statusConfirm.style.display = 'none'; }, 2000);
+    } else {
+      console.error('Failed to update status:', response.status);
+      statusSelect.value = currentStatus;
+    }
+  } catch (error) {
+    console.error('Error updating status:', error);
+    statusSelect.value = currentStatus;
+  }
+});
+
+// Render projects as chips with remove buttons
+function renderProjectChips() {
+  const box = document.getElementById('hobby-projects-box');
+  box.innerHTML = '';
+  if (!currentProjects.length) {
+    const note = document.createElement('span');
+    note.className = 'optional';
+    note.textContent = 'No member projects yet.';
+    box.appendChild(note);
+  } else {
+    currentProjects.forEach(p => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      const link = document.createElement('a');
+      link.href = `/project/${p.slug}`;
+      link.textContent = p.title;
+      link.style.textDecoration = 'none';
+      link.style.color = 'inherit';
+      chip.appendChild(link);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = '×';
+      btn.style.marginLeft = '4px';
+      btn.addEventListener('click', () => removeProjectFromHobby(p.id));
+      chip.appendChild(btn);
+      box.appendChild(chip);
+    });
+  }
+}
+
+// Render items as a gallery grid
+function renderItemsGrid() {
+  const box = document.getElementById('hobby-items-box');
+  const empty = document.getElementById('hobby-items-empty');
+
+  box.innerHTML = '';
+  if (!currentItems.length) {
+    empty.style.display = 'block';
+  } else {
+    empty.style.display = 'none';
+    currentItems.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'project-item-card-wrapper';
+      card.dataset.slug = item.slug;
+
+      const link = document.createElement('a');
+      link.href = `/object/${item.slug}`;
+      link.className = 'project-item-card';
+
+      const thumb = document.createElement('div');
+      thumb.className = 'project-item-thumb';
+      if (item.thumb_url) {
+        const img = document.createElement('img');
+        img.src = item.thumb_url;
+        img.loading = 'lazy';
+        img.alt = item.display_name || item.filename || '';
+        thumb.appendChild(img);
+      } else if (item.media_type) {
+        const pill = document.createElement('span');
+        pill.className = 'media-type-pill';
+        pill.textContent = item.media_type;
+        thumb.appendChild(pill);
+      }
+      link.appendChild(thumb);
+
+      const body = document.createElement('div');
+      body.className = 'project-item-body';
+
+      const title = document.createElement('div');
+      title.className = 'project-item-title';
+      title.textContent = item.display_name || item.filename || item.slug;
+      body.appendChild(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'project-item-meta';
+      meta.textContent = (item.media_type || 'unknown') + ' · ' + (item.uploaded_at_display || '');
+      body.appendChild(meta);
+
+      link.appendChild(body);
+      card.appendChild(link);
+      box.appendChild(card);
+    });
+  }
+}
+
+// Load available projects for adding
+async function loadProjectOptions() {
+  const res = await fetch('/api/projects');
+  const projects = await res.json();
+  const select = document.getElementById('hobby-add-project-select');
+  select.querySelectorAll('option[data-project]').forEach(o => o.remove());
+
+  const currentIds = new Set(currentProjects.map(p => String(p.id)));
+  const html = projects
+    .filter(p => !currentIds.has(String(p.id)))
+    .map(p => `<option value="${p.id}" data-project>${p.title}</option>`)
+    .join('');
+  select.insertAdjacentHTML('beforeend', html);
+}
+
+// Add project to hobby
+async function addProjectToHobby(projectId) {
+  const form = new FormData();
+  form.append('project_id', projectId);
+  const res = await fetch(`/api/hobby/${hobbyId}/add-project`, { method: 'POST', body: form });
+  if (res.ok) {
+    currentProjects = await res.json();
+    renderProjectChips();
+    loadProjectOptions();
+  } else {
+    const body = await res.json().catch(() => ({ detail: 'Failed to add project' }));
+    alert(body.detail || 'Failed to add project');
+  }
+}
+
+// Remove project from hobby
+async function removeProjectFromHobby(projectId) {
+  const form = new FormData();
+  form.append('project_id', projectId);
+  const res = await fetch(`/api/hobby/${hobbyId}/remove-project`, { method: 'POST', body: form });
+  if (res.ok) {
+    currentProjects = await res.json();
+    renderProjectChips();
+    loadProjectOptions();
+  } else {
+    alert('Failed to remove project');
+  }
+}
+
+// Add project select handler
+document.getElementById('hobby-add-project-select').addEventListener('change', function() {
+  const val = this.value;
+  if (!val) return;
+  addProjectToHobby(val);
+  this.value = '';
+});
+
+// Initial render
+renderProjectChips();
+renderItemsGrid();
+loadProjectOptions();
+</script>
+
+{% endblock %}

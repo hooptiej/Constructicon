@@ -48,6 +48,7 @@
         {% if project.status not in PROJECT_STATUSES %}<option value="{{ project.status }}" selected>{{ project.status }} (legacy)</option>{% endif %}
       </select>
       <p class="status-confirm" id="status-confirm" style="display:none;font-size:12px;color:#6E6B57;margin:0">Saved.</p>
+      <button type="button" class="btn-secondary" id="convert-to-hobby-btn" title="Convert this project to a hobby" style="margin-left:auto">Convert to hobby</button>
       {# Curator Stage 2: per-project health indicator #}
       {% if project_score %}
       {% set _applicable = project_score.checklist | rejectattr('excused') | list %}
@@ -198,6 +199,24 @@
   })();
   </script>
   {% endif %}
+</div>
+
+<div class="modal-backdrop" id="convert-hobby-backdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Convert to hobby?</h2>
+      <button type="button" class="modal-close" id="convert-hobby-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="convert-hobby-message" style="margin:0;line-height:1.5"></p>
+      <div style="display:flex;gap:12px;margin-top:20px">
+        <button type="button" class="btn-danger" id="convert-hobby-confirm">Convert</button>
+        <button type="button" class="btn-secondary" id="convert-hobby-cancel">Cancel</button>
+      </div>
+      <p class="error-text" id="convert-hobby-error" style="display:none;margin-top:12px"></p>
+      <p class="save-confirm" id="convert-hobby-success" style="display:none;margin-top:12px"></p>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -475,6 +494,65 @@ loadParentProjects();
   textEl.addEventListener('click', startEdit);
   editBtn.addEventListener('click', startEdit);
 }
+
+// Convert to hobby (#360): confirmation dialog and conversion handler
+const convertHobbyBtn = document.getElementById('convert-to-hobby-btn');
+const convertHobbyBackdrop = document.getElementById('convert-hobby-backdrop');
+const convertHobbyMessage = document.getElementById('convert-hobby-message');
+const convertHobbyConfirm = document.getElementById('convert-hobby-confirm');
+const convertHobbyCancel = document.getElementById('convert-hobby-cancel');
+const convertHobbyClose = document.getElementById('convert-hobby-close');
+const convertHobbyError = document.getElementById('convert-hobby-error');
+const convertHobbySuccess = document.getElementById('convert-hobby-success');
+
+function showConvertDialog() {
+  convertHobbyError.style.display = 'none';
+  convertHobbySuccess.style.display = 'none';
+  convertHobbyConfirm.disabled = false;
+  convertHobbyMessage.textContent = `"${currentTitle}" isn't a project — make it a hobby? Its sub-projects move to the new hobby and this project entry is removed. This can't be auto-undone.`;
+  convertHobbyBackdrop.style.display = 'flex';
+}
+
+function hideConvertDialog() {
+  convertHobbyBackdrop.style.display = 'none';
+}
+
+convertHobbyBtn.addEventListener('click', showConvertDialog);
+convertHobbyCancel.addEventListener('click', hideConvertDialog);
+convertHobbyClose.addEventListener('click', hideConvertDialog);
+
+convertHobbyConfirm.addEventListener('click', async () => {
+  convertHobbyConfirm.disabled = true;
+  convertHobbyConfirm.textContent = 'Converting…';
+  convertHobbyError.style.display = 'none';
+  convertHobbySuccess.style.display = 'none';
+
+  try {
+    const res = await fetch(`/api/project/{{ project.slug }}/convert-to-hobby`, { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      throw new Error(body.detail || 'Conversion failed');
+    }
+
+    // Success: show summary and link to hobby
+    const summary = body.summary || {};
+    const hobbyName = body.name || currentTitle;
+    const hobbySlug = body.slug;
+    convertHobbySuccess.innerHTML = `Made "${hobbyName}" a hobby — moved ${summary.children_moved || 0} sub-project${summary.children_moved === 1 ? '' : 's'} and ${summary.items_moved || 0} object${summary.items_moved === 1 ? '' : 's'}. <a href="/hobby/${hobbySlug}" style="color:inherit;text-decoration:underline">View hobby</a>`;
+    convertHobbySuccess.style.display = 'block';
+
+    // Redirect after a brief delay
+    setTimeout(() => {
+      window.location.href = `/hobby/${hobbySlug}`;
+    }, 1500);
+  } catch (err) {
+    convertHobbyError.textContent = err.message;
+    convertHobbyError.style.display = 'block';
+    convertHobbyConfirm.disabled = false;
+    convertHobbyConfirm.textContent = 'Convert';
+  }
+});
 </script>
 
 {% endblock %}

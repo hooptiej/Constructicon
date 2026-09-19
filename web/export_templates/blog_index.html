@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Blog - {{ site_title }}{% endblock %}
+
+{% block content %}
+<section class="blog-index">
+    <h2>Blog Posts</h2>
+    {% if blog_entries %}
+    <ul class="blog-entries-list">
+        {% for entry in blog_entries %}
+        <li>
+            <a href="{{ entry.slug }}.html">{{ entry.title }}</a>
+            {% if entry.subtitle %}<p class="subtitle">{{ entry.subtitle }}</p>{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p>No blog entries to display.</p>
+    {% endif %}
+</section>
+{% endblock %}

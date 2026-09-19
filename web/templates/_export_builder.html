@@ -36,16 +36,21 @@
     <!-- Build button -->
     <button type="button" id="export-build-btn" class="btn-primary" style="margin-top: 16px">Build Site</button>
 
-    <!-- Build report (initially hidden) -->
+    <!-- Build report — in-session stats/warnings for the build just run -->
     <div id="export-report" class="export-report" style="display: none">
       <div class="export-report-title">Build Report</div>
       <div id="export-report-stats" class="export-report-stats"></div>
       <div id="export-report-warnings" class="export-report-warnings"></div>
-      <button type="button" id="export-preview-btn" class="btn-secondary" style="width: 100%; margin-top: 12px">
-        Preview in New Tab
-      </button>
+    </div>
 
-      <!-- Publish section (shown after successful build) -->
+    <!-- Current build actions — shown whenever a build exists (this session OR a
+         prior one), so the preview link + publish don't vanish on reopen (#335). -->
+    <div id="export-current" style="display: none">
+      <a id="export-preview-btn" class="btn-secondary" href="/preview/" target="_blank" style="display: block; text-align: center; width: 100%; margin-top: 12px">
+        Preview in New Tab
+      </a>
+
+      <!-- Publish section -->
       <div id="export-publish-section" class="export-publish-section" style="display: none">
         <div class="export-section">
           <h3>PUBLISH</h3>
@@ -134,15 +139,31 @@
 
   function esc(t) { const d = document.createElement('div'); d.textContent = (t == null ? '' : t); return d.innerHTML; }
 
-  function openBuilder() {
+  async function openBuilder() {
     builder.classList.add('open');
     backdrop.classList.add('open');
-    loadData();
+    report.style.display = 'none';  // in-session report resets each open
+    await loadData();
+    await showCurrentIfBuilt();
   }
   function closeBuilder() {
     builder.classList.remove('open');
     backdrop.classList.remove('open');
     report.style.display = 'none';
+    document.getElementById('export-current').style.display = 'none';
+  }
+
+  async function showCurrentIfBuilt() {
+    // A build persists at /preview/ across drawer sessions. If one exists, show
+    // the preview link + publish section on open (not only after an in-session
+    // build), so they don't vanish on reopen (#335).
+    try {
+      const res = await fetch('/preview/index.html', { method: 'HEAD' });
+      if (res.ok) {
+        document.getElementById('export-current').style.display = 'block';
+        renderPublish();
+      }
+    } catch (e) { /* no build yet — leave hidden */ }
   }
 
   const trigger = document.getElementById('export-builder-trigger');
@@ -345,6 +366,7 @@
       }
 
       report.style.display = 'block';
+      document.getElementById('export-current').style.display = 'block';
       renderPublish();
     } catch (err) {
       console.error('build failed', err);
@@ -354,10 +376,6 @@
       buildBtn.disabled = false;
       buildBtn.textContent = 'Build Site';
     }
-  });
-
-  previewBtn.addEventListener('click', () => {
-    window.open('/preview/', '_blank');
   });
 
   publishTargetSelect.addEventListener('change', (e) => {

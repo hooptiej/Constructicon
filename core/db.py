@@ -1936,11 +1936,18 @@ def create_blog_entry(title, subtitle="", body="", status="draft", cover_slug=No
 
 
 def get_blog_entry(id_or_slug):
-    """Look up by either numeric id or slug; returns dict or None."""
+    """Look up by id (int) or slug (str); returns dict or None.
+
+    A STRING is always looked up by slug, even an all-digits one: blog slugs
+    come from _slugify(title), so a title like "2" yields the slug "2", and
+    the public identifier everywhere (HTTP routes, MCP tools) is the slug.
+    Only an actual int is treated as an id (the internal existing["id"]
+    callers). Coercing numeric strings to ids made numeric-slug entries
+    unreachable by their own slug -> 404 (#318)."""
     conn = get_conn()
     try:
-        if isinstance(id_or_slug, int) or (isinstance(id_or_slug, str) and id_or_slug.isdigit()):
-            row = conn.execute("SELECT * FROM blog_entries WHERE id = ?", (int(id_or_slug),)).fetchone()
+        if isinstance(id_or_slug, int):
+            row = conn.execute("SELECT * FROM blog_entries WHERE id = ?", (id_or_slug,)).fetchone()
         else:
             row = conn.execute("SELECT * FROM blog_entries WHERE slug = ?", (id_or_slug,)).fetchone()
         return dict(row) if row else None

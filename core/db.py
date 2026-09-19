@@ -117,6 +117,33 @@ CREATE TABLE IF NOT EXISTS pending_decisions (
     resolved_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_pending_decisions_open ON pending_decisions(kind, resolved_at);
+CREATE TABLE IF NOT EXISTS blog_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT UNIQUE NOT NULL,
+    title TEXT NOT NULL,
+    subtitle TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft',
+    cover_slug TEXT,
+    content_date REAL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS blog_entry_projects (
+    entry_id INTEGER NOT NULL REFERENCES blog_entries(id),
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (entry_id, project_id)
+);
+CREATE TABLE IF NOT EXISTS blog_entry_items (
+    entry_id INTEGER NOT NULL REFERENCES blog_entries(id),
+    post_slug TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (entry_id, post_slug)
+);
+CREATE INDEX IF NOT EXISTS idx_blog_entry_items_slug ON blog_entry_items(post_slug);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -1864,5 +1891,189 @@ def resolve_pending_decision(decision_id, resolution=None):
         )
         conn.commit()
         return get_pending_decision(decision_id)
+    finally:
+        conn.close()
+
+
+# --- Blog entries ---
+# A blog entry is a collection of curated projects and objects that tell a story,
+# distinct from a project (which is a collection of objects) or a tag (which is an
+# automatic grouping).
+
+def create_blog_entry(title, subtitle="", body="", status="draft", cover_slug=None, content_date=None):
+    """Auto-generates a unique slug from title via _slugify with numeric-suffix
+    dedup; sets created_at/updated_at=now; returns the full dict."""
+    conn = get_conn()
+    try:
+        slug = _slugify(title)
+        base_slug = slug
+        n = 2
+        while conn.execute("SELECT 1 FROM blog_entries WHERE slug = ?", (slug,)).fetchone():
+            slug = f"{base_slug}-{n}"
+            n += 1
+        now = time.time()
+        cur = conn.execute(
+            "INSERT INTO blog_entries (slug, title, subtitle, body, status, cover_slug, content_date, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (slug, title, subtitle, body, status, cover_slug, content_date, now, now),
+        )
+        conn.commit()
+        entry_id = cur.lastrowid
+        return {
+            "id": entry_id,
+            "slug": slug,
+            "title": title,
+            "subtitle": subtitle,
+            "body": body,
+            "status": status,
+            "cover_slug": cover_slug,
+            "content_date": content_date,
+            "created_at": now,
+            "updated_at": now,
+        }
+    finally:
+        conn.close()
+
+
+def get_blog_entry(id_or_slug):
+    """Look up by either numeric id or slug; returns dict or None."""
+    conn = get_conn()
+    try:
+        if isinstance(id_or_slug, int) or (isinstance(id_or_slug, str) and id_or_slug.isdigit()):
+            row = conn.execute("SELECT * FROM blog_entries WHERE id = ?", (int(id_or_slug),)).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM blog_entries WHERE slug = ?", (id_or_slug,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_blog_entries(status=None):
+    """All entries (or filtered by status), ORDER BY updated_at DESC."""
+    conn = get_conn()
+    try:
+        if status is not None:
+            rows = conn.execute(
+                "SELECT * FROM blog_entries WHERE status = ? ORDER BY updated_at DESC", (status,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM blog_entries ORDER BY updated_at DESC").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_blog_entry(id_or_slug, title=None, subtitle=None, body=None, status=None, cover_slug=..., content_date=...):
+    """Partial update — None means 'leave unchanged'. cover_slug and content_date
+    use the ... (Ellipsis) sentinel so passing None explicitly CLEARS them.
+    Bumps updated_at. Returns the updated entry dict or None if not found."""
+    existing = get_blog_entry(id_or_slug)
+    if existing is None:
+        return None
+
+    conn = get_conn()
+    try:
+        now = time.time()
+        new_cover_slug = cover_slug if cover_slug is not ... else existing.get("cover_slug")
+        new_content_date = content_date if content_date is not ... else existing.get("content_date")
+        conn.execute(
+            "UPDATE blog_entries SET title = ?, subtitle = ?, body = ?, status = ?, cover_slug = ?, content_date = ?, updated_at = ? WHERE id = ?",
+            (
+                title if title is not None else existing["title"],
+                subtitle if subtitle is not None else existing["subtitle"],
+                body if body is not None else existing["body"],
+                status if status is not None else existing["status"],
+                new_cover_slug,
+                new_content_date,
+                now,
+                existing["id"],
+            ),
+        )
+        conn.commit()
+        return get_blog_entry(existing["id"])
+    finally:
+        conn.close()
+
+
+def delete_blog_entry(id_or_slug):
+    """Resolve to id, then DELETE the entry's rows from blog_entry_projects
+    and blog_entry_items FIRST, then from blog_entries."""
+    entry = get_blog_entry(id_or_slug)
+    if entry is None:
+        return
+
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM blog_entry_projects WHERE entry_id = ?", (entry["id"],))
+        conn.execute("DELETE FROM blog_entry_items WHERE entry_id = ?", (entry["id"],))
+        conn.execute("DELETE FROM blog_entries WHERE id = ?", (entry["id"],))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_entry_projects(entry_id):
+    """The projects attached to an entry, joined with projects so full project
+    data comes back, including sort_order and note. Ordered by sort_order ASC."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT p.*, bep.sort_order, bep.note FROM blog_entry_projects bep "
+            "JOIN projects p ON p.id = bep.project_id WHERE bep.entry_id = ? ORDER BY bep.sort_order ASC",
+            (entry_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_entry_items(entry_id):
+    """The objects attached to an entry, joined with capture_events so full
+    object data comes back, including sort_order and note. Ordered by sort_order ASC."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT ce.*, bei.sort_order, bei.note FROM blog_entry_items bei "
+            "JOIN capture_events ce ON ce.slug = bei.post_slug WHERE bei.entry_id = ? "
+            "ORDER BY bei.sort_order ASC",
+            (entry_id,),
+        ).fetchall()
+        # _row_to_dict parses the capture_events JSON columns (tags,
+        # type_metadata); the joined sort_order/note ride along in dict(row).
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def set_entry_projects(entry_id, items):
+    """items is a list of (project_id, note) tuples in desired display order.
+    In ONE transaction: DELETE all existing blog_entry_projects rows for entry_id,
+    then INSERT each with sort_order = its index in the list."""
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM blog_entry_projects WHERE entry_id = ?", (entry_id,))
+        for sort_order, (project_id, note) in enumerate(items):
+            conn.execute(
+                "INSERT INTO blog_entry_projects (entry_id, project_id, sort_order, note) VALUES (?, ?, ?, ?)",
+                (entry_id, project_id, sort_order, note),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_entry_items(entry_id, items):
+    """items is a list of (post_slug, note) tuples in desired display order.
+    In ONE transaction: DELETE all existing blog_entry_items rows for entry_id,
+    then INSERT each with sort_order = its index in the list."""
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM blog_entry_items WHERE entry_id = ?", (entry_id,))
+        for sort_order, (post_slug, note) in enumerate(items):
+            conn.execute(
+                "INSERT INTO blog_entry_items (entry_id, post_slug, sort_order, note) VALUES (?, ?, ?, ?)",
+                (entry_id, post_slug, sort_order, note),
+            )
+        conn.commit()
     finally:
         conn.close()

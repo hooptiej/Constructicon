@@ -1,0 +1,404 @@
+<!-- Blog builder (#313 stage 3) — self-contained drawer with nested pickers for
+     projects and objects. Vanilla JS IIFE, matching _upload_drawer.html pattern.
+     Dispatches "constructicon:blog-entry-saved" custom event on successful save
+     so pages can refresh their own data. -->
+
+<div class="drawer-backdrop" id="blog-builder-backdrop"></div>
+<div class="blog-builder" id="blog-builder">
+  <div class="blog-builder-header">
+    <h2>Blog Builder</h2>
+    <button type="button" class="modal-close" id="blog-builder-close">&times;</button>
+  </div>
+
+  <!-- Entry list view (initial state) -->
+  <div id="blog-builder-list-view" class="blog-builder-list-view">
+    <div id="blog-entries-list" class="blog-entries-list"></div>
+    <button type="button" class="btn-primary" id="blog-new-entry-btn" style="margin-top: 12px">＋ New entry</button>
+  </div>
+
+  <!-- Entry editor view -->
+  <div id="blog-builder-editor-view" class="blog-builder-editor-view" style="display: none">
+    <button type="button" class="back-btn" id="blog-builder-back-btn">← Back</button>
+    <form id="blog-entry-form">
+      <div class="field">
+        <label>TITLE <span class="required">*</span></label>
+        <input class="input" id="blog-entry-title" name="title" placeholder="Blog entry title" required>
+      </div>
+
+      <div class="field">
+        <label>SUBTITLE</label>
+        <input class="input" id="blog-entry-subtitle" name="subtitle" placeholder="Optional subtitle">
+      </div>
+
+      <div class="field">
+        <label>BODY</label>
+        <textarea class="input" id="blog-entry-body" name="body" rows="6" placeholder="Markdown or plain text content"></textarea>
+      </div>
+
+      <div class="field">
+        <label>STATUS</label>
+        <select class="input" id="blog-entry-status">
+          <option value="draft">Draft</option>
+          <option value="ready">Ready</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>COVER IMAGE</label>
+        <div style="display: flex; gap: 8px; align-items: center">
+          <input class="input" id="blog-entry-cover-slug" placeholder="Object slug (optional)" style="flex: 1">
+          <button type="button" class="btn-secondary" id="blog-entry-cover-picker-btn">Browse</button>
+          <button type="button" class="btn-secondary" id="blog-entry-cover-clear-btn" style="min-width: auto; padding: 10px 8px">✕</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>CONTENT DATE</label>
+        <input class="input" id="blog-entry-content-date" name="content_date" type="date">
+      </div>
+
+      <!-- Projects attachment section -->
+      <div class="blog-attachment-section">
+        <div class="blog-attachment-header">
+          <h3>PROJECTS</h3>
+          <button type="button" class="btn-secondary" id="blog-projects-add-btn">+ Add</button>
+        </div>
+        <div id="blog-projects-list" class="blog-attachment-list"></div>
+      </div>
+
+      <!-- Objects attachment section -->
+      <div class="blog-attachment-section" style="margin-top: 20px">
+        <div class="blog-attachment-header">
+          <h3>OBJECTS</h3>
+          <button type="button" class="btn-secondary" id="blog-objects-add-btn">+ Add</button>
+        </div>
+        <div id="blog-objects-list" class="blog-attachment-list"></div>
+      </div>
+
+      <div class="blog-editor-actions" style="margin-top: 24px; display: flex; gap: 8px">
+        <button type="submit" class="btn-primary" style="flex: 1">Save entry</button>
+        <button type="button" class="btn-secondary" id="blog-entry-delete-btn" style="flex: 0; min-width: auto; padding: 11px 8px">Delete</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Project picker (nested sub-drawer) -->
+  <div class="blog-picker-backdrop" id="blog-project-picker-backdrop" style="display: none"></div>
+  <div class="blog-picker-drawer" id="blog-project-picker" style="display: none">
+    <div class="blog-picker-header">
+      <h3>Add Projects</h3>
+      <button type="button" class="modal-close" id="blog-project-picker-close">&times;</button>
+    </div>
+    <div id="blog-projects-picker-list" class="blog-picker-list"></div>
+  </div>
+
+  <!-- Object picker (nested sub-drawer) -->
+  <div class="blog-picker-backdrop" id="blog-object-picker-backdrop" style="display: none"></div>
+  <div class="blog-picker-drawer" id="blog-object-picker" style="display: none">
+    <div class="blog-picker-header">
+      <h3>Add Objects</h3>
+      <button type="button" class="modal-close" id="blog-object-picker-close">&times;</button>
+    </div>
+    <div class="field" style="margin-bottom: 12px; padding: 0 14px">
+      <input class="input" id="blog-object-search" placeholder="Search objects…" autocomplete="off">
+    </div>
+    <div id="blog-objects-picker-list" class="blog-picker-list"></div>
+  </div>
+</div>
+
+<script>
+// Blog builder — client state is the single source of truth (state.projects /
+// state.objects); the DOM is only ever rendered FROM that state, never scraped
+// back into it. All the /api/blog-entries endpoints are called with the shapes
+// the server actually uses: create/update take form fields (URLSearchParams),
+// the project/item setters take a JSON array body, and the list/search/projects
+// endpoints all return plain JSON arrays.
+(function () {
+  const state = {
+    currentEntrySlug: null,
+    projects: [],   // [{id, title, note}]
+    objects: [],    // [{slug, label, note}]
+    pickerMode: 'objects', // 'objects' | 'cover'
+  };
+  let pickSel = new Map(); // transient selection inside an open picker
+
+  const backdrop = document.getElementById('blog-builder-backdrop');
+  const builder = document.getElementById('blog-builder');
+  const listView = document.getElementById('blog-builder-list-view');
+  const editorView = document.getElementById('blog-builder-editor-view');
+  const entriesList = document.getElementById('blog-entries-list');
+  const form = document.getElementById('blog-entry-form');
+  const projectsList = document.getElementById('blog-projects-list');
+  const objectsList = document.getElementById('blog-objects-list');
+  const projectPickerBackdrop = document.getElementById('blog-project-picker-backdrop');
+  const projectPicker = document.getElementById('blog-project-picker');
+  const projectPickerList = document.getElementById('blog-projects-picker-list');
+  const objectPickerBackdrop = document.getElementById('blog-object-picker-backdrop');
+  const objectPicker = document.getElementById('blog-object-picker');
+  const objectPickerList = document.getElementById('blog-objects-picker-list');
+  const objectSearch = document.getElementById('blog-object-search');
+  const coverInput = document.getElementById('blog-entry-cover-slug');
+  const dateInput = document.getElementById('blog-entry-content-date');
+  const deleteBtn = document.getElementById('blog-entry-delete-btn');
+
+  function esc(t) { const d = document.createElement('div'); d.textContent = (t == null ? '' : t); return d.innerHTML; }
+
+  // API stores content_date as a unix timestamp (float seconds); <input type=date>
+  // works in YYYY-MM-DD. Convert both ways so the field round-trips correctly.
+  function tsToDateInput(ts) {
+    if (ts === null || ts === undefined || ts === '') return '';
+    const d = new Date(Number(ts) * 1000);
+    return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+  }
+  function dateInputToTs(v) {
+    if (!v) return '';
+    const ms = Date.parse(v + 'T00:00:00Z');
+    return isNaN(ms) ? '' : String(ms / 1000);
+  }
+
+  function openBuilder() { builder.classList.add('open'); backdrop.classList.add('open'); showListView(); loadEntries(); }
+  function closeBuilder() { builder.classList.remove('open'); backdrop.classList.remove('open'); }
+
+  const builderTrigger = document.getElementById('blog-builder-trigger');
+  if (builderTrigger) builderTrigger.addEventListener('click', openBuilder);
+  document.getElementById('blog-builder-close').addEventListener('click', closeBuilder);
+  backdrop.addEventListener('click', closeBuilder);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !builder.classList.contains('open')) return;
+    if (projectPicker.style.display !== 'none') closeProjectPicker();
+    else if (objectPicker.style.display !== 'none') closeObjectPicker();
+    else closeBuilder();
+  });
+
+  function showListView() { listView.style.display = 'block'; editorView.style.display = 'none'; }
+  function showEditorView() { listView.style.display = 'none'; editorView.style.display = 'block'; }
+
+  async function loadEntries() {
+    try {
+      const res = await fetch('/api/blog-entries');
+      if (!res.ok) return;
+      const entries = await res.json(); // ARRAY
+      entriesList.innerHTML = '';
+      (entries || []).forEach((entry) => {
+        const row = document.createElement('div');
+        row.className = 'blog-entry-row';
+        const badge = entry.status === 'ready'
+          ? '<span class="blog-status-badge ready">Ready</span>'
+          : '<span class="blog-status-badge draft">Draft</span>';
+        row.innerHTML = `<div class="blog-entry-info"><div class="blog-entry-title">${esc(entry.title)}</div>${badge}</div>`;
+        row.addEventListener('click', () => editEntry(entry.slug));
+        entriesList.appendChild(row);
+      });
+      if (!entries || entries.length === 0) entriesList.innerHTML = '<div class="blog-empty">No entries yet.</div>';
+    } catch (err) { console.error('load entries failed', err); }
+  }
+
+  document.getElementById('blog-new-entry-btn').addEventListener('click', () => {
+    state.currentEntrySlug = null;
+    state.projects = [];
+    state.objects = [];
+    form.reset();
+    coverInput.value = '';
+    dateInput.value = '';
+    renderProjects();
+    renderObjects();
+    deleteBtn.style.display = 'none';
+    showEditorView();
+    document.getElementById('blog-entry-title').focus();
+  });
+
+  document.getElementById('blog-builder-back-btn').addEventListener('click', () => { showListView(); loadEntries(); });
+
+  async function editEntry(slug) {
+    try {
+      const res = await fetch(`/api/blog-entries/${encodeURIComponent(slug)}`);
+      if (!res.ok) return;
+      const entry = await res.json();
+      state.currentEntrySlug = slug;
+      document.getElementById('blog-entry-title').value = entry.title || '';
+      document.getElementById('blog-entry-subtitle').value = entry.subtitle || '';
+      document.getElementById('blog-entry-body').value = entry.body || '';
+      document.getElementById('blog-entry-status').value = entry.status || 'draft';
+      coverInput.value = entry.cover_slug || '';
+      dateInput.value = tsToDateInput(entry.content_date);
+      state.projects = (entry.projects || []).map((p) => ({ id: p.id, title: p.title || p.name || 'Project', note: p.note || '' }));
+      state.objects = (entry.items || []).map((o) => ({ slug: o.slug, label: o.display_name || o.content_description || o.title || o.slug, note: o.note || '' }));
+      renderProjects();
+      renderObjects();
+      deleteBtn.style.display = 'block';
+      showEditorView();
+    } catch (err) { console.error('edit entry failed', err); }
+  }
+
+  // One row renderer for both sections. `arr` is the backing state array and
+  // `rerender` its render fn — reorder/remove mutate the array then re-render,
+  // and the note input writes straight back into the state object.
+  function attachmentRow(label, note, idx, arr, rerender) {
+    const row = document.createElement('div');
+    row.className = 'blog-attachment-row';
+    row.innerHTML = `
+      <span class="blog-attachment-label">${esc(label)}</span>
+      <input class="blog-attachment-note" placeholder="Note" value="${esc(note)}">
+      <button type="button" class="blog-btn-reorder blog-btn-up" title="Move up">▲</button>
+      <button type="button" class="blog-btn-reorder blog-btn-down" title="Move down">▼</button>
+      <button type="button" class="blog-btn-remove" title="Remove">✕</button>`;
+    row.querySelector('.blog-attachment-note').addEventListener('input', (e) => { arr[idx].note = e.target.value; });
+    row.querySelector('.blog-btn-up').addEventListener('click', (e) => { e.preventDefault(); if (idx > 0) { [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]]; rerender(); } });
+    row.querySelector('.blog-btn-down').addEventListener('click', (e) => { e.preventDefault(); if (idx < arr.length - 1) { [arr[idx + 1], arr[idx]] = [arr[idx], arr[idx + 1]]; rerender(); } });
+    row.querySelector('.blog-btn-remove').addEventListener('click', (e) => { e.preventDefault(); arr.splice(idx, 1); rerender(); });
+    return row;
+  }
+  function renderProjects() {
+    projectsList.innerHTML = '';
+    state.projects.forEach((p, idx) => projectsList.appendChild(attachmentRow(p.title, p.note, idx, state.projects, renderProjects)));
+  }
+  function renderObjects() {
+    objectsList.innerHTML = '';
+    state.objects.forEach((o, idx) => objectsList.appendChild(attachmentRow(o.label, o.note, idx, state.objects, renderObjects)));
+  }
+
+  // --- Project picker ---
+  async function openProjectPicker() {
+    pickSel = new Map();
+    projectPickerList.innerHTML = '';
+    projectPickerBackdrop.style.display = 'block';
+    projectPicker.style.display = 'flex';
+    try {
+      const res = await fetch('/api/projects');
+      if (!res.ok) return;
+      const projects = await res.json(); // ARRAY
+      const already = new Set(state.projects.map((p) => p.id));
+      (projects || []).forEach((proj) => {
+        const el = document.createElement('div');
+        el.className = 'blog-picker-item';
+        const isAdded = already.has(proj.id);
+        el.innerHTML = `<label><input type="checkbox" ${isAdded ? 'checked disabled' : ''}> ${esc(proj.title || proj.name || 'Project')}</label>`;
+        if (!isAdded) {
+          const cb = el.querySelector('input');
+          cb.addEventListener('change', () => {
+            if (cb.checked) pickSel.set(proj.id, { id: proj.id, title: proj.title || proj.name || 'Project' });
+            else pickSel.delete(proj.id);
+          });
+        }
+        projectPickerList.appendChild(el);
+      });
+    } catch (err) { console.error('load projects failed', err); }
+  }
+  function closeProjectPicker() {
+    projectPickerBackdrop.style.display = 'none';
+    projectPicker.style.display = 'none';
+    pickSel.forEach((p) => { if (!state.projects.some((x) => x.id === p.id)) state.projects.push({ id: p.id, title: p.title, note: '' }); });
+    pickSel = new Map();
+    renderProjects();
+  }
+  document.getElementById('blog-projects-add-btn').addEventListener('click', (e) => { e.preventDefault(); openProjectPicker(); });
+  document.getElementById('blog-project-picker-close').addEventListener('click', closeProjectPicker);
+  projectPickerBackdrop.addEventListener('click', closeProjectPicker);
+
+  // --- Object picker (also serves the cover Browse button via pickerMode) ---
+  function openObjectPicker(mode) {
+    state.pickerMode = mode || 'objects';
+    pickSel = new Map();
+    objectSearch.value = '';
+    objectPickerList.innerHTML = '';
+    objectPickerBackdrop.style.display = 'block';
+    objectPicker.style.display = 'flex';
+    loadObjectsForPicker('');
+  }
+  function closeObjectPicker() {
+    objectPickerBackdrop.style.display = 'none';
+    objectPicker.style.display = 'none';
+    if (state.pickerMode === 'objects') {
+      pickSel.forEach((o) => { if (!state.objects.some((x) => x.slug === o.slug)) state.objects.push({ slug: o.slug, label: o.label, note: '' }); });
+      renderObjects();
+    }
+    pickSel = new Map();
+  }
+  async function loadObjectsForPicker(query) {
+    try {
+      // /api/search returns a flat JSON array (unlike /api/gallery which groups
+      // by uploader); param is `query`, not `q`. Empty query returns recents.
+      const res = await fetch(`/api/search?query=${encodeURIComponent(query || '')}`);
+      if (!res.ok) return;
+      const items = await res.json(); // ARRAY
+      objectPickerList.innerHTML = '';
+      (items || []).forEach((item) => {
+        const label = item.display_name || item.content_description || item.title || item.slug;
+        const el = document.createElement('div');
+        el.className = 'blog-picker-item';
+        if (state.pickerMode === 'cover') {
+          el.innerHTML = `<button type="button" class="blog-picker-cover-pick">${esc(label)}</button>`;
+          el.querySelector('button').addEventListener('click', (ev) => { ev.preventDefault(); coverInput.value = item.slug; closeObjectPicker(); });
+        } else {
+          const isAdded = state.objects.some((x) => x.slug === item.slug);
+          el.innerHTML = `<label><input type="checkbox" ${isAdded ? 'checked disabled' : ''}> ${esc(label)}</label>`;
+          if (!isAdded) {
+            const cb = el.querySelector('input');
+            cb.addEventListener('change', () => {
+              if (cb.checked) pickSel.set(item.slug, { slug: item.slug, label });
+              else pickSel.delete(item.slug);
+            });
+          }
+        }
+        objectPickerList.appendChild(el);
+      });
+      if (!items || items.length === 0) objectPickerList.innerHTML = '<div class="blog-empty">No matches.</div>';
+    } catch (err) { console.error('load objects failed', err); }
+  }
+  let objSearchT;
+  objectSearch.addEventListener('input', (e) => { clearTimeout(objSearchT); const v = e.target.value; objSearchT = setTimeout(() => loadObjectsForPicker(v), 200); });
+  document.getElementById('blog-objects-add-btn').addEventListener('click', (e) => { e.preventDefault(); openObjectPicker('objects'); });
+  document.getElementById('blog-object-picker-close').addEventListener('click', closeObjectPicker);
+  objectPickerBackdrop.addEventListener('click', closeObjectPicker);
+
+  // --- Cover ---
+  document.getElementById('blog-entry-cover-picker-btn').addEventListener('click', (e) => { e.preventDefault(); openObjectPicker('cover'); });
+  document.getElementById('blog-entry-cover-clear-btn').addEventListener('click', (e) => { e.preventDefault(); coverInput.value = ''; });
+
+  // --- Save ---
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    // create/update read Form fields, so send URLSearchParams (not JSON).
+    const params = new URLSearchParams();
+    params.set('title', document.getElementById('blog-entry-title').value.trim());
+    params.set('subtitle', document.getElementById('blog-entry-subtitle').value);
+    params.set('body', document.getElementById('blog-entry-body').value);
+    params.set('status', document.getElementById('blog-entry-status').value);
+    params.set('cover_slug', coverInput.value.trim());       // "" clears on update
+    params.set('content_date', dateInputToTs(dateInput.value)); // "" clears on update
+    try {
+      let slug = state.currentEntrySlug;
+      const url = slug ? `/api/blog-entries/${encodeURIComponent(slug)}` : '/api/blog-entries';
+      const res = await fetch(url, { method: 'POST', body: params });
+      if (!res.ok) throw new Error('save failed (' + res.status + ')');
+      const saved = await res.json();
+      slug = saved.slug;
+      state.currentEntrySlug = slug;
+      // Always PUT both lists (server does replace-all, so [] clears them).
+      const projPayload = state.projects.map((p) => ({ project_id: p.id, note: p.note || '' }));
+      const objPayload = state.objects.map((o) => ({ slug: o.slug, note: o.note || '' }));
+      const r1 = await fetch(`/api/blog-entries/${encodeURIComponent(slug)}/projects`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(projPayload) });
+      if (!r1.ok) throw new Error('save projects failed (' + r1.status + ')');
+      const r2 = await fetch(`/api/blog-entries/${encodeURIComponent(slug)}/items`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(objPayload) });
+      if (!r2.ok) throw new Error('save items failed (' + r2.status + ')');
+      document.dispatchEvent(new CustomEvent('constructicon:blog-entry-saved', { detail: { slug } }));
+      showListView();
+      loadEntries();
+    } catch (err) { console.error('save failed', err); alert('Error saving entry: ' + err.message); }
+  });
+
+  // --- Delete ---
+  deleteBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!state.currentEntrySlug) return;
+    if (!confirm('Delete this entry?')) return;
+    try {
+      const res = await fetch(`/api/blog-entries/${encodeURIComponent(state.currentEntrySlug)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('delete failed (' + res.status + ')');
+      document.dispatchEvent(new CustomEvent('constructicon:blog-entry-saved', { detail: { slug: state.currentEntrySlug, deleted: true } }));
+      showListView();
+      loadEntries();
+    } catch (err) { console.error('delete failed', err); alert('Error deleting entry: ' + err.message); }
+  });
+})();
+</script>

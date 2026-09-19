@@ -53,9 +53,16 @@
       {% include "_category_tiles.html" %}
 
       {% if projects %}
-      <div class="projects-container">
-        <div class="featured-project" id="featured-project"></div>
-        <div class="project-grid" id="projects-grid"></div>
+      <div id="active-zone" style="display:none">
+        <h3 class="zone-heading">Active</h3>
+        <div class="projects-container">
+          <div class="featured-project" id="featured-project"></div>
+          <div class="project-grid" id="projects-grid"></div>
+        </div>
+      </div>
+      <div id="done-zone" style="display:none">
+        <h3 class="zone-heading">Finished / Archived</h3>
+        <div class="projects-done-scroll" id="projects-done-grid"></div>
       </div>
       <script>
       (function () {
@@ -79,8 +86,26 @@
               </div>
             </a>`;
         }
+        function projectCompactCardHtml(p) {
+          return `
+            <a class="project-compact-card" href="/project/${p.slug}">
+              <div class="project-compact-cover">
+                ${p.cover_url ? `<img src="${p.cover_url}" loading="lazy" alt="">` : `<div class="project-cover-placeholder"></div>`}
+              </div>
+              <div class="project-compact-body">
+                <div class="project-compact-title">${escapeHtml(p.title)}</div>
+                <span class="project-status-pill${p.status === 'archived' ? ' archived' : ''}">${escapeHtml(p.status)}</span>
+              </div>
+            </a>`;
+        }
         const projects = {{ projects | tojson }};
+        const activeProjects = projects.filter(p => p.status === 'wip' || p.status === 'active');
+        const doneProjects = projects.filter(p => p.status !== 'wip' && p.status !== 'active');
+
+        const activeZone = document.getElementById('active-zone');
+        const doneZone = document.getElementById('done-zone');
         const grid = document.getElementById('projects-grid');
+        const doneGrid = document.getElementById('projects-done-grid');
         const featuredContainer = document.getElementById('featured-project');
         const sortSelect = document.getElementById('projects-sort');
         const SORTERS = {
@@ -89,14 +114,13 @@
           az: (a, b) => a.title.localeCompare(b.title),
         };
 
-        // Select a featured project: prefer non-archived with cover_url, fallback to any non-archived
+        // Select a featured project from active set only
         function selectFeaturedProject() {
-          const nonArchived = projects.filter(p => p.status !== 'archived');
-          if (nonArchived.length === 0) return null;
+          if (activeProjects.length === 0) return null;
 
           // Prefer projects with cover images
-          const withCover = nonArchived.filter(p => p.cover_url);
-          const candidates = withCover.length > 0 ? withCover : nonArchived;
+          const withCover = activeProjects.filter(p => p.cover_url);
+          const candidates = withCover.length > 0 ? withCover : activeProjects;
 
           // Random selection
           return candidates[Math.floor(Math.random() * candidates.length)];
@@ -104,20 +128,35 @@
 
         function render() {
           const featured = selectFeaturedProject();
-          const sortedFull = projects.slice().sort(SORTERS[sortSelect.value]);
+          const sortedActive = activeProjects.slice().sort(SORTERS[sortSelect.value]);
+          const sortedDone = doneProjects.slice().sort(SORTERS[sortSelect.value]);
 
-          // Render featured if available
-          if (featured) {
-            featuredContainer.innerHTML = projectCardHtml(featured, true);
+          // Show/hide active zone
+          if (activeProjects.length > 0) {
+            activeZone.style.display = 'block';
+            // Render featured if available
+            if (featured) {
+              featuredContainer.innerHTML = projectCardHtml(featured, true);
+            } else {
+              featuredContainer.innerHTML = '';
+            }
+
+            // Render grid, excluding the featured project
+            const gridProjects = featured
+              ? sortedActive.filter(p => p.slug !== featured.slug)
+              : sortedActive;
+            grid.innerHTML = gridProjects.map(p => projectCardHtml(p, false)).join('');
           } else {
-            featuredContainer.innerHTML = '';
+            activeZone.style.display = 'none';
           }
 
-          // Render grid, excluding the featured project
-          const gridProjects = featured
-            ? sortedFull.filter(p => p.slug !== featured.slug)
-            : sortedFull;
-          grid.innerHTML = gridProjects.map(p => projectCardHtml(p, false)).join('');
+          // Show/hide done zone
+          if (doneProjects.length > 0) {
+            doneZone.style.display = 'block';
+            doneGrid.innerHTML = sortedDone.map(p => projectCompactCardHtml(p)).join('');
+          } else {
+            doneZone.style.display = 'none';
+          }
         }
         sortSelect.addEventListener('change', render);
         render();

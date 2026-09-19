@@ -2,11 +2,8 @@
 
 Named after the Transformers Decepticon that assembles itself out of smaller
 robots — because of what this app is *for*: pulling in individual pieces of
-content (uploads, posts, links) and assembling them into something bigger — a
-**Project**, a **Blog entry**, and ultimately a whole **website**. (It was
-forked and repurposed from
-[imagerepo](https://github.com/ComputerCats-Jason/imagerepo), but that's
-incidental — vestiges of that origin still echo through some field names.)
+content (Images, Art assets, 3dobjects, videos, audio, code snipptest, and links) and assembling them into something bigger — a
+**Project**, a **Blog entry**, and ultimately a whole **website** to be deployed to io
 
 ## What it is
 

@@ -7,6 +7,7 @@ making it suitable for deployment to any static host or viewing offline.
 
 import json
 import shutil
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -246,6 +247,213 @@ def _update_current_pointer(build_dir: Path) -> None:
 
     # Prune: keep only the last 2 timestamped builds
     _prune_old_builds()
+
+
+def publish_build(remote_url, branch, build_dir, work_dir, *, auth_url=None, commit_message=None, author=("Constructicon", "constructicon@localhost")) -> dict:
+    """Publish a build to a git remote repository.
+
+    Args:
+        remote_url: CLEAN git remote URL (no credentials). This is the only URL
+                    ever written to .git/config (as origin), so a token never
+                    lands on disk.
+        auth_url:   Optional network URL used ONLY for the fetch/push subprocess
+                    invocations (may carry a token, e.g.
+                    https://x-access-token:<tok>@github.com/owner/repo.git). It is
+                    passed as an explicit argument each time and never saved as a
+                    remote. Defaults to remote_url (for tokenless remotes like a
+                    local file:// bare repo used in tests).
+        branch: Target branch name (e.g., "master", "main").
+        build_dir: Source directory containing the built files (e.g., exports/current/).
+        work_dir: Working checkout directory (will be cloned/updated here).
+        commit_message: Optional commit message (default: "Publish site <ISO timestamp>").
+        author: Tuple of (name, email) for git commit identity (default: ("Constructicon", "constructicon@localhost")).
+
+    Returns:
+        Dict with keys:
+            - commit: Commit SHA (None if no changes)
+            - files: List of file paths that were in the build
+            - branch: Target branch name
+            - changed: Boolean indicating whether new commit was created
+            - detail: Optional detail message for no-change case
+
+    Raises:
+        RuntimeError: On git operation failure (clone, fetch, reset, commit, push).
+    """
+    build_dir = Path(build_dir)
+    work_dir = Path(work_dir)
+
+    if not build_dir.exists():
+        raise RuntimeError(f"Build directory does not exist: {build_dir}")
+
+    # Ensure work_dir parent exists
+    work_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    # Default commit message with ISO timestamp
+    if commit_message is None:
+        timestamp = datetime.now().isoformat()
+        commit_message = f"Publish site {timestamp}"
+
+    author_name, author_email = author
+
+    # net_url may carry a token; it is only ever passed as an explicit fetch/push
+    # argument, never stored. origin (in .git/config) is always the CLEAN URL.
+    net_url = auth_url or remote_url
+
+    # Ensure a checkout exists with a CLEAN origin. The token is NEVER written to
+    # .git/config: we init locally + set origin to the clean URL, and reach the
+    # network only via `git fetch/push <net_url>` with net_url as an explicit arg.
+    if not (work_dir / ".git").exists():
+        work_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "-C", str(work_dir), "init"], check=True, capture_output=True, text=True, timeout=10)
+        subprocess.run(["git", "-C", str(work_dir), "remote", "add", "origin", remote_url], check=True, capture_output=True, text=True, timeout=10)
+    else:
+        # Reused per-target checkout: force origin back to the clean URL in case an
+        # older build ever persisted a token-bearing one.
+        subprocess.run(["git", "-C", str(work_dir), "remote", "set-url", "origin", remote_url], capture_output=True, text=True, timeout=10)
+
+    # Fetch the current remote branch via net_url (explicit, not saved). Tolerate an
+    # empty/new remote or a branch that doesn't exist there yet.
+    fetch_res = subprocess.run(["git", "-C", str(work_dir), "fetch", net_url, branch], capture_output=True, text=True, timeout=60)
+    if fetch_res.returncode == 0:
+        # Point the local branch at what we just fetched (handles both first sync
+        # and updates), replacing any prior working state.
+        subprocess.run(["git", "-C", str(work_dir), "checkout", "-B", branch, "FETCH_HEAD"], check=True, capture_output=True, text=True, timeout=10)
+    else:
+        # New/empty remote or missing branch: just be on a fresh branch.
+        subprocess.run(["git", "-C", str(work_dir), "checkout", "-B", branch], capture_output=True, text=True, timeout=10)
+
+    # Preserve CNAME if it exists
+    cname_path = work_dir / "CNAME"
+    cname_content = None
+    if cname_path.exists():
+        cname_content = cname_path.read_text()
+
+    # Replace working tree with build contents (except .git)
+    git_dir = work_dir / ".git"
+    if git_dir.exists():
+        # Preserve .git
+        for item in work_dir.iterdir():
+            if item.name != ".git":
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+
+    # Copy build contents
+    for item in build_dir.iterdir():
+        dest = work_dir / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest)
+        else:
+            shutil.copy2(item, dest)
+
+    # Restore CNAME if it was there
+    if cname_content is not None:
+        cname_path.write_text(cname_content)
+
+    # Write .nojekyll
+    (work_dir / ".nojekyll").touch()
+
+    # Collect file list
+    files = []
+    for item in work_dir.rglob("*"):
+        if item.is_file() and not item.relative_to(work_dir).parts[0] == ".git":
+            files.append(str(item.relative_to(work_dir)))
+
+    # Stage all changes
+    try:
+        subprocess.run(
+            ["git", "-C", str(work_dir), "add", "-A"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to stage changes: {e.stderr}") from e
+
+    # Check if there are changes to commit
+    try:
+        status_output = subprocess.run(
+            ["git", "-C", str(work_dir), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to check git status: {e.stderr}") from e
+
+    # If no changes, return early
+    if not status_output.stdout.strip():
+        return {
+            "commit": None,
+            "files": files,
+            "branch": branch,
+            "changed": False,
+            "detail": "No changes to publish"
+        }
+
+    # Commit with per-invocation identity
+    try:
+        subprocess.run(
+            [
+                "git",
+                "-C", str(work_dir),
+                "-c", f"user.name={author_name}",
+                "-c", f"user.email={author_email}",
+                "commit",
+                "-m", commit_message
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to commit: {e.stderr}") from e
+
+    # Get the commit SHA
+    try:
+        commit_output = subprocess.run(
+            ["git", "-C", str(work_dir), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        commit_sha = commit_output.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to get commit SHA: {e.stderr}") from e
+
+    # Push to remote
+    try:
+        subprocess.run(
+            ["git", "-C", str(work_dir), "push", net_url, f"HEAD:{branch}"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.CalledProcessError as e:
+        # Strip token from error message if present
+        error_msg = e.stderr
+        error_msg = _strip_token_from_error(error_msg)
+        raise RuntimeError(f"Failed to push: {error_msg}") from e
+
+    return {
+        "commit": commit_sha,
+        "files": files,
+        "branch": branch,
+        "changed": True,
+    }
+
+
+def _strip_token_from_error(error_msg: str) -> str:
+    """Remove any x-access-token credentials from error messages."""
+    import re
+    # Remove https://x-access-token:<token>@github.com/... patterns
+    return re.sub(r"x-access-token:[^@]+@", "x-access-token:[REDACTED]@", error_msg)
 
 
 def _prune_old_builds(keep: int = 2) -> None:

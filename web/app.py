@@ -907,6 +907,8 @@ KNOWN_SETTINGS = {
     "thingiverse_app_token": "Thingiverse App Token",
     "imgur_client_id": "Imgur Client ID",
     "imgur_username": "Imgur Username",
+    "pages_publish_token": "GitHub Pages Publish Token",
+    "pages_publish_targets": "GitHub Pages Publish Targets",
 }
 
 
@@ -2611,6 +2613,141 @@ def api_export_config():
         return JSONResponse({})
     except Exception:
         return JSONResponse({})
+
+
+@app.get("/api/export/targets")
+def api_export_targets():
+    """Retrieve the configured GitHub Pages publish targets.
+    Returns a dict mapping target names to {repo, branch}.
+    Never returns the token.
+    """
+    default_targets = {
+        "test": {"repo": "hooptiej/constructicon-export-test", "branch": "master"},
+        "live": {"repo": "hooptiej/hooptiej.github.io", "branch": "master"}
+    }
+    try:
+        targets_json = db.get_setting("pages_publish_targets")
+        if targets_json:
+            targets = json.loads(targets_json)
+            return JSONResponse(targets)
+        return JSONResponse(default_targets)
+    except Exception:
+        return JSONResponse(default_targets)
+
+
+@app.post("/api/export/publish")
+async def api_export_publish(request: Request):
+    """Publish the current build to a GitHub Pages repository.
+
+    Request body (JSON):
+    {
+        "target": "test" | "live"
+    }
+
+    Returns:
+    {
+        "target": "test" | "live",
+        "repo": "owner/repo",
+        "branch": "master",
+        "commit": "abc123...",
+        "files": 42,
+        "pages_url": "https://..."
+    }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    target = body.get("target")
+
+    # Guard: token required
+    token = db.get_setting("pages_publish_token")
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="GitHub Pages publish token not configured (see admin settings)"
+        )
+
+    # Guard: target must be known
+    try:
+        targets_json = db.get_setting("pages_publish_targets")
+        if targets_json:
+            targets = json.loads(targets_json)
+        else:
+            targets = {
+                "test": {"repo": "hooptiej/constructicon-export-test", "branch": "master"},
+                "live": {"repo": "hooptiej/hooptiej.github.io", "branch": "master"}
+            }
+    except Exception:
+        targets = {
+            "test": {"repo": "hooptiej/constructicon-export-test", "branch": "master"},
+            "live": {"repo": "hooptiej/hooptiej.github.io", "branch": "master"}
+        }
+
+    if target not in targets:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown publish target: {target!r}"
+        )
+
+    target_config = targets[target]
+    repo = target_config["repo"]
+    branch = target_config["branch"]
+
+    # Guard: current build must exist
+    current_build = Path(__file__).resolve().parent.parent / "exports" / "current"
+    if not current_build.exists() or not list(current_build.iterdir()):
+        raise HTTPException(
+            status_code=400,
+            detail="No current build available (build the site first)"
+        )
+
+    # Clean origin URL (saved in .git/config) vs. the token-bearing URL used only
+    # for the actual network fetch/push (never persisted). See publish_build.
+    clean_url = f"https://github.com/{repo}.git"
+    auth_url = f"https://x-access-token:{token}@github.com/{repo}.git"
+    work_dir = Path(__file__).resolve().parent.parent / "exports" / ".publish" / target
+
+    try:
+        report = site_export.publish_build(
+            clean_url,
+            branch,
+            current_build,
+            work_dir,
+            auth_url=auth_url,
+            commit_message=f"Publish site {datetime.now().isoformat()}",
+            author=("Constructicon", "constructicon@localhost")
+        )
+    except Exception as e:
+        error_msg = str(e)
+        # Strip token from error message
+        error_msg = error_msg.replace(token, "[REDACTED]")
+        error_msg = error_msg.replace(f"x-access-token:{token}@", "x-access-token:[REDACTED]@")
+        print(f"Publish failed for target {target}: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Publish failed: {error_msg}"
+        ) from e
+
+    # Build pages URL
+    if repo.endswith(".github.io"):
+        # User/org pages
+        pages_url = f"https://{repo[:-10]}/"
+    else:
+        # Project pages
+        owner = repo.split("/")[0]
+        repo_name = repo.split("/")[1]
+        pages_url = f"https://{owner}.github.io/{repo_name}/"
+
+    return JSONResponse({
+        "target": target,
+        "repo": repo,
+        "branch": branch,
+        "commit": report["commit"],
+        "files": len(report["files"]),
+        "pages_url": pages_url
+    })
 
 
 # --- Public hotlink (no auth — Hudu/Slack need to fetch this directly) ---

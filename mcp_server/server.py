@@ -57,6 +57,10 @@ def _to_public(row):
         "content_date": row.get("content_date"),
         "display_date_override": row.get("display_date_override"),
         "effective_date": timeline.resolve_item_date(row),
+        # Curator (#341): provenance classification + highlight flag, so every
+        # MCP object read (get_project items, search, list) carries them.
+        "provenance": row.get("provenance"),
+        "highlight": bool(row.get("highlight")),
     }
 
 
@@ -839,6 +843,65 @@ def constructicon_set_agent_notes(slug: str, notes: str | None = None) -> dict |
     # isn't JSON-serializable, so the tool call itself failed for every row
     # that had been through OCR (#211).
     return {**_to_public(row), "agent_notes": row.get("agent_notes")}
+
+
+@mcp.tool()
+def constructicon_set_provenance(slug: str, provenance: str | None = None) -> dict | None:
+    """Set or clear an object's provenance classification (#341).
+
+    Provenance describes how an object came to be captured: "found", "created",
+    "documented", "result" (outcome of a process), "failure" (lesson learned),
+    "reference" (cited or sourced from elsewhere), "design" (drafted/designed).
+    The set is loose and extensible — trim in use as patterns emerge.
+
+    provenance: one of the standard types, a custom value, or None to clear.
+    Returns the updated object (the usual public shape plus "provenance"),
+    or None if not found.
+    """
+    row = db.set_provenance(slug, provenance)
+    if row is None:
+        return None
+    return {**_to_public(row), "provenance": row.get("provenance")}
+
+
+@mcp.tool()
+def constructicon_set_highlight(slug: str, on: bool = False) -> dict | None:
+    """Mark or unmark an object as highlighted (#341).
+
+    Highlight is an orthogonal boolean flag for "cool/unique" objects —
+    featured in project exports and curated views.
+
+    on: True to mark as highlighted, False to clear.
+    Returns the updated object (the usual public shape plus "highlight"),
+    or None if not found.
+    """
+    row = db.set_highlight(slug, on)
+    if row is None:
+        return None
+    return {**_to_public(row), "highlight": row.get("highlight")}
+
+
+@mcp.tool()
+def constructicon_set_project_status(id_or_slug: str, status: str) -> dict | None:
+    """Set a project's lifecycle status (#341).
+
+    Status conditions scoring and nudging in the Curator system: "wip" (work
+    in progress, scored leniently), "complete" (finished, strict scoring),
+    "shelved" (paused), "means-to-an-end" (an intermediate step for something
+    else), "abandoned" (discontinued), "idea" (pre-start thinking), "published"
+    (live site version), "reference-only" (external link, not authored here).
+    Existing "active" rows are equivalent to "wip".
+
+    The set is loose and extensible — trim in use as patterns emerge.
+
+    id_or_slug: project ID or slug.
+    status: the new status value.
+    Returns the updated project dict, or None if not found.
+    """
+    project = db.update_project(id_or_slug, status=status)
+    if project is None:
+        return None
+    return _to_public_project(project)
 
 
 if __name__ == "__main__":

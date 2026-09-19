@@ -322,6 +322,11 @@ def _to_public(row):
         "caption_capable": captions.should_caption(spec),
         "artifact_link": row["artifact_link"],
         "type_metadata": row.get("type_metadata", {}),
+        # Curator (#341): object provenance classification + highlight flag, so
+        # every object response (gallery/detail/update) carries them for the UI
+        # and the completeness scoring/export to read.
+        "provenance": row.get("provenance"),
+        "highlight": bool(row.get("highlight")),
     }
 
 
@@ -1705,6 +1710,8 @@ async def api_update_image(
     content_date: float | None = Form(None),
     display_date: str | None = Form(None),
     reset_display_date: bool = Form(False),
+    provenance: str | None = Form(None),
+    highlight: str | None = Form(None),
 ):
     # #213 / A5 fix: only parse and pass tags if they were actually provided
     # in the form. Defaults of None mean "don't touch this field", allowing
@@ -1776,6 +1783,17 @@ async def api_update_image(
         # the stored time by several hours.
         db.set_display_date_override(slug, timeline.source_datetime_to_epoch(datetime.fromisoformat(display_date)))
         row = db.get_by_slug(slug)
+    # provenance (#341): like display_name/icon, read the raw form so ""
+    # clears the value (None-means-"don't change" convention applies here too).
+    # form_data already read above, reuse it.
+    if "provenance" in form_data:
+        raw_provenance = form_data.get("provenance") if form_data.get("provenance") else None
+        row = db.set_provenance(slug, raw_provenance)
+    # highlight (#341): truthy form value (any non-empty string) marks it as
+    # highlighted, empty/missing means off.
+    if "highlight" in form_data:
+        raw_highlight = form_data.get("highlight")
+        row = db.set_highlight(slug, bool(raw_highlight))
     return JSONResponse(_to_public(row))
 
 

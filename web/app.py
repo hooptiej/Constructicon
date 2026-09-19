@@ -1189,6 +1189,45 @@ def unfiled_page(request: Request):
     )
 
 
+@app.get("/hobbies", response_class=HTMLResponse)
+def hobbies_page(request: Request):
+    """Hobbies listing page (#360) showing all hobby interests."""
+    return templates.TemplateResponse(request, "hobbies.html", {})
+
+
+@app.get("/hobby/{slug}", response_class=HTMLResponse)
+def hobby_detail_page(request: Request, slug: str):
+    """Hobby detail page (#360) showing metadata, member projects, and attached objects."""
+    hobby = db.get_hobby(slug)
+    if hobby is None:
+        raise HTTPException(status_code=404, detail="hobby not found")
+
+    projects = db.list_projects_for_hobby(hobby["id"])
+    items = db.list_posts_for_tag(hobby["id"], include_descendants=False)
+
+    return templates.TemplateResponse(
+        request, "hobby.html",
+        {
+            "hobby": {
+                "id": hobby["id"],
+                "name": hobby["name"],
+                "slug": hobby["slug"],
+                "status": hobby.get("hobby_status", "active"),
+                "projects": [
+                    {
+                        "id": p["id"],
+                        "slug": p["slug"],
+                        "title": p["title"],
+                        "status": p["status"],
+                    }
+                    for p in projects
+                ],
+                "items": [_to_object_detail(item) for item in items],
+            },
+        },
+    )
+
+
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str):
     rows = db.search(uploaded_by=uploader, limit=1000)

@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% block title %}Curator — Constructicon{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+
+<div class="app-main">
+  <div>
+    <h1 class="page-title">Curator Dashboard</h1>
+    <p class="page-subtitle">State of the beast: project health scores, status distribution, and gap buckets.</p>
+  </div>
+
+  <div class="curator-grid">
+
+    <!-- Summary Stats -->
+    <section class="curator-panel">
+      <div class="curator-panel-header">
+        <h2>Summary</h2>
+      </div>
+      <div class="curator-stats">
+        <div class="stat-tile">
+          <div class="stat-label">Projects by Status</div>
+          <div id="curator-status-list" class="status-list"></div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">Average Health (Live Projects)</div>
+          <div id="curator-avg-health" class="health-score">—</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">Unfiled Objects</div>
+          <div id="curator-unfiled-count" class="unfiled-count">—</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Gap Buckets -->
+    <section class="curator-panel">
+      <div class="curator-panel-header">
+        <h2>Failing Checks (Gap Buckets)</h2>
+        <div class="curator-row-hint">Which specific checks are most commonly failing across projects</div>
+      </div>
+      <div id="curator-gap-buckets" class="gap-buckets-list"></div>
+    </section>
+
+    <!-- Project Scores -->
+    <section class="curator-panel full-width">
+      <div class="curator-panel-header">
+        <h2>Individual Project Scores</h2>
+      </div>
+      <div id="curator-project-scores" class="project-scores-list"></div>
+    </section>
+
+  </div>
+</div>
+
+<style>
+.curator-grid {
+  display: grid;
+  gap: 2rem;
+  margin-top: 2rem;
+}
+
+.curator-panel {
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 8px;
+  padding: 1.5rem;
+  background: var(--card-bg, #fff);
+}
+
+.curator-panel.full-width {
+  grid-column: 1 / -1;
+}
+
+.curator-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.curator-panel-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.curator-row-hint {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #666);
+  margin-top: 0.25rem;
+}
+
+.curator-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.stat-tile {
+  padding: 1rem;
+  background: var(--panel-bg, #f9f9f9);
+  border-radius: 6px;
+}
+
+.stat-label {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--text-secondary, #666);
+  margin-bottom: 0.5rem;
+}
+
+.health-score {
+  font-size: 2rem;
+  font-weight: bold;
+  color: var(--primary-color, #2196f3);
+}
+
+.status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.status-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+}
+
+.status-label {
+  font-weight: 500;
+}
+
+.status-count {
+  color: var(--text-secondary, #666);
+}
+
+.gap-buckets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.gap-bucket-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem;
+  background: var(--panel-bg, #f9f9f9);
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.gap-bucket-check {
+  font-weight: 500;
+  flex: 1;
+}
+
+.gap-bucket-count {
+  font-weight: bold;
+  color: var(--error-color, #f44336);
+  min-width: 2rem;
+  text-align: right;
+}
+
+.project-scores-list {
+  display: grid;
+  gap: 1rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.project-score-item {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem;
+  background: var(--panel-bg, #f9f9f9);
+  border-radius: 4px;
+  border-left: 4px solid;
+}
+
+.project-score-item.green {
+  border-left-color: #4caf50;
+}
+
+.project-score-item.yellow {
+  border-left-color: #ff9800;
+}
+
+.project-score-item.red {
+  border-left-color: #f44336;
+}
+
+.project-score-title {
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.project-score-title-link {
+  color: var(--link-color, #2196f3);
+  text-decoration: none;
+}
+
+.project-score-title-link:hover {
+  text-decoration: underline;
+}
+
+.project-status-badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  background: var(--badge-bg, #e0e0e0);
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--badge-text, #333);
+}
+
+.project-score-gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.project-score-value {
+  font-size: 1.25rem;
+  font-weight: bold;
+  min-width: 3rem;
+  text-align: center;
+}
+
+.project-score-bar {
+  width: 80px;
+  height: 6px;
+  background: var(--border-color, #e0e0e0);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.project-score-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.project-score-fill.green {
+  background: #4caf50;
+}
+
+.project-score-fill.yellow {
+  background: #ff9800;
+}
+
+.project-score-fill.red {
+  background: #f44336;
+}
+</style>
+
+<script>
+async function loadCuratorDashboard() {
+  try {
+    const response = await fetch('/api/curator/dashboard');
+    const data = await response.json();
+    renderCuratorDashboard(data);
+  } catch (error) {
+    console.error('Failed to load curator dashboard:', error);
+    document.getElementById('curator-status-list').innerHTML = '<div class="error">Failed to load data</div>';
+  }
+}
+
+function renderCuratorDashboard(data) {
+  // Projects by status
+  const statusList = document.getElementById('curator-status-list');
+  const statusHtml = Object.entries(data.projects_by_status || {})
+    .sort()
+    .map(([status, count]) => `
+      <div class="status-item">
+        <span class="status-label">${status}</span>
+        <span class="status-count">${count}</span>
+      </div>
+    `).join('');
+  statusList.innerHTML = statusHtml || '<div>No projects</div>';
+
+  // Average health
+  const avgHealth = data.average_health || 0;
+  const healthElement = document.getElementById('curator-avg-health');
+  healthElement.textContent = Math.round(avgHealth);
+  const healthBand = avgHealth >= 80 ? 'green' : avgHealth >= 50 ? 'yellow' : 'red';
+  healthElement.style.color = {green: '#4caf50', yellow: '#ff9800', red: '#f44336'}[healthBand];
+
+  // Unfiled count
+  document.getElementById('curator-unfiled-count').textContent = data.unfiled_count || 0;
+
+  // Gap buckets
+  const gapBucketsEl = document.getElementById('curator-gap-buckets');
+  const sortedGaps = Object.entries(data.gap_buckets || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 15); // Top 15
+
+  const gapHtml = sortedGaps.map(([check, count]) => `
+    <div class="gap-bucket-item">
+      <div class="gap-bucket-check">${check}</div>
+      <div class="gap-bucket-count">${count}</div>
+    </div>
+  `).join('');
+  gapBucketsEl.innerHTML = gapHtml || '<div>No failing checks</div>';
+
+  // Project scores
+  const scoresEl = document.getElementById('curator-project-scores');
+  const scores = (data.all_project_scores || [])
+    .sort((a, b) => b.score - a.score);
+
+  const scoresHtml = scores.map(score => `
+    <div class="project-score-item ${score.band}" title="${score.unmet.map(u => u.dimension + ':' + u.item).join(', ')}">
+      <div class="project-score-title">
+        <a href="/project/${score.slug}" class="project-score-title-link">${score.title}</a>
+        <span class="project-status-badge">${score.status}</span>
+        ${score.silent ? '<span class="project-status-badge" style="background: #999;">silent</span>' : ''}
+      </div>
+      <div class="project-score-gauge">
+        <div class="project-score-value">${score.score}%</div>
+        <div class="project-score-bar">
+          <div class="project-score-fill ${score.band}" style="width: ${score.score}%"></div>
+        </div>
+      </div>
+      <div style="text-align: right; font-size: 0.875rem; color: var(--text-secondary, #666);">
+        ${Math.round(score.earned)}/${Math.round(score.applicable)}
+      </div>
+    </div>
+  `).join('');
+  scoresEl.innerHTML = scoresHtml || '<div>No projects</div>';
+}
+
+// Load on page load
+document.addEventListener('DOMContentLoaded', loadCuratorDashboard);
+</script>
+
+{% endblock %}

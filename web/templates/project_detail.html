@@ -48,6 +48,21 @@
         {% if project.status not in PROJECT_STATUSES %}<option value="{{ project.status }}" selected>{{ project.status }} (legacy)</option>{% endif %}
       </select>
       <p class="status-confirm" id="status-confirm" style="display:none;font-size:12px;color:#6E6B57;margin:0">Saved.</p>
+      {# Curator Stage 2: per-project health indicator #}
+      {% if project_score %}
+      {% set _applicable = project_score.checklist | rejectattr('excused') | list %}
+      {% set _passed = _applicable | selectattr('passed') | list %}
+      {% if project_score.silent %}
+      <span class="project-health-badge" title="Status '{{ project_score.status }}' is not scored by the Curator" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#6E6B57">
+        <span style="width:9px;height:9px;border-radius:50%;background:#B9B4A0"></span>not scored
+      </span>
+      {% else %}
+      <span class="project-health-badge" title="Curator health: {{ _passed|length }} of {{ _applicable|length }} checks passed{% if project_score.unmet %} — missing: {% for u in project_score.unmet %}{{ u.dimension }}/{{ u.item }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600">
+        <span style="width:9px;height:9px;border-radius:50%;background:{% if project_score.band=='green' %}#3FA34D{% elif project_score.band=='yellow' %}#D9A400{% else %}#C0392B{% endif %}"></span>
+        {{ project_score.score }}% · {{ _passed|length }}/{{ _applicable|length }}
+      </span>
+      {% endif %}
+      {% endif %}
     </div>
     <div class="hazard-stripe" style="width:64px"></div>
     {% if cover_url %}

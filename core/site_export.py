@@ -34,6 +34,47 @@ def _youtube_embed_url(url):
     return f"https://www.youtube.com/embed/{vid}" if vid else None
 
 
+def _bundle_item_media(item, media_dir, copied_slugs, warnings):
+    """Bundle one item's media into media_dir and set its display fields.
+
+    Sets on the item dict:
+      - embed_url: YouTube /embed URL (or None)
+      - media_file: filename of the copied original (e.g. "<slug>.stl"), or None
+      - thumb_file: filename of the copied rendered thumbnail ("<slug>_thumb.jpg"),
+        or None. Every previewable type has a thumbnail (what /f/<slug>/thumb
+        serves); the templates display it for types whose original isn't a
+        web-native image (#333).
+    Copies each file at most once per slug (an item can appear in several
+    projects/entries). Returns the number of NEW files copied."""
+    item["embed_url"] = _youtube_embed_url(item.get("external_url"))
+    item["media_file"] = None
+    item["thumb_file"] = None
+    slug = item["slug"]
+    first = slug not in copied_slugs
+    n = 0
+
+    stored = item.get("stored_filename")
+    if stored:
+        src = storage.path_for(stored)
+        if src.exists():
+            item["media_file"] = f"{slug}{Path(stored).suffix}"
+            if first:
+                shutil.copy2(src, media_dir / item["media_file"])
+                n += 1
+        else:
+            warnings.append(f"Media file missing: {stored} for item '{slug}'")
+
+    thumb_src = storage.thumb_path_for(slug)
+    if thumb_src.exists():
+        item["thumb_file"] = f"{slug}_thumb.jpg"
+        if first:
+            shutil.copy2(thumb_src, media_dir / item["thumb_file"])
+            n += 1
+
+    copied_slugs.add(slug)
+    return n
+
+
 EXPORTS_DIR = Path(__file__).resolve().parent.parent / "exports"
 EXPORT_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "web" / "export_templates"
 
@@ -117,46 +158,17 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         if not entry_items[entry_id]:
             warnings.append(f"Blog entry '{blog_entries_dict[entry_id]['slug']}' has no attachments")
 
-    # Enrich every rendered item with a ready YouTube embed URL so the templates
-    # don't have to parse links themselves (#331). None for non-YouTube items.
-    for _item_list in list(project_items.values()) + list(entry_items.values()):
-        for _it in _item_list:
-            _it["embed_url"] = _youtube_embed_url(_it.get("external_url"))
-
     # Create media directory
     media_dir = out_dir / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy media files for projects
-    all_items = {}  # slug -> item dict (for lookups)
-    for items_list in project_items.values():
+    # Bundle each rendered item's media (original + rendered thumbnail) and set
+    # its display fields (embed_url / media_file / thumb_file). One copy per slug
+    # even if the item appears in multiple projects/entries (#333).
+    copied_slugs = set()
+    for items_list in list(project_items.values()) + list(entry_items.values()):
         for item in items_list:
-            all_items[item["slug"]] = item
-            if item.get("stored_filename"):
-                src = storage.path_for(item["stored_filename"])
-                if src.exists():
-                    # Preserve the file extension
-                    ext = Path(item["stored_filename"]).suffix
-                    dest = media_dir / f"{item['slug']}{ext}"
-                    shutil.copy2(src, dest)
-                    media_count += 1
-                else:
-                    warnings.append(f"Media file missing: {item['stored_filename']} for item '{item['slug']}'")
-
-    # Copy media files for blog entries
-    for items_list in entry_items.values():
-        for item in items_list:
-            all_items[item["slug"]] = item
-            if item.get("stored_filename"):
-                src = storage.path_for(item["stored_filename"])
-                if src.exists():
-                    ext = Path(item["stored_filename"]).suffix
-                    dest = media_dir / f"{item['slug']}{ext}"
-                    if not dest.exists():  # Don't overwrite if already copied
-                        shutil.copy2(src, dest)
-                        media_count += 1
-                else:
-                    warnings.append(f"Media file missing: {item['stored_filename']} for item '{item['slug']}'")
+            media_count += _bundle_item_media(item, media_dir, copied_slugs, warnings)
 
     # Set up Jinja2 environment
     env = Environment(

@@ -25,7 +25,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
+from core import automatch, backup, captions, curator, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES
 
 app = FastAPI()
@@ -1143,6 +1143,10 @@ def project_detail_page(request: Request, slug: str):
             "date_display": start_display if start_display == end_display else f"{start_display} – {end_display}",
         })
     grid_entries.sort(key=lambda entry: entry["sort_date"])
+
+    # Curator Stage 2: per-project health score
+    project_score = curator.score_project(project)
+
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
@@ -1158,6 +1162,7 @@ def project_detail_page(request: Request, slug: str):
             "timeline_items": timeline_items,
             "timeline_children": timeline_children,
             "PROJECT_STATUSES": PROJECT_STATUSES,
+            "project_score": project_score,
         },
     )
 
@@ -1238,6 +1243,15 @@ def admin_page(request: Request):
     captions/test, backup, delete-all) -- the page itself carries no data,
     the JS fetches it, so there's nothing to pass in here."""
     return templates.TemplateResponse(request, "admin.html", {})
+
+
+@app.get("/curator", response_class=HTMLResponse)
+def curator_dashboard_page(request: Request):
+    """Curator Stage 2 dashboard: state of the beast. Displays aggregate
+    project health scoring, project status distribution, and gap buckets
+    (which checks are failing most frequently). The page loads the dashboard
+    data via /api/curator/dashboard."""
+    return templates.TemplateResponse(request, "curator.html", {})
 
 
 # --- API ---
@@ -2243,6 +2257,22 @@ def api_export_project(project_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# --- Curator (Stage 2) ---
+
+@app.get("/api/curator/dashboard")
+def api_curator_dashboard(request: Request):
+    """Curator Stage 2 dashboard: aggregate project health scoring.
+
+    Returns:
+        - projects_by_status: count per effective status
+        - average_health: average score of LIVE projects (wip/complete/published)
+        - gap_buckets: counts of projects failing each specific check
+        - unfiled_count: count of capture_events not in any project
+        - all_project_scores: detailed scoring for every project
+    """
+    return JSONResponse(curator.score_all_projects())
 
 
 # --- Blog Entries API ---

@@ -128,13 +128,21 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
             if p:
                 projects[p["id"]] = p
 
-    # Gather project items
+    # Gather project items + write-up bodies. The write-up lives in a separate
+    # document row referenced by writeup_slug (its type_metadata.body); the
+    # project row itself doesn't carry it, so fetch it here and attach it as
+    # project["writeup"] for the template (#337, same pattern as project_export).
     project_items = {}  # project_id -> list of items
-    for project_id in projects:
+    for project_id, project in projects.items():
         items = db.list_project_items(project_id)
         project_items[project_id] = items
         if not items:
-            warnings.append(f"Project '{projects[project_id]['slug']}' has no items")
+            warnings.append(f"Project '{project['slug']}' has no items")
+        project["writeup"] = ""
+        if project.get("writeup_slug"):
+            doc = db.get_by_slug(project["writeup_slug"])
+            if doc:
+                project["writeup"] = doc.get("type_metadata", {}).get("body", "") or ""
 
     # Gather blog entries
     if blog_entry_slugs is None:

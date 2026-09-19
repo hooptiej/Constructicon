@@ -23,6 +23,26 @@ _UNMET_TO_NUDGE = {
 }
 
 
+# Effort rank per nudge kind: lower = quicker/easier to resolve, so it floats
+# to the top of the queue (momentum — knock out the one-click wins first).
+# Impact (priority) breaks ties within a tier, so within "easy" the most
+# important quick win still leads.
+_EFFORT_RANK = {
+    "confirm_caption": 1,     # accept a suggestion
+    "confirm_automatch": 1,   # confirm a match
+    "no_highlight": 1,        # one-click flag
+    "missing_cover": 2,       # pick a cover image
+    "stale_wip": 2,           # one status decision
+    "weak_connections": 2,    # add a tag / link
+    "missing_dates": 3,       # date items
+    "timeline_gap": 3,        # acknowledge / add footage
+    "thin_captions": 4,       # caption many items
+    "missing_writeup": 5,     # write a narrative
+    "unfiled_objects": 5,     # file a pile of objects
+}
+_DEFAULT_EFFORT = 3
+
+
 def _status_weight(status):
     """Compute the status_weight used in priority ranking.
     status is the normalized status from curator.score_project()."""
@@ -227,7 +247,9 @@ def list_needs():
     # Sort by priority DESC, tie-break by target recency (created_at of project/item),
     # then by id if still tied
     def sort_key(nudge):
-        # Priority DESC
+        # Easy-first: lower effort floats to the top (quick wins first).
+        effort = _EFFORT_RANK.get(nudge["kind"], _DEFAULT_EFFORT)
+        # Within an effort tier, higher impact leads (priority DESC).
         priority = -nudge["priority"]
 
         # Target recency (newest first = smallest epoch last, so negate)
@@ -244,7 +266,7 @@ def list_needs():
                 recency = -project["created_at"]
 
         # Nudge key as final tiebreaker (lexicographic)
-        return (priority, recency, nudge["nudge_key"])
+        return (effort, priority, recency, nudge["nudge_key"])
 
     nudges.sort(key=sort_key)
     return nudges

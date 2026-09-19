@@ -1156,6 +1156,9 @@ def project_detail_page(request: Request, slug: str):
     # Curator Stage 2: per-project health score
     project_score = curator.score_project(project)
 
+    # Fetch hobbies this project is in (#365)
+    project_hobbies = db.list_hobbies_for_project(project["id"])
+
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
@@ -1172,6 +1175,7 @@ def project_detail_page(request: Request, slug: str):
             "timeline_children": timeline_children,
             "PROJECT_STATUSES": PROJECT_STATUSES,
             "project_score": project_score,
+            "project_hobbies": [{"id": h["id"], "name": h["name"], "slug": h["slug"]} for h in project_hobbies],
         },
     )
 

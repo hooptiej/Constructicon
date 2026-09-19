@@ -2332,16 +2332,19 @@ def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | flo
     snooze_epoch = None
 
     if snooze_until is not None:
-        if isinstance(snooze_until, str):
-            # Try to parse as ISO 8601
-            try:
-                dt = datetime.fromisoformat(snooze_until)
-                snooze_epoch = dt.timestamp()
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid snooze_until datetime")
-        else:
-            # Assume it's already a float epoch
+        if isinstance(snooze_until, (int, float)):
             snooze_epoch = float(snooze_until)
+        else:
+            # Form values always arrive as strings; accept either an epoch
+            # timestamp ("1789856789.1") or an ISO 8601 datetime.
+            s = str(snooze_until).strip()
+            try:
+                snooze_epoch = float(s)
+            except ValueError:
+                try:
+                    snooze_epoch = datetime.fromisoformat(s).timestamp()
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="snooze_until must be an epoch timestamp or ISO 8601 datetime")
 
     db.add_curator_dismissal(nudge_key, action, snooze_until=snooze_epoch)
     return JSONResponse({"ok": True})

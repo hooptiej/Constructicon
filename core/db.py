@@ -1376,6 +1376,12 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
     conn = get_conn()
     try:
         slug = _slugify(title)
+        # Never mint a purely-numeric slug: get_project treats an all-digits
+        # string as an id (it must — project_id arrives as a numeric string in
+        # many Form-based callers), so a slug like "2" would be shadowed by
+        # id lookup and unreachable by slug (#320, sibling of #318).
+        if slug.isdigit():
+            slug = f"{slug}-project"
         base_slug = slug
         n = 2
         while conn.execute("SELECT 1 FROM projects WHERE slug = ?", (slug,)).fetchone():

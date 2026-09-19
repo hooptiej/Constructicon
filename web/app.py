@@ -2212,6 +2212,234 @@ def api_export_project(project_id: str):
     )
 
 
+# --- Blog Entries API ---
+
+def _to_blog_entry_detail(entry):
+    """Full detail shape for GET /api/blog-entries/{slug}, including hydrated
+    projects and items. Same structure as the db layer returns but with
+    attached project and item details."""
+    projects = db.list_entry_projects(entry["id"])
+    items = db.list_entry_items(entry["id"])
+    return {
+        "id": entry["id"],
+        "slug": entry["slug"],
+        "title": entry["title"],
+        "subtitle": entry.get("subtitle", ""),
+        "body": entry.get("body", ""),
+        "status": entry["status"],
+        "cover_slug": entry.get("cover_slug"),
+        "content_date": entry.get("content_date"),
+        "created_at": entry["created_at"],
+        "updated_at": entry["updated_at"],
+        # Layer the per-attachment note + sort_order (from list_entry_projects/
+        # _items) on top of the standard project/object shape — the reshaping
+        # helpers don't carry them, but they're the point of the attachment.
+        "projects": [{**_to_project_option(p), "note": p.get("note", ""), "sort_order": p.get("sort_order")} for p in projects],
+        "items": [{**_to_content_public(i), "note": i.get("note", ""), "sort_order": i.get("sort_order")} for i in items],
+    }
+
+
+@app.get("/api/blog-entries")
+def api_list_blog_entries(request: Request, status: str = ""):
+    """List all blog entries, optionally filtered by status (draft/published/etc).
+    Returns a list of entry metadata without hydrated projects/items."""
+    entries = db.list_blog_entries(status=status if status else None)
+    return JSONResponse([
+        {
+            "id": e["id"],
+            "slug": e["slug"],
+            "title": e["title"],
+            "subtitle": e.get("subtitle", ""),
+            "status": e["status"],
+            "cover_slug": e.get("cover_slug"),
+            "content_date": e.get("content_date"),
+            "created_at": e["created_at"],
+            "updated_at": e["updated_at"],
+        }
+        for e in entries
+    ])
+
+
+@app.get("/api/blog-entries/{slug}")
+def api_get_blog_entry(request: Request, slug: str):
+    """Get a single blog entry by slug with full hydration: projects and items."""
+    entry = db.get_blog_entry(slug)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Blog entry not found")
+    return JSONResponse(_to_blog_entry_detail(entry))
+
+
+@app.post("/api/blog-entries")
+def api_create_blog_entry(
+    request: Request,
+    title: str = Form(...),
+    subtitle: str = Form(""),
+    body: str = Form(""),
+    status: str = Form("draft"),
+    cover_slug: str = Form(None),
+    content_date: str = Form(None),
+):
+    """Create a new blog entry. title is required; others are optional.
+    content_date, if provided, is parsed from a timestamp string."""
+    title = title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+
+    # Parse content_date if provided
+    parsed_content_date = None
+    if content_date:
+        try:
+            parsed_content_date = float(content_date)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid content_date format")
+
+    entry = db.create_blog_entry(
+        title=title,
+        subtitle=subtitle,
+        body=body,
+        status=status,
+        cover_slug=cover_slug,
+        content_date=parsed_content_date,
+    )
+    return JSONResponse(_to_blog_entry_detail(entry))
+
+
+@app.post("/api/blog-entries/{slug}")
+async def api_update_blog_entry(
+    request: Request,
+    slug: str,
+    title: str | None = Form(None),
+    subtitle: str | None = Form(None),
+    body: str | None = Form(None),
+    status: str | None = Form(None),
+):
+    """Update a blog entry. Only the fields present in the form are touched;
+    title/subtitle/body/status default to None ("leave unchanged").
+
+    cover_slug and content_date are tri-state, read from the raw form the same
+    way #244 does for display_name/icon: a field absent from the form is left
+    unchanged; present-but-empty ("") clears it; a value sets it. FastAPI's
+    Form(None) collapses "absent" and "empty" to the same None, which is why
+    these two are read via request.form() membership instead."""
+    entry = db.get_blog_entry(slug)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Blog entry not found")
+
+    form_data = await request.form()
+
+    cover_slug = ...  # Ellipsis => leave unchanged (db.update_blog_entry's sentinel)
+    if "cover_slug" in form_data:
+        raw_cover = form_data.get("cover_slug")
+        cover_slug = raw_cover if raw_cover else None
+
+    content_date = ...
+    if "content_date" in form_data:
+        raw_date = form_data.get("content_date")
+        if raw_date:
+            try:
+                content_date = float(raw_date)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="Invalid content_date format")
+        else:
+            content_date = None
+
+    updated = db.update_blog_entry(
+        slug,
+        title=title,
+        subtitle=subtitle,
+        body=body,
+        status=status,
+        cover_slug=cover_slug,
+        content_date=content_date,
+    )
+
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Blog entry not found")
+
+    return JSONResponse(_to_blog_entry_detail(updated))
+
+
+@app.delete("/api/blog-entries/{slug}")
+def api_delete_blog_entry(slug: str):
+    """Delete a blog entry and its attached projects/items."""
+    entry = db.get_blog_entry(slug)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Blog entry not found")
+
+    db.delete_blog_entry(slug)
+    return JSONResponse({"deleted": True})
+
+
+@app.put("/api/blog-entries/{slug}/projects")
+async def api_set_blog_entry_projects(
+    request: Request,
+    slug: str,
+):
+    """Set the ordered list of projects attached to a blog entry.
+    Body should be JSON: [{"project_id": ..., "note": "..."}, ...]"""
+    entry = db.get_blog_entry(slug)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Blog entry not found")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    if not isinstance(body, list):
+        raise HTTPException(status_code=400, detail="Expected a JSON array")
+
+    # Convert to (project_id, note) tuples
+    items = []
+    for item in body:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="Each item must be a dict")
+        project_id = item.get("project_id")
+        note = item.get("note", "")
+        if project_id is None:
+            raise HTTPException(status_code=400, detail="project_id is required")
+        items.append((project_id, note))
+
+    db.set_entry_projects(entry["id"], items)
+    updated = db.get_blog_entry(slug)
+    return JSONResponse(_to_blog_entry_detail(updated))
+
+
+@app.put("/api/blog-entries/{slug}/items")
+async def api_set_blog_entry_items(
+    request: Request,
+    slug: str,
+):
+    """Set the ordered list of items (posts) attached to a blog entry.
+    Body should be JSON: [{"slug": "...", "note": "..."}, ...]"""
+    entry = db.get_blog_entry(slug)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Blog entry not found")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    if not isinstance(body, list):
+        raise HTTPException(status_code=400, detail="Expected a JSON array")
+
+    # Convert to (post_slug, note) tuples
+    items = []
+    for item in body:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="Each item must be a dict")
+        post_slug = item.get("slug")
+        note = item.get("note", "")
+        if post_slug is None:
+            raise HTTPException(status_code=400, detail="slug is required")
+        items.append((post_slug, note))
+
+    db.set_entry_items(entry["id"], items)
+    updated = db.get_blog_entry(slug)
+    return JSONResponse(_to_blog_entry_detail(updated))
+
+
 def _attach_to_project(slug, project_id):
     """Shared by /api/upload and /api/content: adds the new row to the given
     project's curated item list (so it shows up on the project's own detail

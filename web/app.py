@@ -25,7 +25,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, thumbnails, timeline
+from core import automatch, backup, captions, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
 
 app = FastAPI()
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -37,6 +37,13 @@ app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 _BRAND_DIR = Path(__file__).resolve().parent.parent / "assets" / "brand"
 if _BRAND_DIR.is_dir():
     app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
+
+# Preview mount for exported sites — points to the current build directory.
+# Ensure the directory exists (even if empty) so the mount doesn't fail at startup.
+_PREVIEW_DIR = Path(__file__).resolve().parent.parent / "exports" / "current"
+_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/preview", StaticFiles(directory=_PREVIEW_DIR, html=True), name="preview")
+
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 
@@ -2551,6 +2558,42 @@ def api_search(request: Request, query: str = "", tags: str = "", client: str = 
     tag_list = [t for t in tags.split(",") if t] or None
     results = db.search(query=query or None, tags=tag_list, client=client or None)
     return JSONResponse([_to_public(r) for r in results])
+
+
+# --- Site export (generate static site for deployment) ---
+
+@app.post("/api/export/build")
+async def api_export_build(request: Request):
+    """Build a static website from the selected projects and blog entries.
+
+    Request body (JSON):
+    {
+        "project_slugs": ["slug1", "slug2"] (optional, defaults to all active),
+        "blog_entry_slugs": ["slug1", "slug2"] (optional, defaults to all ready),
+        "site": {
+            "title": "...",
+            "tagline": "..."
+        }
+    }
+
+    Returns the build report with project/entry/media counts and any warnings.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    try:
+        report = site_export.build_site(body)
+        return JSONResponse(report)
+    except Exception as e:
+        print(f"Build failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=500
+        )
 
 
 # --- Public hotlink (no auth — Hudu/Slack need to fetch this directly) ---

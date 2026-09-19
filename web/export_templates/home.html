@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}{{ site_title }}{% endblock %}
+
+{% block content %}
+<section class="home">
+    <h2>Projects</h2>
+    {% if projects %}
+    <ul class="project-list">
+        {% for project in projects %}
+        <li><a href="{{ root | default('') }}projects/{{ project.slug }}.html">{{ project.title }}</a></li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p>No projects to display.</p>
+    {% endif %}
+
+    <h2>Blog</h2>
+    {% if blog_entries %}
+    <ul class="blog-list">
+        {% for entry in blog_entries %}
+        <li><a href="{{ root | default('') }}blog/{{ entry.slug }}.html">{{ entry.title }}</a></li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p>No blog entries to display.</p>
+    {% endif %}
+</section>
+{% endblock %}

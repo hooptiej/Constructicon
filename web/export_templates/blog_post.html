@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}{{ entry.title }} - {{ site_title }}{% endblock %}
+
+{% block content %}
+<section class="blog-post">
+    <h2>{{ entry.title }}</h2>
+    {% if entry.subtitle %}<p class="subtitle">{{ entry.subtitle }}</p>{% endif %}
+
+    {% if entry.body %}
+    <div class="post-body">
+        {{ entry.body | safe }}
+    </div>
+    {% endif %}
+
+    {% if projects %}
+    <section class="entry-projects">
+        <h3>Related Projects</h3>
+        <ul>
+        {% for project in projects %}
+            <li>
+                <a href="{{ root | default('') }}projects/{{ project.slug }}.html">{{ project.title }}</a>
+                {% if project.note %}<p class="note">{{ project.note }}</p>{% endif %}
+            </li>
+        {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+
+    {% if items %}
+    <section class="entry-items">
+        <h3>Attachments</h3>
+        <div class="items">
+        {% for item in items %}
+            <div class="item">
+                {% if item.stored_filename %}
+                {% set media_slug = item.slug %}
+                {% set file_ext = item.stored_filename.rsplit('.', 1)[-1] if '.' in item.stored_filename else '' %}
+                <img src="{{ root | default('') }}media/{{ media_slug }}.{{ file_ext }}" alt="{{ item.display_name or item.filename or item.slug }}" class="item-media">
+                {% elif item.external_url %}
+                {% if 'youtube' in item.external_url or 'youtu.be' in item.external_url %}
+                <div class="youtube-embed">
+                    <iframe width="560" height="315" src="https://www.youtube.com/embed/{{ item.external_url.split('/')[-1].split('?')[0] }}" frameborder="0" allowfullscreen></iframe>
+                </div>
+                {% else %}
+                <a href="{{ item.external_url }}" target="_blank">{{ item.display_name or item.external_url }}</a>
+                {% endif %}
+                {% endif %}
+
+                {% if item.note or item.display_name or item.description %}
+                <div class="item-info">
+                    {% if item.display_name %}<h4>{{ item.display_name }}</h4>{% endif %}
+                    {% if item.note %}<p class="note">{{ item.note }}</p>{% endif %}
+                    {% if item.description %}<p>{{ item.description }}</p>{% endif %}
+                </div>
+                {% endif %}
+            </div>
+        {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    <p><a href="index.html">&laquo; Back to Blog</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Projects - {{ site_title }}{% endblock %}
+
+{% block content %}
+<section class="projects-index">
+    <h2>All Projects</h2>
+    {% if projects %}
+    <ul class="projects-list">
+        {% for project in projects %}
+        <li>
+            <a href="{{ project.slug }}.html">{{ project.title }}</a>
+            {% if project.description %}<p>{{ project.description }}</p>{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p>No projects to display.</p>
+    {% endif %}
+</section>
+{% endblock %}

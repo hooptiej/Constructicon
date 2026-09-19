@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.title }} - {{ site_title }}{% endblock %}
+
+{% block content %}
+<section class="project-detail">
+    <h2>{{ project.title }}</h2>
+    {% if project.description %}
+    <p class="description">{{ project.description }}</p>
+    {% endif %}
+
+    <div class="items">
+        {% if items %}
+        {% for item in items %}
+        <div class="item">
+            {% if item.stored_filename %}
+            {% set media_slug = item.slug %}
+            {% set file_ext = item.stored_filename.rsplit('.', 1)[-1] if '.' in item.stored_filename else '' %}
+            <img src="{{ root | default('') }}media/{{ media_slug }}.{{ file_ext }}" alt="{{ item.display_name or item.filename or item.slug }}" class="item-media">
+            {% elif item.external_url %}
+            {% if 'youtube' in item.external_url or 'youtu.be' in item.external_url %}
+            <div class="youtube-embed">
+                <iframe width="560" height="315" src="https://www.youtube.com/embed/{{ item.external_url.split('/')[-1].split('?')[0] }}" frameborder="0" allowfullscreen></iframe>
+            </div>
+            {% else %}
+            <a href="{{ item.external_url }}" target="_blank">{{ item.display_name or item.external_url }}</a>
+            {% endif %}
+            {% endif %}
+
+            {% if item.display_name or item.description %}
+            <div class="item-info">
+                {% if item.display_name %}<h3>{{ item.display_name }}</h3>{% endif %}
+                {% if item.description %}<p>{{ item.description }}</p>{% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <p>No items in this project.</p>
+        {% endif %}
+    </div>
+
+    {% if project.writeup %}
+    <section class="writeup">
+        <h3>About This Project</h3>
+        {{ project.writeup | safe }}
+    </section>
+    {% endif %}
+
+    <p><a href="index.html">&laquo; Back to Projects</a></p>
+</section>
+{% endblock %}

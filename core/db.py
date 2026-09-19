@@ -168,6 +168,10 @@ PROVENANCE_TYPES = ["found", "created", "documented", "result", "failure", "refe
 # rows have status='active' — treat as 'wip' (work in progress).
 PROJECT_STATUSES = ["wip", "complete", "shelved", "means-to-an-end", "abandoned", "idea", "published", "reference-only"]
 
+# --- Hobby statuses (blog_tags.hobby_status) — #360 ---
+# Controlled vocab for hobby tier status. Only meaningful when is_hobby=1.
+HOBBY_STATUSES = ["active", "dormant", "abandoned"]
+
 # --- Source (capture_events.tech) ---
 # `tech` used to record which technician uploaded a screenshot in imagerepo
 # (the original project), when it was a real multi-tech tool gated behind auth.
@@ -399,6 +403,23 @@ def init_db():
         # points at a capture_events.slug with no FK constraint.
         if "writeup_slug" not in existing_project_columns:
             conn.execute("ALTER TABLE projects ADD COLUMN writeup_slug TEXT")
+        # is_hobby (#360): marks a blog_tags row as a hobby (top-level organizing tier).
+        # Hobbies are just tags with is_hobby=1 and an optional hobby_status.
+        existing_blog_tags_columns = {row["name"] for row in conn.execute("PRAGMA table_info(blog_tags)")}
+        if "is_hobby" not in existing_blog_tags_columns:
+            conn.execute("ALTER TABLE blog_tags ADD COLUMN is_hobby INTEGER NOT NULL DEFAULT 0")
+        if "hobby_status" not in existing_blog_tags_columns:
+            conn.execute("ALTER TABLE blog_tags ADD COLUMN hobby_status TEXT")
+        # project_hobbies (#360): many-to-many join between projects and hobbies (tags).
+        # A project can be associated with multiple hobbies via project_hobbies.
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS project_hobbies (
+            project_id INTEGER NOT NULL REFERENCES projects(id),
+            hobby_tag_id INTEGER NOT NULL REFERENCES blog_tags(id),
+            PRIMARY KEY (project_id, hobby_tag_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_hobbies_hobby ON project_hobbies(hobby_tag_id);
+        """)
         # start_date_override/end_date_override (Timeline feature): a project is a
         # span, not a moment — these manually override its computed start/end
         # (derived from its items' effective dates otherwise). NULL means "use the
@@ -2199,3 +2220,216 @@ def set_entry_items(entry_id, items):
         conn.commit()
     finally:
         conn.close()
+
+
+# --- Hobbies (#360) ---
+# A hobby is a first-class organizing tier ABOVE projects. Mechanism: a hobby
+# is just a tag (blog_tags row) marked is_hobby=1 with an optional hobby_status.
+# Projects attach to hobbies many-to-many via project_hobbies.
+
+
+def mark_tag_as_hobby(tag_id, status="active"):
+    """Mark a blog_tags row as a hobby with an optional status.
+
+    status: one of HOBBY_STATUSES ('active', 'dormant', 'abandoned'), defaults to 'active'.
+    If status is invalid, raises ValueError."""
+    if status not in HOBBY_STATUSES:
+        raise ValueError(f"Invalid hobby_status: {status}. Must be one of {HOBBY_STATUSES}")
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE blog_tags SET is_hobby = 1, hobby_status = ? WHERE id = ?", (status, tag_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def unmark_hobby(tag_id):
+    """Remove the hobby designation from a blog_tags row.
+
+    Sets is_hobby=0 and clears hobby_status."""
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE blog_tags SET is_hobby = 0, hobby_status = NULL WHERE id = ?", (tag_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_hobby_status(tag_id, status):
+    """Update a hobby's status (active/dormant/abandoned).
+
+    Raises ValueError if status is invalid."""
+    if status not in HOBBY_STATUSES:
+        raise ValueError(f"Invalid hobby_status: {status}. Must be one of {HOBBY_STATUSES}")
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE blog_tags SET hobby_status = ? WHERE id = ? AND is_hobby = 1", (status, tag_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_hobbies():
+    """List all hobby tags (is_hobby=1), with a project count each.
+
+    Returns a list of tag dicts with an added 'project_count' key."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT bt.*, COUNT(ph.project_id) AS project_count FROM blog_tags bt "
+            "LEFT JOIN project_hobbies ph ON ph.hobby_tag_id = bt.id "
+            "WHERE bt.is_hobby = 1 GROUP BY bt.id ORDER BY bt.name",
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_hobby(id_or_slug):
+    """Look up a hobby by id or slug.
+
+    If id_or_slug is numeric (int or all-digits string), look up by id;
+    otherwise look up by slug. Returns the hobby tag dict (is_hobby=1) or None."""
+    conn = get_conn()
+    try:
+        if isinstance(id_or_slug, int) or (isinstance(id_or_slug, str) and id_or_slug.isdigit()):
+            row = conn.execute(
+                "SELECT * FROM blog_tags WHERE id = ? AND is_hobby = 1", (int(id_or_slug),)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM blog_tags WHERE slug = ? AND is_hobby = 1", (id_or_slug,)
+            ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_projects_for_hobby(tag_id):
+    """Get all projects attached to a hobby via project_hobbies.
+
+    Returns a list of project dicts."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT p.* FROM projects p JOIN project_hobbies ph ON ph.project_id = p.id "
+            "WHERE ph.hobby_tag_id = ? ORDER BY p.updated_at DESC",
+            (tag_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_hobbies_for_project(project_id):
+    """Get all hobbies attached to a project via project_hobbies.
+
+    Returns a list of hobby tag dicts."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT bt.* FROM blog_tags bt JOIN project_hobbies ph ON ph.hobby_tag_id = bt.id "
+            "WHERE ph.project_id = ? ORDER BY bt.name",
+            (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def add_project_to_hobby(project_id, tag_id):
+    """Add a project to a hobby's many-to-many relation.
+
+    Idempotent via INSERT OR IGNORE."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO project_hobbies (project_id, hobby_tag_id) VALUES (?, ?)",
+            (project_id, tag_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_project_from_hobby(project_id, tag_id):
+    """Remove a project from a hobby's many-to-many relation."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "DELETE FROM project_hobbies WHERE project_id = ? AND hobby_tag_id = ?",
+            (project_id, tag_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def convert_project_to_hobby(project_id):
+    """Convert an existing project into a hobby.
+
+    DESTRUCTIVE. Steps, in one transaction:
+    1. Load the project; return None if not found.
+    2. Resolve its hobby tag: if project.tag_id is set, use that tag;
+       else create/reuse a root-level tag with the project's title.
+    3. Mark the tag as a hobby (is_hobby=1, status='active').
+    4. Re-hang child projects: for each child project, add it to the hobby
+       via project_hobbies and set its parent_id to NULL.
+    5. Move the project's directly-attached objects onto the hobby tag:
+       for each object in list_project_items, attach the hobby tag via post_tags.
+    6. Delete the project row (and its project_items rows).
+    7. Return the hobby tag dict.
+
+    Safe to call multiple times; guards against converting a project that
+    is already a hobby-linked tag."""
+
+    # Resolve EVERYTHING before opening the write transaction. get_or_create_tag,
+    # list_child_projects and list_project_items each open their own connection;
+    # if any of them ran while we held BEGIN IMMEDIATE, a nested write (tag
+    # creation) would deadlock on our own lock ("database is locked"). Sequence
+    # for stability, no racing: reads + tag resolution first, then a tight
+    # write-only transaction on a single connection.
+    project = get_project(project_id)
+    if project is None:
+        return None
+
+    if project.get("tag_id"):
+        tag_id = project["tag_id"]
+    else:
+        tag_id = get_or_create_tag(project["title"], parent_id=None)["id"]
+
+    child_ids = [c["id"] for c in list_child_projects(project_id)]
+    item_slugs = [it["slug"] for it in list_project_items(project_id)]
+
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # Mark the tag as a hobby.
+        conn.execute(
+            "UPDATE blog_tags SET is_hobby = 1, hobby_status = ? WHERE id = ?",
+            ("active", tag_id),
+        )
+        # Re-hang child projects onto the hobby; clear their parent_id.
+        for cid in child_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO project_hobbies (project_id, hobby_tag_id) VALUES (?, ?)",
+                (cid, tag_id),
+            )
+            conn.execute("UPDATE projects SET parent_id = NULL WHERE id = ?", (cid,))
+        # Move the project's own directly-attached objects onto the hobby tag.
+        for slug in item_slugs:
+            conn.execute(
+                "INSERT OR IGNORE INTO post_tags (post_slug, tag_id) VALUES (?, ?)",
+                (slug, tag_id),
+            )
+        # Dissolve the (never-really-a-)project row and its membership rows.
+        conn.execute("DELETE FROM project_items WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return get_tag(tag_id)

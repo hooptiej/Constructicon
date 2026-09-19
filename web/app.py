@@ -2350,6 +2350,153 @@ def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | flo
     return JSONResponse({"ok": True})
 
 
+# --- Hobbies (#360) ---
+
+@app.get("/api/hobbies")
+def api_list_hobbies(request: Request):
+    """List all hobbies (tags marked is_hobby=1) with their project counts.
+
+    Returns a list of hobby tag dicts."""
+    return JSONResponse(db.list_hobbies())
+
+
+@app.get("/api/hobby/{id_or_slug}")
+def api_get_hobby(request: Request, id_or_slug: str):
+    """Get a hobby's full details: metadata, attached projects, and attached objects.
+
+    Returns a dict with the hobby tag, its projects, and its objects (via post_tags)."""
+    hobby = db.get_hobby(id_or_slug)
+    if hobby is None:
+        raise HTTPException(status_code=404, detail="hobby not found")
+
+    projects = db.list_projects_for_hobby(hobby["id"])
+    # Get all objects tagged with this hobby tag
+    items = db.list_posts_for_tag(hobby["id"], include_descendants=False)
+
+    return JSONResponse({
+        "id": hobby["id"],
+        "name": hobby["name"],
+        "slug": hobby["slug"],
+        "status": hobby.get("hobby_status"),
+        "projects": [
+            {
+                "id": p["id"],
+                "slug": p["slug"],
+                "title": p["title"],
+                "status": p["status"],
+            }
+            for p in projects
+        ],
+        "items": [_to_object_detail(item) for item in items],
+    })
+
+
+@app.post("/api/hobby/{id_or_slug}/status")
+def api_set_hobby_status(request: Request, id_or_slug: str, status: str = Form(...)):
+    """Update a hobby's status (active/dormant/abandoned).
+
+    Returns the updated hobby dict."""
+    hobby = db.get_hobby(id_or_slug)
+    if hobby is None:
+        raise HTTPException(status_code=404, detail="hobby not found")
+
+    try:
+        db.set_hobby_status(hobby["id"], status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return JSONResponse(db.get_hobby(hobby["id"]))
+
+
+@app.post("/api/hobby/{id_or_slug}/add-project")
+def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str = Form(...)):
+    """Add a project to a hobby.
+
+    project_id can be an id (int) or slug (str).
+    Returns the updated hobby's project list."""
+    hobby = db.get_hobby(id_or_slug)
+    if hobby is None:
+        raise HTTPException(status_code=404, detail="hobby not found")
+
+    project = db.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    db.add_project_to_hobby(project["id"], hobby["id"])
+
+    projects = db.list_projects_for_hobby(hobby["id"])
+    return JSONResponse([
+        {
+            "id": p["id"],
+            "slug": p["slug"],
+            "title": p["title"],
+            "status": p["status"],
+        }
+        for p in projects
+    ])
+
+
+@app.post("/api/hobby/{id_or_slug}/remove-project")
+def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id: str = Form(...)):
+    """Remove a project from a hobby.
+
+    project_id can be an id (int) or slug (str).
+    Returns the updated hobby's project list."""
+    hobby = db.get_hobby(id_or_slug)
+    if hobby is None:
+        raise HTTPException(status_code=404, detail="hobby not found")
+
+    project = db.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    db.remove_project_from_hobby(project["id"], hobby["id"])
+
+    projects = db.list_projects_for_hobby(hobby["id"])
+    return JSONResponse([
+        {
+            "id": p["id"],
+            "slug": p["slug"],
+            "title": p["title"],
+            "status": p["status"],
+        }
+        for p in projects
+    ])
+
+
+@app.post("/api/project/{slug}/convert-to-hobby")
+def api_convert_project_to_hobby(request: Request, slug: str):
+    """Convert an existing project into a hobby (DESTRUCTIVE).
+
+    The project is converted into a hobby tag, its children are moved to the hobby,
+    its items are tagged with the hobby, and the project row is deleted.
+
+    Returns the new hobby tag dict with summary info about what was moved."""
+    project = db.get_project(slug)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    # Get counts before conversion
+    children_count = len(db.list_child_projects(project["id"]))
+    items_count = len(db.list_project_items(project["id"]))
+
+    hobby = db.convert_project_to_hobby(project["id"])
+
+    if hobby is None:
+        raise HTTPException(status_code=500, detail="conversion failed")
+
+    return JSONResponse({
+        "id": hobby["id"],
+        "name": hobby["name"],
+        "slug": hobby["slug"],
+        "status": hobby.get("hobby_status"),
+        "summary": {
+            "children_moved": children_count,
+            "items_moved": items_count,
+        },
+    })
+
+
 # --- Blog Entries API ---
 
 def _to_blog_entry_detail(entry):

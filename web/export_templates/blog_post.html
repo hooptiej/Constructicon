@@ -33,23 +33,27 @@
         <div class="items">
         {% for item in items %}
             <div class="item">
-                {% if item.stored_filename %}
-                {% set file_ext = item.stored_filename.rsplit('.', 1)[-1] if '.' in item.stored_filename else '' %}
-                {% if item.media_type == 'video' %}
-                <video src="{{ root | default('') }}media/{{ item.slug }}.{{ file_ext }}" controls preload="metadata" class="item-media"></video>
-                {% elif item.media_type == 'audio' %}
-                <audio src="{{ root | default('') }}media/{{ item.slug }}.{{ file_ext }}" controls preload="metadata"></audio>
-                {% else %}
-                <img src="{{ root | default('') }}media/{{ item.slug }}.{{ file_ext }}" alt="{{ item.display_name or item.filename or item.slug }}" class="item-media">
-                {% endif %}
-                {% elif item.external_url %}
-                {% if item.embed_url %}
+                {% set alt = item.display_name or item.filename or item.slug %}
+                {% if item.media_type in ['image', 'gif', 'svg'] and item.media_file %}
+                <img src="{{ root | default('') }}media/{{ item.media_file }}" alt="{{ alt }}" class="item-media">
+                {% elif item.media_type == 'video' and item.media_file %}
+                <video src="{{ root | default('') }}media/{{ item.media_file }}" controls preload="metadata" class="item-media"></video>
+                {% elif item.media_type == 'audio' and item.media_file %}
+                <audio src="{{ root | default('') }}media/{{ item.media_file }}" controls preload="metadata"></audio>
+                {% elif item.embed_url %}
                 <div class="youtube-embed">
                     <iframe width="560" height="315" src="{{ item.embed_url }}" frameborder="0" allowfullscreen></iframe>
                 </div>
+                {% elif item.thumb_file %}
+                {% if item.media_file %}
+                <a href="{{ root | default('') }}media/{{ item.media_file }}"><img src="{{ root | default('') }}media/{{ item.thumb_file }}" alt="{{ alt }}" class="item-media"></a>
                 {% else %}
-                <a href="{{ item.external_url }}" target="_blank">{{ item.display_name or item.external_url }}</a>
+                <img src="{{ root | default('') }}media/{{ item.thumb_file }}" alt="{{ alt }}" class="item-media">
                 {% endif %}
+                {% elif item.media_file %}
+                <a href="{{ root | default('') }}media/{{ item.media_file }}">{{ alt }}</a>
+                {% elif item.external_url %}
+                <a href="{{ item.external_url }}" target="_blank">{{ item.display_name or item.external_url }}</a>
                 {% endif %}
 
                 {% if item.note or item.display_name or item.description %}

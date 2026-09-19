@@ -1827,3 +1827,95 @@ body.delete-mode-on .card-select-row { display: flex; }
   font-size: 12px; color: var(--text); cursor: pointer; flex: 1; margin: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* --- Export builder (#314 farm 2) --- */
+.export-builder-trigger {
+  display: inline-flex; align-items: center; gap: 8px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px; padding: 9px 16px;
+  font-size: 13px; color: var(--text); cursor: pointer;
+}
+.export-builder-trigger:hover { border-color: var(--accent); }
+
+.export-builder {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 46; width: 380px; max-width: 90vw;
+  background: var(--card); border-left: 1px solid var(--border);
+  transform: translateX(100%); transition: transform 0.22s ease;
+  display: flex; flex-direction: column; padding: 22px; box-sizing: border-box; overflow-y: auto;
+}
+.export-builder.open { transform: translateX(0); }
+
+.export-builder-header {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-shrink: 0;
+}
+.export-builder-header h2 { font-size: 16px; font-weight: 500; margin: 0; }
+
+.export-builder-content {
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+.export-section {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.export-section h3 {
+  font-size: 11px; font-weight: 500; color: var(--text-3); letter-spacing: 0.4px;
+  margin: 0; text-transform: uppercase;
+}
+
+.export-checklist {
+  display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+}
+
+.export-checklist-item {
+  display: flex; align-items: center;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px; transition: background 0.15s ease;
+}
+.export-checklist-item:hover { background: var(--chip); }
+
+.export-checklist-item label {
+  font-size: 12px; color: var(--text); cursor: pointer; margin: 0; display: flex;
+  align-items: center; gap: 8px; flex: 1;
+}
+
+.export-checklist-item input[type="checkbox"] {
+  width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; accent-color: var(--accent);
+}
+
+.export-status-badge {
+  font-size: 10px; font-weight: 500; padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
+  letter-spacing: 0.3px;
+}
+.export-status-badge.draft { background: var(--chip); color: var(--text-3); }
+.export-status-badge.ready { background: var(--accent); color: var(--bg); }
+
+.export-report {
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+  background: var(--surface); display: flex; flex-direction: column; gap: 10px;
+}
+
+.export-report-title {
+  font-size: 12px; font-weight: 500; color: var(--accent); text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.export-report-stats {
+  display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text);
+}
+
+.export-stat {
+  display: flex; gap: 4px;
+}
+
+.export-report-warnings {
+  display: flex; flex-direction: column; gap: 6px; font-size: 11px;
+}
+
+.export-warnings-title {
+  color: var(--hazard-yellow); font-weight: 500; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+.export-warning {
+  color: var(--text-2); padding-left: 4px;
+}

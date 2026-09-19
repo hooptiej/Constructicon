@@ -2577,6 +2577,7 @@ async def api_export_build(request: Request):
     }
 
     Returns the build report with project/entry/media counts and any warnings.
+    Saves the submitted config to app settings for next time.
     """
     try:
         body = await request.json()
@@ -2585,6 +2586,8 @@ async def api_export_build(request: Request):
 
     try:
         report = site_export.build_site(body)
+        # Persist the config for next time
+        db.set_setting("export_config", json.dumps(body))
         return JSONResponse(report)
     except Exception as e:
         print(f"Build failed: {e}")
@@ -2594,6 +2597,20 @@ async def api_export_build(request: Request):
             {"error": str(e)},
             status_code=500
         )
+
+
+@app.get("/api/export/config")
+def api_export_config():
+    """Retrieve the saved export configuration. Returns the last successfully
+    built config, or an empty object {} if none has been saved yet.
+    """
+    try:
+        saved_json = db.get_setting("export_config")
+        if saved_json:
+            return JSONResponse(json.loads(saved_json))
+        return JSONResponse({})
+    except Exception:
+        return JSONResponse({})
 
 
 # --- Public hotlink (no auth — Hudu/Slack need to fetch this directly) ---

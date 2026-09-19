@@ -41,6 +41,12 @@
       <div class="tag-suggestions" id="bulk-tag-suggestions" style="display:none"></div>
     </div>
 
+    <select class="filter-select" id="bulk-provenance-select" title="Set provenance for selection">
+      <option value="">Set provenance…</option>
+      {% for prov in PROVENANCE_TYPES %}<option value="{{ prov }}">{{ prov }}</option>{% endfor %}
+    </select>
+    <button type="button" class="ocr-retry-btn" id="apply-provenance-btn">Apply</button>
+
     <button type="button" class="btn-secondary" id="create-project-btn">Turn into project…</button>
     <button type="button" class="btn-danger" id="delete-selected-btn">Delete selected</button>
   </div>
@@ -357,6 +363,33 @@
     const res = await fetch('/api/projects/from-selection', { method: 'POST', body: fd });
     if (res.ok) reload();
     else alert('Failed to create project.');
+  });
+
+  // --- Bulk set provenance: #341 ---
+  const bulkProvenanceSelect = document.getElementById('bulk-provenance-select');
+  const applyProvenanceBtn = document.getElementById('apply-provenance-btn');
+  applyProvenanceBtn.addEventListener('click', async () => {
+    const provenance = bulkProvenanceSelect.value;
+    const slugs = [...selectedSlugs];
+    if (!provenance || !slugs.length) return;
+    applyProvenanceBtn.disabled = true;
+    applyProvenanceBtn.textContent = 'Applying…';
+    try {
+      for (const slug of slugs) {
+        const fd = new FormData();
+        fd.append('provenance', provenance);
+        await fetch(`/api/image/${slug}`, { method: 'POST', body: fd });
+      }
+      bulkProvenanceSelect.value = '';
+      reload();
+    } catch (err) {
+      alert('Failed to apply provenance.');
+      applyProvenanceBtn.disabled = false;
+      applyProvenanceBtn.textContent = 'Apply';
+    }
+  });
+  bulkProvenanceSelect.addEventListener('change', () => {
+    applyProvenanceBtn.disabled = !bulkProvenanceSelect.value || !selectedSlugs.size;
   });
 
   // --- Turn selection directly into a new project (no tagging step) ---

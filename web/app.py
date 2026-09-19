@@ -26,6 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
 from core import automatch, backup, captions, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
+from core.db import PROVENANCE_TYPES, PROJECT_STATUSES
 
 app = FastAPI()
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -428,6 +429,10 @@ def _to_object_detail(row):
     has_thumb = _has_thumbnail(row, spec) and is_file
     return {
         "slug": row["slug"],
+        # Curator (#341): provenance + highlight so the detail page's classifier
+        # controls preselect correctly (and never render Undefined -> tojson 500).
+        "provenance": row.get("provenance"),
+        "highlight": bool(row.get("highlight")),
         "media_type": media_type,
         "type_label": spec.label,
         "type_icon": spec.badge_icon,
@@ -1152,6 +1157,7 @@ def project_detail_page(request: Request, slug: str):
             "effective_end_display": _friendly_datetime(effective_end),
             "timeline_items": timeline_items,
             "timeline_children": timeline_children,
+            "PROJECT_STATUSES": PROJECT_STATUSES,
         },
     )
 
@@ -1165,7 +1171,7 @@ def unfiled_page(request: Request):
     unfiled_items = [_to_public(r) for r in db.list_unfiled_items()]
     return templates.TemplateResponse(
         request, "unfiled.html",
-        {"unfiled_items": unfiled_items},
+        {"unfiled_items": unfiled_items, "PROVENANCE_TYPES": PROVENANCE_TYPES},
     )
 
 
@@ -1207,7 +1213,7 @@ def object_detail_page(request: Request, slug: str):
     breadcrumbs = _build_breadcrumbs(from_param, item["display_name"])
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs},
+        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "PROVENANCE_TYPES": PROVENANCE_TYPES},
     )
 
 

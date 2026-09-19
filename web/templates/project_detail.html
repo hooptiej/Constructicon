@@ -496,6 +496,9 @@ loadParentProjects();
 }
 
 // Convert to hobby (#360): confirmation dialog and conversion handler
+// Self-contained title (the title-edit block's `currentTitle` is in a different
+// scope and not visible here — referencing it threw ReferenceError on click).
+const convertProjectTitle = {{ project.title | tojson }};
 const convertHobbyBtn = document.getElementById('convert-to-hobby-btn');
 const convertHobbyBackdrop = document.getElementById('convert-hobby-backdrop');
 const convertHobbyMessage = document.getElementById('convert-hobby-message');
@@ -509,7 +512,7 @@ function showConvertDialog() {
   convertHobbyError.style.display = 'none';
   convertHobbySuccess.style.display = 'none';
   convertHobbyConfirm.disabled = false;
-  convertHobbyMessage.textContent = `"${currentTitle}" isn't a project — make it a hobby? Its sub-projects move to the new hobby and this project entry is removed. This can't be auto-undone.`;
+  convertHobbyMessage.textContent = `"${convertProjectTitle}" isn't a project — make it a hobby? Its sub-projects move to the new hobby and this project entry is removed. This can't be auto-undone.`;
   convertHobbyBackdrop.style.display = 'flex';
 }
 
@@ -537,7 +540,7 @@ convertHobbyConfirm.addEventListener('click', async () => {
 
     // Success: show summary and link to hobby
     const summary = body.summary || {};
-    const hobbyName = body.name || currentTitle;
+    const hobbyName = body.name || convertProjectTitle;
     const hobbySlug = body.slug;
     convertHobbySuccess.innerHTML = `Made "${hobbyName}" a hobby — moved ${summary.children_moved || 0} sub-project${summary.children_moved === 1 ? '' : 's'} and ${summary.items_moved || 0} object${summary.items_moved === 1 ? '' : 's'}. <a href="/hobby/${hobbySlug}" style="color:inherit;text-decoration:underline">View hobby</a>`;
     convertHobbySuccess.style.display = 'block';

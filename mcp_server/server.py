@@ -80,6 +80,28 @@ def _to_public_project(project):
     }
 
 
+def _to_public_blog_entry(entry):
+    """Full detail shape for a blog entry, including hydrated projects and items."""
+    projects = db.list_entry_projects(entry["id"])
+    items = db.list_entry_items(entry["id"])
+    return {
+        "id": entry["id"],
+        "slug": entry["slug"],
+        "title": entry["title"],
+        "subtitle": entry.get("subtitle", ""),
+        "body": entry.get("body", ""),
+        "status": entry["status"],
+        "cover_slug": entry.get("cover_slug"),
+        "content_date": entry.get("content_date"),
+        "created_at": entry["created_at"],
+        "updated_at": entry["updated_at"],
+        # Carry the per-attachment note + sort_order (the reshaping helpers
+        # drop them, but they're the point of the attachment).
+        "projects": [{**_to_public_project(p), "note": p.get("note", ""), "sort_order": p.get("sort_order")} for p in projects],
+        "items": [{**_to_public(i), "note": i.get("note", ""), "sort_order": i.get("sort_order")} for i in items],
+    }
+
+
 @mcp.tool()
 def constructicon_upload(filename: str, content_base64: str, description: str = "", tags: list[str] | None = None,
                       uploaded_by: str = db.SOURCE_AUTHORED,
@@ -582,6 +604,134 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
         "cover": cover,
         "writeup": writeup,
     }
+
+
+@mcp.tool()
+def constructicon_list_blog_entries(status: str | None = None) -> list[dict]:
+    """List all blog entries, optionally filtered by status (e.g. 'draft', 'published').
+
+    Returns entries ordered by most-recently-updated first.
+    """
+    entries = db.list_blog_entries(status=status)
+    return [
+        {
+            "id": e["id"],
+            "slug": e["slug"],
+            "title": e["title"],
+            "subtitle": e.get("subtitle", ""),
+            "status": e["status"],
+            "cover_slug": e.get("cover_slug"),
+            "content_date": e.get("content_date"),
+            "created_at": e["created_at"],
+            "updated_at": e["updated_at"],
+        }
+        for e in entries
+    ]
+
+
+@mcp.tool()
+def constructicon_create_blog_entry(title: str, subtitle: str = "", body: str = "", status: str = "draft",
+                                    cover_slug: str | None = None, content_date: float | None = None) -> dict:
+    """Create a new blog entry.
+
+    title: The entry's title (required; a slug is auto-generated from this).
+    subtitle, body: Optional metadata and content.
+    status: The entry's status (default 'draft'). Common values: 'draft', 'published'.
+    cover_slug: Optional slug of a Constructicon object to use as the entry's cover image.
+    content_date: Optional unix timestamp for the entry's content date (distinct from created_at).
+
+    Returns the created entry with projects and items (initially empty).
+    """
+    entry = db.create_blog_entry(title=title, subtitle=subtitle, body=body, status=status,
+                                 cover_slug=cover_slug, content_date=content_date)
+    return _to_public_blog_entry(entry)
+
+
+@mcp.tool()
+def constructicon_get_blog_entry(slug: str) -> dict | None:
+    """Get a single blog entry by slug, with full hydration: projects and items.
+
+    Returns None if not found.
+    """
+    entry = db.get_blog_entry(slug)
+    return _to_public_blog_entry(entry) if entry else None
+
+
+@mcp.tool()
+def constructicon_update_blog_entry(slug: str, title: str | None = None, subtitle: str | None = None,
+                                    body: str | None = None, status: str | None = None,
+                                    cover_slug: str | None = None, content_date: float | None = None,
+                                    clear_cover_slug: bool = False, clear_content_date: bool = False) -> dict | None:
+    """Update a blog entry. Every field defaults to "leave unchanged".
+
+    Pass a value to set it. cover_slug/content_date can't be cleared just by
+    passing None (None means "leave unchanged" here), so to clear one, set its
+    clear_* flag instead: clear_cover_slug / clear_content_date.
+
+    (The Ellipsis sentinel db.update_blog_entry uses internally can't cross the
+    MCP tool boundary — the schema generator treats an Ellipsis default as a
+    required arg — so this tool maps None/clear-flags onto that sentinel.)
+
+    Returns the updated entry with full hydration, or None if not found.
+    """
+    cover = None if clear_cover_slug else (cover_slug if cover_slug is not None else ...)
+    cdate = None if clear_content_date else (content_date if content_date is not None else ...)
+    updated = db.update_blog_entry(slug, title=title, subtitle=subtitle, body=body, status=status,
+                                   cover_slug=cover, content_date=cdate)
+    return _to_public_blog_entry(updated) if updated else None
+
+
+@mcp.tool()
+def constructicon_delete_blog_entry(slug: str) -> bool:
+    """Delete a blog entry and all its attached projects/items. Irreversible.
+
+    Returns True if deleted, False if not found.
+    """
+    entry = db.get_blog_entry(slug)
+    if entry is None:
+        return False
+    db.delete_blog_entry(slug)
+    return True
+
+
+@mcp.tool()
+def constructicon_set_blog_entry_projects(slug: str, items: list[dict]) -> dict | None:
+    """Set the ordered list of projects attached to a blog entry.
+
+    items: list of dicts with 'project_id' (int) and optional 'note' (str) keys,
+      in desired display order. Each dict becomes a (project_id, note) tuple.
+
+    Returns the updated entry with full hydration, or None if not found.
+    """
+    entry = db.get_blog_entry(slug)
+    if entry is None:
+        return None
+
+    # Convert dicts to (project_id, note) tuples
+    project_items = [(item.get("project_id"), item.get("note", "")) for item in items]
+    db.set_entry_projects(entry["id"], project_items)
+    updated = db.get_blog_entry(slug)
+    return _to_public_blog_entry(updated) if updated else None
+
+
+@mcp.tool()
+def constructicon_set_blog_entry_items(slug: str, items: list[dict]) -> dict | None:
+    """Set the ordered list of Constructicon objects attached to a blog entry.
+
+    items: list of dicts with 'slug' (str) and optional 'note' (str) keys,
+      in desired display order. Each dict becomes a (post_slug, note) tuple.
+
+    Returns the updated entry with full hydration, or None if not found.
+    """
+    entry = db.get_blog_entry(slug)
+    if entry is None:
+        return None
+
+    # Convert dicts to (post_slug, note) tuples
+    post_items = [(item.get("slug"), item.get("note", "")) for item in items]
+    db.set_entry_items(entry["id"], post_items)
+    updated = db.get_blog_entry(slug)
+    return _to_public_blog_entry(updated) if updated else None
 
 
 @mcp.tool()

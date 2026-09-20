@@ -1228,6 +1228,7 @@ def project_detail_page(request: Request, slug: str):
         grid_entries.append({
             "kind": "project",
             "sort_date": child_start,
+            "id": child["id"],  # #376: template needs it for data-project-id (orphan/cover-by-child)
             "slug": child["slug"],
             "title": child["title"],
             "description": child.get("description"),

@@ -227,7 +227,7 @@ def score_project(project_id_or_dict):
     weight_per_item = dim_rules["weight"] / len(dim_rules["items"])
 
     # Check 1: cover_image
-    cover_passed = project.get("cover_slug") is not None
+    cover_passed = db.resolve_project_cover_slug(project) is not None
     excused = not dim_applicable[0]
     if not excused:
         applicable += weight_per_item

@@ -550,6 +550,16 @@ def _project_cover_url(cover_slug):
     return f"/f/{row['slug']}/thumb"
 
 
+def _project_effective_cover_url(project):
+    """Resolves a project's effective cover URL, whether from cover_slug
+    (#325) or cover_project_id (#356, borrowed from a child project).
+
+    Uses db.resolve_project_cover_slug to follow the proxy chain and find
+    the effective cover slug, then delegates to _project_cover_url."""
+    effective_slug = db.resolve_project_cover_slug(project)
+    return _project_cover_url(effective_slug) if effective_slug else None
+
+
 def _to_project_card(project):
     writeup_excerpt = None
     if project.get("writeup_slug"):
@@ -575,7 +585,7 @@ def _to_project_card(project):
         "title": project["title"],
         "description": project["description"],
         "status": project["status"],
-        "cover_url": _project_cover_url(project.get("cover_slug")),
+        "cover_url": _project_effective_cover_url(project),
         # #56: front-page sort control needs a date to sort "Newest"/"Oldest"
         # by — created_at was already stored on every project row, just never
         # exposed to this card shape before.
@@ -594,7 +604,7 @@ def _to_timeline_project(project):
         "id": project["id"],
         "slug": project["slug"],
         "title": project["title"],
-        "cover_url": _project_cover_url(project.get("cover_slug")),
+        "cover_url": _project_effective_cover_url(project),
         "effective_start": effective_start,
         "effective_end": effective_end,
         "is_child": project.get("parent_id") is not None,
@@ -1233,7 +1243,7 @@ def project_detail_page(request: Request, slug: str):
             "title": child["title"],
             "description": child.get("description"),
             "status": child.get("status"),
-            "cover_url": _project_cover_url(child.get("cover_slug")),
+            "cover_url": _project_effective_cover_url(child),
             "item_count": len(child_items),
             "date_display": start_display if start_display == end_display else f"{start_display} – {end_display}",
         })
@@ -1249,7 +1259,7 @@ def project_detail_page(request: Request, slug: str):
         request, "project_detail.html",
         {
             "project": project,
-            "cover_url": _project_cover_url(project.get("cover_slug")),
+            "cover_url": _project_effective_cover_url(project),
             "grid_entries": grid_entries,
             "ancestors": ancestors,
             "writeup_body": writeup_body,
@@ -2309,6 +2319,9 @@ async def api_update_project(
     parent_id (#133) can be set to create/remove a parent-child relationship.
     Pass empty string to remove a parent, or a project ID to set one.
 
+    cover_project_id (#356) sets the cover by borrowing from a child project,
+    mutually exclusive with cover_slug. Pass empty string to clear.
+
     writeup_slug (#156) can be set to point to a document-type item as the
     project's write-up. Pass empty string to remove a writeup."""
     project = db.get_project(project_id)
@@ -2345,6 +2358,27 @@ async def api_update_project(
     if writeup_slug is not None:
         writeup_slug_value = writeup_slug if writeup_slug else None
 
+    # (#356): Handle cover_project_id (borrow a child project's cover).
+    # Same raw-form presence logic as parent_id: distinguish "not submitted"
+    # from "submitted empty (clear)".
+    cover_project_id_value = ...  # "..." means don't update cover_project_id
+    if "cover_project_id" in _form:
+        raw_cover_project = (str(_form.get("cover_project_id")) or "").strip()
+        if raw_cover_project == "":
+            cover_project_id_value = None  # explicit clear
+        else:
+            try:
+                cover_project_int = int(raw_cover_project)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid cover_project_id")
+            # Validate that the child project exists and is actually a child
+            child = db.get_project(cover_project_int)
+            if child is None:
+                raise HTTPException(status_code=400, detail="Child project not found")
+            if child.get("parent_id") != project["id"]:
+                raise HTTPException(status_code=400, detail="Project is not a child of this project")
+            cover_project_id_value = cover_project_int
+
     try:
         updated = db.update_project(
             project_id,
@@ -2354,6 +2388,7 @@ async def api_update_project(
             status=status,
             parent_id=parent_id_value,
             writeup_slug=writeup_slug_value,
+            cover_project_id=cover_project_id_value,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

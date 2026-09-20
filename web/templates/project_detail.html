@@ -152,7 +152,10 @@
           <div class="project-item-meta">{{ entry.item_count }} item{{ '' if entry.item_count == 1 else 's' }} · {{ entry.date_display }}</div>
         </div>
       </a>
-      <button type="button" class="orphan-child-btn" title="Remove from this project" style="position:absolute;top:8px;right:8px;width:24px;height:24px;padding:0;border:1px solid var(--border);border-radius:4px;background:var(--bg);cursor:pointer;display:none;align-items:center;justify-content:center;font-size:14px;color:var(--text)">×</button>
+      <div class="project-item-selectors" style="position:absolute;top:8px;right:8px;display:flex;gap:8px;align-items:center">
+        <input type="radio" class="project-cover-selector-child" name="cover" data-project-id="{{ entry.id }}" title="Set as project cover (borrow child's cover)" {% if project.cover_project_id == entry.id %}checked{% endif %}>
+        <button type="button" class="orphan-child-btn" title="Remove from this project" style="width:24px;height:24px;padding:0;border:1px solid var(--border);border-radius:4px;background:var(--bg);cursor:pointer;display:none;align-items:center;justify-content:center;font-size:14px;color:var(--text)">×</button>
+      </div>
     </div>
     {% else %}
     <div class="project-item-card-wrapper" data-slug="{{ entry.slug }}" style="position:relative">
@@ -433,17 +436,29 @@
 
 <script>
 let currentCoverSlug = {{ project.cover_slug | tojson }};
+let currentCoverProjectId = {{ project.cover_project_id | tojson }};
 let currentWriteupSlug = {{ project.writeup_slug | tojson }};
 let currentParentId = {{ project.parent_id | tojson }};
 const projectId = {{ project.id }};
 
 function revertCoverSelection(failedRadio) {
   failedRadio.checked = false;
-  if (currentCoverSlug) {
-    const previous = document.querySelector(
-      `.project-cover-selector[data-slug="${CSS.escape(currentCoverSlug)}"]`
-    );
-    if (previous) previous.checked = true;
+  // Check if this was a child project cover selector
+  if (failedRadio.classList.contains('project-cover-selector-child')) {
+    if (currentCoverProjectId) {
+      const previous = document.querySelector(
+        `.project-cover-selector-child[data-project-id="${currentCoverProjectId}"]`
+      );
+      if (previous) previous.checked = true;
+    }
+  } else {
+    // Object cover selector
+    if (currentCoverSlug) {
+      const previous = document.querySelector(
+        `.project-cover-selector[data-slug="${CSS.escape(currentCoverSlug)}"]`
+      );
+      if (previous) previous.checked = true;
+    }
   }
 }
 
@@ -469,6 +484,32 @@ document.querySelectorAll('.project-cover-selector').forEach(radio => {
       });
       if (response.ok) {
         currentCoverSlug = slug;
+        currentCoverProjectId = null; // Clear the child project cover when setting object cover
+      } else {
+        console.error('Failed to update cover:', response.status);
+        revertCoverSelection(this);
+      }
+    } catch (error) {
+      console.error('Error updating cover:', error);
+      revertCoverSelection(this);
+    }
+  });
+});
+
+// Child project cover selector (#356): borrow cover from a child project
+document.querySelectorAll('.project-cover-selector-child').forEach(radio => {
+  radio.addEventListener('change', async function() {
+    if (!this.checked) return;
+    const projectId_ = this.dataset.projectId;
+    try {
+      const response = await fetch(`/api/projects/${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `cover_project_id=${encodeURIComponent(projectId_)}`
+      });
+      if (response.ok) {
+        currentCoverProjectId = parseInt(projectId_);
+        currentCoverSlug = null; // Clear the object cover when setting child project cover
       } else {
         console.error('Failed to update cover:', response.status);
         revertCoverSelection(this);

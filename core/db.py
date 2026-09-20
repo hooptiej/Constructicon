@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS projects (
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     cover_slug TEXT,
+    cover_project_id INTEGER REFERENCES projects(id),
     status TEXT NOT NULL DEFAULT 'active',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
@@ -398,6 +399,10 @@ def init_db():
             conn.execute("ALTER TABLE projects ADD COLUMN parent_id INTEGER REFERENCES projects(id)")
         # Create the index after the column is guaranteed to exist
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id)")
+        # cover_project_id (#356): a project can borrow a child project's cover instead of
+        # hoisting grandchild objects. Mutually exclusive with cover_slug — see update_project.
+        if "cover_project_id" not in existing_project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN cover_project_id INTEGER REFERENCES projects(id)")
         # writeup_slug (#156): optional reference to a document-type capture_event that
         # serves as the project's write-up/article. Follows the same pattern as cover_slug —
         # points at a capture_events.slug with no FK constraint.
@@ -1499,6 +1504,52 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
         conn.close()
 
 
+def resolve_project_cover_slug(project_or_id, _depth=0):
+    """Resolves the effective cover slug for a project (#356).
+
+    A project's cover can be either:
+    1. An object cover_slug (direct reference to a capture_events row)
+    2. A cover_project_id (borrowed from a child project)
+
+    If cover_project_id is set, recursively resolves that child project's
+    effective cover. Returns the final effective cover_slug (or None if no
+    cover exists at the end of the chain).
+
+    Guards against cycles and runaway recursion with a depth cap of 10.
+
+    Accepts either a project dict or an id."""
+    if _depth > 10:
+        # Depth exceeded (likely a cycle or very deep chain)
+        return None
+
+    # Resolve to a project dict if given an id
+    if isinstance(project_or_id, int) or (isinstance(project_or_id, str) and project_or_id.isdigit()):
+        project = get_project(project_or_id)
+        if project is None:
+            return None
+    else:
+        project = project_or_id
+
+    # Safety check: project must not be None at this point
+    if project is None:
+        return None
+
+    # If this project has a direct cover_slug, return it
+    if project.get("cover_slug"):
+        return project["cover_slug"]
+
+    # If this project has a cover_project_id, resolve the child's effective cover
+    if project.get("cover_project_id"):
+        child = get_project(project["cover_project_id"])
+        if child is None:
+            return None
+        # Recurse to the child
+        return resolve_project_cover_slug(child, _depth=_depth + 1)
+
+    # No cover at this level
+    return None
+
+
 def get_project(id_or_slug):
     """Look up by either numeric id or slug — a project detail page will
     likely be reached by slug in a URL, but internal callers (e.g.
@@ -1528,12 +1579,16 @@ def list_projects(status=None):
         conn.close()
 
 
-def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None, parent_id=..., writeup_slug=...):
+def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None, parent_id=..., writeup_slug=..., cover_project_id=...):
     """Partial update — only overwrites fields that were passed, same
     pattern as update_tags() for capture_events. Bumps updated_at.
 
     parent_id can be updated; a cycle check prevents setting a project
     as its own ancestor. Use parent_id=None to clear a parent.
+
+    cover_slug (#325) and cover_project_id (#356) are mutually exclusive:
+    a project's cover is either an object (cover_slug) or a child project proxy
+    (cover_project_id), never both. Setting one clears the other.
 
     writeup_slug points to a document-type capture_event (#156), same pattern
     as cover_slug. Use writeup_slug=None to clear it."""
@@ -1549,16 +1604,28 @@ def update_project(id_or_slug, title=None, description=None, cover_slug=None, st
         if new_parent_id in descendant_ids:
             raise ValueError(f"Cannot set project {new_parent_id} as parent: it is already a descendant of this project")
 
+    # Mutual exclusion: cover_slug and cover_project_id cannot both be set
+    new_cover_slug = cover_slug if cover_slug is not None else existing.get("cover_slug")
+    new_cover_project_id = cover_project_id if cover_project_id is not ... else existing.get("cover_project_id")
+
+    if cover_slug is not None and cover_slug != "":
+        # Setting cover_slug clears cover_project_id
+        new_cover_project_id = None
+    if cover_project_id is not ... and cover_project_id is not None:
+        # Setting cover_project_id clears cover_slug
+        new_cover_slug = None
+
     conn = get_conn()
     try:
         now = time.time()
         new_writeup_slug = writeup_slug if writeup_slug is not ... else existing.get("writeup_slug")
         conn.execute(
-            "UPDATE projects SET title = ?, description = ?, cover_slug = ?, status = ?, parent_id = ?, writeup_slug = ?, updated_at = ? WHERE id = ?",
+            "UPDATE projects SET title = ?, description = ?, cover_slug = ?, cover_project_id = ?, status = ?, parent_id = ?, writeup_slug = ?, updated_at = ? WHERE id = ?",
             (
                 title if title is not None else existing["title"],
                 description if description is not None else existing["description"],
-                cover_slug if cover_slug is not None else existing["cover_slug"],
+                new_cover_slug,
+                new_cover_project_id,
                 status if status is not None else existing["status"],
                 new_parent_id,
                 new_writeup_slug,

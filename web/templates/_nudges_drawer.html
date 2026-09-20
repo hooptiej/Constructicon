@@ -1,0 +1,163 @@
+<!-- Nudges (#345) — the Curator "what the beast needs" ranked-nudge queue
+     (#343), moved out of the admin page into its own nav-rail drawer. Ranked
+     suggestions for improving the collection, each with an Open action plus
+     dismiss/snooze. Loads lazily on first open and refreshes on
+     constructicon:needs-changed. The needs badge (formerly on the Admin tab)
+     now rides the Nudges rail tab. -->
+<button type="button" id="nudges-drawer-trigger" style="display:none" aria-hidden="true" tabindex="-1"></button>
+<div class="drawer-backdrop" id="nudges-drawer-backdrop"></div>
+<div class="wide-drawer nudges-drawer" id="nudges-drawer" role="dialog" aria-label="Nudges">
+  <div class="wide-drawer-header">
+    <h2>Nudges <span id="nudges-drawer-count" class="apikey-status"></span></h2>
+    <button type="button" class="modal-close" id="nudges-drawer-close" aria-label="Close">&times;</button>
+  </div>
+  <p class="page-subtitle">Ranked nudges for improving project data and unfiled items.</p>
+  <div id="nudges-drawer-list" class="admin-curator-needs-list"></div>
+</div>
+
+<script>
+(function () {
+  const backdrop = document.getElementById('nudges-drawer-backdrop');
+  const drawer = document.getElementById('nudges-drawer');
+  const trigger = document.getElementById('nudges-drawer-trigger');
+  const closeBtn = document.getElementById('nudges-drawer-close');
+  const list = document.getElementById('nudges-drawer-list');
+  const count = document.getElementById('nudges-drawer-count');
+  let loaded = false;
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  // Map action.type (+ project_slug) to the URL its Open button links to.
+  function getActionHref(action) {
+    if (!action) return '#';
+    switch (action.type) {
+      case 'set_cover':
+      case 'draft_writeup':
+      case 'add_captions':
+      case 'add_dates':
+      case 'add_related_or_tags':
+      case 'add_highlight':
+      case 'set_status':
+      case 'acknowledge':
+        return `/project/${encodeURIComponent(action.project_slug || '')}`;
+      case 'file_unfiled':
+        return '/unfiled';
+      case 'review_automatch':
+      case 'review_captions':
+        return '/admin';
+      default:
+        return '#';
+    }
+  }
+
+  // priority >= 18 = high, 8-17 = medium, < 8 = low.
+  function getSeverityCue(priority) {
+    if (priority >= 18) return { className: 'curator-severity-high', label: '●' };
+    if (priority >= 8) return { className: 'curator-severity-medium', label: '●' };
+    return { className: 'curator-severity-low', label: '●' };
+  }
+
+  function render(data) {
+    const needs = Array.isArray(data) ? data : [];
+    count.textContent = needs.length ? `(${needs.length})` : '';
+    list.innerHTML = '';
+    if (needs.length === 0) {
+      list.innerHTML = '<div class="audit-log-empty">All clear — nothing needs your attention.</div>';
+      return;
+    }
+    for (const nudge of needs) {
+      const el = document.createElement('div');
+      el.className = 'curator-nudge-item';
+      el.dataset.nudgeKey = nudge.nudge_key;
+      const severity = getSeverityCue(nudge.priority);
+      const actionHref = getActionHref(nudge.action);
+      const now = Math.floor(Date.now() / 1000);
+      const oneWeekEpoch = String(now + 7 * 24 * 3600);
+      const oneMonthEpoch = String(now + 30 * 24 * 3600);
+      el.innerHTML = `
+        <div class="curator-nudge-head">
+          <span class="curator-severity ${severity.className}" title="Priority: ${nudge.priority}">${severity.label}</span>
+          <div class="curator-nudge-text">
+            <div class="curator-nudge-title">${esc(nudge.title)}</div>
+            <div class="curator-nudge-summary">${esc(nudge.summary || '')}</div>
+          </div>
+        </div>
+        <div class="curator-nudge-actions">
+          <a class="btn-ms curator-action-link" href="${esc(actionHref)}" title="Open to resolve this nudge">Open</a>
+          <div class="curator-snooze-group">
+            <button type="button" class="btn-ms curator-snooze-btn" data-snooze-until="${oneWeekEpoch}" title="Hide for 1 week">1 week</button>
+            <button type="button" class="btn-ms curator-snooze-btn" data-snooze-until="${oneMonthEpoch}" title="Hide for 1 month">1 month</button>
+          </div>
+          <button type="button" class="btn-ms curator-dismiss-btn" title="Permanently dismiss this nudge">Dismiss</button>
+          <span class="backup-status curator-nudge-msg"></span>
+        </div>`;
+      const msg = el.querySelector('.curator-nudge-msg');
+      el.querySelector('.curator-dismiss-btn').addEventListener('click', async () => {
+        await dismissNudge(nudge.nudge_key, null, el, msg);
+      });
+      el.querySelectorAll('.curator-snooze-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          await dismissNudge(nudge.nudge_key, btn.dataset.snoozeUntil, el, msg);
+        });
+      });
+      list.appendChild(el);
+    }
+  }
+
+  async function dismissNudge(nudgeKey, snoozeUntil, el, msgEl) {
+    const body = new URLSearchParams({ nudge_key: nudgeKey });
+    if (snoozeUntil) body.append('snooze_until', snoozeUntil);
+    try {
+      el.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      const res = await fetch('/api/curator/needs/dismiss', { method: 'POST', body });
+      if (!res.ok) throw new Error(`Failed (${res.status})`);
+      msgEl.textContent = snoozeUntil ? 'Snoozed' : 'Dismissed';
+      msgEl.className = 'backup-status backup-status-ok curator-nudge-msg';
+      setTimeout(() => {
+        el.style.opacity = '0.5';
+        setTimeout(() => el.remove(), 300);
+        document.dispatchEvent(new Event('constructicon:needs-changed'));
+      }, 400);
+    } catch (err) {
+      msgEl.textContent = err.message || 'Failed';
+      msgEl.className = 'backup-status backup-status-error curator-nudge-msg';
+      el.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      setTimeout(() => { msgEl.textContent = ''; msgEl.className = 'backup-status curator-nudge-msg'; }, 8000);
+    }
+  }
+
+  async function loadNudges() {
+    try {
+      const res = await fetch('/api/curator/needs');
+      if (!res.ok) return;
+      render(await res.json());
+    } catch (err) { /* leave whatever's shown */ }
+  }
+
+  function openDrawer() {
+    drawer.classList.add('open');
+    backdrop.classList.add('open');
+    loaded = true;
+    loadNudges();  // refresh on every open so the list is current
+  }
+  function closeDrawer() {
+    drawer.classList.remove('open');
+    backdrop.classList.remove('open');
+  }
+
+  if (trigger) trigger.addEventListener('click', openDrawer);
+  closeBtn.addEventListener('click', closeDrawer);
+  backdrop.addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && drawer.classList.contains('open')) closeDrawer();
+  });
+  // Keep the open drawer in sync if a nudge is dismissed/snoozed elsewhere.
+  document.addEventListener('constructicon:needs-changed', () => {
+    if (loaded && drawer.classList.contains('open')) loadNudges();
+  });
+})();
+</script>

@@ -23,6 +23,7 @@
   --icon-muted: #3F4530;
   --hazard-yellow: #E8B93A;
   --hazard-black: #17150F;
+  --hazard-stripe: #889B55;
   --hazard-red: #E24B4A;
   --hazard-red-soft: #C97A5E;
   --warn: #BA7517;
@@ -39,7 +40,7 @@
   height: 6px;
   background: repeating-linear-gradient(
     -45deg,
-    var(--hazard-yellow) 0 14px,
+    var(--hazard-stripe) 0 14px,
     var(--hazard-black) 14px 28px
   );
   border-radius: 3px;
@@ -2009,7 +2010,7 @@ body.delete-mode-on .card-select-row { display: flex; }
      scrim so the light icon/label stay legible; hover lightens the scrim. */
   background:
     linear-gradient(rgba(23,21,15,0.62), rgba(23,21,15,0.62)),
-    repeating-linear-gradient(-45deg, var(--hazard-yellow) 0 14px, var(--hazard-black) 14px 28px);
+    repeating-linear-gradient(-45deg, var(--hazard-stripe) 0 14px, var(--hazard-black) 14px 28px);
   /* Purple stroke (#345) — each tab is its own folder tab: full 3px purple
      outline (no right edge, it tucks off the page), rounded on both left
      corners, with a gap between tabs (see .nav-tabs-list) so they read as
@@ -2024,7 +2025,7 @@ body.delete-mode-on .card-select-row { display: flex; }
 .nav-tab:hover, .nav-tab.active {
   background:
     linear-gradient(rgba(23,21,15,0.34), rgba(23,21,15,0.34)),
-    repeating-linear-gradient(-45deg, var(--hazard-yellow) 0 14px, var(--hazard-black) 14px 28px);
+    repeating-linear-gradient(-45deg, var(--hazard-stripe) 0 14px, var(--hazard-black) 14px 28px);
 }
 
 .nav-tab-icon {

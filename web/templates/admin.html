@@ -247,6 +247,22 @@
       <div id="admin-audit-log-container" class="admin-audit-log-container"></div>
     </section>
 
+    <!-- Storage (#352) — silo stats: total storage + DB, file count by type,
+         exported-site size, and backup count/size. Complements the Maintenance
+         panel's backup control with the "how big is the silo?" view. -->
+    <section class="admin-panel">
+      <div class="admin-panel-header">
+        <div>
+          <h2>Storage</h2>
+          <div class="admin-row-hint">Silo size, file distribution, exports, and backups (#352)</div>
+        </div>
+        <button type="button" class="btn-ms admin-storage-refresh" id="admin-storage-refresh" title="Refresh stats">↻</button>
+      </div>
+      <div id="admin-storage-content" class="admin-storage-content">
+        <div class="admin-storage-loading">Loading…</div>
+      </div>
+    </section>
+
     <!-- Maintenance — the original #24 contents that weren't a list or a
          form: "Back up now" (relocated from _header.html back then) and the
          "Delete all" development convenience (relocated from
@@ -378,6 +394,80 @@
 
 .curator-nudge-msg {
   margin-left: auto;
+}
+
+.admin-storage-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.admin-storage-loading {
+  padding: 1rem;
+  text-align: center;
+  color: var(--text-secondary, #666);
+}
+
+.admin-storage-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  background: var(--panel-bg, #f9f9f9);
+  border-radius: 4px;
+  border-left: 3px solid #2196f3;
+}
+
+.admin-storage-total {
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.admin-storage-breakdown {
+  font-size: 0.85rem;
+  color: var(--text-secondary, #666);
+}
+
+.admin-storage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.admin-storage-table th,
+.admin-storage-table td {
+  padding: 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.admin-storage-table th {
+  background: var(--panel-bg, #f9f9f9);
+  font-weight: 500;
+  color: var(--text-secondary, #666);
+  padding: 0.5rem;
+}
+
+.admin-storage-table td:nth-child(2),
+.admin-storage-table td:nth-child(3) {
+  text-align: right;
+}
+
+.admin-storage-section {
+  padding: 0.75rem;
+  background: var(--panel-bg, #f9f9f9);
+  border-radius: 4px;
+}
+
+.admin-storage-section-title {
+  font-weight: 500;
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.admin-storage-section-value {
+  font-size: 0.85rem;
+  color: var(--text-secondary, #666);
 }
 </style>
 
@@ -845,6 +935,88 @@
   }
   loadAuditLog();
 
+  // Storage stats (#352) — silo size breakdown: storage + DB, files by type,
+  // exports, and backups. Fetched on load and refreshable via a button.
+  const storageContent = document.getElementById('admin-storage-content');
+  const storageRefresh = document.getElementById('admin-storage-refresh');
+
+  function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+  }
+
+  async function loadStorageStats() {
+    storageContent.innerHTML = '<div class="admin-storage-loading">Loading…</div>';
+    try {
+      const res = await fetch('/api/admin/storage-stats');
+      if (!res.ok) throw new Error(`Failed (${res.status})`);
+      const data = await res.json();
+      renderStorageStats(data);
+    } catch (err) {
+      storageContent.innerHTML = `<div class="admin-storage-loading">Failed to load: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderStorageStats(data) {
+    const silo = data.silo || {};
+    const byType = data.by_type || [];
+    const exportsBytes = data.exports_bytes || 0;
+    const backups = data.backups || {};
+
+    let html = '';
+
+    // Headline: total silo size with storage/DB split
+    const storageFormatted = formatBytes(silo.storage_bytes || 0);
+    const dbFormatted = formatBytes(silo.db_bytes || 0);
+    const totalFormatted = formatBytes(silo.total_bytes || 0);
+    html += `
+      <div class="admin-storage-headline">
+        <div class="admin-storage-total">Silo: ${totalFormatted}</div>
+        <div class="admin-storage-breakdown">Storage files: ${storageFormatted} · DB: ${dbFormatted}</div>
+      </div>
+    `;
+
+    // File type distribution table
+    if (byType.length > 0) {
+      html += '<table class="admin-storage-table"><thead><tr><th>Type</th><th>Count</th><th>Size</th></tr></thead><tbody>';
+      for (const row of byType) {
+        const typeLabel = escapeHtml(row.media_type || 'unknown');
+        html += `
+          <tr>
+            <td>${typeLabel}</td>
+            <td>${row.count}</td>
+            <td>${formatBytes(row.bytes || 0)}</td>
+          </tr>
+        `;
+      }
+      html += '</tbody></table>';
+    }
+
+    // Exports size
+    html += `
+      <div class="admin-storage-section">
+        <div class="admin-storage-section-title">Exported site</div>
+        <div class="admin-storage-section-value">${formatBytes(exportsBytes)}</div>
+      </div>
+    `;
+
+    // Backups
+    html += `
+      <div class="admin-storage-section">
+        <div class="admin-storage-section-title">Backups</div>
+        <div class="admin-storage-section-value">${backups.count || 0} file${backups.count !== 1 ? 's' : ''}, ${formatBytes(backups.bytes || 0)} total</div>
+      </div>
+    `;
+
+    storageContent.innerHTML = html;
+  }
+
+  loadStorageStats();
+  storageRefresh.addEventListener('click', loadStorageStats);
+
   // "Back up now" — same /api/backup call it's always made.
   const backupBtn = document.getElementById('admin-backup-btn');
   const backupStatus = document.getElementById('admin-backup-status');
@@ -863,6 +1035,8 @@
       const sizeMb = (data.size / (1024 * 1024)).toFixed(1);
       backupStatus.textContent = `Saved ${data.filename} (${sizeMb} MB)`;
       backupStatus.className = 'backup-status backup-status-ok';
+      // Refresh storage stats after backup
+      setTimeout(loadStorageStats, 500);
     } catch (err) {
       backupStatus.textContent = err.message || 'Backup failed';
       backupStatus.className = 'backup-status backup-status-error';

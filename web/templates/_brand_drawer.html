@@ -1,0 +1,126 @@
+<!-- Brand vault (#345) — the /brand "Brand Kit" surface as a wide slide-out
+     drawer, so it's reachable from the nav rail on every page instead of a page
+     navigation that read as inconsistent sitting among the drawer tabs. Included
+     globally from base.html. Assets load lazily on first open. The hidden
+     #brand-drawer-trigger is what the rail's Brand tab dispatches its click to,
+     the same pattern the Upload/Blog/Export tabs use. The standalone /brand page
+     still exists as a direct-URL fallback. -->
+<button type="button" id="brand-drawer-trigger" style="display:none" aria-hidden="true" tabindex="-1"></button>
+<div class="drawer-backdrop" id="brand-drawer-backdrop"></div>
+<div class="wide-drawer brand-drawer" id="brand-drawer" role="dialog" aria-label="Brand vault">
+  <div class="wide-drawer-header">
+    <h2>Brand Vault</h2>
+    <button type="button" class="modal-close" id="brand-drawer-close" aria-label="Close">&times;</button>
+  </div>
+  <p class="page-subtitle">Reusable branding assets (logos, icons, colors, etc.).</p>
+  <div id="brand-drawer-container" style="display:none">
+    <div id="brand-drawer-assets"></div>
+  </div>
+  <p id="brand-drawer-empty" class="empty-state" style="display:none">No brand assets yet — mark objects as brand assets from their detail page.</p>
+</div>
+
+<script>
+(function () {
+  const backdrop = document.getElementById('brand-drawer-backdrop');
+  const drawer = document.getElementById('brand-drawer');
+  const trigger = document.getElementById('brand-drawer-trigger');
+  const closeBtn = document.getElementById('brand-drawer-close');
+  let loaded = false;
+
+  function esc(str) {
+    return String(str || '').replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  function copyUrl(text, btn) {
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    }).catch((err) => { console.error('Failed to copy:', err); });
+  }
+
+  async function loadAssets() {
+    try {
+      const res = await fetch('/api/brand-assets');
+      if (!res.ok) return;
+      const assets = await res.json();
+      const container = document.getElementById('brand-drawer-assets');
+      const empty = document.getElementById('brand-drawer-empty');
+      const main = document.getElementById('brand-drawer-container');
+
+      if (!assets.length) {
+        empty.style.display = 'block';
+        main.style.display = 'none';
+        return;
+      }
+      empty.style.display = 'none';
+      main.style.display = 'block';
+
+      const grouped = {};
+      assets.forEach((a) => {
+        const role = a.brand_role || 'other';
+        (grouped[role] = grouped[role] || []).push(a);
+      });
+
+      container.innerHTML = Object.entries(grouped)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([role, items]) => `
+          <div class="brand-role-section">
+            <div class="brand-role-header">${esc(role)}</div>
+            <div class="brand-assets-grid">
+              ${items.map((asset) => `
+                <a href="/object/${encodeURIComponent(asset.slug)}" class="brand-asset-link">
+                  <div class="brand-asset-card">
+                    <div class="brand-asset-thumb">
+                      <img src="${esc(asset.thumb_url)}" alt="${esc(asset.title)}" loading="lazy">
+                    </div>
+                    <div class="brand-asset-info">
+                      <div class="brand-asset-title">${esc(asset.title)}</div>
+                      <div class="brand-asset-role">${esc(role)}</div>
+                      <div class="brand-asset-links">
+                        <div class="brand-asset-link-item">
+                          <span class="brand-asset-link-text">${esc(asset.file_url)}</span>
+                          <button type="button" class="brand-asset-copy-btn" title="Copy file URL" data-url="${esc(asset.file_url)}">Copy</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </a>
+              `).join('')}
+            </div>
+          </div>
+        `).join('');
+
+      // Wire copy buttons (data-url + listener, rather than inline onclick relying
+      // on the global `event` object like the old /brand page did).
+      container.querySelectorAll('.brand-asset-copy-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          copyUrl(btn.dataset.url, btn);
+        });
+      });
+    } catch (err) {
+      console.error('Failed to load brand assets:', err);
+    }
+  }
+
+  function openDrawer() {
+    drawer.classList.add('open');
+    backdrop.classList.add('open');
+    if (!loaded) { loaded = true; loadAssets(); }
+  }
+  function closeDrawer() {
+    drawer.classList.remove('open');
+    backdrop.classList.remove('open');
+  }
+
+  if (trigger) trigger.addEventListener('click', openDrawer);
+  closeBtn.addEventListener('click', closeDrawer);
+  backdrop.addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && drawer.classList.contains('open')) closeDrawer();
+  });
+})();
+</script>

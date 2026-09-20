@@ -2054,3 +2054,49 @@ body.delete-mode-on .card-select-row { display: flex; }
 .gallery-drawer-tab {
   display: none !important;
 }
+
+/* --- Wide slide-out drawer (#345) — a roomier variant of .upload-drawer for
+   surfaces that want multi-column content (Brand vault now; Admin next).
+   Reuses .drawer-backdrop; slides in from the right like the other drawers. */
+.wide-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 46;
+  width: 760px; max-width: 92vw;
+  background: var(--card); border-left: 1px solid var(--border);
+  transform: translateX(100%); transition: transform 0.22s ease;
+  display: flex; flex-direction: column; padding: 22px; box-sizing: border-box; overflow-y: auto;
+}
+.wide-drawer.open { transform: translateX(0); }
+.wide-drawer-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; flex-shrink: 0; }
+.wide-drawer-header h2 { font-size: 16px; font-weight: 500; margin: 0; }
+.wide-drawer .page-subtitle { margin: 0 0 18px; }
+
+/* Brand vault cards — moved out of brand.html's inline <style> when Brand
+   became a drawer (#345), and remapped from nonexistent --*-color var names
+   (which were silently falling back to light hardcodes) to the real dark-theme
+   tokens so the cards match the rest of the app. */
+.brand-role-section { margin-bottom: 1.6rem; }
+.brand-role-header {
+  font-size: 13px; font-weight: 600; color: var(--icon-muted);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 0.9rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);
+}
+.brand-assets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+.brand-asset-link { text-decoration: none; color: inherit; }
+.brand-asset-card {
+  display: flex; flex-direction: column; gap: 8px; padding: 1rem;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface); transition: all 0.2s;
+}
+.brand-asset-card:hover { border-color: var(--border-strong); box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+.brand-asset-thumb {
+  display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 1;
+  background: var(--chip); border-radius: 4px; overflow: hidden;
+}
+.brand-asset-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.brand-asset-info { display: flex; flex-direction: column; gap: 4px; }
+.brand-asset-title { font-weight: 500; font-size: 14px; color: var(--text); word-break: break-word; }
+.brand-asset-role { font-size: 12px; color: var(--icon-muted); }
+.brand-asset-links { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.brand-asset-link-item { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-family: monospace; color: var(--icon-muted); }
+.brand-asset-link-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand-asset-copy-btn { background: none; border: none; padding: 2px 4px; cursor: pointer; color: var(--accent); font-size: 12px; opacity: 0.7; transition: opacity 0.2s; }
+.brand-asset-copy-btn:hover { opacity: 1; }

@@ -2365,6 +2365,64 @@ def remove_project_from_hobby(project_id, tag_id):
         conn.close()
 
 
+def delete_project(project_id):
+    """Delete a project without cascade: orphan child projects, detach objects,
+    remove hobbies, and delete the project row itself.
+
+    Returns a dict with {children_orphaned, items_detached} summarizing the
+    deletion, or None if the project wasn't found.
+
+    DESTRUCTIVE. Steps, in one transaction:
+    1. Load the project; return None if not found.
+    2. Resolve everything that needs to change: child project ids,
+       item slugs, hobby tag ids (read-only, before the write transaction).
+    3. In one transaction (BEGIN IMMEDIATE):
+       - Set every child project's parent_id to NULL (orphan them, don't delete)
+       - Delete all project_items rows for this project
+       - Delete all project_hobbies rows for this project
+       - Delete the projects row itself
+    4. Return summary of what was orphaned/detached."""
+
+    # Resolve EVERYTHING before opening the write transaction. Each read function
+    # (list_child_projects, list_project_items, list_hobbies_for_project) opens
+    # its own connection; if any of them ran while we held BEGIN IMMEDIATE, they'd
+    # deadlock. Sequence for stability: reads first, then a tight write-only
+    # transaction on a single connection.
+    project = get_project(project_id)
+    if project is None:
+        return None
+
+    child_ids = [c["id"] for c in list_child_projects(project_id)]
+    item_slugs = [it["slug"] for it in list_project_items(project_id)]
+    hobby_ids = [h["id"] for h in list_hobbies_for_project(project_id)]
+
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        # Orphan child projects (don't delete them).
+        for child_id in child_ids:
+            conn.execute("UPDATE projects SET parent_id = NULL WHERE id = ?", (child_id,))
+
+        # Detach objects from this project.
+        conn.execute("DELETE FROM project_items WHERE project_id = ?", (project_id,))
+
+        # Remove project from hobbies.
+        conn.execute("DELETE FROM project_hobbies WHERE project_id = ?", (project_id,))
+
+        # Delete the project itself.
+        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+        conn.commit()
+
+        return {
+            "children_orphaned": len(child_ids),
+            "items_detached": len(item_slugs),
+        }
+    finally:
+        conn.close()
+
+
 def convert_project_to_hobby(project_id):
     """Convert an existing project into a hobby.
 

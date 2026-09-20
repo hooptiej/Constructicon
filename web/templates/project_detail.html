@@ -57,6 +57,7 @@
           </select>
         </div>
         <button type="button" class="btn-secondary" id="convert-to-hobby-btn" title="Convert this project to a hobby" style="white-space:nowrap">Convert to hobby</button>
+        <button type="button" class="btn-danger" id="delete-project-btn" title="Delete this project (orphan children, detach objects)" style="white-space:nowrap">Delete project</button>
       </div>
       {# Curator Stage 2: per-project health indicator #}
       {% if project_score %}
@@ -135,7 +136,7 @@
     {% endif %}
     {% for entry in grid_entries %}
     {% if entry.kind == 'project' %}
-    <div class="project-item-card-wrapper project-subproject-wrapper" data-project-slug="{{ entry.slug }}">
+    <div class="project-item-card-wrapper project-subproject-wrapper" data-project-slug="{{ entry.slug }}" data-project-id="{{ entry.id }}">
       <a class="project-item-card project-subproject-card" href="/project/{{ entry.slug }}">
         <div class="project-item-thumb">
           {% if entry.cover_url %}
@@ -151,9 +152,10 @@
           <div class="project-item-meta">{{ entry.item_count }} item{{ '' if entry.item_count == 1 else 's' }} · {{ entry.date_display }}</div>
         </div>
       </a>
+      <button type="button" class="orphan-child-btn" title="Remove from this project" style="position:absolute;top:8px;right:8px;width:24px;height:24px;padding:0;border:1px solid var(--border);border-radius:4px;background:var(--bg);cursor:pointer;display:none;align-items:center;justify-content:center;font-size:14px;color:var(--text)">×</button>
     </div>
     {% else %}
-    <div class="project-item-card-wrapper" data-slug="{{ entry.slug }}">
+    <div class="project-item-card-wrapper" data-slug="{{ entry.slug }}" style="position:relative">
       <a class="project-item-card" href="{{ entry.link }}">
         <div class="project-item-thumb">
           {% if entry.thumb_url %}
@@ -172,6 +174,7 @@
         {% if entry.media_type == 'document' %}
         <input type="radio" class="project-writeup-selector" name="writeup" data-slug="{{ entry.slug }}" title="Set as write-up" {% if entry.slug == project.writeup_slug %}checked{% endif %}>
         {% endif %}
+        <button type="button" class="remove-item-btn" title="Remove from this project" style="border:none;background:none;padding:4px 8px;cursor:pointer;color:var(--text);font-size:14px;display:none">×</button>
       </div>
     </div>
     {% endif %}
@@ -224,6 +227,24 @@
       </div>
       <p class="error-text" id="convert-hobby-error" style="display:none;margin-top:12px"></p>
       <p class="save-confirm" id="convert-hobby-success" style="display:none;margin-top:12px"></p>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="delete-project-backdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Delete project?</h2>
+      <button type="button" class="modal-close" id="delete-project-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="delete-project-message" style="margin:0;line-height:1.5"></p>
+      <div style="display:flex;gap:12px;margin-top:20px">
+        <button type="button" class="btn-danger" id="delete-project-confirm">Delete</button>
+        <button type="button" class="btn-secondary" id="delete-project-cancel">Cancel</button>
+      </div>
+      <p class="error-text" id="delete-project-error" style="display:none;margin-top:12px"></p>
+      <p class="save-confirm" id="delete-project-success" style="display:none;margin-top:12px"></p>
     </div>
   </div>
 </div>
@@ -747,6 +768,165 @@ convertHobbyConfirm.addEventListener('click', async () => {
     convertHobbyConfirm.textContent = 'Convert';
   }
 });
+
+// Delete project (#367): confirmation dialog and deletion handler
+// SELF-CONTAINED — embed projectId and title via Jinja
+(function () {
+  const projectId = {{ project.id | tojson }};
+  const projectTitle = {{ project.title | tojson }};
+  const projectChildCount = {{ grid_entries | selectattr('kind', 'equalto', 'project') | list | length }};
+  const projectItemCount = {{ grid_entries | rejectattr('kind', 'equalto', 'project') | list | length }};
+
+  const deleteProjectBtn = document.getElementById('delete-project-btn');
+  const deleteProjectBackdrop = document.getElementById('delete-project-backdrop');
+  const deleteProjectMessage = document.getElementById('delete-project-message');
+  const deleteProjectConfirm = document.getElementById('delete-project-confirm');
+  const deleteProjectCancel = document.getElementById('delete-project-cancel');
+  const deleteProjectClose = document.getElementById('delete-project-close');
+  const deleteProjectError = document.getElementById('delete-project-error');
+  const deleteProjectSuccess = document.getElementById('delete-project-success');
+
+  function showDeleteDialog() {
+    deleteProjectError.style.display = 'none';
+    deleteProjectSuccess.style.display = 'none';
+    deleteProjectConfirm.disabled = false;
+    deleteProjectConfirm.textContent = 'Delete';
+    const message = `Delete "${projectTitle}"? Its ${projectChildCount} sub-project${projectChildCount === 1 ? '' : 's'} become top-level and its ${projectItemCount} object${projectItemCount === 1 ? '' : 's'} are detached — nothing else is deleted. This can't be undone.`;
+    deleteProjectMessage.textContent = message;
+    deleteProjectBackdrop.style.display = 'flex';
+  }
+
+  function hideDeleteDialog() {
+    deleteProjectBackdrop.style.display = 'none';
+  }
+
+  deleteProjectBtn.addEventListener('click', showDeleteDialog);
+  deleteProjectCancel.addEventListener('click', hideDeleteDialog);
+  deleteProjectClose.addEventListener('click', hideDeleteDialog);
+
+  deleteProjectConfirm.addEventListener('click', async () => {
+    deleteProjectConfirm.disabled = true;
+    deleteProjectConfirm.textContent = 'Deleting…';
+    deleteProjectError.style.display = 'none';
+    deleteProjectSuccess.style.display = 'none';
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/delete`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(body.detail || 'Deletion failed');
+      }
+
+      deleteProjectSuccess.textContent = `Deleted "${projectTitle}" — orphaned ${body.children_orphaned} project${body.children_orphaned === 1 ? '' : 's'}, detached ${body.items_detached} object${body.items_detached === 1 ? '' : 's'}.`;
+      deleteProjectSuccess.style.display = 'block';
+
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 1500);
+    } catch (err) {
+      deleteProjectError.textContent = err.message;
+      deleteProjectError.style.display = 'block';
+      deleteProjectConfirm.disabled = false;
+      deleteProjectConfirm.textContent = 'Delete';
+    }
+  });
+})();
+
+// Orphan child projects (#367): remove-from-parent control
+// SELF-CONTAINED — embed projectId via Jinja
+(function () {
+  const projectId = {{ project.id | tojson }};
+
+  // Show/hide orphan buttons on hover
+  document.querySelectorAll('.project-subproject-wrapper').forEach(wrapper => {
+    const btn = wrapper.querySelector('.orphan-child-btn');
+    wrapper.addEventListener('mouseenter', () => {
+      btn.style.display = 'flex';
+    });
+    wrapper.addEventListener('mouseleave', () => {
+      btn.style.display = 'none';
+    });
+
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const childId = wrapper.getAttribute('data-project-id');
+      const childTitle = wrapper.querySelector('.project-item-title').textContent;
+
+      if (!confirm(`Remove "${childTitle}" from this project? It becomes top-level.`)) return;
+
+      try {
+        const res = await fetch(`/api/projects/${projectId}/orphan-child`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `child_id=${encodeURIComponent(childId)}`
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          alert('Error: ' + (body.detail || 'Failed to remove child'));
+          return;
+        }
+
+        // Remove from DOM
+        wrapper.style.opacity = '0.5';
+        setTimeout(() => wrapper.remove(), 300);
+      } catch (err) {
+        console.error('Error orphaning child:', err);
+        alert('Error: ' + err.message);
+      }
+    });
+  });
+})();
+
+// Remove objects from project (#367): remove control on object cards
+// SELF-CONTAINED — embed projectId via Jinja
+(function () {
+  const projectId = {{ project.id | tojson }};
+
+  // Show/hide remove buttons on hover
+  document.querySelectorAll('.project-item-card-wrapper[data-slug]').forEach(wrapper => {
+    const btn = wrapper.querySelector('.remove-item-btn');
+    if (!btn) return; // Only applies to object cards, not project cards
+
+    wrapper.addEventListener('mouseenter', () => {
+      btn.style.display = 'block';
+    });
+    wrapper.addEventListener('mouseleave', () => {
+      btn.style.display = 'none';
+    });
+
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const slug = wrapper.getAttribute('data-slug');
+      const title = wrapper.querySelector('.project-item-title').textContent;
+
+      if (!confirm(`Remove "${title}" from this project?`)) return;
+
+      try {
+        const res = await fetch(`/api/projects/${projectId}/remove-item`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `slug=${encodeURIComponent(slug)}`
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          alert('Error: ' + (body.detail || 'Failed to remove object'));
+          return;
+        }
+
+        // Remove from DOM
+        wrapper.style.opacity = '0.5';
+        setTimeout(() => wrapper.remove(), 300);
+      } catch (err) {
+        console.error('Error removing item:', err);
+        alert('Error: ' + err.message);
+      }
+    });
+  });
+})();
 </script>
 
 {% endblock %}

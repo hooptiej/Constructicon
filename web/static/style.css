@@ -1108,21 +1108,18 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 
 /* --- Projects (curated cards) --- */
-.tag-chip-row-wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.tag-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+/* #370: Slimmed hobby pill row -- tighter spacing, smaller chips, single
+   horizontal band. Flex-start aligns all pills left (no space-between
+   toggle); flex-wrap allows tight wrapping on narrow viewports. */
+.tag-chip-row-wrap { display: flex; align-items: center; justify-content: flex-start; gap: 8px; overflow-x: auto; overflow-y: hidden; max-height: 44px; padding: 6px 0; }
+.tag-chip-row { display: flex; gap: 6px; flex-wrap: nowrap; min-width: min-content; }
 .tag-chip {
-  font-size: 11.5px; color: var(--text-2); background: var(--chip); border: 1px solid var(--border-strong);
-  padding: 5px 11px; border-radius: 100px; text-decoration: none; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; color: var(--text-2); background: var(--chip); border: 1px solid var(--border-strong);
+  padding: 4px 9px; border-radius: 100px; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex-shrink: 0;
 }
 .tag-chip:hover { color: var(--text); border-color: var(--purple-bright); }
 .tag-chip.active { color: #fff; background: var(--purple); border-color: var(--purple-bright); }
-/* #173: top-level vs. all-projects pill-scope toggle */
-.pill-scope-toggle { display: flex; gap: 2px; font-size: 11px; flex-shrink: 0; }
-.pill-scope-option {
-  color: var(--text-3); text-decoration: none; padding: 4px 9px; border-radius: 100px;
-}
-.pill-scope-option:hover { color: var(--text-2); }
-.pill-scope-option.active { color: var(--text); background: var(--chip); }
+/* #370: pill-scope-toggle removed (pills now hobby-based, not project-tag based) */
 .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
 .project-card {
   background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;

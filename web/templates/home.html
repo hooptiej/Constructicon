@@ -164,7 +164,7 @@
       </script>
       {% else %}
       <p class="empty-state">
-        {% if selected_tag_slug %}No projects tagged under this category yet.{% else %}No projects yet.{% endif %}
+        {% if selected_tag_slug %}No projects in this hobby yet.{% elif show_reference_selected %}No reference projects yet.{% else %}No projects yet.{% endif %}
       </p>
       {% endif %}
 

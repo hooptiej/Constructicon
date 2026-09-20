@@ -759,43 +759,40 @@ def healthz():
 # --- Pages ---
 
 @app.get("/", response_class=HTMLResponse)
-def home_page(request: Request, tag: str = "", scope: str = "top"):
+def home_page(request: Request, hobby: str = "", ref: str = ""):
     """Home is the gallery itself (left third) plus a curated Projects
     section (right two-thirds) — see README's Projects/tag-tree note for why
-    projects and blog_tags are separate concepts. ?tag=<slug> filters the
-    Projects section down to cards with at least one item under that tag or
-    one of its descendants; the gallery pane (client-side, /api/gallery) is
-    unaffected by it.
+    projects and blog_tags are separate concepts. The pill row filters by
+    hobby (?hobby=<slug>) or by reference status (?ref=1); the gallery pane
+    (client-side, /api/gallery) is unaffected by it.
+
+    #370: Pills are now hobby-based, not project-derived. Selecting a hobby
+    pill (?hobby=<slug>) shows only projects attached to that hobby;
+    selecting the Reference pill (?ref=1) shows only reference-status projects;
+    no params shows all top-level projects.
     """
-    tag_tree = db.list_tag_tree()
-    selected_tag = None
-    if tag:
-        selected_tag = next((t for t in _flatten_tags(tag_tree) if t["slug"] == tag), None)
     all_projects = db.list_projects()
-    # #173: the pill row is a project filter, not a general tag browser —
-    # pills are derived from projects themselves (via each project's linked
-    # tag_id), not from every root-level blog_tags row. This naturally
-    # excludes pre-Projects "category" tags with no matching project (e.g.
-    # "AlienWhoop & TinyShark") that #154's child-project-only exclusion
-    # missed, and ?scope=all opts into including child projects' pills too.
-    # selected_tag above still matches against the full tag tree, so a
-    # direct ?tag= link works regardless of which pills are shown.
-    tags_by_id = {t["id"]: t for t in _flatten_tags(tag_tree)}
-    pill_source = all_projects if scope == "all" else [p for p in all_projects if p.get("parent_id") is None]
-    project_pills, seen_tag_ids = [], set()
-    for p in sorted(pill_source, key=lambda p: p["title"]):
-        pill_tag = tags_by_id.get(p.get("tag_id"))
-        if not pill_tag or pill_tag["id"] in seen_tag_ids:
-            continue
-        seen_tag_ids.add(pill_tag["id"])
-        project_pills.append({**pill_tag, "name": p["title"]})
-    # #149: only top-level projects belong on the front-page widget — a
-    # child project (parent_id set, #133) is reached via its parent's
-    # project detail page, not as its own tile here.
-    projects = [p for p in all_projects if p.get("parent_id") is None]
-    if selected_tag:
-        member_slugs = {r["slug"] for r in db.list_posts_for_tag(selected_tag["id"], limit=10000)}
-        projects = [p for p in projects if _project_has_tag(p, member_slugs)]
+    # #370: Hobby pills replace project-tag pills. Build the pill row from
+    # hobbies, with an "All" pill (no filter) and a "Reference" pill at the end.
+    hobby_pills = db.list_hobbies()
+
+    # Resolve selected hobby and determine filtered projects
+    selected_hobby = None
+    selected_hobby_slug = None
+    projects = [p for p in all_projects if p.get("parent_id") is None]  # #149: top-level only
+
+    if hobby:
+        selected_hobby = db.get_hobby(hobby)
+        if selected_hobby:
+            selected_hobby_slug = selected_hobby["slug"]
+            # Show only projects in this hobby
+            hobby_projects = db.list_projects_for_hobby(selected_hobby["id"])
+            hobby_project_ids = {p["id"] for p in hobby_projects}
+            projects = [p for p in projects if p["id"] in hobby_project_ids]
+    elif ref:
+        # Show only reference-status projects (v1: reference-only status;
+        # future: could also include loose reference objects via provenance)
+        projects = [p for p in projects if p.get("status") == "reference-only"]
     # Owner name/initials for the combined gallery+upload pop-out's tab
     # (#17) — SOURCE_GROUPS[0] is the site's single-owner display label
     # (e.g. "Hooptie J (me)"); strip the "(me)" qualifier for the tab's
@@ -830,9 +827,10 @@ def home_page(request: Request, tag: str = "", scope: str = "top"):
         request, "home.html",
         {
             "active": "home",
-            "top_tags": project_pills,
-            "selected_tag_slug": tag or None,
-            "pill_scope": scope,
+            "top_tags": hobby_pills,  # #370: hobby pills, kept as top_tags for template reuse
+            "selected_tag_slug": selected_hobby_slug,  # #370: selected hobby slug for pill highlighting
+            "show_reference_pill": True,  # #370: always show Reference pill
+            "show_reference_selected": bool(ref),  # #370: highlight if ?ref=1
             "projects": [_to_project_card(p) for p in projects],
             "owner_name": _owner_label,
             "owner_initials": _owner_initials,

@@ -1965,6 +1965,20 @@ def count_pending_decisions():
         conn.close()
 
 
+def media_type_counts():
+    """Return a list of dicts {media_type, count} for all non-redacted items,
+    grouped by media_type, ordered by count descending. Used by the storage
+    stats panel (#352) to show file type distribution."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT media_type, COUNT(*) as count FROM capture_events WHERE redacted = 0 GROUP BY media_type ORDER BY count DESC"
+        ).fetchall()
+        return [{"media_type": row["media_type"], "count": row["count"]} for row in rows]
+    finally:
+        conn.close()
+
+
 def resolve_pending_decision(decision_id, resolution=None):
     """Marks a decision resolved, recording what was chosen (any JSON-able
     value — for project_match, the list of project ids applied, possibly

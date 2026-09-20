@@ -1054,6 +1054,93 @@ def api_list_redacted():
     return JSONResponse({"count": len(items), "items": items})
 
 
+@app.get("/api/admin/storage-stats")
+def api_storage_stats():
+    """#352: storage statistics for the admin page. Returns:
+    - silo: {storage_bytes, db_bytes, total_bytes}
+    - by_type: [{media_type, count, bytes}]
+    - exports_bytes: size of exports/current/ directory
+    - backups: {count, bytes}
+    """
+    # Per-type counts from DB
+    type_counts = {t["media_type"]: t["count"] for t in db.media_type_counts()}
+
+    # Per-type bytes and storage total: walk storage directory and stat files
+    storage_total = 0
+    type_bytes = {}
+    if storage.STORAGE_DIR.is_dir():
+        # Get all non-redacted items to map stored_filename -> media_type
+        conn = db.get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT media_type, stored_filename FROM capture_events WHERE redacted = 0 AND stored_filename IS NOT NULL"
+            ).fetchall()
+            stored_by_type = {}
+            for row in rows:
+                media_type = row["media_type"]
+                stored_filename = row["stored_filename"]
+                if media_type not in stored_by_type:
+                    stored_by_type[media_type] = []
+                stored_by_type[media_type].append(stored_filename)
+
+            # Sum file sizes by type and total
+            for media_type, filenames in stored_by_type.items():
+                type_bytes[media_type] = 0
+                for filename in filenames:
+                    fpath = storage.STORAGE_DIR / filename
+                    if fpath.exists():
+                        type_bytes[media_type] += fpath.stat().st_size
+                        storage_total += fpath.stat().st_size
+
+            # Also add thumbnail files to the total (they belong to all types)
+            for thumb_path in storage.STORAGE_DIR.glob("*_thumb.jpg"):
+                storage_total += thumb_path.stat().st_size
+        finally:
+            conn.close()
+
+    # DB size
+    db_bytes = 0
+    if db.DB_PATH.exists():
+        db_bytes = db.DB_PATH.stat().st_size
+
+    # Exports size
+    exports_bytes = 0
+    exports_dir = Path(__file__).resolve().parent.parent / "exports"
+    if exports_dir.is_dir():
+        for fpath in exports_dir.rglob("*"):
+            if fpath.is_file():
+                exports_bytes += fpath.stat().st_size
+
+    # Backups: count and total size
+    backup_files = backup._existing_backups()
+    backups_count = len(backup_files)
+    backups_bytes = sum(f.stat().st_size for f in backup_files if f.exists())
+
+    # Build response: by_type list with counts + bytes, sorted by bytes desc
+    by_type = []
+    for media_type, count in type_counts.items():
+        by_type.append({
+            "media_type": media_type,
+            "count": count,
+            "bytes": type_bytes.get(media_type, 0),
+        })
+    by_type.sort(key=lambda x: x["bytes"], reverse=True)
+
+    return JSONResponse({
+        "silo": {
+            "storage_bytes": storage_total,
+            "db_bytes": db_bytes,
+            "total_bytes": storage_total + db_bytes,
+        },
+        "by_type": by_type,
+        "exports_bytes": exports_bytes,
+        "backups": {
+            "count": backups_count,
+            "bytes": backups_bytes,
+        },
+    })
+
+
 @app.get("/upload")
 def upload_page_redirect():
     # Upload is now a pane on the home page, not its own screen.

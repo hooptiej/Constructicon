@@ -16,6 +16,7 @@
       <h1 class="page-title">Hobbies</h1>
       <p class="page-subtitle">Collections organized by hobby interest.</p>
     </div>
+    <button type="button" class="btn-secondary" id="new-hobby-btn" title="Create a new hobby">+ New hobby</button>
   </div>
 
   <div id="hobbies-grid" class="gallery-grid"></div>
@@ -67,6 +68,20 @@ function encodeHtml(str) {
     "'": '&#39;'
   }[c]));
 }
+
+document.getElementById('new-hobby-btn').addEventListener('click', async () => {
+  const name = prompt('New hobby name:');
+  if (!name || !name.trim()) return;
+  const fd = new FormData();
+  fd.append('name', name.trim());
+  const res = await fetch('/api/hobbies', { method: 'POST', body: fd });
+  if (res.ok) {
+    const hobby = await res.json();
+    window.location.href = `/hobby/${encodeURIComponent(hobby.slug)}`;
+  } else {
+    alert('Failed to create hobby.');
+  }
+});
 
 loadHobbies();
 </script>

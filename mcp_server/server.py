@@ -960,9 +960,9 @@ def constructicon_set_provenance(slug: str, provenance: str | None = None) -> di
     """Set or clear an object's provenance classification (#341).
 
     Provenance describes how an object came to be captured: "found", "created",
-    "documented", "result" (outcome of a process), "failure" (lesson learned),
-    "reference" (cited or sourced from elsewhere), "design" (drafted/designed).
-    The set is loose and extensible — trim in use as patterns emerge.
+    "documented", "result" (outcome of a process), "reference" (cited or sourced
+    from elsewhere), "design" (drafted/designed). The set is loose and extensible
+    — trim in use as patterns emerge.
 
     provenance: one of the standard types, a custom value, or None to clear.
     Returns the updated object (the usual public shape plus "provenance"),
@@ -998,9 +998,9 @@ def constructicon_set_project_status(id_or_slug: str, status: str) -> dict | Non
     Status conditions scoring and nudging in the Curator system: "wip" (work
     in progress, scored leniently), "complete" (finished, strict scoring),
     "shelved" (paused), "means-to-an-end" (an intermediate step for something
-    else), "abandoned" (discontinued), "idea" (pre-start thinking), "published"
-    (live site version), "reference-only" (external link, not authored here).
-    Existing "active" rows are equivalent to "wip".
+    else), "abandoned" (discontinued), "failed" (tried, never succeeded), "idea"
+    (pre-start thinking), "published" (live site version), "reference-only"
+    (external link, not authored here). Existing "active" rows are equivalent to "wip".
 
     The set is loose and extensible — trim in use as patterns emerge.
 

@@ -1992,7 +1992,7 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 
 .nav-tabs-list {
-  display: flex; flex-direction: column; align-items: stretch; gap: 0;
+  display: flex; flex-direction: column; align-items: stretch; gap: 10px;
   list-style: none; margin: 0; padding: 0;
 }
 
@@ -2007,23 +2007,15 @@ body.delete-mode-on .card-select-row { display: flex; }
   background:
     linear-gradient(rgba(23,21,15,0.62), rgba(23,21,15,0.62)),
     repeating-linear-gradient(-45deg, var(--hazard-yellow) 0 14px, var(--hazard-black) 14px 28px);
-  /* Purple stroke (#345) — visual separation between the hazard-stripe tabs */
-  border: 1px solid var(--purple-bright); border-right: none;
-  border-radius: 10px 0 0 0; border-bottom: none;
+  /* Purple stroke (#345) — each tab is its own folder tab: full 3px purple
+     outline (no right edge, it tucks off the page), rounded on both left
+     corners, with a gap between tabs (see .nav-tabs-list) so they read as
+     separate folder tabs rather than one button bar. */
+  border: 3px solid var(--purple-bright); border-right: none;
+  border-radius: 12px 0 0 12px;
   padding: 12px 9px; cursor: pointer; transition: background 0.2s ease;
   box-shadow: -2px 2px 10px rgba(0,0,0,0.35);
   font-size: 0; color: inherit; text-decoration: none;
-  /* First tab gets top radius, rest get none */
-}
-.nav-tab-item:first-child .nav-tab {
-  border-radius: 10px 0 0 0;
-}
-.nav-tab-item:not(:first-child) .nav-tab {
-  border-radius: 0;
-}
-.nav-tab-item:last-child .nav-tab {
-  border-radius: 0 0 0 10px;
-  border-bottom: 1px solid var(--purple-bright);
 }
 
 .nav-tab:hover, .nav-tab.active {

@@ -51,6 +51,7 @@ just leaves that row without a similarity signal.
 """
 
 import io
+import os
 import re
 import threading
 from pathlib import Path
@@ -62,8 +63,8 @@ from . import db, object_types, similarity, storage, thumbnails
 
 MIN_NICKNAME_LEN = 3
 OCR_TIMEOUT_SECONDS = 20  # a real screenshot should OCR in a few seconds; past 20s it's not worth the wait
-MAX_CONCURRENT_OCR = 2  # leave headroom on a 4-core box so the app itself stays responsive
-OCR_SEMAPHORE = threading.Semaphore(MAX_CONCURRENT_OCR)
+_OCR_CONCURRENCY = threading.BoundedSemaphore(int(os.environ.get("OCR_MAX_CONCURRENCY", "2")))  # leave headroom on a 4-core box so the app itself stays responsive
+OCR_SEMAPHORE = _OCR_CONCURRENCY  # alias for backward compat with existing code
 
 # #237: size bounds for the pre-OCR resize step. Below MIN_OCR_DIMENSION on
 # its long side, text is often too small for tesseract to resolve reliably;

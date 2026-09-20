@@ -26,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, curator, curator_needs, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
+from core import automatch, backup, captions, curator, curator_needs, db, embedded_metadata, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()
@@ -962,15 +962,9 @@ def api_backup():
 # Thingiverse's side, so this is exactly the same "paste one static secret"
 # shape as youtube_data_api_key. No storage/endpoint changes required; this
 # confirms #55/#59's genericness holds for a second key.
-# imgur_client_id / imgur_username (#200): public-gallery-only Imgur import
-# (account/{username}/submissions), Client-ID auth — same "paste one static
-# secret" shape again. imgur_username isn't itself a secret but rides the
-# same generic settings mechanism rather than a one-off config path.
 KNOWN_SETTINGS = {
     "youtube_data_api_key": "YouTube Data API Key",
     "thingiverse_app_token": "Thingiverse App Token",
-    "imgur_client_id": "Imgur Client ID",
-    "imgur_username": "Imgur Username",
     "pages_publish_token": "GitHub Pages Publish Token",
     "pages_publish_targets": "GitHub Pages Publish Targets",
 }
@@ -1649,55 +1643,6 @@ async def api_create_content(
     if captions.should_caption(spec):
         background_tasks.add_task(captions.run_caption, slug)  # #239, see /api/upload
     _attach_to_project(slug, project_id or None)
-    return JSONResponse(_to_public(db.get_by_slug(slug)))
-
-
-@app.post("/api/imgur/import")
-def api_imgur_import(background_tasks: BackgroundTasks):
-    """Issue #200: the upload drawer's "Import from Imgur" button. Runs
-    core.imgur_import.sync_public_gallery() synchronously — a personal
-    gallery's submission count is small enough that one request/response
-    round trip is fine, no background job needed — then schedules OCR (and,
-    #249, an auto-caption) for each newly created row the same way
-    /api/content does."""
-    try:
-        summary = imgur_import.sync_public_gallery()
-    except imgur_import.ImgurImportError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    spec = object_types.get_object_type("imgur")
-    if spec.ocr_capable:
-        for slug in summary["slugs"]:
-            row = db.get_by_slug(slug)
-            if row and row["ocr_status"] == "pending":
-                background_tasks.add_task(ocr.run_ocr, slug)
-    if captions.should_caption(spec):
-        for slug in summary["slugs"]:
-            background_tasks.add_task(captions.run_caption, slug)  # #249, see /api/upload
-    return JSONResponse(summary)
-
-
-@app.post("/api/imgur/import-url")
-def api_imgur_import_url(background_tasks: BackgroundTasks, url: str = Form(...)):
-    """Issue #203: the generic link field's Imgur-aware counterpart to
-    /api/content (see _upload_drawer.html's addImgurUrlAndTrack) — one
-    pasted Imgur post/album URL, one row, giving the owner exact control
-    over what enters Constructicon instead of /api/imgur/import's
-    account-wide all-or-nothing pull. Returns the same public-item shape
-    /api/content does (so the drawer's OCR-poll logic works unchanged),
-    or {"skipped": true} if that item was already imported."""
-    try:
-        result = imgur_import.import_from_url(url)
-    except imgur_import.ImgurImportError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    if not result["slug"]:
-        return JSONResponse({"skipped": True})
-    slug = result["slug"]
-    spec = object_types.get_object_type("imgur")
-    row = db.get_by_slug(slug)
-    if spec.ocr_capable and row["ocr_status"] == "pending":
-        background_tasks.add_task(ocr.run_ocr, slug)
-    if captions.should_caption(spec):
-        background_tasks.add_task(captions.run_caption, slug)  # #249, see /api/upload
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 
@@ -3337,7 +3282,7 @@ def get_file(slug: str):
     if row["redacted"]:
         raise HTTPException(status_code=410, detail="file was redacted (sensitive content) — metadata is still on the image page")
     if not row.get("stored_filename"):
-        # Content-only row (youtube/imgur/url/document — see core/db.py's
+        # Content-only row (youtube/url/document — see core/db.py's
         # insert_content): there is no local file to serve. Without this
         # guard storage.path_for(None) raises TypeError and the route 500s
         # (#211), even though _to_public advertises /f/<slug> for every row.

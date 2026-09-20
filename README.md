@@ -27,13 +27,11 @@ flowchart TD
     subgraph ingest [Ingest]
         U[Web upload / drag-drop or folder]
         D[Desktop uploader app]
-        L[Paste any URL — YouTube / Imgur / web]
-        IM[Imgur gallery import]
+        L[Paste any URL — YouTube / web]
     end
     U --> CE
     D --> CE
     L --> CE
-    IM --> CE
     CE[("capture_events — every object<br/>image, video, STL, PDF, PSD, SVG,<br/>audio, YouTube link, …")]
     CE --> ENRICH[OCR · perceptual/embedding similarity · auto-caption · thumbnail]
     CE --> TAGS[Nestable tag tree]
@@ -106,9 +104,8 @@ erDiagram
 ## Features
 
 - **Ingest** — drag-and-drop upload (a folder drop becomes a Project), a
-  separate **desktop uploader app** (`desktop_app/`), pasting any URL
-  (YouTube / Imgur / generic web page, classified server-side), and a
-  one-click **Imgur gallery import**.
+  separate **desktop uploader app** (`desktop_app/`), and pasting any URL
+  (YouTube / generic web page, classified server-side).
 - **OCR & search** — images are OCR'd (`tesseract`), PDFs use their text layer;
   everything is searchable.
 - **Related items** — perceptual-hash + sentence-transformer similarity surface
@@ -152,10 +149,10 @@ OCR-eligibility, metadata) registered into a shared dispatch table.
 | Source code | `.php` `.py` `.js` `.sh` `.json` `.yaml` `.yml` `.html` `.css` `.sql` |
 | Archive | `.zip` `.7z` |
 
-Plus non-file content types (a URL, no upload): **YouTube video**, **Imgur
-upload**, generic **web page**, **live stream**, and a plain **written post**
-(the type project write-up documents use). Unrecognized extensions still store
-fine — they just get no thumbnail/OCR until a spec is added.
+Plus non-file content types (a URL, no upload): **YouTube video**, generic
+**web page**, **live stream**, and a plain **written post** (the type project
+write-up documents use). Unrecognized extensions still store fine — they just
+get no thumbnail/OCR until a spec is added.
 
 ## Export & publish, in detail
 

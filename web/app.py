@@ -254,6 +254,23 @@ def _has_thumbnail(row, spec=None):
     return spec.thumbnail_source != object_types.ThumbnailSource.NONE
 
 
+def _should_advertise_thumb(row, spec=None):
+    """Whether a card/detail shape should expose thumb_url. The type must have
+    a thumbnail strategy (_has_thumbnail), AND the thumbnail must be obtainable:
+    an UPLOADED_FILE type needs its stored file present, but FETCH_URL/CAPTURE
+    types derive or fetch the thumbnail lazily (the /f/<slug>/thumb route does
+    it on first request) even with NO stored_filename — e.g. youtube. The old
+    blanket `and bool(stored_filename)` guard (#222) wrongly hid youtube
+    thumbnails (no stored file, but a perfectly fetchable img.youtube.com thumb),
+    leaving broken cards."""
+    spec = spec or object_types.get_object_type(row.get("media_type"))
+    if not _has_thumbnail(row, spec):
+        return False
+    if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
+        return bool(row.get("stored_filename"))
+    return True
+
+
 def _to_public(row):
     media_type = row.get("media_type") or "image"
     spec = object_types.get_object_type(media_type)
@@ -268,7 +285,7 @@ def _to_public(row):
     # project-card shape below already does; the card templates also check
     # this themselves, so this is about the API shape being consistent for
     # any consumer that doesn't.
-    has_thumb = _has_thumbnail(row, spec) and bool(row.get("stored_filename"))
+    has_thumb = _should_advertise_thumb(row, spec)
     return {
         "slug": row["slug"],
         "url": f"/f/{row['slug']}",
@@ -435,7 +452,7 @@ def _to_object_detail(row):
     is_file = bool(row.get("stored_filename"))
     media_type = row.get("media_type") or "image"
     spec = object_types.get_object_type(media_type)
-    has_thumb = _has_thumbnail(row, spec) and is_file
+    has_thumb = _should_advertise_thumb(row, spec)
     return {
         "slug": row["slug"],
         # Curator (#341): provenance + highlight so the detail page's classifier
@@ -684,7 +701,7 @@ def _to_content_public(row, project_slug=None):
     is_file = bool(row.get("filename"))
     media_type = row.get("media_type") or "image"
     spec = object_types.get_object_type(media_type)
-    has_thumb = _has_thumbnail(row) and bool(row.get("stored_filename"))
+    has_thumb = _should_advertise_thumb(row)
     link = f"/object/{row['slug']}"
     if project_slug:
         link = f"{link}?from=project:{project_slug}"
@@ -816,7 +833,7 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
         for row in loose_ref_rows:
             media_type = row.get("media_type") or "image"
             spec = object_types.get_object_type(media_type)
-            has_thumb = _has_thumbnail(row, spec) and bool(row.get("stored_filename"))
+            has_thumb = _should_advertise_thumb(row, spec)
             reference_objects.append({
                 "slug": row["slug"],
                 "title": row.get("display_name") or row.get("content_description") or row["filename"] or row["slug"],

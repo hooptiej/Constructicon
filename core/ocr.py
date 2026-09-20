@@ -66,6 +66,16 @@ OCR_TIMEOUT_SECONDS = 20  # a real screenshot should OCR in a few seconds; past 
 _OCR_CONCURRENCY = threading.BoundedSemaphore(int(os.environ.get("OCR_MAX_CONCURRENCY", "2")))  # leave headroom on a 4-core box so the app itself stays responsive
 OCR_SEMAPHORE = _OCR_CONCURRENCY  # alias for backward compat with existing code
 
+# #391: bound each tesseract call to a single OpenMP thread. tesseract uses
+# OpenMP internally and, unbounded, fans one OCR across every core -- so
+# OCR_MAX_CONCURRENCY slots x (all cores each) still pegs the whole box and
+# starves uvicorn until serving hardlocks (the 2026-09-19 bulk-import incident).
+# With this, OCR CPU is bounded at ~OCR_MAX_CONCURRENCY cores total, leaving
+# headroom for the web worker. tesseract reads OMP_THREAD_LIMIT from the
+# environment when it spawns, so setting it here (before any image_to_string
+# call) is enough; setdefault so an explicit deployment override still wins.
+os.environ.setdefault("OMP_THREAD_LIMIT", os.environ.get("OCR_OMP_THREAD_LIMIT", "1"))
+
 # #237: size bounds for the pre-OCR resize step. Below MIN_OCR_DIMENSION on
 # its long side, text is often too small for tesseract to resolve reliably;
 # above MAX_OCR_DIMENSION (a real iPhone photo can be 4032x3024+), there's no

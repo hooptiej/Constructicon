@@ -1,0 +1,105 @@
+<!-- Processing drawer (#388) — a left-edge pop-out (mirroring the right nav
+     rail) showing in-flight post-upload work: OCR / captioning / embedding per
+     item. Global view of everything the box is still chewing, however it was
+     uploaded (drawer, MCP, bulk script), with the items this browser just
+     submitted (localStorage) highlighted at the top. Included globally from
+     base.html. Polls GET /api/processing; no status is stored just for this. -->
+<button type="button" class="proc-tab idle" id="proc-tab" title="Processing" aria-label="Processing">
+  <svg class="proc-tab-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
+    <path d="M12 3a9 9 0 109 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </svg>
+  <span class="proc-tab-label">Processing</span>
+  <span class="proc-tab-badge" id="proc-tab-badge" hidden>0</span>
+</button>
+<div class="drawer-backdrop" id="proc-backdrop"></div>
+<div class="proc-drawer" id="proc-drawer" role="dialog" aria-label="Processing">
+  <div class="proc-drawer-header">
+    <h2>Processing</h2>
+    <button type="button" class="modal-close" id="proc-close" aria-label="Close">&times;</button>
+  </div>
+  <p class="page-subtitle">Uploads still being chewed — OCR, captioning, embedding.</p>
+  <div class="proc-list" id="proc-list"></div>
+  <p class="proc-empty" id="proc-empty" style="display:none">All caught up — nothing processing.</p>
+</div>
+
+<script>
+(function () {
+  const tab = document.getElementById('proc-tab');
+  const badge = document.getElementById('proc-tab-badge');
+  const drawer = document.getElementById('proc-drawer');
+  const backdrop = document.getElementById('proc-backdrop');
+  const closeBtn = document.getElementById('proc-close');
+  const list = document.getElementById('proc-list');
+  const empty = document.getElementById('proc-empty');
+  const SKEY = 'ctc_processing_session';
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  function sessionSlugs() {
+    try {
+      const a = JSON.parse(localStorage.getItem(SKEY) || '[]');
+      const cut = Date.now() - 86400000; // drop entries older than a day
+      const keep = a.filter(x => x && x.ts > cut);
+      if (keep.length !== a.length) localStorage.setItem(SKEY, JSON.stringify(keep));
+      return keep.map(x => x.slug);
+    } catch (e) { return []; }
+  }
+
+  function stageHtml(st) {
+    const label = st.state === 'failed' ? esc(st.stage) + ' failed' : esc(st.stage);
+    return `<span class="proc-stage ${esc(st.state)}"><span class="proc-stage-dot"></span>${label}</span>`;
+  }
+
+  function render(data) {
+    const items = (data && data.items) || [];
+    const n = (data && data.count) || 0;
+    badge.textContent = n > 99 ? '99+' : n;
+    badge.hidden = n === 0;
+    tab.classList.toggle('idle', n === 0);
+    if (!items.length) {
+      list.innerHTML = '';
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+    list.innerHTML = items.map(it => `
+      <div class="proc-item ${it.is_session ? 'is-session' : ''}">
+        <div class="proc-item-name">${esc(it.name)}</div>
+        <div class="proc-stages">${
+          (it.stages || []).map(stageHtml).join('') ||
+          '<span class="proc-stage done"><span class="proc-stage-dot"></span>done</span>'
+        }</div>
+      </div>`).join('');
+  }
+
+  let polling = false;
+  async function poll() {
+    if (polling) return;
+    polling = true;
+    try {
+      const s = sessionSlugs();
+      const url = '/api/processing' + (s.length ? '?session=' + encodeURIComponent(s.join(',')) : '');
+      const res = await fetch(url);
+      if (res.ok) render(await res.json());
+    } catch (e) { /* transient — next tick retries */ }
+    finally { polling = false; }
+  }
+
+  function openDrawer() { drawer.classList.add('open'); backdrop.classList.add('open'); poll(); }
+  function closeDrawer() { drawer.classList.remove('open'); backdrop.classList.remove('open'); }
+
+  tab.addEventListener('click', () => drawer.classList.contains('open') ? closeDrawer() : openDrawer());
+  closeBtn.addEventListener('click', closeDrawer);
+  backdrop.addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && drawer.classList.contains('open')) closeDrawer(); });
+  // ingest.js fires this right after a submit registers new slugs.
+  document.addEventListener('constructicon:processing-added', openDrawer);
+
+  poll();
+  setInterval(poll, 3000);
+})();
+</script>

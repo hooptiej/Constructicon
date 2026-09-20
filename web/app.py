@@ -1650,6 +1650,72 @@ async def api_create_content(
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 
+def _derive_processing_status(row):
+    """#388: turn a raw row into the processing drawer's per-stage view.
+    Stages shown depend on the type's capabilities: OCR + Embed for OCR-capable
+    types, Caption for caption-capable ones. Embed has no status of its own — it
+    settles in the same slot as OCR (see core/ocr.py) — so it's derived from
+    embedding presence."""
+    spec = object_types.get_object_type(row.get("media_type"))
+    try:
+        tm = json.loads(row.get("type_metadata") or "{}")
+    except Exception:
+        tm = {}
+    stages = []
+    if spec and spec.ocr_capable:
+        s = row.get("ocr_status")
+        stages.append({"stage": "OCR", "state": "done" if s == "done" else "failed" if s == "failed" else "pending"})
+    if spec and spec.caption_capable:
+        cs = tm.get("auto_caption_status")
+        stages.append({"stage": "Caption", "state": "done" if cs == "done" else "failed" if cs == "failed" else "pending"})
+    if spec and spec.ocr_capable:
+        stages.append({"stage": "Embed", "state": "done" if row.get("has_embedding") else "pending"})
+    in_flight = any(st["state"] == "pending" for st in stages)
+    if not stages:
+        overall = "done"
+    elif in_flight:
+        overall = "processing"
+    elif any(st["state"] == "failed" for st in stages):
+        overall = "failed"
+    else:
+        overall = "done"
+    return {"stages": stages, "in_flight": in_flight, "overall": overall}
+
+
+@app.get("/api/processing")
+def api_processing(request: Request, session: str = ""):
+    """#388: in-flight post-upload work (OCR/caption/embed) for the processing
+    drawer. Returns everything still mid-pipeline across the whole box (however
+    it was uploaded), plus any explicitly-requested `session` slugs even once
+    settled, so the drawer can show the caller's own items finish. Derived from
+    existing per-row signals — no status is stored just for this."""
+    session_slugs = [s for s in session.split(",") if s][:200]
+    by_slug = {r["slug"]: r for r in db.list_processing_candidates()}
+    for r in db.get_processing_rows_by_slugs(session_slugs):
+        by_slug.setdefault(r["slug"], r)
+    session_set = set(session_slugs)
+    items = []
+    in_flight_count = 0
+    for slug, row in by_slug.items():
+        st = _derive_processing_status(row)
+        is_session = slug in session_set
+        if not (st["in_flight"] or is_session):
+            continue
+        if st["in_flight"]:
+            in_flight_count += 1
+        items.append({
+            "slug": slug,
+            "name": row.get("display_name") or row.get("content_description") or row.get("filename") or slug,
+            "stages": st["stages"],
+            "overall": st["overall"],
+            "is_session": is_session,
+        })
+    # In-flight first, then settled; within each, session items ahead of the rest.
+    order = {"processing": 0, "failed": 1, "done": 2}
+    items.sort(key=lambda x: (order.get(x["overall"], 3), not x["is_session"]))
+    return JSONResponse({"items": items, "count": in_flight_count})
+
+
 @app.get("/api/image/{slug}")
 def api_get_image(request: Request, slug: str):
     row = db.get_by_slug(slug)

@@ -17,6 +17,20 @@
 // tracking now lives in this one shared addFiles/stageFolderDrop path, so
 // both callers get it.
 
+// #388: remember slugs we just submitted (per-browser) so the processing
+// drawer can highlight them, show them through to done, and pop open when a
+// new batch lands. The drawer (_processing_drawer.html) reads the same key.
+function registerProcessing(slug) {
+  if (!slug) return;
+  try {
+    const K = 'ctc_processing_session';
+    const list = JSON.parse(localStorage.getItem(K) || '[]');
+    list.push({ slug: slug, ts: Date.now() });
+    localStorage.setItem(K, JSON.stringify(list.slice(-300)));
+    document.dispatchEvent(new Event('constructicon:processing-added'));
+  } catch (e) { /* localStorage unavailable — non-fatal */ }
+}
+
 function createIngestController({ onOpen }) {
   const fileInput = document.getElementById('file-input');
   const stagedList = document.getElementById('staged-list');
@@ -498,6 +512,7 @@ function createIngestController({ onOpen }) {
     }
 
     const item = await res.json();
+    registerProcessing(item.slug);
     if (item.ocr_status !== 'pending') {
       updateFileStatus(i, 'done', undefined, item.slug);
       return { ok: true };
@@ -536,6 +551,7 @@ function createIngestController({ onOpen }) {
     }
 
     const item = await res.json();
+    registerProcessing(item.slug);
     if (item.ocr_status !== 'pending') {
       updateFileStatus(i, 'done', undefined, item.slug);
       return { ok: true };

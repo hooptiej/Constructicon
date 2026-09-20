@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS capture_events (
     icon TEXT,
     agent_notes TEXT,
     provenance TEXT,
-    highlight INTEGER NOT NULL DEFAULT 0
+    highlight INTEGER NOT NULL DEFAULT 0,
+    is_brand_asset INTEGER NOT NULL DEFAULT 0,
+    brand_role TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_capture_events_source ON capture_events(source);
 CREATE INDEX IF NOT EXISTS idx_capture_events_client ON capture_events(client);
@@ -163,6 +165,11 @@ SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
 # Controlled vocab for object provenance (how an object came to be captured).
 # Loose (no DB CHECK), extensible — trim in use as patterns emerge.
 PROVENANCE_TYPES = ["found", "created", "documented", "result", "reference", "design"]
+
+# --- Brand asset roles (capture_events.brand_role) — #350 ---
+# Suggested vocab for reusable branding objects (logo, logotype, icon, etc.).
+# Loose (no DB CHECK), extensible — brand_role is freeform text, allows custom values.
+BRAND_ROLES = ["logo", "logotype", "icon", "color", "typography", "swag", "template-asset", "other"]
 
 # --- Project statuses (projects.status) — #341 ---
 # Controlled vocab for project lifecycle stage. Loose, no DB CHECK. Existing
@@ -449,6 +456,12 @@ def init_db():
         # Idempotent — safe to run on every init. "failure" moved to project status;
         # re-tag objects as "documented".
         conn.execute("UPDATE capture_events SET provenance='documented' WHERE provenance='failure'")
+        # is_brand_asset + brand_role (#350): Brand kit data model. is_brand_asset flags
+        # reusable branding objects (logo, logotype, icon, color, etc.); brand_role is
+        # a freeform label describing their purpose.
+        for column, ddl_type in (("is_brand_asset", "INTEGER NOT NULL DEFAULT 0"), ("brand_role", "TEXT")):
+            if column not in existing_columns:
+                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
         conn.commit()
     finally:
         conn.close()
@@ -850,6 +863,48 @@ def set_highlight(slug, on: bool):
         conn.execute("UPDATE capture_events SET highlight = ? WHERE slug = ?", (1 if on else 0, slug))
         conn.commit()
         return get_by_slug(slug)
+    finally:
+        conn.close()
+
+
+def set_brand_asset(slug, is_brand, brand_role=None):
+    """Sets or clears an object's brand asset status and role (#350).
+
+    is_brand: True to flag as brand asset, False to clear.
+    brand_role: optional role label (one of BRAND_ROLES or custom). When is_brand
+                is falsey, brand_role is also cleared.
+    Returns the updated row, or None if not found."""
+    existing = get_by_slug(slug)
+    if existing is None:
+        return None
+    conn = get_conn()
+    try:
+        if not is_brand:
+            # Clear both flag and role when marking as not a brand asset
+            conn.execute("UPDATE capture_events SET is_brand_asset = 0, brand_role = NULL WHERE slug = ?", (slug,))
+        else:
+            conn.execute(
+                "UPDATE capture_events SET is_brand_asset = 1, brand_role = ? WHERE slug = ?",
+                (brand_role or None, slug)
+            )
+        conn.commit()
+        return get_by_slug(slug)
+    finally:
+        conn.close()
+
+
+def list_brand_assets():
+    """Returns all brand assets (where is_brand_asset=1), non-redacted,
+    ordered by brand_role then recency (timestamp desc). Each row includes
+    slug, title (from content_description or display_name), brand_role,
+    and availability for thumb/file URLs."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE is_brand_asset = 1 AND redacted = 0 "
+            "ORDER BY brand_role, timestamp DESC"
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 

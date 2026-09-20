@@ -61,6 +61,10 @@ def _to_public(row):
         # MCP object read (get_project items, search, list) carries them.
         "provenance": row.get("provenance"),
         "highlight": bool(row.get("highlight")),
+        # Brand assets (#350): is_brand_asset flag + optional brand_role label,
+        # so every MCP object read carries brand kit metadata.
+        "is_brand_asset": bool(row.get("is_brand_asset")),
+        "brand_role": row.get("brand_role"),
     }
 
 
@@ -989,6 +993,44 @@ def constructicon_set_highlight(slug: str, on: bool = False) -> dict | None:
     if row is None:
         return None
     return {**_to_public(row), "highlight": row.get("highlight")}
+
+
+@mcp.tool()
+def constructicon_set_brand_asset(slug: str, is_brand: bool = False, brand_role: str | None = None) -> dict | None:
+    """Mark or unmark an object as a brand asset (#350).
+
+    Brand assets are reusable branding objects (logos, icons, colors, etc.)
+    that live outside the project/hobby structure and are consumed by
+    export templates.
+
+    slug: the object's slug.
+    is_brand: True to mark as a brand asset, False to clear.
+    brand_role: optional role label (e.g., "logo", "icon", "color").
+                One of the standard BRAND_ROLES or a custom value.
+                Ignored when is_brand is False; brand_role is cleared
+                when the flag is cleared.
+
+    Returns the updated object (the usual public shape plus
+    "is_brand_asset" and "brand_role"), or None if not found.
+    """
+    row = db.set_brand_asset(slug, is_brand, brand_role=brand_role)
+    if row is None:
+        return None
+    return {**_to_public(row), "is_brand_asset": bool(row.get("is_brand_asset")), "brand_role": row.get("brand_role")}
+
+
+@mcp.tool()
+def constructicon_list_brand_assets() -> list[dict]:
+    """List all brand assets (#350), grouped by role and ordered by recency.
+
+    Returns a list of brand asset dicts (the usual public shape plus
+    "is_brand_asset" and "brand_role").
+    """
+    assets = db.list_brand_assets()
+    return [
+        {**_to_public(asset), "is_brand_asset": bool(asset.get("is_brand_asset")), "brand_role": asset.get("brand_role")}
+        for asset in assets
+    ]
 
 
 @mcp.tool()

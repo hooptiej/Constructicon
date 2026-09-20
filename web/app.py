@@ -27,7 +27,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
 from core import automatch, backup, captions, curator, curator_needs, db, embedded_metadata, imgur_import, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
-from core.db import PROVENANCE_TYPES, PROJECT_STATUSES
+from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -442,6 +442,10 @@ def _to_object_detail(row):
         # controls preselect correctly (and never render Undefined -> tojson 500).
         "provenance": row.get("provenance"),
         "highlight": bool(row.get("highlight")),
+        # #350: brand-kit flag/role so the detail page's brand controls preselect
+        # (and never render Undefined -> tojson 500, same as provenance above).
+        "is_brand_asset": bool(row.get("is_brand_asset")),
+        "brand_role": row.get("brand_role"),
         "media_type": media_type,
         "type_label": spec.label,
         "type_icon": spec.badge_icon,
@@ -1344,6 +1348,12 @@ def hobby_detail_page(request: Request, slug: str):
     )
 
 
+@app.get("/brand", response_class=HTMLResponse)
+def brand_kit_page(request: Request):
+    """Brand kit page (#350) showing all reusable branding assets."""
+    return templates.TemplateResponse(request, "brand.html", {})
+
+
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str):
     rows = db.search(uploaded_by=uploader, limit=1000)
@@ -1382,7 +1392,7 @@ def object_detail_page(request: Request, slug: str):
     breadcrumbs = _build_breadcrumbs(from_param, item["display_name"])
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "PROVENANCE_TYPES": PROVENANCE_TYPES},
+        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "PROVENANCE_TYPES": PROVENANCE_TYPES, "BRAND_ROLES": BRAND_ROLES},
     )
 
 
@@ -1978,6 +1988,12 @@ async def api_update_image(
     if "highlight" in form_data:
         raw_highlight = form_data.get("highlight")
         row = db.set_highlight(slug, bool(raw_highlight))
+    # brand asset (#350): checkbox for is_brand_asset (0/1), optional text field for brand_role.
+    # Like highlight, any non-empty string is truthy for is_brand_asset.
+    if "is_brand_asset" in form_data:
+        raw_is_brand = form_data.get("is_brand_asset")
+        raw_brand_role = form_data.get("brand_role") if form_data.get("brand_role") else None
+        row = db.set_brand_asset(slug, bool(raw_is_brand), brand_role=raw_brand_role)
     return JSONResponse(_to_public(row))
 
 
@@ -2743,6 +2759,26 @@ def api_convert_project_to_hobby(request: Request, slug: str):
             "items_moved": items_count,
         },
     })
+
+
+# --- Brand Assets (#350) ---
+
+@app.get("/api/brand-assets")
+def api_list_brand_assets(request: Request):
+    """List all brand assets, grouped by role.
+
+    Returns a list of brand asset dicts with slug, title, brand_role, and URLs."""
+    assets = db.list_brand_assets()
+    return JSONResponse([
+        {
+            "slug": asset["slug"],
+            "title": asset.get("content_description") or asset.get("display_name") or asset["slug"],
+            "brand_role": asset.get("brand_role"),
+            "thumb_url": f"/f/{asset['slug']}/thumb",
+            "file_url": f"/f/{asset['slug']}",
+        }
+        for asset in assets
+    ])
 
 
 # --- Blog Entries API ---

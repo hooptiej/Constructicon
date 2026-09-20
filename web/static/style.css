@@ -581,6 +581,8 @@ body.delete-mode-on .card-select-row { display: flex; }
 .gallery-drawer.open { transform: translateX(0); opacity: 1; }
 .gallery-drawer .dropzone { padding: 28px 16px; }
 .gallery-drawer .meta-form { width: 100%; background: none; border: none; padding: 0; margin-top: 18px; }
+.gallery-drawer-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.gallery-drawer-header .gallery-drawer-section-title { margin: 0; }
 .gallery-drawer-section-title {
   font-size: 12px; font-weight: 600; color: var(--text-2-bright); margin: 0 0 12px;
   text-transform: uppercase; letter-spacing: 0.5px;
@@ -1979,3 +1981,162 @@ body.delete-mode-on .card-select-row { display: flex; }
 .export-publish-error-detail {
   font-size: 11px; color: var(--text-2); line-height: 1.4;
 }
+
+/* --- Navigation rail (#345) — unified right-edge folder-tab rail
+   Replaces mixed header buttons/links. Styled after .gallery-drawer-tab.
+   Tabs can be drawer-openers or navigate links. Drawer-opener tabs hide
+   if their trigger element doesn't exist on the page. */
+.nav-rail {
+  position: fixed; top: 50%; right: 0; z-index: 45; transform: translateY(-50%);
+  display: flex; flex-direction: column;
+}
+
+.nav-tabs-list {
+  display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+  list-style: none; margin: 0; padding: 0;
+}
+
+.nav-tab-item {
+  flex-shrink: 0;
+}
+
+.nav-tab {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  /* Hazard-stripe tabs (#345) — the app's yellow/black hazard tape under a dark
+     scrim so the light icon/label stay legible; hover lightens the scrim. */
+  background:
+    linear-gradient(rgba(23,21,15,0.62), rgba(23,21,15,0.62)),
+    repeating-linear-gradient(-45deg, var(--hazard-yellow) 0 14px, var(--hazard-black) 14px 28px);
+  /* Purple stroke (#345) — each tab is its own folder tab: full 3px purple
+     outline (no right edge, it tucks off the page), rounded on both left
+     corners, with a gap between tabs (see .nav-tabs-list) so they read as
+     separate folder tabs rather than one button bar. */
+  border: 3px solid var(--purple-bright); border-right: none;
+  border-radius: 12px 0 0 12px;
+  padding: 12px 9px; cursor: pointer; transition: background 0.2s ease;
+  box-shadow: -2px 2px 10px rgba(0,0,0,0.35);
+  font-size: 0; color: inherit; text-decoration: none;
+}
+
+.nav-tab:hover, .nav-tab.active {
+  background:
+    linear-gradient(rgba(23,21,15,0.34), rgba(23,21,15,0.34)),
+    repeating-linear-gradient(-45deg, var(--hazard-yellow) 0 14px, var(--hazard-black) 14px 28px);
+}
+
+.nav-tab-icon {
+  width: 16px; height: 16px; flex-shrink: 0;
+  color: var(--text);
+}
+
+.nav-tab-label {
+  writing-mode: vertical-rl; transform: rotate(180deg); font-size: 10px;
+  color: var(--text); letter-spacing: 0.3px; max-height: 80px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+.nav-tab-separator {
+  height: 1px; background: var(--border-stronger); margin: 6px 8px;
+  box-shadow: -2px 2px 10px rgba(0,0,0,0.35);
+}
+
+/* --- Hide redundant old nav controls (now all in the nav rail) ---
+   Keep the drawer trigger buttons in the DOM (their drawers' JS wires
+   open logic to them; the rail tabs dispatch a click to them), just hide
+   them visually. The admin gear becomes the rail's Admin tab, and the
+   home page's gallery-drawer hover-tab (#345: it popped out over the rail
+   and made the whole thing a mess) is hidden too — home's upload is now
+   driven only by the rail's Upload tab -> #upload-trigger -> the gallery
+   drawer, same as every other page's Upload tab. */
+.app-header .upload-trigger,
+.app-header .blog-builder-trigger,
+.app-header .export-builder-trigger,
+.gallery-drawer-tab {
+  display: none !important;
+}
+
+/* --- Wide slide-out drawer (#345) — a roomier variant of .upload-drawer for
+   surfaces that want multi-column content (Brand vault now; Admin next).
+   Reuses .drawer-backdrop; slides in from the right like the other drawers. */
+.wide-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 46;
+  width: 760px; max-width: 92vw;
+  background: var(--card); border-left: 1px solid var(--border);
+  transform: translateX(100%); transition: transform 0.22s ease;
+  display: flex; flex-direction: column; padding: 22px; box-sizing: border-box; overflow-y: auto;
+}
+.wide-drawer.open { transform: translateX(0); }
+.wide-drawer-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; flex-shrink: 0; }
+.wide-drawer-header h2 { font-size: 16px; font-weight: 500; margin: 0; }
+.wide-drawer .page-subtitle { margin: 0 0 18px; }
+
+/* Brand vault cards — moved out of brand.html's inline <style> when Brand
+   became a drawer (#345), and remapped from nonexistent --*-color var names
+   (which were silently falling back to light hardcodes) to the real dark-theme
+   tokens so the cards match the rest of the app. */
+.brand-role-section { margin-bottom: 1.6rem; }
+.brand-role-header {
+  font-size: 13px; font-weight: 600; color: var(--icon-muted);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 0.9rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);
+}
+.brand-assets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+.brand-asset-link { text-decoration: none; color: inherit; }
+.brand-asset-card {
+  display: flex; flex-direction: column; gap: 8px; padding: 1rem;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface); transition: all 0.2s;
+}
+.brand-asset-card:hover { border-color: var(--border-strong); box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+.brand-asset-thumb {
+  display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 1;
+  background: var(--chip); border-radius: 4px; overflow: hidden;
+}
+.brand-asset-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.brand-asset-info { display: flex; flex-direction: column; gap: 4px; }
+.brand-asset-title { font-weight: 500; font-size: 14px; color: var(--text); word-break: break-word; }
+.brand-asset-role { font-size: 12px; color: var(--icon-muted); }
+.brand-asset-links { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.brand-asset-link-item { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-family: monospace; color: var(--icon-muted); }
+.brand-asset-link-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand-asset-copy-btn { background: none; border: none; padding: 2px 4px; cursor: pointer; color: var(--accent); font-size: 12px; opacity: 0.7; transition: opacity 0.2s; }
+.brand-asset-copy-btn:hover { opacity: 1; }
+
+/* Admin drawer (#345) — the admin page loads chrome-less into an iframe that
+   fills the wide drawer below the header. */
+.admin-drawer { overflow: hidden; }
+.admin-drawer-frame { flex: 1 1 auto; width: 100%; border: 0; background: var(--bg); margin-top: 12px; }
+
+/* Needs badge (#240) on the Admin nav-rail tab, mirroring the old .admin-badge
+   that rode the header gear. .nav-tab is position:relative so this anchors to it. */
+.nav-tab-badge {
+  position: absolute; top: 4px; right: 4px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: var(--hazard-yellow); color: var(--hazard-black);
+  font-size: 10px; font-weight: 600; line-height: 16px; text-align: center; box-sizing: border-box;
+}
+
+/* Curator nudges (#343) — moved out of admin.html's inline <style> into the
+   Nudges drawer (#345); remapped from nonexistent --panel-bg / --text-secondary
+   (light hardcode fallbacks) to real dark tokens. Severity colours kept. */
+.admin-curator-needs-list {
+  display: flex; flex-direction: column; gap: 0.75rem;
+  max-height: 70vh; overflow-y: auto; padding-right: 0.25rem;
+}
+.curator-nudge-item {
+  display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem;
+  background: var(--surface); border-radius: 4px; border-left: 3px solid var(--border-strong);
+}
+.curator-nudge-head { display: flex; gap: 0.75rem; align-items: flex-start; }
+.curator-severity { font-size: 1.25rem; line-height: 1.2; flex-shrink: 0; padding-top: 0.05rem; }
+.curator-severity-high { color: #f44336; }
+.curator-severity-medium { color: #ff9800; }
+.curator-severity-low { color: #4caf50; }
+.curator-nudge-text { flex: 1; min-width: 0; }
+.curator-nudge-title { font-weight: 500; font-size: 0.95rem; margin-bottom: 0.25rem; color: var(--text); }
+.curator-nudge-summary { font-size: 0.85rem; color: var(--icon-muted); line-height: 1.3; }
+.curator-nudge-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.875rem; }
+.curator-action-link { text-decoration: none; }
+.curator-action-link:hover { text-decoration: underline; }
+.curator-snooze-group { display: flex; gap: 0.25rem; }
+.curator-snooze-group .btn-ms { font-size: 0.8rem; padding: 4px 8px; }
+.curator-dismiss-btn { font-size: 0.8rem; padding: 4px 8px; }
+.curator-nudge-msg { margin-left: auto; }

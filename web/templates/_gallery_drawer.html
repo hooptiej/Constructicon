@@ -23,7 +23,10 @@
 </div>
 <div class="gallery-drawer" id="gallery-drawer">
   <div>
-    <h2 class="gallery-drawer-section-title">Upload</h2>
+    <div class="gallery-drawer-header">
+      <h2 class="gallery-drawer-section-title">Upload</h2>
+      <button type="button" class="modal-close" id="gallery-drawer-close" aria-label="Close">&times;</button>
+    </div>
     <form id="upload-form">
       <p class="error-text" id="upload-error" style="display:none;margin-bottom:12px"></p>
       <button class="btn-primary" type="submit" id="submit-btn" style="margin-bottom:14px" disabled>Ingest to Constructicon</button>
@@ -124,6 +127,18 @@
   panel.addEventListener('mouseenter', () => clearTimeout(closeTimer));
   panel.addEventListener('mouseleave', () => scheduleHide());
   if (headerUploadTrigger) headerUploadTrigger.addEventListener('click', togglePinned);
+
+  // Explicit close button (#345) — the other drawers all have an X; this one
+  // used to close only on hover-out/outside-click/Escape. Close directly rather
+  // than via scheduleHide, whose :hover guard would otherwise keep it open
+  // (the click lands inside the panel, so the pointer is over it).
+  const closeBtn = document.getElementById('gallery-drawer-close');
+  if (closeBtn) closeBtn.addEventListener('click', () => {
+    pinned = false;
+    clearTimeout(closeTimer);
+    panel.classList.remove('open');
+    tab.classList.remove('active');
+  });
 
   document.addEventListener('click', (e) => {
     if (!pinned) return;

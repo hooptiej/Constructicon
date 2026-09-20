@@ -1,0 +1,141 @@
+<!-- Navigation rail (#345) — unified right-edge folder-tab rail
+     replacing mixed header buttons/links. Data-driven for extensibility.
+     Each tab is either:
+     - A drawer-opener: carries target trigger id(s), clicks the target if present
+     - A navigate link: plain href
+     Drawer-opener tabs hide if neither target nor fallback exists on the page.
+-->
+
+<nav class="nav-rail" role="navigation" aria-label="Navigation tabs">
+  <ul class="nav-tabs-list">
+    <!-- Upload drawer (home page uses #gallery-drawer-tab, others use #upload-trigger) -->
+    <li class="nav-tab-item">
+      <button type="button" class="nav-tab nav-tab-drawer" data-drawer-trigger="upload-trigger" data-drawer-fallback="gallery-drawer-tab" title="Upload">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="nav-tab-icon">
+          <path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <span class="nav-tab-label">Upload</span>
+      </button>
+    </li>
+
+    <!-- Blog drawer -->
+    <li class="nav-tab-item">
+      <button type="button" class="nav-tab nav-tab-drawer" data-drawer-trigger="blog-builder-trigger" title="Blog">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="nav-tab-icon">
+          <path d="M4 5h16M4 9h16M4 13h16M4 17h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <span class="nav-tab-label">Blog</span>
+      </button>
+    </li>
+
+    <!-- Export drawer -->
+    <li class="nav-tab-item">
+      <button type="button" class="nav-tab nav-tab-drawer" data-drawer-trigger="export-builder-trigger" title="Export">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="nav-tab-icon">
+          <path d="M19 9l-7 7-7-7M12 16V4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="nav-tab-label">Export</span>
+      </button>
+    </li>
+
+    <!-- Brand vault drawer (#345: was a navigate link to /brand, which read as
+         inconsistent next to the drawer tabs; now a wide slide-out like the rest) -->
+    <li class="nav-tab-item">
+      <button type="button" class="nav-tab nav-tab-drawer" data-drawer-trigger="brand-drawer-trigger" title="Brand">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="nav-tab-icon">
+          <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z" fill="currentColor" opacity="0.6"/>
+          <path d="M12 12.5c.83 0 1.5-.67 1.5-1.5s-.67-1.5-1.5-1.5-1.5.67-1.5 1.5.67 1.5 1.5 1.5z" fill="currentColor"/>
+        </svg>
+        <span class="nav-tab-label">Brand</span>
+      </button>
+    </li>
+
+    <!-- Hobbies drawer (#345: was a navigate link to /hobbies, now a wide
+         slide-out like the rest) -->
+    <li class="nav-tab-item">
+      <button type="button" class="nav-tab nav-tab-drawer" data-drawer-trigger="hobbies-drawer-trigger" title="Hobbies">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="nav-tab-icon">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z" fill="currentColor"/>
+        </svg>
+        <span class="nav-tab-label">Hobbies</span>
+      </button>
+    </li>
+
+    <!-- Nudges drawer (#345/#343) — the Curator "what the beast needs" queue,
+         moved out of the admin page to its own tab. Carries the needs badge
+         (#240) that briefly rode the Admin tab. -->
+    <li class="nav-tab-item">
+      <button type="button" class="nav-tab nav-tab-drawer" data-drawer-trigger="nudges-drawer-trigger" title="Nudges">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="nav-tab-icon">
+          <path d="M12 22a2.4 2.4 0 002.4-2h-4.8A2.4 2.4 0 0012 22zm6-6V11c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 00-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" fill="currentColor"/>
+        </svg>
+        <span class="nav-tab-label">Nudges</span>
+        <span class="nav-tab-badge" id="nudges-rail-badge" hidden>0</span>
+      </button>
+    </li>
+
+    <!-- Admin drawer (#345: was a navigate link / the old header gear; now a
+         wide slide-out loading the admin page in an isolated iframe). -->
+    <li class="nav-tab-item">
+      <button type="button" class="nav-tab nav-tab-drawer" data-drawer-trigger="admin-drawer-trigger" title="Admin">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="nav-tab-icon">
+          <path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M19.4 13.5a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V19.5a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H4.5a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H10a1.65 1.65 0 001-1.51V4.5a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V10a1.65 1.65 0 001.51 1h.09a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+        <span class="nav-tab-label">Admin</span>
+      </button>
+    </li>
+  </ul>
+</nav>
+
+<script>
+(function () {
+  // Wire up drawer-opener tabs to click their trigger buttons if present
+  document.querySelectorAll('.nav-tab-drawer').forEach((btn) => {
+    const triggerId = btn.dataset.drawerTrigger;
+    const fallbackId = btn.dataset.drawerFallback;
+
+    // Check if target or fallback trigger exists on this page
+    const targetEl = document.getElementById(triggerId);
+    const fallbackEl = fallbackId ? document.getElementById(fallbackId) : null;
+    const triggerToUse = targetEl || fallbackEl;
+
+    if (!triggerToUse) {
+      // Neither target nor fallback exists — hide this tab
+      btn.closest('.nav-tab-item').style.display = 'none';
+      return;
+    }
+
+    // Click handler: dispatch a click to the real trigger button.
+    // stopPropagation is essential: on the home page the Upload trigger
+    // opens the gallery drawer, which has a document-level outside-click
+    // closer. Without stopPropagation this same click would bubble up to
+    // that closer and slam the drawer shut the instant it opened (#345).
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      triggerToUse.click();
+    });
+  });
+
+  // Needs badge (#240, #343, #345) — the nudge count rides the Nudges rail tab.
+  // Same source (/api/curator/needs) and same refresh events, so curator
+  // dismiss/snooze actions keep it live.
+  const railBadge = document.getElementById('nudges-rail-badge');
+  if (railBadge) {
+    async function refreshRailBadge() {
+      try {
+        const res = await fetch('/api/curator/needs');
+        if (!res.ok) return;
+        const data = await res.json();
+        const n = Array.isArray(data) ? data.length : 0;
+        railBadge.textContent = n;
+        railBadge.hidden = n === 0;
+      } catch (err) { /* leave whatever's shown */ }
+    }
+    refreshRailBadge();
+    document.addEventListener('constructicon:pending-decisions-changed', refreshRailBadge);
+    document.addEventListener('constructicon:needs-changed', refreshRailBadge);
+  }
+})();
+</script>

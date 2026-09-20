@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Admin — Constructicon{% endblock %}
 {% block body %}
+{% if not embed %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
 {% include "_export_builder.html" %}
+{% endif %}
 <!-- Admin page (#295) — the full-page home of every admin/destructive/meta
      control. This started life as #24's small bottom-right pop-out
      (_admin_pane.html, included on every page); by the time the pending
@@ -34,20 +36,8 @@
        ragged cell lands at the bottom of the page instead of mid-page. -->
   <div class="admin-grid">
 
-    <!-- Curator — what the beast needs (#343) — ranked nudges telling you what
-         the system needs right now to improve. Severity cue + title/summary +
-         action link + dismiss/snooze controls. May include pending-decision
-         confirmations (review_automatch, review_captions) represented in this
-         generic queue. Empty state: "All clear — nothing needs your attention." -->
-    <section class="admin-panel" id="admin-curator-needs-section">
-      <div class="admin-panel-header">
-        <div>
-          <h2>Curator — what the beast needs <span id="admin-curator-needs-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Ranked nudges for improving project data and unfiled items (#343)</div>
-        </div>
-      </div>
-      <div id="admin-curator-needs-list" class="admin-curator-needs-list"></div>
-    </section>
+    <!-- (#345) The Curator "what the beast needs" nudges panel that used to
+         live here moved to its own nav-rail drawer (_nudges_drawer.html). -->
 
     <!-- Needs your input (#240) — the pending-decision queue. Today the only
          kind is "project_match": an upload whose filename/folder matched
@@ -264,104 +254,7 @@
 </div>
 
 <style>
-/* Curator nudges (#343) — severity cues, compact titles, and action links */
-.admin-curator-needs-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  /* The queue can be long (one nudge per gap across every project); cap it
-     and scroll internally so it doesn't make the admin page endless (#343). */
-  max-height: 60vh;
-  overflow-y: auto;
-  padding-right: 0.25rem; /* breathing room so rows don't touch the scrollbar */
-}
-
-.curator-nudge-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  background: var(--panel-bg, #f9f9f9);
-  border-radius: 4px;
-  border-left: 3px solid #ccc;
-}
-
-.curator-nudge-head {
-  display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
-}
-
-.curator-severity {
-  font-size: 1.25rem;
-  line-height: 1.2;
-  flex-shrink: 0;
-  padding-top: 0.05rem;
-}
-
-.curator-severity-high {
-  color: #f44336; /* red */
-}
-
-.curator-severity-medium {
-  color: #ff9800; /* orange */
-}
-
-.curator-severity-low {
-  color: #4caf50; /* green */
-}
-
-.curator-nudge-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.curator-nudge-title {
-  font-weight: 500;
-  font-size: 0.95rem;
-  margin-bottom: 0.25rem;
-}
-
-.curator-nudge-summary {
-  font-size: 0.85rem;
-  color: var(--text-secondary, #666);
-  line-height: 1.3;
-}
-
-.curator-nudge-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-  font-size: 0.875rem;
-}
-
-.curator-action-link {
-  text-decoration: none;
-}
-
-.curator-action-link:hover {
-  text-decoration: underline;
-}
-
-.curator-snooze-group {
-  display: flex;
-  gap: 0.25rem;
-}
-
-.curator-snooze-group .btn-ms {
-  font-size: 0.8rem;
-  padding: 4px 8px;
-}
-
-.curator-dismiss-btn {
-  font-size: 0.8rem;
-  padding: 4px 8px;
-}
-
-.curator-nudge-msg {
-  margin-left: auto;
-}
+/* (#345) Curator-nudge styles moved to style.css with the Nudges drawer. */
 
 .admin-storage-content {
   display: flex;
@@ -444,126 +337,8 @@
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  // Curator nudges (#343) — ranked suggestions for improving the collection.
-  // Each nudge has a priority (0+), action type (set_cover, draft_writeup, etc.),
-  // and a target (project or global). Dismiss = permanent, snooze = temporary.
-  const curatorNeedsList = document.getElementById('admin-curator-needs-list');
-  const curatorNeedsCount = document.getElementById('admin-curator-needs-count');
-
-  // Map action.type + project_slug (if present) to the URL the action button should link to.
-  function getActionHref(action) {
-    if (!action) return '#';
-    switch (action.type) {
-      case 'set_cover':
-      case 'draft_writeup':
-      case 'add_captions':
-      case 'add_dates':
-      case 'add_related_or_tags':
-      case 'add_highlight':
-      case 'set_status':
-      case 'acknowledge':
-        return `/project/${encodeURIComponent(action.project_slug || '')}`;
-      case 'file_unfiled':
-        return '/unfiled';
-      case 'review_automatch':
-      case 'review_captions':
-        return '/admin';
-      default:
-        return '#';
-    }
-  }
-
-  // Severity thresholds: priority >= 18 = high, 8-17 = medium, < 8 = low.
-  function getSeverityCue(priority) {
-    if (priority >= 18) return { className: 'curator-severity-high', label: '●' };
-    if (priority >= 8) return { className: 'curator-severity-medium', label: '●' };
-    return { className: 'curator-severity-low', label: '●' };
-  }
-
-  function renderCuratorNeeds(data) {
-    const needs = Array.isArray(data) ? data : [];
-    curatorNeedsCount.textContent = needs.length ? `(${needs.length})` : '';
-    curatorNeedsList.innerHTML = '';
-    if (needs.length === 0) {
-      curatorNeedsList.innerHTML = '<div class="audit-log-empty">All clear — nothing needs your attention.</div>';
-      return;
-    }
-    for (const nudge of needs) {
-      const el = document.createElement('div');
-      el.className = 'curator-nudge-item';
-      el.dataset.nudgeKey = nudge.nudge_key;
-      const severity = getSeverityCue(nudge.priority);
-      const actionHref = getActionHref(nudge.action);
-      // Snooze time calculations: now + N days as unix epoch string
-      const now = Math.floor(Date.now() / 1000);
-      const oneWeekEpoch = String(now + 7 * 24 * 3600);
-      const oneMonthEpoch = String(now + 30 * 24 * 3600);
-      el.innerHTML = `
-        <div class="curator-nudge-head">
-          <span class="curator-severity ${severity.className}" title="Priority: ${nudge.priority}">${severity.label}</span>
-          <div class="curator-nudge-text">
-            <div class="curator-nudge-title">${escapeHtml(nudge.title)}</div>
-            <div class="curator-nudge-summary">${escapeHtml(nudge.summary || '')}</div>
-          </div>
-        </div>
-        <div class="curator-nudge-actions">
-          <a class="btn-ms curator-action-link" href="${escapeHtml(actionHref)}" title="Open to resolve this nudge">Open</a>
-          <div class="curator-snooze-group">
-            <button type="button" class="btn-ms curator-snooze-btn" data-snooze-until="${oneWeekEpoch}" title="Hide for 1 week">1 week</button>
-            <button type="button" class="btn-ms curator-snooze-btn" data-snooze-until="${oneMonthEpoch}" title="Hide for 1 month">1 month</button>
-          </div>
-          <button type="button" class="btn-ms curator-dismiss-btn" title="Permanently dismiss this nudge">Dismiss</button>
-          <span class="backup-status curator-nudge-msg"></span>
-        </div>`;
-      const msg = el.querySelector('.curator-nudge-msg');
-      // Dismiss handler
-      el.querySelector('.curator-dismiss-btn').addEventListener('click', async () => {
-        await dismissNudge(nudge.nudge_key, null, el, msg);
-      });
-      // Snooze handlers
-      el.querySelectorAll('.curator-snooze-btn').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const snoozeUntil = btn.dataset.snoozeUntil;
-          await dismissNudge(nudge.nudge_key, snoozeUntil, el, msg);
-        });
-      });
-      curatorNeedsList.appendChild(el);
-    }
-  }
-
-  async function dismissNudge(nudgeKey, snoozeUntil, el, msgEl) {
-    const body = new URLSearchParams({ nudge_key: nudgeKey });
-    if (snoozeUntil) {
-      body.append('snooze_until', snoozeUntil);
-    }
-    try {
-      el.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-      const res = await fetch('/api/curator/needs/dismiss', { method: 'POST', body });
-      if (!res.ok) throw new Error(`Failed (${res.status})`);
-      msgEl.textContent = snoozeUntil ? 'Snoozed' : 'Dismissed';
-      msgEl.className = 'backup-status backup-status-ok curator-nudge-msg';
-      setTimeout(() => {
-        el.style.opacity = '0.5';
-        setTimeout(() => el.remove(), 300);
-        document.dispatchEvent(new Event('constructicon:needs-changed'));
-      }, 400);
-    } catch (err) {
-      msgEl.textContent = err.message || 'Failed';
-      msgEl.className = 'backup-status backup-status-error curator-nudge-msg';
-      el.querySelectorAll('button').forEach((b) => { b.disabled = false; });
-      setTimeout(() => { msgEl.textContent = ''; msgEl.className = 'backup-status curator-nudge-msg'; }, 8000);
-    }
-  }
-
-  async function loadCuratorNeeds() {
-    try {
-      const res = await fetch('/api/curator/needs');
-      if (!res.ok) return;
-      renderCuratorNeeds(await res.json());
-    } catch (err) { /* leave whatever's shown */ }
-  }
-  loadCuratorNeeds();
-  document.addEventListener('constructicon:needs-changed', loadCuratorNeeds);
+  // (#345) The Curator nudges logic that used to live here moved to the Nudges
+  // nav-rail drawer (_nudges_drawer.html) along with its markup and styles.
 
   // "Delete all" — the endpoint deletes every upload/tag/project regardless
   // of which page you're on, so it lives here with the other global actions

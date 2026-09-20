@@ -32,7 +32,10 @@ BACKUP_DIR = storage.STORAGE_DIR.parent / "backups"
 # Simple retention: keep only the N most recent backups, deleting older ones
 # on every new backup. Not a config knob — just a constant, per the issue's
 # guidance not to build config infrastructure for this.
-BACKUP_RETENTION_COUNT = 10
+# Each backup zip is a full DB + storage/ snapshot (~1 GB and growing with the
+# library), so keep the count low — this is a rolling safety net, not an archive.
+# (#351: was 10, which quietly hoarded ~9 GB before anyone noticed.)
+BACKUP_RETENTION_COUNT = 3
 
 DB_ARCNAME = "imagerepo.db"
 STORAGE_ARCPREFIX = "storage"

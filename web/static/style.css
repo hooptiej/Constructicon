@@ -2007,7 +2007,8 @@ body.delete-mode-on .card-select-row { display: flex; }
   background:
     linear-gradient(rgba(23,21,15,0.62), rgba(23,21,15,0.62)),
     repeating-linear-gradient(-45deg, var(--hazard-yellow) 0 14px, var(--hazard-black) 14px 28px);
-  border: 1px solid var(--border-stronger); border-right: none;
+  /* Purple stroke (#345) — visual separation between the hazard-stripe tabs */
+  border: 1px solid var(--purple-bright); border-right: none;
   border-radius: 10px 0 0 0; border-bottom: none;
   padding: 12px 9px; cursor: pointer; transition: background 0.2s ease;
   box-shadow: -2px 2px 10px rgba(0,0,0,0.35);
@@ -2022,6 +2023,7 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .nav-tab-item:last-child .nav-tab {
   border-radius: 0 0 0 10px;
+  border-bottom: 1px solid var(--purple-bright);
 }
 
 .nav-tab:hover, .nav-tab.active {

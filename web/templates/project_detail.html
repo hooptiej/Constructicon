@@ -48,7 +48,16 @@
         {% if project.status not in PROJECT_STATUSES %}<option value="{{ project.status }}" selected>{{ project.status }} (legacy)</option>{% endif %}
       </select>
       <p class="status-confirm" id="status-confirm" style="display:none;font-size:12px;color:#6E6B57;margin:0">Saved.</p>
-      <button type="button" class="btn-secondary" id="convert-to-hobby-btn" title="Convert this project to a hobby" style="margin-left:auto">Convert to hobby</button>
+      <div style="display:flex;gap:12px;align-items:center;margin-left:auto">
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+          <label style="display:block;font-size:12px;color:var(--text-muted)">In hobbies:</label>
+          <div id="hobby-chips-container" style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center;min-height:24px"></div>
+          <select id="add-to-hobby-select" class="input" style="max-width:180px;font-size:12px">
+            <option value="">+ Add to hobby…</option>
+          </select>
+        </div>
+        <button type="button" class="btn-secondary" id="convert-to-hobby-btn" title="Convert this project to a hobby" style="white-space:nowrap">Convert to hobby</button>
+      </div>
       {# Curator Stage 2: per-project health indicator #}
       {% if project_score %}
       {% set _applicable = project_score.checklist | rejectattr('excused') | list %}
@@ -218,6 +227,188 @@
     </div>
   </div>
 </div>
+
+<script>
+// In hobbies (#365): add project to hobby, render chips, manage list
+// SELF-CONTAINED — embed all data via Jinja to avoid cross-scope variable
+// references (see #498's "lesson" comment above for why this matters).
+(function() {
+  const projectId = {{ project.id | tojson }};
+  const projectSlug = {{ project.slug | tojson }};
+  let currentHobbies = {{ project_hobbies | tojson }};
+
+  const chipsContainer = document.getElementById('hobby-chips-container');
+  const addSelect = document.getElementById('add-to-hobby-select');
+
+  async function fetchAllHobbies() {
+    try {
+      const res = await fetch('/api/hobbies');
+      return await res.json();
+    } catch (e) {
+      console.error('Failed to fetch hobbies:', e);
+      return [];
+    }
+  }
+
+  function renderChips() {
+    chipsContainer.innerHTML = '';
+    if (currentHobbies.length === 0) {
+      const note = document.createElement('span');
+      note.style.fontSize = '12px';
+      note.style.color = 'var(--text-muted)';
+      note.textContent = 'Not in any hobby yet.';
+      chipsContainer.appendChild(note);
+    } else {
+      currentHobbies.forEach(hobby => {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+
+        const link = document.createElement('a');
+        link.href = `/hobby/${hobby.slug}`;
+        link.textContent = hobby.name;
+        link.style.textDecoration = 'none';
+        link.style.color = 'inherit';
+        chip.appendChild(link);
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '×';
+        btn.style.marginLeft = '4px';
+        btn.addEventListener('click', () => removeFromHobby(hobby.id));
+        chip.appendChild(btn);
+
+        chipsContainer.appendChild(chip);
+      });
+    }
+  }
+
+  async function loadHobbyOptions() {
+    const allHobbies = await fetchAllHobbies();
+    const currentIds = new Set(currentHobbies.map(h => h.id));
+
+    // Remove all option children except the first (placeholder)
+    Array.from(addSelect.querySelectorAll('option')).slice(1).forEach(o => o.remove());
+
+    // Add options for hobbies not yet in the project
+    const html = allHobbies
+      .filter(h => !currentIds.has(h.id))
+      .map(h => `<option value="${h.id}" data-hobby-slug="${h.slug}" data-hobby-name="${h.name}">${h.name}</option>`)
+      .join('');
+
+    if (html) {
+      addSelect.insertAdjacentHTML('beforeend', html);
+    }
+  }
+
+  async function addToHobby(hobbyId) {
+    const form = new FormData();
+    form.append('project_id', projectId);
+
+    try {
+      const res = await fetch(`/api/hobby/${hobbyId}/add-project`, {
+        method: 'POST',
+        body: form
+      });
+
+      if (res.ok) {
+        // Add hobby to current list
+        const hobbyOption = addSelect.querySelector(`option[value="${hobbyId}"]`);
+        if (hobbyOption) {
+          const hobby = {
+            id: hobbyId,
+            name: hobbyOption.dataset.hobbyName,
+            slug: hobbyOption.dataset.hobbySlug
+          };
+          currentHobbies.push(hobby);
+        }
+
+        renderChips();
+        loadHobbyOptions();
+        addSelect.value = '';
+
+        // Brief success indication
+        showSuccess();
+      } else {
+        const body = await res.json().catch(() => ({}));
+        showError(body.detail || 'Failed to add to hobby');
+      }
+    } catch (error) {
+      console.error('Error adding to hobby:', error);
+      showError('Network error');
+    }
+  }
+
+  async function removeFromHobby(hobbyId) {
+    const form = new FormData();
+    form.append('project_id', projectId);
+
+    try {
+      const res = await fetch(`/api/hobby/${hobbyId}/remove-project`, {
+        method: 'POST',
+        body: form
+      });
+
+      if (res.ok) {
+        // Remove hobby from current list
+        currentHobbies = currentHobbies.filter(h => h.id !== hobbyId);
+
+        renderChips();
+        loadHobbyOptions();
+
+        // Brief success indication
+        showSuccess();
+      } else {
+        showError('Failed to remove from hobby');
+      }
+    } catch (error) {
+      console.error('Error removing from hobby:', error);
+      showError('Network error');
+    }
+  }
+
+  function showSuccess() {
+    const msg = document.createElement('div');
+    msg.style.fontSize = '12px';
+    msg.style.color = '#3FA34D';
+    msg.style.position = 'fixed';
+    msg.style.bottom = '20px';
+    msg.style.right = '20px';
+    msg.style.padding = '8px 12px';
+    msg.style.background = 'var(--bg-2)';
+    msg.style.borderRadius = '4px';
+    msg.style.border = '1px solid #3FA34D';
+    msg.textContent = 'Updated.';
+    document.body.appendChild(msg);
+    setTimeout(() => msg.remove(), 2000);
+  }
+
+  function showError(detail) {
+    const msg = document.createElement('div');
+    msg.style.fontSize = '12px';
+    msg.style.color = '#C0392B';
+    msg.style.position = 'fixed';
+    msg.style.bottom = '20px';
+    msg.style.right = '20px';
+    msg.style.padding = '8px 12px';
+    msg.style.background = 'var(--bg-2)';
+    msg.style.borderRadius = '4px';
+    msg.style.border = '1px solid #C0392B';
+    msg.textContent = detail || 'Error.';
+    document.body.appendChild(msg);
+    setTimeout(() => msg.remove(), 4000);
+  }
+
+  addSelect.addEventListener('change', function() {
+    const val = this.value;
+    if (!val) return;
+    addToHobby(parseInt(val));
+  });
+
+  // Initial render
+  renderChips();
+  loadHobbyOptions();
+})();
+</script>
 
 <script>
 let currentCoverSlug = {{ project.cover_slug | tojson }};

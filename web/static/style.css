@@ -34,6 +34,20 @@
 
 * { box-sizing: border-box; }
 
+/* Scrollbars (#400) — themed to the palette instead of the bright default OS
+   chrome. Transparent track; muted-olive resting thumb that lights to the neon
+   accent on hover (a padding-box border insets it so it reads as a slim pill).
+   Applies globally, incl. inner scroll areas (FILES panel, tag rows, drawers). */
+* { scrollbar-width: thin; scrollbar-color: var(--icon-muted) transparent; }
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--icon-muted); border-radius: 8px;
+  border: 3px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--accent); border-width: 2px; }
+::-webkit-scrollbar-corner { background: transparent; }
+
 /* Hazard stripe accent motif — used sparingly (dividers, a header bar
    underline, button edges), not as a background wallpaper. */
 .hazard-stripe {

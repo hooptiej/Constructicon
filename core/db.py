@@ -340,6 +340,52 @@ def get_conn():
     return conn
 
 
+# --- #388: processing-drawer status source -------------------------------
+# Two thin read helpers returning the same column shape. The caller (app.py's
+# /api/processing) derives the per-stage state, since that needs object_types.
+_PROCESSING_COLS = (
+    "slug, filename, display_name, content_description, media_type, "
+    "ocr_status, type_metadata, (embedding IS NOT NULL) AS has_embedding, timestamp"
+)
+
+
+def list_processing_candidates(within_seconds=86400, limit=500):
+    """Recent, non-redacted rows that might still be mid-pipeline (OCR/caption/
+    embed) — the candidate set for the processing drawer. Bounded by recency +
+    LIMIT so a huge backlog can't make this unbounded; the caller filters to
+    the ones actually still in flight."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT {_PROCESSING_COLS} FROM capture_events "
+            "WHERE redacted=0 AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
+            (time.time() - within_seconds, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_processing_rows_by_slugs(slugs):
+    """Same shape as list_processing_candidates, for specific slugs — the
+    frontend's session items, so the drawer can show them through to done even
+    after they've settled and dropped out of the in-flight set."""
+    slugs = [s for s in (slugs or []) if s]
+    if not slugs:
+        return []
+    conn = get_conn()
+    try:
+        placeholders = ",".join("?" * len(slugs))
+        rows = conn.execute(
+            f"SELECT {_PROCESSING_COLS} FROM capture_events "
+            f"WHERE redacted=0 AND slug IN ({placeholders})",
+            slugs,
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def init_db():
     conn = get_conn()
     try:

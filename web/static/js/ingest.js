@@ -64,13 +64,6 @@ function createIngestController({ onOpen }) {
   // catching obviously-not-a-URL input before it hits the network.
   const LINK_URL_RE = /^https?:\/\/.+\..+/i;
 
-  // Recognizes an Imgur post/album link specifically (i.imgur.com/...,
-  // imgur.com/<id>, imgur.com/a/<id>, imgur.com/gallery/<id>) so a staged
-  // link item can be routed to /api/imgur/import-url (#203) instead of the
-  // generic /api/content at submit time — see core/imgur_import.py's
-  // parse_imgur_url for the server-side counterpart of this same shape.
-  const IMGUR_URL_RE = /imgur\.com\//i;
-
   const STATUS_META = {
     queued:          { dot: '#57543F', label: 'Waiting…' },
     uploading:       { dot: '#57543F', label: 'Uploading…' },
@@ -103,7 +96,7 @@ function createIngestController({ onOpen }) {
   function updateSubmitButton() {
     if (isUploading) return; // don't let a mid-upload re-render re-enable the button
     submitBtn.disabled = stagedFiles.length === 0;
-    const fileCount = stagedFiles.filter(f => !f.__isYoutube && !f.__isImgur).length;
+    const fileCount = stagedFiles.filter(f => !f.__isYoutube).length;
     const linkCount = stagedFiles.length - fileCount;
     if (stagedFiles.length === 0) {
       submitBtn.textContent = 'Ingest to Constructicon';
@@ -173,11 +166,9 @@ function createIngestController({ onOpen }) {
             row.classList.add('completed');
           }
         } else {
-          metaEl.textContent = file.__isImgur
-            ? 'Imgur link — ready to import'
-            : file.__isYoutube
-              ? 'Link — ready to add'
-              : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
+          metaEl.textContent = file.__isYoutube
+            ? 'Link — ready to add'
+            : `${(file.size / 1024 / 1024).toFixed(1)} MB — ready to upload`;
         }
         const removeBtn = row.querySelector('.staged-remove');
         if (state && (state.status === 'uploading' || state.status === 'ocr-pending')) {
@@ -216,7 +207,7 @@ function createIngestController({ onOpen }) {
     updateSubmitButton();
   }
 
-  // Helper to stage a link after validation and Imgur detection.
+  // Helper to stage a link after validation.
   // Used by both manual link-add (#25) and .url-file-drop paths.
   function stageLink(url, showError = true) {
     uploadError.style.display = 'none';
@@ -229,8 +220,10 @@ function createIngestController({ onOpen }) {
       }
       return false;
     }
-    const isImgur = IMGUR_URL_RE.test(trimmedUrl);
-    stagedFiles.push({ name: trimmedUrl, size: 0, __isYoutube: !isImgur, __isImgur: isImgur, url: trimmedUrl });
+    // __isYoutube here just means "a link, route to /api/content at submit"
+    // — the server classifies the URL (YouTube vs. any other web page); the
+    // name is a historical misnomer, not a claim it's specifically YouTube.
+    stagedFiles.push({ name: trimmedUrl, size: 0, __isYoutube: true, url: trimmedUrl });
     renderStaged();
     return true;
   }
@@ -278,11 +271,10 @@ function createIngestController({ onOpen }) {
     if (opening) youtubeUrlInput.focus();
   });
 
-  // Manual link add (#25, generalized by #184, Imgur-aware by #203) —
-  // stages a placeholder object alongside any real staged Files, so it
-  // rides the exact same staged-list UI, submit button, and per-item
-  // status tracking as a file drop. Routed to the right endpoint at
-  // submit time based on which flag got set here.
+  // Manual link add (#25, generalized by #184) — stages a placeholder
+  // object alongside any real staged Files, so it rides the exact same
+  // staged-list UI, submit button, and per-item status tracking as a file
+  // drop. Routed to /api/content at submit time.
   function addYoutubeLink() {
     const url = youtubeUrlInput.value;
     if (stageLink(url, true)) {
@@ -298,36 +290,6 @@ function createIngestController({ onOpen }) {
     if (e.key === 'Enter') {
       e.preventDefault();
       addYoutubeLink();
-    }
-  });
-
-  // Import from Imgur (#200) — one server-side round trip against the
-  // owner's public gallery submissions (see web/app.py's
-  // /api/imgur/import); the server does its own dedup against already-
-  // imported items, so this is safe to click again later to pick up
-  // anything new. Deliberately not staged item-by-item the way a file
-  // drop or a single pasted link is — the whole batch is one request.
-  const imgurImportBtn = document.getElementById('imgur-import-btn');
-  const imgurImportStatus = document.getElementById('imgur-import-status');
-  imgurImportBtn.addEventListener('click', async () => {
-    imgurImportBtn.disabled = true;
-    imgurImportBtn.textContent = 'Importing…';
-    imgurImportStatus.textContent = '';
-    imgurImportStatus.classList.remove('error-text');
-    try {
-      const res = await fetch('/api/imgur/import', { method: 'POST' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.detail || 'Import failed');
-      imgurImportStatus.textContent = `Imported ${body.imported} new item${body.imported === 1 ? '' : 's'} (${body.skipped} already had, ${body.found} found total).`;
-      if (body.imported > 0) {
-        document.dispatchEvent(new CustomEvent('constructicon:upload-complete', { detail: { failures: [] } }));
-      }
-    } catch (err) {
-      imgurImportStatus.textContent = err.message;
-      imgurImportStatus.classList.add('error-text');
-    } finally {
-      imgurImportBtn.disabled = false;
-      imgurImportBtn.textContent = 'Import from Imgur';
     }
   });
 
@@ -584,42 +546,6 @@ function createIngestController({ onOpen }) {
     return { ok: true };
   }
 
-  async function addImgurUrlAndTrack(url, i) {
-    // Imgur counterpart to addContentAndTrack (#203) — POSTs to
-    // /api/imgur/import-url instead of /api/content, since resolving a
-    // pasted Imgur post/album page link into a real direct image (and its
-    // metadata) needs a Client-ID-authenticated Imgur API call the server
-    // has to make, not something the generic content-add path does.
-    updateFileStatus(i, 'uploading', 'Importing from Imgur…');
-    let res;
-    try {
-      res = await fetch('/api/imgur/import-url', { method: 'POST', body: new URLSearchParams({ url }) });
-    } catch (err) {
-      updateFileStatus(i, 'upload-failed', err.message);
-      return { ok: false, message: `${url}: ${err.message}` };
-    }
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ detail: 'Import failed' }));
-      const message = `Import failed — ${body.detail || 'unknown error'}`;
-      updateFileStatus(i, 'upload-failed', message);
-      return { ok: false, message: `${url}: ${message}` };
-    }
-
-    const item = await res.json();
-    if (item.skipped) {
-      updateFileStatus(i, 'done', 'Already imported');
-      return { ok: true };
-    }
-    if (item.ocr_status !== 'pending') {
-      updateFileStatus(i, 'done', undefined, item.slug);
-      return { ok: true };
-    }
-    updateFileStatus(i, 'ocr-pending', undefined, item.slug);
-    const finalStatus = await pollOcrStatus(item.slug);
-    updateFileStatus(i, finalStatus === 'failed' ? 'ocr-failed' : 'done', undefined, item.slug);
-    return { ok: true };
-  }
-
   async function retryOcrForStagedFile(i) {
     const slug = fileStates[i] && fileStates[i].slug;
     if (!slug) return;
@@ -693,11 +619,9 @@ function createIngestController({ onOpen }) {
     // solo retry from the detail page — a fully sequential queue removes
     // that contention rather than just papering over it with a bigger cap.
     const results = await runWithConcurrency(stagedFiles, 1, (file, i) =>
-      file.__isImgur
-        ? addImgurUrlAndTrack(file.url, i)
-        : file.__isYoutube
-          ? addContentAndTrack(file.url, i, description, tagList, projectId)
-          : uploadAndTrack(file, i, description, tagList, projectId)
+      file.__isYoutube
+        ? addContentAndTrack(file.url, i, description, tagList, projectId)
+        : uploadAndTrack(file, i, description, tagList, projectId)
     );
 
     tags = [];

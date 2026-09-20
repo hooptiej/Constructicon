@@ -99,9 +99,7 @@
          redisplaying what you last typed. Add another labeled row here (and
          to web/app.py's KNOWN_SETTINGS, and the JS API_KEY_SETTINGS array
          below) for each additional integration that needs a key — see the
-         thingiverse_app_token row (#62) for the second one, and the Imgur
-         pair (#200: a real Client ID secret plus a non-secret username that
-         rides the same mechanism rather than a one-off config path). -->
+         thingiverse_app_token row (#62) for the second one. -->
     <section class="admin-panel">
       <div class="admin-panel-header">
         <div>
@@ -139,37 +137,6 @@
           <button type="button" class="btn-ms admin-apikey-save" data-key="thingiverse_app_token">Save</button>
         </div>
         <span id="admin-apikey-msg-thingiverse_app_token" class="backup-status"></span>
-      </div>
-      <div class="admin-divider"></div>
-      <div class="admin-row admin-apikey-row">
-        <div class="admin-apikey-label-row">
-          <div>
-            <div class="admin-row-label">Imgur Client ID</div>
-            <div class="admin-row-hint">Public-gallery-only import, no OAuth (#200)</div>
-          </div>
-          <span id="admin-apikey-status-imgur_client_id" class="apikey-status">…</span>
-        </div>
-        <div class="admin-apikey-input-row">
-          <input type="password" class="input admin-apikey-input" id="admin-apikey-input-imgur_client_id"
-                 placeholder="Enter to set" autocomplete="off">
-          <button type="button" class="btn-ms admin-apikey-save" data-key="imgur_client_id">Save</button>
-        </div>
-        <span id="admin-apikey-msg-imgur_client_id" class="backup-status"></span>
-      </div>
-      <div class="admin-row admin-apikey-row">
-        <div class="admin-apikey-label-row">
-          <div>
-            <div class="admin-row-label">Imgur Username</div>
-            <div class="admin-row-hint">Whose public gallery to import from</div>
-          </div>
-          <span id="admin-apikey-status-imgur_username" class="apikey-status">…</span>
-        </div>
-        <div class="admin-apikey-input-row">
-          <input type="text" class="input admin-apikey-input" id="admin-apikey-input-imgur_username"
-                 placeholder="Enter to set" autocomplete="off">
-          <button type="button" class="btn-ms admin-apikey-save" data-key="imgur_username">Save</button>
-        </div>
-        <span id="admin-apikey-msg-imgur_username" class="backup-status"></span>
       </div>
       <div class="admin-divider"></div>
       <div class="admin-row admin-apikey-row">
@@ -617,7 +584,7 @@
   // real value back. KNOWN_SETTINGS is web/app.py's allowlist; this array is
   // just this page's UI-side list of which of those keys get a labeled row —
   // add an entry here (plus the matching markup above) for a future key.
-  const API_KEY_SETTINGS = ['youtube_data_api_key', 'thingiverse_app_token', 'imgur_client_id', 'imgur_username', 'pages_publish_token'];
+  const API_KEY_SETTINGS = ['youtube_data_api_key', 'thingiverse_app_token', 'pages_publish_token'];
 
   function setApiKeyStatus(key, isSet) {
     const status = document.getElementById(`admin-apikey-status-${key}`);

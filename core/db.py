@@ -1866,6 +1866,29 @@ def list_unfiled_items(limit=10000):
         conn.close()
 
 
+def list_loose_reference_objects(limit=500):
+    """capture_events rows with provenance='reference' that are not filed in
+    any project (#370 follow-up). "Loose" means they have no project_items row —
+    reference objects that are already in a project are shown as part of that
+    project, not duplicated here.
+
+    Used to populate the Reference pill's "Reference material" section, showing
+    objects classified as reference material but not yet curated into a project.
+    Returns _row_to_dict rows ordered newest first (by rowid/timestamp desc).
+    """
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
+            "WHERE ce.provenance = 'reference' AND ce.redacted = 0 AND pi.post_slug IS NULL "
+            "ORDER BY ce.rowid DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def list_recent_items_by_type(limit_per_type=10):
     """Most recent capture_events rows, independently fetched per media_type.
     Each type gets its own N most recent items, rather than competing within

@@ -52,7 +52,7 @@
 
       {% include "_category_tiles.html" %}
 
-      {% if projects %}
+      {% if projects or (show_reference_selected and reference_objects) %}
       <div id="active-zone" style="display:none">
         <h3 class="zone-heading">Active</h3>
         <div class="projects-container">
@@ -64,6 +64,12 @@
         <h3 class="zone-heading">Finished / Archived</h3>
         <div class="projects-done-scroll" id="projects-done-grid"></div>
       </div>
+      {% if show_reference_selected %}
+      <div id="reference-zone" style="display:none">
+        <h3 class="zone-heading">Reference material</h3>
+        <div class="projects-done-scroll" id="reference-objects-grid"></div>
+      </div>
+      {% endif %}
       <script>
       (function () {
         function escapeHtml(str) {
@@ -98,14 +104,28 @@
               </div>
             </a>`;
         }
+        function referenceObjectCardHtml(obj) {
+          return `
+            <a class="project-compact-card" href="/object/${obj.slug}">
+              <div class="project-compact-cover">
+                ${obj.thumb_url ? `<img src="${obj.thumb_url}" loading="lazy" alt="">` : `<div class="project-cover-placeholder"></div>`}
+              </div>
+              <div class="project-compact-body">
+                <div class="project-compact-title">${escapeHtml(obj.title)}</div>
+              </div>
+            </a>`;
+        }
         const projects = {{ projects | tojson }};
+        const referenceObjects = {{ reference_objects | tojson }};
         const activeProjects = projects.filter(p => p.status === 'wip' || p.status === 'active');
         const doneProjects = projects.filter(p => p.status !== 'wip' && p.status !== 'active');
 
         const activeZone = document.getElementById('active-zone');
         const doneZone = document.getElementById('done-zone');
+        const referenceZone = document.getElementById('reference-zone');
         const grid = document.getElementById('projects-grid');
         const doneGrid = document.getElementById('projects-done-grid');
+        const referenceGrid = document.getElementById('reference-objects-grid');
         const featuredContainer = document.getElementById('featured-project');
         const sortSelect = document.getElementById('projects-sort');
         const SORTERS = {
@@ -157,6 +177,17 @@
           } else {
             doneZone.style.display = 'none';
           }
+
+          // Show/hide reference zone
+          if (referenceZone) {
+            if (referenceObjects.length > 0) {
+              referenceZone.style.display = 'block';
+              referenceGrid.innerHTML = referenceObjects.map(obj => referenceObjectCardHtml(obj)).join('');
+            } else {
+              referenceZone.style.display = 'block';
+              referenceGrid.innerHTML = '<div class="empty-state">No loose reference objects yet — classify some with provenance=reference</div>';
+            }
+          }
         }
         sortSelect.addEventListener('change', render);
         render();
@@ -164,7 +195,7 @@
       </script>
       {% else %}
       <p class="empty-state">
-        {% if selected_tag_slug %}No projects in this hobby yet.{% elif show_reference_selected %}No reference projects yet.{% else %}No projects yet.{% endif %}
+        {% if selected_tag_slug %}No projects in this hobby yet.{% elif show_reference_selected and not reference_objects %}No reference projects or objects yet.{% elif show_reference_selected %}No reference projects yet.{% else %}No projects yet.{% endif %}
       </p>
       {% endif %}
 

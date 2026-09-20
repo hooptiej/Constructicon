@@ -803,6 +803,21 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
         # Show only reference-status projects (v1: reference-only status;
         # future: could also include loose reference objects via provenance)
         projects = [p for p in projects if p.get("status") == "reference-only"]
+    # #370 follow-up: Compute loose reference objects (provenance='reference',
+    # not in any project) for the Reference pill view. Shape for cards:
+    # {slug, title, thumb_url}
+    reference_objects = []
+    if ref:
+        loose_ref_rows = db.list_loose_reference_objects()
+        for row in loose_ref_rows:
+            media_type = row.get("media_type") or "image"
+            spec = object_types.get_object_type(media_type)
+            has_thumb = _has_thumbnail(row, spec) and bool(row.get("stored_filename"))
+            reference_objects.append({
+                "slug": row["slug"],
+                "title": row.get("display_name") or row.get("content_description") or row["filename"] or row["slug"],
+                "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
+            })
     # Owner name/initials for the combined gallery+upload pop-out's tab
     # (#17) — SOURCE_GROUPS[0] is the site's single-owner display label
     # (e.g. "Hooptie J (me)"); strip the "(me)" qualifier for the tab's
@@ -842,6 +857,7 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
             "show_reference_pill": True,  # #370: always show Reference pill
             "show_reference_selected": bool(ref),  # #370: highlight if ?ref=1
             "projects": [_to_project_card(p) for p in projects],
+            "reference_objects": reference_objects,  # #370 follow-up: loose reference objects
             "owner_name": _owner_label,
             "owner_initials": _owner_initials,
             "unfiled_slugs": unfiled_slugs,

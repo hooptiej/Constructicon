@@ -2051,9 +2051,6 @@ body.delete-mode-on .card-select-row { display: flex; }
 .app-header .upload-trigger,
 .app-header .blog-builder-trigger,
 .app-header .export-builder-trigger,
-.app-header .admin-link,
-.app-header a[href="/hobbies"],
-.app-header a[href="/brand"],
 .gallery-drawer-tab {
   display: none !important;
 }

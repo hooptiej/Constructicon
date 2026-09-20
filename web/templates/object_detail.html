@@ -441,7 +441,7 @@ if (refreshThumbBtn) {
     try {
       const res = await fetch('/api/image/{{ item.slug }}/thumbnail/refresh', { method: 'POST' });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || body.detail || 'Failed to refresh thumbnail');
+      if (!res.ok || !body.ok) throw new Error(body.error || body.detail || 'Failed to refresh thumbnail');
       // Reload the thumbnail image with cache-busting query param
       const previewImg = document.getElementById('preview-img');
       const thumbImg = document.querySelector('img[src*="/f/{{ item.slug }}/thumb"]');

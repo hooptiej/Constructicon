@@ -1661,6 +1661,10 @@ def _derive_processing_status(row):
         tm = json.loads(row.get("type_metadata") or "{}")
     except Exception:
         tm = {}
+    # Embedding is deliberately NOT a stage: it's computed inside the OCR slot
+    # (see core/ocr.py), so it has already settled by the time OCR reads "done".
+    # Surfacing it separately would strand rows that silently never embedded at
+    # a phantom "pending" forever. OCR + Caption are the real observable phases.
     stages = []
     if spec and spec.ocr_capable:
         s = row.get("ocr_status")
@@ -1668,8 +1672,6 @@ def _derive_processing_status(row):
     if spec and spec.caption_capable:
         cs = tm.get("auto_caption_status")
         stages.append({"stage": "Caption", "state": "done" if cs == "done" else "failed" if cs == "failed" else "pending"})
-    if spec and spec.ocr_capable:
-        stages.append({"stage": "Embed", "state": "done" if row.get("has_embedding") else "pending"})
     in_flight = any(st["state"] == "pending" for st in stages)
     if not stages:
         overall = "done"

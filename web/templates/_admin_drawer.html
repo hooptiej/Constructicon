@@ -1,0 +1,45 @@
+<!-- Admin (#345) — the /admin surface as a wide slide-out drawer, reachable
+     from the nav rail on every page (was a navigate link / the old header gear).
+     Because the admin page is large and stateful (many panels, each with its own
+     fetches and forms), it's loaded chrome-less into an isolated iframe
+     (/admin?embed=1) rather than inlined -- no duplicated markup, no per-page
+     admin fetches, no ID collisions, and its existing JS runs untouched. The
+     iframe src is set lazily on first open. The standalone /admin page still
+     exists as a direct-URL fallback. -->
+<button type="button" id="admin-drawer-trigger" style="display:none" aria-hidden="true" tabindex="-1"></button>
+<div class="drawer-backdrop" id="admin-drawer-backdrop"></div>
+<div class="wide-drawer admin-drawer" id="admin-drawer" role="dialog" aria-label="Admin">
+  <div class="wide-drawer-header">
+    <h2>Admin</h2>
+    <button type="button" class="modal-close" id="admin-drawer-close" aria-label="Close">&times;</button>
+  </div>
+  <iframe id="admin-drawer-frame" class="admin-drawer-frame" title="Admin" data-src="/admin?embed=1"></iframe>
+</div>
+
+<script>
+(function () {
+  const backdrop = document.getElementById('admin-drawer-backdrop');
+  const drawer = document.getElementById('admin-drawer');
+  const trigger = document.getElementById('admin-drawer-trigger');
+  const closeBtn = document.getElementById('admin-drawer-close');
+  const frame = document.getElementById('admin-drawer-frame');
+  let loaded = false;
+
+  function openDrawer() {
+    drawer.classList.add('open');
+    backdrop.classList.add('open');
+    if (!loaded) { loaded = true; frame.src = frame.dataset.src; }
+  }
+  function closeDrawer() {
+    drawer.classList.remove('open');
+    backdrop.classList.remove('open');
+  }
+
+  if (trigger) trigger.addEventListener('click', openDrawer);
+  closeBtn.addEventListener('click', closeDrawer);
+  backdrop.addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && drawer.classList.contains('open')) closeDrawer();
+  });
+})();
+</script>

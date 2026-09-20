@@ -2100,3 +2100,16 @@ body.delete-mode-on .card-select-row { display: flex; }
 .brand-asset-link-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand-asset-copy-btn { background: none; border: none; padding: 2px 4px; cursor: pointer; color: var(--accent); font-size: 12px; opacity: 0.7; transition: opacity 0.2s; }
 .brand-asset-copy-btn:hover { opacity: 1; }
+
+/* Admin drawer (#345) — the admin page loads chrome-less into an iframe that
+   fills the wide drawer below the header. */
+.admin-drawer { overflow: hidden; }
+.admin-drawer-frame { flex: 1 1 auto; width: 100%; border: 0; background: var(--bg); margin-top: 12px; }
+
+/* Needs badge (#240) on the Admin nav-rail tab, mirroring the old .admin-badge
+   that rode the header gear. .nav-tab is position:relative so this anchors to it. */
+.nav-tab-badge {
+  position: absolute; top: 4px; right: 4px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: var(--hazard-yellow); color: var(--hazard-black);
+  font-size: 10px; font-weight: 600; line-height: 16px; text-align: center; box-sizing: border-box;
+}

@@ -12,8 +12,13 @@
 </head>
 <body>
 {% block body %}{% endblock %}
+{# #345: the nav rail + its global drawers. Skipped in ?embed=1 mode so the
+   Admin drawer's iframe (which loads /admin?embed=1) has no nested chrome. #}
+{% if not embed %}
 {% include "_brand_drawer.html" %}
 {% include "_hobbies_drawer.html" %}
+{% include "_admin_drawer.html" %}
 {% include "_nav_tabs.html" %}
+{% endif %}
 </body>
 </html>

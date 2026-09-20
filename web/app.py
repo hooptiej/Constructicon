@@ -1420,14 +1420,18 @@ def account_page(request: Request):
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request):
+def admin_page(request: Request, embed: int = 0):
     """#295: the admin surface as its own full page. It was a bottom-right
     pop-out (_admin_pane.html) included on every page until it outgrew a
     320px column; every panel on it still talks to the same /api/* routes
     it always did (settings, pending-decisions, redacted, audit-log,
     captions/test, backup, delete-all) -- the page itself carries no data,
-    the JS fetches it, so there's nothing to pass in here."""
-    return templates.TemplateResponse(request, "admin.html", {})
+    the JS fetches it, so there's nothing to pass in here.
+
+    #345: ?embed=1 renders a chrome-less version (no header, no nav rail,
+    no other drawers) so it can be loaded inside the Admin nav-rail drawer's
+    iframe without nested chrome. The panels/JS are identical either way."""
+    return templates.TemplateResponse(request, "admin.html", {"embed": bool(embed)})
 
 
 @app.get("/curator", response_class=HTMLResponse)

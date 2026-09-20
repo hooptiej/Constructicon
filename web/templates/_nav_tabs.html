@@ -61,18 +61,18 @@
       </button>
     </li>
 
-    <!-- Separator -->
-    <li class="nav-tab-separator"></li>
-
-    <!-- Navigate links -->
+    <!-- Admin drawer (#345: was a navigate link / the old header gear; now a
+         wide slide-out loading the admin page in an isolated iframe). The needs
+         badge (#240) that used to ride the header gear moves onto this tab. -->
     <li class="nav-tab-item">
-      <a href="/admin" class="nav-tab nav-tab-link{% if request.url.path == '/admin' %} active{% endif %}" title="Admin">
+      <button type="button" class="nav-tab nav-tab-drawer" data-drawer-trigger="admin-drawer-trigger" title="Admin">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="nav-tab-icon">
           <path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="currentColor" stroke-width="1.6"/>
           <path d="M19.4 13.5a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V19.5a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H4.5a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H10a1.65 1.65 0 001-1.51V4.5a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V10a1.65 1.65 0 001.51 1h.09a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="1.3"/>
         </svg>
         <span class="nav-tab-label">Admin</span>
-      </a>
+        <span class="nav-tab-badge" id="admin-rail-badge" hidden>0</span>
+      </button>
     </li>
   </ul>
 </nav>
@@ -106,5 +106,26 @@
       triggerToUse.click();
     });
   });
+
+  // Admin needs-badge (#240, #345) — the count that used to ride the header
+  // gear now rides the Admin rail tab. Same source (/api/curator/needs) and
+  // same refresh events the old header script listened to, so curator
+  // dismiss/snooze actions keep it live.
+  const railBadge = document.getElementById('admin-rail-badge');
+  if (railBadge) {
+    async function refreshRailBadge() {
+      try {
+        const res = await fetch('/api/curator/needs');
+        if (!res.ok) return;
+        const data = await res.json();
+        const n = Array.isArray(data) ? data.length : 0;
+        railBadge.textContent = n;
+        railBadge.hidden = n === 0;
+      } catch (err) { /* leave whatever's shown */ }
+    }
+    refreshRailBadge();
+    document.addEventListener('constructicon:pending-decisions-changed', refreshRailBadge);
+    document.addEventListener('constructicon:needs-changed', refreshRailBadge);
+  }
 })();
 </script>

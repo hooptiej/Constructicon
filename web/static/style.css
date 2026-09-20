@@ -2002,7 +2002,12 @@ body.delete-mode-on .card-select-row { display: flex; }
 
 .nav-tab {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px;
-  background: var(--purple); border: 1px solid var(--border-stronger); border-right: none;
+  /* Hazard-stripe tabs (#345) — the app's yellow/black hazard tape under a dark
+     scrim so the light icon/label stay legible; hover lightens the scrim. */
+  background:
+    linear-gradient(rgba(23,21,15,0.62), rgba(23,21,15,0.62)),
+    repeating-linear-gradient(-45deg, var(--hazard-yellow) 0 14px, var(--hazard-black) 14px 28px);
+  border: 1px solid var(--border-stronger); border-right: none;
   border-radius: 10px 0 0 0; border-bottom: none;
   padding: 12px 9px; cursor: pointer; transition: background 0.2s ease;
   box-shadow: -2px 2px 10px rgba(0,0,0,0.35);
@@ -2020,7 +2025,9 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 
 .nav-tab:hover, .nav-tab.active {
-  background: var(--purple-hover);
+  background:
+    linear-gradient(rgba(23,21,15,0.34), rgba(23,21,15,0.34)),
+    repeating-linear-gradient(-45deg, var(--hazard-yellow) 0 14px, var(--hazard-black) 14px 28px);
 }
 
 .nav-tab-icon {

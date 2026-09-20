@@ -581,6 +581,8 @@ body.delete-mode-on .card-select-row { display: flex; }
 .gallery-drawer.open { transform: translateX(0); opacity: 1; }
 .gallery-drawer .dropzone { padding: 28px 16px; }
 .gallery-drawer .meta-form { width: 100%; background: none; border: none; padding: 0; margin-top: 18px; }
+.gallery-drawer-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.gallery-drawer-header .gallery-drawer-section-title { margin: 0; }
 .gallery-drawer-section-title {
   font-size: 12px; font-weight: 600; color: var(--text-2-bright); margin: 0 0 12px;
   text-transform: uppercase; letter-spacing: 0.5px;

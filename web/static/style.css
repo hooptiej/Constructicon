@@ -528,22 +528,24 @@ body.delete-mode-on .card-select-row { display: flex; }
 .admin-audit-log-container { max-height: 480px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 8px; }
 .audit-log-empty { font-size: 12px; color: var(--text-3); padding: 12px; text-align: center; }
 .audit-log-list { display: flex; flex-direction: column; gap: 8px; }
+/* #324: two-line responsive card instead of a cramped 5-column grid.
+   Line 1: METHOD · STATUS · (time pushed right).  Line 2: path (wraps).
+   Line 3 (only if slugs): affected slugs. Flat divs reflow via flex order. */
 .audit-log-entry {
-  display: grid; grid-template-columns: 40px 1fr 50px 100px 120px; gap: 8px;
+  display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; row-gap: 2px;
   font-size: 11px; padding: 8px; background: var(--background); border-radius: 3px;
   border-left: 2px solid var(--border);
 }
 .audit-log-method {
-  font-weight: 600; color: var(--text-2-bright); text-transform: uppercase; font-size: 10px;
-  display: flex; align-items: center; justify-content: center;
+  order: 1; font-weight: 600; color: var(--text-2-bright); text-transform: uppercase; font-size: 10px;
 }
-.audit-log-path { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.audit-log-status { font-weight: 500; text-align: right; }
+.audit-log-status { order: 2; font-weight: 500; }
+.audit-log-time { order: 3; margin-left: auto; color: var(--text-3); text-align: right; }
+.audit-log-path { order: 4; flex-basis: 100%; color: var(--text); word-break: break-all; }
+.audit-log-slugs { order: 5; flex-basis: 100%; color: var(--text-3); word-break: break-all; }
 .audit-log-status-success { color: var(--accent); }
 .audit-log-status-error { color: var(--hazard-red); }
 .audit-log-status-other { color: var(--text-2); }
-.audit-log-slugs { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.audit-log-time { color: var(--text-3); text-align: right; }
 
 /* --- Combined gallery + upload pop-out (#17) — home page only.
    Fixed-trigger + CSS-transition panel (transform/opacity, 0.2s ease --

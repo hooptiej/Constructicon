@@ -2201,14 +2201,13 @@ def api_create_project_from_related(slug: str = Form(...), title: str = Form(...
 
 
 @app.post("/api/projects/{project_id}")
-def api_update_project(
+async def api_update_project(
     request: Request,
     project_id: str,
     title: str = Form(None),
     description: str = Form(None),
     cover_slug: str = Form(None),
     status: str = Form(None),
-    parent_id: str = Form(None),
     writeup_slug: str = Form(None),
     start_date: str = Form(None),
     reset_start_date: bool = Form(False),
@@ -2230,24 +2229,31 @@ def api_update_project(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # (#367): Distinguish "parent_id field not submitted" from "parent_id
+    # submitted empty (clear parent)". We CANNOT use `parent_id: str = Form(None)`
+    # for this: FastAPI delivers an empty-string form field as None, colliding
+    # with "field absent". So read the raw form and key on PRESENCE.
+    #   - key absent            -> leave parent_id unchanged (sentinel ...)
+    #   - key present, empty     -> clear parent (None)
+    #   - key present, a value   -> validate + set
+    _form = await request.form()
     parent_id_value = ...  # "..." means don't update parent_id
-    if parent_id is not None:
-        parent_id_value = None
-        if parent_id:
+    if "parent_id" in _form:
+        raw_parent = (str(_form.get("parent_id")) or "").strip()
+        if raw_parent == "":
+            parent_id_value = None  # explicit clear
+        else:
             try:
-                parent_id_int = int(parent_id)
-                # Compare against the resolved row's id, not the path
-                # param: project_id may be a slug (db.get_project accepts
-                # either), and int("some-slug") would land in the
-                # except ValueError below as a bogus "Invalid parent_id"
-                # (#217).
-                if parent_id_int == project["id"]:
-                    raise HTTPException(status_code=400, detail="A project cannot be its own parent")
-                if db.get_project(parent_id_int) is None:
-                    raise HTTPException(status_code=400, detail="Parent project not found")
-                parent_id_value = parent_id_int
+                parent_id_int = int(raw_parent)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid parent_id")
+            # Compare against the resolved row's id, not the path param
+            # (project_id may be a slug; #217).
+            if parent_id_int == project["id"]:
+                raise HTTPException(status_code=400, detail="A project cannot be its own parent")
+            if db.get_project(parent_id_int) is None:
+                raise HTTPException(status_code=400, detail="Parent project not found")
+            parent_id_value = parent_id_int
 
     writeup_slug_value = ...  # "..." means don't update writeup_slug
     if writeup_slug is not None:
@@ -2279,6 +2285,68 @@ def api_update_project(
         updated = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
 
     return JSONResponse(updated or {})
+
+
+@app.post("/api/projects/{project_id}/orphan-child")
+def api_orphan_child(project_id: str, child_id: str = Form(...)):
+    """Orphan a child project: set its parent_id to NULL.
+
+    The child becomes top-level. Returns the updated child project."""
+    child = db.get_project(child_id)
+    if child is None:
+        raise HTTPException(status_code=404, detail="Child project not found")
+
+    # Resolve parent_id: if it's a digit, use it; otherwise resolve the slug.
+    parent_resolved = db.get_project(project_id)
+    if parent_resolved is None:
+        raise HTTPException(status_code=404, detail="Parent project not found")
+    parent_id = parent_resolved["id"]
+
+    # Verify the child is actually a child of this project.
+    if child.get("parent_id") != parent_id:
+        raise HTTPException(status_code=400, detail="Child is not a child of this project")
+
+    try:
+        updated = db.update_project(child_id, parent_id=None)
+        return JSONResponse(updated or {})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/projects/{project_id}/remove-item")
+def api_remove_item_from_project(project_id: str, slug: str = Form(...)):
+    """Remove an object from a project.
+
+    The object is detached but not deleted. Returns {success: true}."""
+    project = db.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify the object exists.
+    obj = db.get_post(slug)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Object not found")
+
+    db.remove_item_from_project(project["id"], slug)
+    return JSONResponse({"success": True})
+
+
+@app.post("/api/projects/{project_id}/delete")
+def api_delete_project(project_id: str):
+    """Delete a project without cascade.
+
+    Orphans all child projects, detaches all objects, removes from hobbies,
+    and deletes the project row. Nothing else is deleted. Returns a summary
+    of what was orphaned/detached."""
+    project = db.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    result = db.delete_project(project["id"])
+    if result is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return JSONResponse(result)
 
 
 @app.get("/api/projects/{project_id}/export.zip")

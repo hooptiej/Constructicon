@@ -2037,13 +2037,20 @@ body.delete-mode-on .card-select-row { display: flex; }
   box-shadow: -2px 2px 10px rgba(0,0,0,0.35);
 }
 
-/* --- Hide redundant header controls (now in nav rail) ---
-   Keep elements in DOM (drawer JS wires open logic to them),
-   just hide them visually. */
+/* --- Hide redundant old nav controls (now all in the nav rail) ---
+   Keep the drawer trigger buttons in the DOM (their drawers' JS wires
+   open logic to them; the rail tabs dispatch a click to them), just hide
+   them visually. The admin gear becomes the rail's Admin tab, and the
+   home page's gallery-drawer hover-tab (#345: it popped out over the rail
+   and made the whole thing a mess) is hidden too — home's upload is now
+   driven only by the rail's Upload tab -> #upload-trigger -> the gallery
+   drawer, same as every other page's Upload tab. */
 .app-header .upload-trigger,
 .app-header .blog-builder-trigger,
 .app-header .export-builder-trigger,
+.app-header .admin-link,
 .app-header a[href="/hobbies"],
-.app-header a[href="/brand"] {
+.app-header a[href="/brand"],
+.gallery-drawer-tab {
   display: none !important;
 }

@@ -91,9 +91,14 @@
       return;
     }
 
-    // Click handler: dispatch click to the trigger
+    // Click handler: dispatch a click to the real trigger button.
+    // stopPropagation is essential: on the home page the Upload trigger
+    // opens the gallery drawer, which has a document-level outside-click
+    // closer. Without stopPropagation this same click would bubble up to
+    // that closer and slam the drawer shut the instant it opened (#345).
     btn.addEventListener('click', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       triggerToUse.click();
     });
   });

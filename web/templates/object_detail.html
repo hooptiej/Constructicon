@@ -325,6 +325,23 @@
           </label>
           <p class="save-confirm" id="highlight-confirm" style="display:none;margin-top:8px;font-size:12px">Saved.</p>
         </div>
+        <div class="field" style="margin-top:15px">
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="brand-asset-checkbox">
+            <span>BRAND ASSET <span class="optional">(reusable branding object)</span></span>
+          </label>
+          <p class="save-confirm" id="brand-asset-confirm" style="display:none;margin-top:8px;font-size:12px">Saved.</p>
+        </div>
+        <div class="field" style="margin-top:12px">
+          <label>BRAND ROLE <span class="optional">(logo, icon, etc.)</span></label>
+          <select class="input" id="brand-role-select">
+            <option value="">— unset —</option>
+            {% for role in BRAND_ROLES %}<option value="{{ role }}">{{ role }}</option>{% endfor %}
+            <option value="">— custom —</option>
+          </select>
+          <input class="input mono" id="brand-role-custom" placeholder="Custom role (e.g. 'swag-design')" style="display:none;margin-top:6px">
+          <p class="save-confirm" id="brand-role-confirm" style="display:none;margin-top:8px;font-size:12px">Saved.</p>
+        </div>
         <p class="error-text" id="save-error" style="display:none;margin-top:15px"></p>
         <p class="save-confirm" id="save-confirm" style="display:none;margin-top:15px">Saved.</p>
         <button class="btn-primary" type="submit" style="margin-top:15px">Save changes</button>
@@ -1011,6 +1028,112 @@ if (highlightCheckbox) {
     }
   });
 }
+
+// #350: Brand asset controls — checkbox + role selector
+(function () {
+  const brandAssetCheckbox = document.getElementById('brand-asset-checkbox');
+  const brandAssetConfirm = document.getElementById('brand-asset-confirm');
+  const brandRoleSelect = document.getElementById('brand-role-select');
+  const brandRoleCustom = document.getElementById('brand-role-custom');
+  const brandRoleConfirm = document.getElementById('brand-role-confirm');
+
+  if (!brandAssetCheckbox) return;
+
+  // Initialize checkbox from item state
+  brandAssetCheckbox.checked = {{ item.is_brand_asset | tojson }};
+  if (brandRoleSelect) {
+    const currentRole = {{ item.brand_role | tojson }};
+    const hasKnownRole = currentRole && {{ BRAND_ROLES | tojson }}.includes(currentRole);
+    if (hasKnownRole) {
+      brandRoleSelect.value = currentRole;
+    } else if (currentRole) {
+      brandRoleSelect.value = '';
+      brandRoleCustom.value = currentRole;
+      brandRoleCustom.style.display = 'block';
+    }
+  }
+
+  // Brand asset checkbox save
+  brandAssetCheckbox.addEventListener('change', async () => {
+    brandAssetConfirm.style.display = 'none';
+    const form = new FormData();
+    form.append('is_brand_asset', brandAssetCheckbox.checked ? '1' : '');
+    try {
+      const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
+      if (res.ok) {
+        brandAssetConfirm.style.display = 'block';
+        setTimeout(() => { brandAssetConfirm.style.display = 'none'; }, 2000);
+      } else {
+        alert('Failed to save brand asset status');
+      }
+    } catch (err) {
+      alert('Failed to save brand asset status');
+    }
+  });
+
+  // Brand role select — toggle custom input on change
+  if (brandRoleSelect) {
+    brandRoleSelect.addEventListener('change', async () => {
+      brandRoleConfirm.style.display = 'none';
+      const selectedRole = brandRoleSelect.value;
+      let roleValue = selectedRole;
+
+      // If "— custom —" is selected, show custom input and use its value
+      if (selectedRole === '') {
+        const lastOption = brandRoleSelect.options[brandRoleSelect.options.length - 1];
+        if (lastOption.textContent.includes('custom')) {
+          brandRoleCustom.style.display = 'block';
+          if (brandRoleCustom.value) {
+            roleValue = brandRoleCustom.value;
+          } else {
+            return; // Don't save yet, user needs to type a custom role
+          }
+        } else {
+          // Regular unset
+          brandRoleCustom.style.display = 'none';
+          roleValue = '';
+        }
+      } else {
+        // Known role selected, hide custom input
+        brandRoleCustom.style.display = 'none';
+      }
+
+      const form = new FormData();
+      form.append('brand_role', roleValue);
+      try {
+        const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
+        if (res.ok) {
+          brandRoleConfirm.style.display = 'block';
+          setTimeout(() => { brandRoleConfirm.style.display = 'none'; }, 2000);
+        } else {
+          alert('Failed to save brand role');
+        }
+      } catch (err) {
+        alert('Failed to save brand role');
+      }
+    });
+
+    // Custom input blur/enter saves
+    if (brandRoleCustom) {
+      brandRoleCustom.addEventListener('change', async () => {
+        const roleValue = brandRoleCustom.value || '';
+        const form = new FormData();
+        form.append('brand_role', roleValue);
+        try {
+          const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
+          if (res.ok) {
+            brandRoleConfirm.style.display = 'block';
+            setTimeout(() => { brandRoleConfirm.style.display = 'none'; }, 2000);
+          } else {
+            alert('Failed to save custom brand role');
+          }
+        } catch (err) {
+          alert('Failed to save custom brand role');
+        }
+      });
+    }
+  }
+})();
 
 document.addEventListener('constructicon:upload-complete', (e) => {
   if (!e.detail.failures.length) location.reload();

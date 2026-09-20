@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %}Brand Kit — Constructicon{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+{% include "_blog_builder.html" %}
+{% include "_export_builder.html" %}
+<div class="app-main">
+  <a class="back-link" href="/">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Back to projects
+  </a>
+
+  <div class="home-col-header">
+    <div>
+      <h1 class="page-title">Brand Kit</h1>
+      <p class="page-subtitle">Reusable branding assets (logos, icons, colors, etc.).</p>
+    </div>
+  </div>
+
+  <div id="brand-container" style="display:none">
+    <div id="brand-assets-container"></div>
+  </div>
+  <p id="brand-empty" class="empty-state" style="display:none">No brand assets yet — mark objects as brand assets from their detail page.</p>
+</div>
+
+<style>
+.brand-role-section {
+  margin-bottom: 2rem;
+}
+
+.brand-role-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted, #7A7764);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-color, #D8D4CC);
+}
+
+.brand-asset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 1rem;
+  border: 1px solid var(--border-color, #D8D4CC);
+  border-radius: 6px;
+  background: var(--card-bg, #FFF);
+  transition: all 0.2s;
+}
+
+.brand-asset-card:hover {
+  border-color: var(--border-hover, #B8B4AC);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.brand-asset-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1;
+  background: var(--bg-secondary, #F8F6F3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.brand-asset-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.brand-asset-link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.brand-asset-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.brand-asset-title {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--text-primary, #1A1815);
+  word-break: break-word;
+}
+
+.brand-asset-role {
+  font-size: 12px;
+  color: var(--text-muted, #7A7764);
+}
+
+.brand-asset-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.brand-asset-link-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-family: monospace;
+  color: var(--text-muted, #7A7764);
+}
+
+.brand-asset-link-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.brand-asset-copy-btn {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  color: var(--accent-color, #7FA37C);
+  font-size: 12px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.brand-asset-copy-btn:hover {
+  opacity: 1;
+}
+
+.brand-assets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+}
+</style>
+
+<script>
+async function loadBrandAssets() {
+  try {
+    const res = await fetch('/api/brand-assets');
+    if (!res.ok) return;
+    const assets = await res.json();
+
+    const container = document.getElementById('brand-assets-container');
+    const empty = document.getElementById('brand-empty');
+    const main = document.getElementById('brand-container');
+
+    if (!assets.length) {
+      empty.style.display = 'block';
+      main.style.display = 'none';
+      return;
+    }
+
+    main.style.display = 'block';
+
+    // Group assets by role
+    const grouped = {};
+    assets.forEach(asset => {
+      const role = asset.brand_role || 'other';
+      if (!grouped[role]) {
+        grouped[role] = [];
+      }
+      grouped[role].push(asset);
+    });
+
+    // Render grouped sections
+    container.innerHTML = Object.entries(grouped)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([role, items]) => `
+        <div class="brand-role-section">
+          <div class="brand-role-header">${encodeHtml(role)}</div>
+          <div class="brand-assets-grid">
+            ${items.map(asset => `
+              <a href="/object/${encodeURIComponent(asset.slug)}" class="brand-asset-link">
+                <div class="brand-asset-card">
+                  <div class="brand-asset-thumb">
+                    <img src="${escapeAttr(asset.thumb_url)}" alt="${encodeHtml(asset.title)}" loading="lazy">
+                  </div>
+                  <div class="brand-asset-info">
+                    <div class="brand-asset-title">${encodeHtml(asset.title)}</div>
+                    <div class="brand-asset-role">${encodeHtml(role)}</div>
+                    <div class="brand-asset-links">
+                      <div class="brand-asset-link-item">
+                        <span class="brand-asset-link-text">${escapeHtml(asset.file_url)}</span>
+                        <button type="button" class="brand-asset-copy-btn" title="Copy file URL" onclick="copyToClipboard('${escapeAttr(asset.file_url)}'); event.preventDefault();">Copy</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </a>
+            `).join('')}
+          </div>
+        </div>
+      `).join('');
+  } catch (err) {
+    console.error('Failed to load brand assets:', err);
+  }
+}
+
+function encodeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[c]));
+}
+
+function escapeAttr(str) {
+  return String(str || '').replace(/"/g, '&quot;');
+}
+
+function escapeHtml(str) {
+  return encodeHtml(str);
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    // Show brief confirmation
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copied';
+    setTimeout(() => {
+      btn.textContent = orig;
+    }, 1500);
+  }).catch(err => {
+    console.error('Failed to copy:', err);
+  });
+}
+
+loadBrandAssets();
+</script>
+
+{% endblock %}

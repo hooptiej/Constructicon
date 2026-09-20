@@ -129,7 +129,7 @@
         if (!res.ok) return;
         const data = await res.json();
         const n = Array.isArray(data) ? data.length : 0;
-        railBadge.textContent = n;
+        railBadge.textContent = n > 99 ? '99+' : n;  // #396: cap wide counts
         railBadge.hidden = n === 0;
       } catch (err) { /* leave whatever's shown */ }
     }

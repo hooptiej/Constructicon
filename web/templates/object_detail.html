@@ -118,6 +118,9 @@
          cardRotationStyle in each card-rendering template) renders it. #}
       <div class="detail-meta" style="margin-top:6px">
         <button type="button" class="ocr-retry-btn" id="rotate-btn" title="Rotate 90°">⟳ Rotate</button>
+        {% if item.thumb_url %}{# #385: only show if thumbnail is available to refresh #}
+        <button type="button" class="ocr-retry-btn" id="refresh-thumbnail-btn" title="Refresh thumbnail">↻ Refresh thumbnail</button>
+        {% endif %}
       </div>
       {% endif %}
 
@@ -424,6 +427,34 @@ if (rotateBtn) {
     } else if (previewImg) {
       // Revert the optimistic UI update on failure.
       previewImg.style.transform = currentRotation ? `rotate(${currentRotation}deg)` : '';
+    }
+  });
+}
+
+// #385: refresh thumbnail button — force regeneration of a thumbnail
+const refreshThumbBtn = document.getElementById('refresh-thumbnail-btn');
+if (refreshThumbBtn) {
+  refreshThumbBtn.addEventListener('click', async () => {
+    const originalText = refreshThumbBtn.textContent;
+    refreshThumbBtn.disabled = true;
+    refreshThumbBtn.textContent = 'Refreshing…';
+    try {
+      const res = await fetch('/api/image/{{ item.slug }}/thumbnail/refresh', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || body.detail || 'Failed to refresh thumbnail');
+      // Reload the thumbnail image with cache-busting query param
+      const previewImg = document.getElementById('preview-img');
+      const thumbImg = document.querySelector('img[src*="/f/{{ item.slug }}/thumb"]');
+      const cacheBustParam = `?t=${Date.now()}`;
+      if (thumbImg && body.thumb_url) {
+        thumbImg.src = body.thumb_url + cacheBustParam;
+      }
+      refreshThumbBtn.disabled = false;
+      refreshThumbBtn.textContent = originalText;
+    } catch (err) {
+      refreshThumbBtn.disabled = false;
+      refreshThumbBtn.textContent = originalText;
+      alert(err.message);
     }
   });
 }

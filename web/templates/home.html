@@ -37,17 +37,35 @@
     <div class="home-widget home-widget-primary" data-widget="projects">
       <div class="home-col-header">
         <h2>Projects</h2>
-        {% if projects %}
-        <div class="sort-control">
-          <label for="projects-sort" class="sort-label">Sort</label>
-          <select class="filter-select" id="projects-sort">
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-            <option value="az">A–Z</option>
-          </select>
+        <div style="display:flex;gap:8px">
+          {% if projects %}
+          <div class="sort-control">
+            <label for="projects-sort" class="sort-label">Sort</label>
+            <select class="filter-select" id="projects-sort">
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="az">A–Z</option>
+            </select>
+          </div>
+          {% endif %}
+          <button type="button" class="btn-secondary" id="new-project-btn" title="Create a new project">+ New project</button>
         </div>
-        {% endif %}
       </div>
+      <script>
+      document.getElementById('new-project-btn').addEventListener('click', async () => {
+        const title = prompt('New project name:');
+        if (!title || !title.trim()) return;
+        const fd = new FormData();
+        fd.append('title', title.trim());
+        const res = await fetch('/api/projects', { method: 'POST', body: fd });
+        if (res.ok) {
+          const project = await res.json();
+          window.location.href = `/project/${project.slug}`;
+        } else {
+          alert('Failed to create project.');
+        }
+      });
+      </script>
       <div class="hazard-stripe" style="width:64px"></div>
 
       {% include "_category_tiles.html" %}
@@ -190,6 +208,7 @@
           }
         }
         sortSelect.addEventListener('change', render);
+
         render();
       })();
       </script>

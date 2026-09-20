@@ -2624,6 +2624,21 @@ def api_list_hobbies(request: Request):
     return JSONResponse(db.list_hobbies())
 
 
+@app.post("/api/hobbies")
+def api_create_hobby(request: Request, name: str = Form(...)):
+    """Create an empty hobby from just a name.
+
+    Creates a top-level blog_tags row with the name, marks it as a hobby
+    with status='active', and returns the new hobby's id and slug."""
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Hobby name can't be empty")
+
+    tag = db.get_or_create_tag(name, parent_id=None)
+    db.mark_tag_as_hobby(tag["id"], status="active")
+    return JSONResponse({"id": tag["id"], "slug": tag["slug"]})
+
+
 @app.get("/api/hobby/{id_or_slug}")
 def api_get_hobby(request: Request, id_or_slug: str):
     """Get a hobby's full details: metadata, attached projects, and attached objects.

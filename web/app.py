@@ -2002,6 +2002,44 @@ def api_delete_image(request: Request, slug: str):
     return JSONResponse({"deleted": True})
 
 
+@app.post("/api/image/{slug}/thumbnail/refresh")
+def api_refresh_thumbnail(request: Request, slug: str):
+    """#385: Force (re)generation of a thumbnail. Deletes any existing cached
+    thumbnail and calls ensure_thumbnail to regenerate it. Useful when a
+    thumbnail failed (e.g. youtube FETCH_URL thumbnail 404'd) or was missed."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+    spec = object_types.get_object_type(row.get("media_type"))
+    if spec.thumbnail_source == object_types.ThumbnailSource.NONE:
+        raise HTTPException(status_code=400, detail="This object type has no thumbnail")
+
+    # Delete the existing thumbnail to force a fresh generation
+    thumb_path = storage.thumb_path_for(slug)
+    if thumb_path.exists():
+        try:
+            thumb_path.unlink()
+        except Exception as e:
+            return JSONResponse({
+                "ok": False,
+                "error": f"Failed to delete cached thumbnail: {e!r}"
+            })
+
+    # Regenerate the thumbnail
+    success = thumbnails.ensure_thumbnail(row)
+    if success:
+        return JSONResponse({
+            "ok": True,
+            "thumb_url": f"/f/{slug}/thumb"
+        })
+    else:
+        return JSONResponse({
+            "ok": False,
+            "error": "Failed to generate thumbnail (see logs for details)"
+        })
+
+
 @app.post("/api/image/{slug}/related")
 def api_add_related(request: Request, slug: str, related_slug: str = Form(...)):
     if db.get_by_slug(slug) is None:

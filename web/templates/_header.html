@@ -18,7 +18,9 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M19 9l-7 7-7-7M12 16V4" stroke="#ECE8DA" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Export
     </button>
-    <a class="btn-ms" href="/account" style="width:auto;padding:8px 14px">Desktop uploader</a>
+    {# #347: Desktop uploader hidden for now — untested, no Windows build, unclear fit.
+       Route/page (/account) still exist (reachable by direct URL); just unadvertised.
+       Re-evaluation tracked in #348. #}
     <!-- Admin (#24 → #295): the gear used to be a fixed bottom-right button
          that popped open _admin_pane.html, included on every page. That
          surface is its own page now (/admin, admin.html), so the gear is a

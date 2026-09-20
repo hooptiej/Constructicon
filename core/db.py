@@ -161,12 +161,12 @@ SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
 # --- Provenance (capture_events.provenance) — #341 ---
 # Controlled vocab for object provenance (how an object came to be captured).
 # Loose (no DB CHECK), extensible — trim in use as patterns emerge.
-PROVENANCE_TYPES = ["found", "created", "documented", "result", "failure", "reference", "design"]
+PROVENANCE_TYPES = ["found", "created", "documented", "result", "reference", "design"]
 
 # --- Project statuses (projects.status) — #341 ---
 # Controlled vocab for project lifecycle stage. Loose, no DB CHECK. Existing
 # rows have status='active' — treat as 'wip' (work in progress).
-PROJECT_STATUSES = ["wip", "complete", "shelved", "means-to-an-end", "abandoned", "idea", "published", "reference-only"]
+PROJECT_STATUSES = ["wip", "complete", "shelved", "means-to-an-end", "abandoned", "failed", "idea", "published", "reference-only"]
 
 # --- Hobby statuses (blog_tags.hobby_status) — #360 ---
 # Controlled vocab for hobby tier status. Only meaningful when is_hobby=1.
@@ -435,11 +435,15 @@ def init_db():
             conn.execute("ALTER TABLE capture_events ADD COLUMN agent_notes TEXT")
         # provenance + highlight (#341): Curator Stage 1 data model. provenance is a
         # controlled-vocab extensible field describing how the object came to be (found,
-        # created, documented, result, failure, reference, design). highlight is a boolean
+        # created, documented, result, reference, design). highlight is a boolean
         # flag for "cool/unique" objects, featured in export.
         for column, ddl_type in (("provenance", "TEXT"), ("highlight", "INTEGER NOT NULL DEFAULT 0")):
             if column not in existing_columns:
                 conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+        # Migration (#359): re-tag any objects set to the removed "failure" provenance value.
+        # Idempotent — safe to run on every init. "failure" moved to project status;
+        # re-tag objects as "documented".
+        conn.execute("UPDATE capture_events SET provenance='documented' WHERE provenance='failure'")
         conn.commit()
     finally:
         conn.close()

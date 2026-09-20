@@ -58,6 +58,7 @@ STATUS_APPLICABILITY = {
     "wip": {"story": [True, True], "presentation": [True, True], "timeline": [True, False], "connections": [True, True], "oddball_bonus": [False]},
     "shelved": None,  # Silent
     "abandoned": None,  # Silent
+    "failed": None,  # Silent
     "reference-only": None,  # Silent
     "idea": None,  # Silent
     "means-to-an-end": "parent_or_related_only",  # Only check parent_id or related links
@@ -144,7 +145,7 @@ def score_project(project_id_or_dict):
     effective_status = _normalize_status(project.get("status", "wip"))
 
     # Determine if silent
-    silent = effective_status in ("shelved", "abandoned", "reference-only", "idea")
+    silent = effective_status in ("shelved", "abandoned", "failed", "reference-only", "idea")
 
     # Special case: means-to-an-end
     if effective_status == "means-to-an-end":

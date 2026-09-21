@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Caption Review — Constructicon{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+<div class="app-main">
+  <a class="back-link" href="/">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Back to projects
+  </a>
+  <div class="home-col-header">
+    <div>
+      <h1 class="page-title">Caption Review</h1>
+      <p class="page-subtitle">Accept, edit, or skip the vision model's suggested captions. Accept copies it into the object's description; skip drops it from the queue.</p>
+    </div>
+    <span id="cr-count" style="font-size:13px;color:var(--text-2)"></span>
+  </div>
+  <div id="cr-list"></div>
+  <p id="cr-empty" class="empty-state" style="display:none">All caught up — no captions to review.</p>
+</div>
+
+<style>
+.cr-card { display:flex; gap:14px; padding:14px; border:1px solid var(--border); border-radius:10px; background:var(--surface); margin-bottom:12px; }
+.cr-thumb img { width:120px; height:120px; object-fit:cover; border-radius:8px; background:var(--chip); display:block; }
+.cr-body { flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
+.cr-name { font-size:12px; color:var(--icon-muted); font-family:monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cr-text { width:100%; resize:vertical; }
+.cr-actions { display:flex; gap:10px; align-items:center; }
+.cr-msg { font-size:12px; color:var(--hazard-red); }
+</style>
+
+<script>
+(function () {
+  const list = document.getElementById('cr-list');
+  const empty = document.getElementById('cr-empty');
+  const countEl = document.getElementById('cr-count');
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function updateCount() {
+    const n = list.querySelectorAll('.cr-card').length;
+    countEl.textContent = n ? n + ' to review' : '';
+    empty.style.display = n ? 'none' : 'block';
+  }
+  async function load() {
+    let items = [];
+    try { const res = await fetch('/api/captions/unreviewed'); if (res.ok) items = await res.json(); } catch (e) {}
+    list.innerHTML = '';
+    items.forEach(it => {
+      const card = document.createElement('div');
+      card.className = 'cr-card';
+      card.innerHTML =
+        '<div class="cr-thumb"><a href="' + esc(it.detail_url) + '" target="_blank" rel="noopener"><img src="' + esc(it.thumb_url) + '" alt="" loading="lazy"></a></div>' +
+        '<div class="cr-body">' +
+          '<div class="cr-name">' + esc(it.name) + '</div>' +
+          '<textarea class="input cr-text" rows="3"></textarea>' +
+          '<div class="cr-actions">' +
+            '<button type="button" class="btn-primary cr-accept">Accept as description</button>' +
+            '<button type="button" class="btn-secondary cr-skip">Skip</button>' +
+            '<span class="cr-msg"></span>' +
+          '</div>' +
+        '</div>';
+      const ta = card.querySelector('.cr-text');
+      ta.value = it.caption || '';
+      const msg = card.querySelector('.cr-msg');
+      card.querySelector('.cr-accept').addEventListener('click', async () => {
+        const text = ta.value.trim();
+        if (!text) { msg.textContent = 'Enter a caption first'; return; }
+        msg.textContent = '';
+        const fd = new FormData(); fd.append('content_description', text);
+        try {
+          const r = await fetch('/api/image/' + encodeURIComponent(it.slug), { method: 'POST', body: fd });
+          if (!r.ok) throw new Error();
+          fetch('/api/image/' + encodeURIComponent(it.slug) + '/caption/mark-used', { method: 'POST' }).catch(() => {});
+          card.remove(); updateCount();
+        } catch (e) { msg.textContent = 'Failed to save'; }
+      });
+      card.querySelector('.cr-skip').addEventListener('click', async () => {
+        msg.textContent = '';
+        try {
+          const r = await fetch('/api/captions/' + encodeURIComponent(it.slug) + '/skip', { method: 'POST' });
+          if (!r.ok) throw new Error();
+          card.remove(); updateCount();
+        } catch (e) { msg.textContent = 'Failed'; }
+      });
+      list.appendChild(card);
+    });
+    updateCount();
+  }
+  load();
+})();
+</script>
+{% endblock %}

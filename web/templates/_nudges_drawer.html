@@ -46,8 +46,9 @@
         return `/project/${encodeURIComponent(action.project_slug || '')}`;
       case 'file_unfiled':
         return '/unfiled';
-      case 'review_automatch':
       case 'review_captions':
+        return '/captions/review';  // #409: bulk caption review
+      case 'review_automatch':
         return '/admin';
       default:
         return '#';

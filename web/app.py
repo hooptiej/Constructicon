@@ -1303,6 +1303,8 @@ def project_detail_page(request: Request, slug: str):
             "PROJECT_STATUSES": PROJECT_STATUSES,
             "project_score": project_score,
             "project_hobbies": [{"id": h["id"], "name": h["name"], "slug": h["slug"]} for h in project_hobbies],
+            # #408: peer project links for the Related-projects widget.
+            "related_projects": _related_projects_public(slug),
         },
     )
 
@@ -1864,6 +1866,42 @@ def api_mark_caption_used(slug: str):
         captions.DESCRIPTION_USED_AT_KEY: time.time(),
     })
     return JSONResponse({"step": step_index, "step_label": step_label})
+
+
+@app.get("/api/captions/unreviewed")
+def api_captions_unreviewed(request: Request):
+    """#409: objects with an auto-caption suggestion awaiting review — feeds the
+    bulk caption-review page. Accept reuses POST /api/image/{slug} (sets
+    content_description) + caption/mark-used; skip is POST /api/captions/{slug}/skip."""
+    out = []
+    for r in db.list_unaccepted_captions():
+        tm = r.get("type_metadata") or {}
+        out.append({
+            "slug": r["slug"],
+            "name": r.get("display_name") or r.get("filename") or r["slug"],
+            "caption": (tm.get("auto_caption") or "").strip(),
+            "thumb_url": f"/f/{r['slug']}/thumb",
+            "detail_url": f"/object/{r['slug']}",
+        })
+    return JSONResponse(out)
+
+
+@app.post("/api/captions/{slug}/skip")
+def api_caption_skip(slug: str):
+    """#409: mark an auto-caption suggestion reviewed-but-not-used, so it drops
+    out of the confirm_caption queue without being copied into the description."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    db.update_content_metadata(slug, type_metadata={"auto_caption_dismissed": True})
+    return JSONResponse({"ok": True})
+
+
+@app.get("/captions/review", response_class=HTMLResponse)
+def captions_review_page(request: Request):
+    """#409: bulk review surface for auto-caption suggestions — the actionable
+    destination for the confirm_caption nudge (was dumping to /admin)."""
+    return templates.TemplateResponse(request, "captions_review.html", {})
 
 
 @app.get("/api/captions/defaults")
@@ -2813,6 +2851,34 @@ def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id:
         }
         for p in projects
     ])
+
+
+def _related_projects_public(slug):
+    """Trim shape for the project-detail Related-projects widget (#408)."""
+    return [
+        {"slug": p["slug"], "title": p["title"], "status": p.get("status")}
+        for p in db.list_related_projects(slug)
+    ]
+
+
+@app.post("/api/project/{slug}/related")
+def api_add_project_related(request: Request, slug: str, related_slug: str = Form(...)):
+    """#408: link two projects as peers (bidirectional). Mirrors the object
+    related route; resolves weak_connections' related-projects half."""
+    if db.get_project(slug) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    if related_slug == slug:
+        raise HTTPException(status_code=400, detail="a project can't be related to itself")
+    if db.get_project(related_slug) is None:
+        raise HTTPException(status_code=404, detail="related project not found")
+    db.add_project_relation(slug, related_slug)
+    return JSONResponse(_related_projects_public(slug))
+
+
+@app.post("/api/project/{slug}/related/remove")
+def api_remove_project_related(request: Request, slug: str, related_slug: str = Form(...)):
+    db.remove_project_relation(slug, related_slug)
+    return JSONResponse(_related_projects_public(slug))
 
 
 @app.post("/api/project/{slug}/convert-to-hobby")

@@ -297,6 +297,7 @@ def _count_unaccepted_captions():
                 json_extract(type_metadata, '$.auto_caption') IS NOT NULL
                 AND json_extract(type_metadata, '$.auto_caption') != ''
                 AND (content_description IS NULL OR content_description = '')
+                AND json_extract(type_metadata, '$.auto_caption_dismissed') IS NULL
         """).fetchone()
         return rows["count"] if rows else 0
     finally:

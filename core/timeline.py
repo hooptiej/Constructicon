@@ -80,6 +80,18 @@ def resolve_item_date(row):
     return row["timestamp"]
 
 
+def has_real_date(row):
+    """True if the row has a *real* content date — anything resolve_item_date
+    would use ahead of the bare upload timestamp (#406). An object dated only
+    via source_modified_at is still placed on the timeline with a real date, so
+    it must count as 'dated' for coverage; otherwise the Curator nags to date
+    things it already knows the date of (archive imports carry their real date
+    in source_modified_at, not content_date)."""
+    return (row.get("display_date_override") is not None
+            or row.get("content_date") is not None
+            or row.get("source_modified_at") is not None)
+
+
 def resolve_project_span(project, items):
     """project is a core.db projects dict. items is that project's
     capture_events rows (core.db.list_project_items shape) — may be empty.

@@ -77,6 +77,20 @@ def _get_writeup(project):
     return db.get_by_slug(project["writeup_slug"])
 
 
+def content_items(project, items):
+    """Project items EXCLUDING the write-up document (#404).
+
+    The write-up is attached to a project (via writeup_slug) and also shows up
+    in list_project_items, but it's a story-dimension concern (does a good
+    narrative exist) — NOT project content. Counting it in per-object coverage
+    (dates, captions, provenance) nags you to "date/caption the write-up", and
+    a write-up saved today injects a today-dated point that fakes a fresh
+    timeline / masks a stale WIP. So every date/coverage/timeline computation
+    runs over this filtered set instead of raw items."""
+    wu = project.get("writeup_slug")
+    return [i for i in items if i.get("slug") != wu] if wu else items
+
+
 def _has_large_gap(items):
     """Check if a project has an unexplained large gap in its timeline.
 
@@ -153,6 +167,9 @@ def score_project(project_id_or_dict):
 
     # Get project items and tags
     items = db.list_project_items(project["id"])
+    # #404: per-object coverage + timeline checks run over content only, never
+    # the write-up doc (which is scored separately as story/writeup_body).
+    content = content_items(project, items)
     project_tags = _get_project_tags(project)
 
     # Build checklist
@@ -204,7 +221,7 @@ def score_project(project_id_or_dict):
     })
 
     # Check 2: provenance_diversity
-    provenance_diversity_passed = len(set(item.get("provenance") for item in items if item.get("provenance"))) >= 2
+    provenance_diversity_passed = len(set(item.get("provenance") for item in content if item.get("provenance"))) >= 2
     excused = not dim_applicable[1]
     if not excused:
         applicable += weight_per_item
@@ -248,9 +265,9 @@ def score_project(project_id_or_dict):
     # frequently auto-populated, so counting it would make nearly every object
     # look "captioned" and render this check meaningless.
     caption_threshold = 0.6
-    if items:
-        captions_present = sum(1 for item in items if (item.get("content_description") or "").strip())
-        captions_passed = captions_present / len(items) >= caption_threshold
+    if content:
+        captions_present = sum(1 for item in content if (item.get("content_description") or "").strip())
+        captions_passed = captions_present / len(content) >= caption_threshold
     else:
         captions_passed = False
     excused = not dim_applicable[1]
@@ -276,9 +293,9 @@ def score_project(project_id_or_dict):
 
     # Check 1: content_dates
     date_threshold = 0.6
-    if items:
-        items_with_dates = sum(1 for item in items if item.get("content_date") is not None)
-        content_dates_passed = items_with_dates / len(items) >= date_threshold
+    if content:
+        items_with_dates = sum(1 for item in content if item.get("content_date") is not None)
+        content_dates_passed = items_with_dates / len(content) >= date_threshold
     else:
         content_dates_passed = False
     excused = not dim_applicable[0]
@@ -297,7 +314,7 @@ def score_project(project_id_or_dict):
     })
 
     # Check 2: no_large_gap
-    no_large_gap_passed = _has_large_gap(items)
+    no_large_gap_passed = _has_large_gap(content)
     excused = not dim_applicable[1]
     if not excused:
         applicable += weight_per_item

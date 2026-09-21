@@ -140,7 +140,9 @@ def list_needs():
 
         # Stale WIP detector
         if project_status == "wip":
-            items = db.list_project_items(project_id)
+            # #404: exclude the write-up doc — a today-saved write-up must not
+            # make a stale WIP look freshly worked-on.
+            items = curator.content_items(project, db.list_project_items(project_id))
             if items:  # Only check if there are items
                 most_recent_date = max(
                     timeline.resolve_item_date(item) for item in items
@@ -259,7 +261,7 @@ def list_needs():
         else:
             # Find the most recent project item date
             project = db.get_project(nudge["target_id"])
-            items = db.list_project_items(nudge["target_id"])
+            items = curator.content_items(project, db.list_project_items(nudge["target_id"]))
             if items:
                 recency = -max(timeline.resolve_item_date(item) for item in items)
             else:

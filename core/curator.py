@@ -32,7 +32,7 @@ SCORING_RULES = {
     "timeline": {
         "weight": 25,
         "items": [
-            {"name": "content_dates", "description": "≥60% of objects have a content date"},
+            {"name": "content_dates", "description": "≥60% of objects have a resolvable date"},
             {"name": "no_large_gap", "description": "no large unexplained gap"},
         ],
     },
@@ -124,10 +124,15 @@ def _has_large_gap(items):
     if median_gap == 0:
         return True  # All items on same date, no gap pattern
 
-    threshold = median_gap * 3
+    # #406: require BOTH a relative and an absolute gap, so the normal cadence
+    # of a multi-year hobby project (a burst of activity then sparse later
+    # additions) doesn't read as a "hole". Only a gap that's both unusually
+    # large for this project AND long in absolute terms is worth surfacing.
+    threshold = median_gap * 4
+    MIN_ABS_GAP = 120 * 24 * 3600  # 120 days
     for gap in gaps:
-        if gap > threshold:
-            return False  # Large gap found
+        if gap > threshold and gap > MIN_ABS_GAP:
+            return False  # genuine large gap found
 
     return True  # No large gap, check passes
 
@@ -294,7 +299,7 @@ def score_project(project_id_or_dict):
     # Check 1: content_dates
     date_threshold = 0.6
     if content:
-        items_with_dates = sum(1 for item in content if item.get("content_date") is not None)
+        items_with_dates = sum(1 for item in content if timeline.has_real_date(item))
         content_dates_passed = items_with_dates / len(content) >= date_threshold
     else:
         content_dates_passed = False

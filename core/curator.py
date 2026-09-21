@@ -486,23 +486,27 @@ def _get_project_tags(project):
 
 
 def _get_related_projects(project):
-    """Get related projects: parent or any manual project-to-project links.
-
-    Since the schema doesn't have project_relations, we check parent_id only.
-    Future enhancement: if project relations are added, include them here.
-    """
+    """Get related projects: the parent/siblings via parent_id, plus explicit
+    project-to-project relations (#408, project_relations table)."""
     related = []
+    seen = set()
 
     # Parent project
     if project.get("parent_id"):
         parent = db.get_project(project["parent_id"])
-        if parent:
-            related.append(parent)
+        if parent and parent["id"] not in seen:
+            related.append(parent); seen.add(parent["id"])
 
     # Sibling/child projects via parent
     if project.get("parent_id"):
-        siblings = db.list_child_projects(project["parent_id"])
-        related.extend([s for s in siblings if s["id"] != project["id"]])
+        for s in db.list_child_projects(project["parent_id"]):
+            if s["id"] != project["id"] and s["id"] not in seen:
+                related.append(s); seen.add(s["id"])
+
+    # Explicit peer links (#408)
+    for rp in db.list_related_projects(project["slug"]):
+        if rp["id"] != project["id"] and rp["id"] not in seen:
+            related.append(rp); seen.add(rp["id"])
 
     return related
 

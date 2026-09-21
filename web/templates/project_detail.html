@@ -77,6 +77,60 @@
         <option value="">+ Add to hobby…</option>
       </select>
     </div>
+    {# #408: peer project links (mirrors the "In hobbies" row above). Resolves
+       the weak_connections nudge's related-projects half, which had no UI. #}
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
+      <label style="font-size:12px;color:var(--text-muted)">Related projects:</label>
+      <div id="related-projects-container" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-height:24px"></div>
+      <select id="add-related-project-select" class="input" style="max-width:220px;font-size:12px">
+        <option value="">+ Add related project…</option>
+      </select>
+    </div>
+    <script>
+    (function () {
+      const SLUG = {{ project.slug | tojson }};
+      let related = {{ related_projects | tojson }};
+      let allProjects = [];
+      const container = document.getElementById('related-projects-container');
+      const select = document.getElementById('add-related-project-select');
+      function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+      function render() {
+        container.innerHTML = '';
+        if (!related.length) {
+          container.innerHTML = '<span style="font-size:12px;color:var(--text-muted)">none yet</span>';
+          return;
+        }
+        related.forEach(p => {
+          const chip = document.createElement('span');
+          chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--chip);border:1px solid var(--border);border-radius:100px;padding:3px 10px';
+          chip.innerHTML = '<a href="/project/' + encodeURIComponent(p.slug) + '" style="color:var(--text);text-decoration:none">' + esc(p.title) + '</a>';
+          const x = document.createElement('button');
+          x.type = 'button'; x.textContent = '×'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove');
+          x.style.cssText = 'background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;line-height:1;padding:0';
+          x.onclick = async () => {
+            const fd = new FormData(); fd.append('related_slug', p.slug);
+            const r = await fetch('/api/project/' + encodeURIComponent(SLUG) + '/related/remove', { method: 'POST', body: fd });
+            if (r.ok) { related = await r.json(); render(); refreshPicker(); }
+          };
+          chip.appendChild(x); container.appendChild(chip);
+        });
+      }
+      function refreshPicker() {
+        const relatedSlugs = new Set(related.map(p => p.slug));
+        select.querySelectorAll('option:not([value=""])').forEach(o => o.remove());
+        allProjects.filter(p => p.slug !== SLUG && !relatedSlugs.has(p.slug))
+          .forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.title; select.appendChild(o); });
+      }
+      select.addEventListener('change', async () => {
+        const rs = select.value; if (!rs) return; select.value = '';
+        const fd = new FormData(); fd.append('related_slug', rs);
+        const r = await fetch('/api/project/' + encodeURIComponent(SLUG) + '/related', { method: 'POST', body: fd });
+        if (r.ok) { related = await r.json(); render(); refreshPicker(); }
+      });
+      fetch('/api/projects').then(r => r.ok ? r.json() : []).then(d => { allProjects = d; refreshPicker(); }).catch(() => {});
+      render();
+    })();
+    </script>
     <div class="hazard-stripe" style="width:64px"></div>
     {% if cover_url %}
     <div class="project-cover" style="height:200px;border-radius:12px;border:1px solid var(--border)">

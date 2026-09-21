@@ -99,6 +99,12 @@ CREATE TABLE IF NOT EXISTS project_items (
     PRIMARY KEY (project_id, post_slug)
 );
 CREATE INDEX IF NOT EXISTS idx_project_items_slug ON project_items(post_slug);
+CREATE TABLE IF NOT EXISTS project_relations (
+    slug_a TEXT NOT NULL,
+    slug_b TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (slug_a, slug_b)
+);
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -1315,6 +1321,71 @@ def list_related(slug):
             "SELECT ce.* FROM capture_event_relations r JOIN capture_events ce ON ce.slug = r.slug_b "
             "WHERE r.slug_a = ? ORDER BY ce.timestamp DESC",
             (slug,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# --- Project-to-project relations (#408) ---
+# Peer links between projects, mirroring capture_event_relations for objects
+# (projects live in their own table, so they can't reuse that object-only
+# relation store). Symmetric: stored both directions so either side's list is
+# a single lookup. Unlike object relations there's no categorization sync —
+# projects aren't tag/membership carriers the way objects are; a related link
+# is just a link.
+def add_project_relation(slug_a, slug_b):
+    if slug_a == slug_b:
+        return
+    conn = get_conn()
+    try:
+        now = time.time()
+        conn.execute("INSERT OR IGNORE INTO project_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)", (slug_a, slug_b, now))
+        conn.execute("INSERT OR IGNORE INTO project_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)", (slug_b, slug_a, now))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_project_relation(slug_a, slug_b):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM project_relations WHERE slug_a = ? AND slug_b = ?", (slug_a, slug_b))
+        conn.execute("DELETE FROM project_relations WHERE slug_a = ? AND slug_b = ?", (slug_b, slug_a))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_related_projects(slug):
+    """Projects peer-linked to the given project slug (both directions)."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT p.* FROM project_relations r JOIN projects p ON p.slug = r.slug_b "
+            "WHERE r.slug_a = ? ORDER BY p.updated_at DESC",
+            (slug,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_unaccepted_captions(limit=500):
+    """Rows with an auto_caption suggestion that hasn't been accepted into
+    content_description and hasn't been skipped — the confirm_caption bulk
+    review queue (#409). Mirrors curator_needs._count_unaccepted_captions'
+    filter, plus the auto_caption_dismissed skip flag."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE redacted=0 "
+            "AND json_extract(type_metadata, '$.auto_caption') IS NOT NULL "
+            "AND json_extract(type_metadata, '$.auto_caption') != '' "
+            "AND (content_description IS NULL OR content_description = '') "
+            "AND json_extract(type_metadata, '$.auto_caption_dismissed') IS NULL "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:

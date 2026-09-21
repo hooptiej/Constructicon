@@ -6,12 +6,12 @@
      now rides the Nudges rail tab. -->
 <button type="button" id="nudges-drawer-trigger" style="display:none" aria-hidden="true" tabindex="-1"></button>
 <div class="drawer-backdrop" id="nudges-drawer-backdrop"></div>
-<div class="wide-drawer nudges-drawer" id="nudges-drawer" role="dialog" aria-label="Nudges">
+<div class="wide-drawer nudges-drawer" id="nudges-drawer" role="dialog" aria-label="Curator">
   <div class="wide-drawer-header">
-    <h2>Nudges <span id="nudges-drawer-count" class="apikey-status"></span></h2>
+    <h2>Curator <span id="nudges-drawer-count" class="apikey-status"></span></h2>
     <button type="button" class="modal-close" id="nudges-drawer-close" aria-label="Close">&times;</button>
   </div>
-  <p class="page-subtitle">Ranked nudges for improving project data and unfiled items.</p>
+  <p class="page-subtitle">What the Curator found — ranked suggestions for improving project data and unfiled items.</p>
   <div id="nudges-drawer-list" class="admin-curator-needs-list"></div>
 </div>
 
@@ -88,12 +88,12 @@
           </div>
         </div>
         <div class="curator-nudge-actions">
-          <a class="btn-ms curator-action-link" href="${esc(actionHref)}" title="Open to resolve this nudge">Open</a>
+          <a class="btn-ms curator-action-link" href="${esc(actionHref)}" title="Open to resolve this item">Open</a>
           <div class="curator-snooze-group">
             <button type="button" class="btn-ms curator-snooze-btn" data-snooze-until="${oneWeekEpoch}" title="Hide for 1 week">1 week</button>
             <button type="button" class="btn-ms curator-snooze-btn" data-snooze-until="${oneMonthEpoch}" title="Hide for 1 month">1 month</button>
           </div>
-          <button type="button" class="btn-ms curator-dismiss-btn" title="Permanently dismiss this nudge">Dismiss</button>
+          <button type="button" class="btn-ms curator-dismiss-btn" title="Permanently dismiss this item">Dismiss</button>
           <span class="backup-status curator-nudge-msg"></span>
         </div>`;
       const msg = el.querySelector('.curator-nudge-msg');

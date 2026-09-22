@@ -76,7 +76,7 @@ def main():
     )
     args = parser.parse_args()
 
-    rows = [r for r in db.search(limit=1000000) if r.get("tags")]
+    rows = [r for r in db.search(limit=1000000, include_brand=True) if r.get("tags")]
     if not rows:
         print("No items with free-text tags found.")
         return

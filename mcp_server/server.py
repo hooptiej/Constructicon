@@ -347,9 +347,10 @@ def constructicon_delete_all() -> dict:
 
     Call constructicon_backup first if you want to preserve the current content.
     """
-    # include_redacted (#282): search() hides redacted rows by default;
-    # a full reset has to take them too or they'd survive as orphans.
-    rows = db.search(limit=100000, include_redacted=True)
+    # include_redacted (#282) / include_brand (#417): search() hides redacted
+    # rows and brand assets by default; a full reset has to take them too or
+    # they'd survive as orphaned rows + storage files.
+    rows = db.search(limit=100000, include_redacted=True, include_brand=True)
     for row in rows:
         if row.get("stored_filename"):
             storage.delete_files(row["slug"], row["stored_filename"])
@@ -632,6 +633,32 @@ def constructicon_list_hobbies() -> list[dict]:
         }
         for h in hobbies
     ]
+
+
+@mcp.tool()
+def constructicon_create_hobby(name: str, status: str = "active") -> dict:
+    """Create an empty hobby from just a name (#418).
+
+    Mirrors POST /api/hobbies: creates (or reuses, via get_or_create_tag) a
+    top-level blog_tags row with the given name and marks it as a hobby. The
+    HTTP route always uses status='active'; this tool also accepts an explicit
+    status so a hobby can be stood up dormant/abandoned in one call.
+
+    status: one of 'active', 'dormant', 'abandoned' (default 'active').
+    Raises ValueError if the name is blank or the status is invalid.
+    Returns the new hobby dict {id, name, slug, status}."""
+    name = name.strip()
+    if not name:
+        raise ValueError("Hobby name can't be empty")
+
+    tag = db.get_or_create_tag(name, parent_id=None)
+    db.mark_tag_as_hobby(tag["id"], status=status)
+    return {
+        "id": tag["id"],
+        "name": tag["name"],
+        "slug": tag["slug"],
+        "status": status,
+    }
 
 
 @mcp.tool()

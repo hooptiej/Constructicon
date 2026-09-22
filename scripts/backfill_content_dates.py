@@ -85,7 +85,7 @@ def candidate_rows(media_types, slugs=None):
     first, so a partial run (Ctrl-C) leaves the backlog's tail, not its
     head, for next time."""
     rows = []
-    for row in db.search(limit=1000000):
+    for row in db.search(limit=1000000, include_brand=True):
         if row.get("media_type") not in media_types:
             continue
         if slugs and row["slug"] not in slugs:

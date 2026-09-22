@@ -155,7 +155,7 @@ def existing_youtube_video_ids():
     HTTP -- no existing endpoint exposes external_url in its JSON shape).
     """
     ids = set()
-    for row in db.search(limit=1000000):
+    for row in db.search(limit=1000000, include_brand=True):
         if row.get("media_type") != "youtube":
             continue
         vid = object_types.extract_youtube_id(row.get("external_url"))

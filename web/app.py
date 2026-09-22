@@ -897,9 +897,10 @@ def api_delete_all():
     Development convenience while content/schema are still in flux, not a
     feature meant to stick around once the site has real content worth
     protecting."""
-    # include_redacted (#282): search() hides redacted rows by default;
-    # a full reset has to take them too or they'd survive as orphans.
-    rows = db.search(limit=100000, include_redacted=True)
+    # include_redacted (#282) / include_brand (#417): search() hides redacted
+    # rows and brand assets by default; a full reset has to take them too or
+    # they'd survive as orphaned rows + storage files.
+    rows = db.search(limit=100000, include_redacted=True, include_brand=True)
     for row in rows:
         if row.get("stored_filename"):
             storage.delete_files(row["slug"], row["stored_filename"])

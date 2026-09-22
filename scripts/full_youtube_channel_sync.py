@@ -300,7 +300,7 @@ def existing_youtube_rows():
     the last one iterated, leaving it permanently uncorrected on every
     future run."""
     mapping = {}
-    for row in db.search(limit=1000000):
+    for row in db.search(limit=1000000, include_brand=True):
         if row.get("media_type") != "youtube":
             continue
         video_id = object_types.extract_youtube_id(row.get("external_url"))

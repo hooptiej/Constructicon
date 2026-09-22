@@ -961,6 +961,35 @@ def list_brand_assets():
         conn.close()
 
 
+# Tag names the Wallpaper surface (#422) gathers. Deliberately a small set of
+# synonyms rather than one canonical tag: the owner's pre-existing "Desktop
+# Picture" pile and the "wallpaper" tag the archive import stamps both mean the
+# same thing, so the surface shows every wallpaper regardless of which was used.
+# Matched case-insensitively. Extend here if another synonym shows up.
+WALLPAPER_TAG_NAMES = ("wallpaper", "desktop picture")
+
+
+def list_wallpapers():
+    """Objects carrying any WALLPAPER_TAG_NAMES tag, non-redacted, newest
+    first (#422). The Wallpaper page's data source — a tag-based sibling of
+    list_brand_assets, no schema change (wallpaper is just a tag, not a flag)."""
+    conn = get_conn()
+    try:
+        names = [n.lower() for n in WALLPAPER_TAG_NAMES]
+        placeholders = ",".join("?" for _ in names)
+        rows = conn.execute(
+            f"SELECT DISTINCT ce.* FROM capture_events ce "
+            f"JOIN post_tags pt ON pt.post_slug = ce.slug "
+            f"JOIN blog_tags t ON t.id = pt.tag_id "
+            f"WHERE lower(t.name) IN ({placeholders}) AND ce.redacted = 0 "
+            f"ORDER BY ce.timestamp DESC",
+            names,
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def get_setting(key):
     """Reads one app_settings value (#55) — a generic key/value store for
     secrets and other app-level settings the app needs to remember across

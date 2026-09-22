@@ -192,7 +192,7 @@ def build_video_id_index():
     """slug -> capture_events row, keyed by extracted YouTube video ID, for
     every media_type='youtube' row in the target's live database."""
     index = {}
-    for row in db.search(limit=1000000):
+    for row in db.search(limit=1000000, include_brand=True):
         if row.get("media_type") != "youtube":
             continue
         vid = object_types.extract_youtube_id(row.get("external_url"))
@@ -225,7 +225,7 @@ def build_blog_url_slug_index():
     find_blog_post is a plain dict lookup rather than an O(n) scan per
     member."""
     index = {}
-    for row in db.search(limit=1000000):
+    for row in db.search(limit=1000000, include_brand=True):
         url = row.get("external_url") or ""
         if "/blog/" not in url or not url.endswith(".html"):
             continue

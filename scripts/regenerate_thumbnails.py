@@ -90,7 +90,7 @@ def main():
         # Same enumerate-everything discovery pass the other maintenance
         # scripts use; redacted rows are excluded by default and have no
         # file to regenerate from anyway.
-        rows = db.search(limit=100000)
+        rows = db.search(limit=100000, include_brand=True)
 
     candidates = regenerated = unreadable = 0
     manual_rotation = []

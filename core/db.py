@@ -1084,7 +1084,7 @@ def list_uploaders(query=None, client=None):
         conn.close()
 
 
-def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, include_redacted=False):
+def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False):
     """Keyword/filter search over capture_events, most recent first.
 
     #282: redacted rows are excluded by default, same as every other
@@ -1099,12 +1099,24 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, inclu
     longer has -- thumbnail/EXIF backfills) or only touch youtube/URL rows,
     which have no stored file and so can never be redacted in the first
     place.
+
+    #417: brand assets (is_brand_asset=1) are likewise excluded by default,
+    so branding art lives only in the Brand Vault + its own project and
+    doesn't clog general search/browse. `include_brand=True` re-includes
+    them. Unlike include_redacted, the enumerate-everything callers must
+    set include_brand=True explicitly (the two delete-all paths -- else a
+    brand asset survives a full reset as an orphaned row + storage file --
+    and every `db.search(limit=<huge>)` maintenance/discovery pass, since a
+    brand asset is a real stored image that still needs thumbnail/date
+    backfills, unlike a fileless redacted row).
     """
     conn = get_conn()
     try:
         clauses, params = [], []
         if not include_redacted:
             clauses.append("redacted = 0")
+        if not include_brand:
+            clauses.append("is_brand_asset = 0")
         if query:
             clauses.append("(description LIKE ? OR filename LIKE ? OR extracted_text LIKE ?)")
             params += [f"%{query}%", f"%{query}%", f"%{query}%"]
@@ -1983,7 +1995,7 @@ def list_projects_for_post(post_slug):
         conn.close()
 
 
-def list_unfiled_items(limit=10000):
+def list_unfiled_items(limit=10000, include_brand=False):
     """capture_events rows with no project_items row — "unfiled" uploads
     (#41). #17 moved the raw upload gallery into the home page's
     hover/drag pop-out and left the main page showing only Project tiles;
@@ -2010,9 +2022,13 @@ def list_unfiled_items(limit=10000):
     """
     conn = get_conn()
     try:
+        # #417: brand assets are excluded by default -- an unfiled brand asset
+        # belongs in the Brand Vault, not the home "Unfiled" section. include_brand
+        # re-includes them for an explicit enumerate-everything caller.
+        brand_clause = "" if include_brand else "AND ce.is_brand_asset = 0 "
         rows = conn.execute(
             "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-            "WHERE pi.post_slug IS NULL AND ce.redacted = 0 "
+            "WHERE pi.post_slug IS NULL AND ce.redacted = 0 " + brand_clause +
             "ORDER BY ce.timestamp DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -2044,7 +2060,7 @@ def list_loose_reference_objects(limit=500):
         conn.close()
 
 
-def list_recent_items_by_type(limit_per_type=10):
+def list_recent_items_by_type(limit_per_type=10, include_brand=False):
     """Most recent capture_events rows, independently fetched per media_type.
     Each type gets its own N most recent items, rather than competing within
     a shared global pool. Returns a dict keyed by media_type, each value a
@@ -2060,16 +2076,20 @@ def list_recent_items_by_type(limit_per_type=10):
     """
     conn = get_conn()
     try:
+        # #417: brand assets are excluded by default -- the Files home widget
+        # is general browse, not the Brand Vault. include_brand re-includes them.
+        brand_clause = "" if include_brand else " AND is_brand_asset = 0"
         # Fetch all distinct media_types that have at least one (non-redacted,
         # #282) row -- a type whose only rows are redacted gets no tab.
         media_type_rows = conn.execute(
-            "SELECT DISTINCT media_type FROM capture_events WHERE redacted = 0"
+            "SELECT DISTINCT media_type FROM capture_events WHERE redacted = 0" + brand_clause
         ).fetchall()
 
         result = {}
         for (media_type,) in media_type_rows:
             rows = conn.execute(
-                "SELECT * FROM capture_events WHERE media_type = ? AND redacted = 0 ORDER BY timestamp DESC LIMIT ?",
+                "SELECT * FROM capture_events WHERE media_type = ? AND redacted = 0" + brand_clause +
+                " ORDER BY timestamp DESC LIMIT ?",
                 (media_type, limit_per_type),
             ).fetchall()
             if rows:

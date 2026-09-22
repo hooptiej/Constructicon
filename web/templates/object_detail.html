@@ -841,9 +841,9 @@ async function loadProjectOptions() {
   const projects = await res.json();
   projectAddSelect.querySelectorAll('option[data-project]').forEach(o => o.remove());
   const currentIds = new Set(currentProjects.map(p => String(p.id)));
-  const html = projects
+  const html = window.projectTree(projects)
     .filter(p => !currentIds.has(String(p.id)))
-    .map(p => `<option value="${p.id}" data-project>${escapeHtml(p.title)}</option>`).join('');
+    .map(p => `<option value="${p.id}" data-project>${escapeHtml(window.projectIndent(p.depth) + p.title)}</option>`).join('');
   projectAddSelect.insertAdjacentHTML('beforeend', html + '<option value="__new__" data-project>+ New project…</option>');
   projectAddSelect.value = '';
 }

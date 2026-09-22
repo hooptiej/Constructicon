@@ -17,6 +17,14 @@
       <p class="page-subtitle" id="unfiled-count-label">{{ unfiled_items | length }} upload{{ 's' if unfiled_items|length != 1 else '' }} not yet added to a project.</p>
     </div>
     <div style="display: flex; gap: 8px; align-items: center;">
+      <div class="sort-control">
+        <label class="sort-label" for="unfiled-sort">Sort</label>
+        <select class="filter-select" id="unfiled-sort">
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="az">A–Z</option>
+        </select>
+      </div>
       <select class="filter-select" id="unfiled-type-filter" title="Filter by file type">
         <option value="">All types</option>
       </select>
@@ -181,6 +189,7 @@
   // unfiled items (same "don't show empty options" discipline as #107's
   // per-type Files widget tabs), not the full type registry.
   const typeFilterSelect = document.getElementById('unfiled-type-filter');
+  const sortSelect = document.getElementById('unfiled-sort');
   let typeFilter = '';
   (function populateTypeFilter() {
     const seen = new Map();
@@ -190,13 +199,20 @@
     });
   })();
   typeFilterSelect.addEventListener('change', () => { typeFilter = typeFilterSelect.value; render(); });
+  sortSelect.addEventListener('change', render);
+
+  const SORTERS = {
+    newest: (a, b) => b.uploaded_at - a.uploaded_at,
+    oldest: (a, b) => a.uploaded_at - b.uploaded_at,
+    az: (a, b) => a.display_name.localeCompare(b.display_name),
+  };
 
   function visibleItems() {
     return typeFilter ? items.filter(item => item.media_type === typeFilter) : items;
   }
 
   function render() {
-    const visible = visibleItems();
+    const visible = visibleItems().slice().sort(SORTERS[sortSelect.value]);
     grid.innerHTML = visible.map(cardHtml).join('');
     emptyState.style.display = visible.length ? 'none' : 'block';
     countLabel.textContent = typeFilter
@@ -259,7 +275,7 @@
     const res = await fetch('/api/projects');
     const projects = await res.json();
     projectSelect.querySelectorAll('option[data-project]').forEach(o => o.remove());
-    projectSelect.insertAdjacentHTML('beforeend', projects.map(p => `<option value="${p.id}" data-project>${escapeHtml(p.title)}</option>`).join(''));
+    projectSelect.insertAdjacentHTML('beforeend', window.projectTree(projects).map(p => `<option value="${p.id}" data-project>${escapeHtml(window.projectIndent(p.depth) + p.title)}</option>`).join(''));
   }
   projectSelect.addEventListener('change', async () => {
     const projectId = projectSelect.value;

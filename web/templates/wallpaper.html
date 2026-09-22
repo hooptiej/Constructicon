@@ -16,6 +16,14 @@
       <h1 class="page-title">Wallpapers</h1>
       <p class="page-subtitle">Desktop pictures, collected in one place — big previews, made to grab.</p>
     </div>
+    <div class="sort-control">
+      <label class="sort-label" for="wallpaper-sort">Sort</label>
+      <select class="filter-select" id="wallpaper-sort">
+        <option value="newest">Newest</option>
+        <option value="oldest">Oldest</option>
+        <option value="az">A–Z</option>
+      </select>
+    </div>
   </div>
 
   <div id="wallpaper-container" style="display:none">
@@ -107,43 +115,6 @@
 </style>
 
 <script>
-async function loadWallpapers() {
-  try {
-    const res = await fetch('/api/wallpapers');
-    if (!res.ok) return;
-    const items = await res.json();
-
-    const grid = document.getElementById('wallpaper-grid');
-    const empty = document.getElementById('wallpaper-empty');
-    const main = document.getElementById('wallpaper-container');
-
-    if (!items.length) {
-      empty.style.display = 'block';
-      main.style.display = 'none';
-      return;
-    }
-    main.style.display = 'block';
-
-    grid.innerHTML = items.map(w => `
-      <div class="wallpaper-card">
-        <a class="wallpaper-thumb-link" href="/object/${encodeURIComponent(w.slug)}?from=wallpaper" title="${escapeAttr(w.title)}">
-          <div class="wallpaper-thumb">
-            <img src="${escapeAttr(w.thumb_url)}" alt="${escapeHtml(w.title)}" loading="lazy">
-          </div>
-        </a>
-        <div class="wallpaper-foot">
-          <span class="wallpaper-title">${escapeHtml(w.title)}</span>
-          ${w.is_file ? `<a class="wallpaper-download" href="${escapeAttr(w.file_url)}" download title="Download full-size">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Download</a>` : ''}
-        </div>
-      </div>
-    `).join('');
-  } catch (err) {
-    console.error('Failed to load wallpapers:', err);
-  }
-}
-
 function escapeHtml(str) {
   return String(str || '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -153,6 +124,55 @@ function escapeAttr(str) {
   return String(str || '').replace(/"/g, '&quot;');
 }
 
+let items = [];
+const grid = document.getElementById('wallpaper-grid');
+const empty = document.getElementById('wallpaper-empty');
+const main = document.getElementById('wallpaper-container');
+const sortSel = document.getElementById('wallpaper-sort');
+
+const SORTERS = {
+  newest: (a, b) => (b.content_date || b.uploaded_at || 0) - (a.content_date || a.uploaded_at || 0),
+  oldest: (a, b) => (a.content_date || a.uploaded_at || 0) - (b.content_date || b.uploaded_at || 0),
+  az: (a, b) => String(a.title || '').localeCompare(String(b.title || '')),
+};
+
+function render() {
+  if (!items.length) {
+    empty.style.display = 'block';
+    main.style.display = 'none';
+    return;
+  }
+  main.style.display = 'block';
+
+  grid.innerHTML = items.slice().sort(SORTERS[sortSel.value]).map(w => `
+    <div class="wallpaper-card">
+      <a class="wallpaper-thumb-link" href="/object/${encodeURIComponent(w.slug)}?from=wallpaper" title="${escapeAttr(w.title)}">
+        <div class="wallpaper-thumb">
+          <img src="${escapeAttr(w.thumb_url)}" alt="${escapeHtml(w.title)}" loading="lazy">
+        </div>
+      </a>
+      <div class="wallpaper-foot">
+        <span class="wallpaper-title">${escapeHtml(w.title)}</span>
+        ${w.is_file ? `<a class="wallpaper-download" href="${escapeAttr(w.file_url)}" download title="Download full-size">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Download</a>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadWallpapers() {
+  try {
+    const res = await fetch('/api/wallpapers');
+    if (!res.ok) return;
+    items = await res.json();
+    render();
+  } catch (err) {
+    console.error('Failed to load wallpapers:', err);
+  }
+}
+
+sortSel.addEventListener('change', render);
 loadWallpapers();
 </script>
 

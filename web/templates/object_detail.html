@@ -90,6 +90,15 @@
             </a>
             {% endif %}
           </div>
+        {% elif item.media_type == 'code' %}
+          {# #420: source code shows as highlighted text. The raw source is
+             already stored in extracted_text by core/object_types/code.py, so
+             it renders server-side (Jinja auto-escapes it into the <pre>) and a
+             bundled highlight.js colors it client-side — see the hljs block at
+             the end of this template. #}
+          <div class="code-preview">
+            <pre><code id="code-preview-block" class="hljs">{{ item.extracted_text }}</code></pre>
+          </div>
         {% elif item.is_file %}
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none">
             <rect x="3" y="4" width="18" height="16" rx="2" stroke="#3F4530" stroke-width="1.4"/>
@@ -1415,4 +1424,22 @@ document.getElementById('lightbox-close').addEventListener('click', () => lightb
 lightboxBackdrop.addEventListener('click', (e) => { if (e.target === lightboxBackdrop) lightboxBackdrop.classList.remove('active'); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') lightboxBackdrop.classList.remove('active'); });
 </script>
+
+{% if item.media_type == 'code' %}
+{# #420: bundled highlight.js (LAN-safe, no CDN) — loaded only on code object
+   pages so the 120KB library doesn't ride along on every other detail page. #}
+<link rel="stylesheet" href="/static/vendor/highlight/atom-one-dark.min.css?v={{ static_version('vendor/highlight/atom-one-dark.min.css') }}">
+<style>
+  .code-preview { width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color, #2A2A2A); }
+  .code-preview pre { margin: 0; max-height: 70vh; overflow: auto; }
+  .code-preview code.hljs { display: block; padding: 1rem 1.15rem; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; line-height: 1.55; tab-size: 2; -moz-tab-size: 2; }
+</style>
+<script src="/static/vendor/highlight/highlight.min.js?v={{ static_version('vendor/highlight/highlight.min.js') }}"></script>
+<script>
+  (function () {
+    const block = document.getElementById('code-preview-block');
+    if (block && window.hljs) hljs.highlightElement(block);
+  })();
+</script>
+{% endif %}
 {% endblock %}

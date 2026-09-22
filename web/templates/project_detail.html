@@ -86,6 +86,24 @@
         <option value="">+ Add related project…</option>
       </select>
     </div>
+
+    {# #414: blog entries that feature this project. Read-only — the link is
+       created on the blog side (blog_entry_projects); each chip opens the Blog
+       builder to that entry via window.openBlogEntry (exposed by
+       _blog_builder.html, which this page includes). Only shown when non-empty. #}
+    {% if featured_entries %}
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
+      <label style="font-size:12px;color:var(--text-muted)">Featured in:</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        {% for e in featured_entries %}
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--chip);border:1px solid var(--border);border-radius:100px;padding:3px 10px">
+          <a href="#" onclick="window.openBlogEntry({{ e.slug | tojson }}); return false;" style="color:var(--text);text-decoration:none">{{ e.title }}</a>
+          {% if e.status != 'ready' %}<span style="color:var(--text-muted);font-size:11px">draft</span>{% endif %}
+        </span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
     <script>
     (function () {
       const SLUG = {{ project.slug | tojson }};

@@ -1315,6 +1315,12 @@ def project_detail_page(request: Request, slug: str):
             "project_hobbies": [{"id": h["id"], "name": h["name"], "slug": h["slug"]} for h in project_hobbies],
             # #408: peer project links for the Related-projects widget.
             "related_projects": _related_projects_public(slug),
+            # #414: blog entries that feature this project, for the "Featured
+            # in" row (reverse of the blog-side entry->projects link).
+            "featured_entries": [
+                {"slug": e["slug"], "title": e["title"], "status": e["status"]}
+                for e in db.list_entries_for_project(project["id"])
+            ],
         },
     )
 

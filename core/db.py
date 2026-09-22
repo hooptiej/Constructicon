@@ -2512,6 +2512,23 @@ def list_entry_projects(entry_id):
         conn.close()
 
 
+def list_entries_for_project(project_id):
+    """Blog entries that feature this project (#414) — the reverse of
+    list_entry_projects, for project_detail's "Featured in" row. Most-recently-
+    updated first."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT be.* FROM blog_entry_projects bep "
+            "JOIN blog_entries be ON be.id = bep.entry_id WHERE bep.project_id = ? "
+            "ORDER BY be.updated_at DESC",
+            (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def list_entry_items(entry_id):
     """The objects attached to an entry, joined with capture_events so full
     object data comes back, including sort_order and note. Ordered by sort_order ASC."""

@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Wallpapers — Constructicon{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+{% include "_blog_builder.html" %}
+{% include "_export_builder.html" %}
+<div class="app-main">
+  <a class="back-link" href="/">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Back to projects
+  </a>
+
+  <div class="home-col-header">
+    <div>
+      <h1 class="page-title">Wallpapers</h1>
+      <p class="page-subtitle">Desktop pictures, collected in one place — big previews, made to grab.</p>
+    </div>
+  </div>
+
+  <div id="wallpaper-container" style="display:none">
+    <div id="wallpaper-grid" class="wallpaper-grid"></div>
+  </div>
+  <p id="wallpaper-empty" class="empty-state" style="display:none">No wallpapers yet — tag an object <code>wallpaper</code> (or <code>Desktop Picture</code>) and it shows up here.</p>
+</div>
+
+<style>
+.wallpaper-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.25rem;
+}
+
+.wallpaper-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--border-color, #D8D4CC);
+  border-radius: 8px;
+  background: var(--card-bg, #FFF);
+  overflow: hidden;
+  transition: all 0.2s;
+}
+
+.wallpaper-card:hover {
+  border-color: var(--border-hover, #B8B4AC);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.10);
+}
+
+.wallpaper-thumb-link {
+  display: block;
+  text-decoration: none;
+}
+
+.wallpaper-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: var(--bg-secondary, #F8F6F3);
+  overflow: hidden;
+}
+
+.wallpaper-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.wallpaper-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 0.9rem 0.9rem;
+}
+
+.wallpaper-title {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--text-primary, #1A1815);
+  word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wallpaper-download {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-color, #7FA37C);
+  color: var(--accent-color, #7FA37C);
+  background: none;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all 0.15s;
+}
+
+.wallpaper-download:hover {
+  background: var(--accent-color, #7FA37C);
+  color: #fff;
+}
+</style>
+
+<script>
+async function loadWallpapers() {
+  try {
+    const res = await fetch('/api/wallpapers');
+    if (!res.ok) return;
+    const items = await res.json();
+
+    const grid = document.getElementById('wallpaper-grid');
+    const empty = document.getElementById('wallpaper-empty');
+    const main = document.getElementById('wallpaper-container');
+
+    if (!items.length) {
+      empty.style.display = 'block';
+      main.style.display = 'none';
+      return;
+    }
+    main.style.display = 'block';
+
+    grid.innerHTML = items.map(w => `
+      <div class="wallpaper-card">
+        <a class="wallpaper-thumb-link" href="/object/${encodeURIComponent(w.slug)}?from=wallpaper" title="${escapeAttr(w.title)}">
+          <div class="wallpaper-thumb">
+            <img src="${escapeAttr(w.thumb_url)}" alt="${escapeHtml(w.title)}" loading="lazy">
+          </div>
+        </a>
+        <div class="wallpaper-foot">
+          <span class="wallpaper-title">${escapeHtml(w.title)}</span>
+          ${w.is_file ? `<a class="wallpaper-download" href="${escapeAttr(w.file_url)}" download title="Download full-size">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download</a>` : ''}
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('Failed to load wallpapers:', err);
+  }
+}
+
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+function escapeAttr(str) {
+  return String(str || '').replace(/"/g, '&quot;');
+}
+
+loadWallpapers();
+</script>
+
+{% endblock %}

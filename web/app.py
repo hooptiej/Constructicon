@@ -1368,6 +1368,13 @@ def brand_kit_page(request: Request):
     return templates.TemplateResponse(request, "brand.html", {})
 
 
+@app.get("/wallpaper", response_class=HTMLResponse)
+def wallpaper_page(request: Request):
+    """Wallpaper home (#422) — a large-preview, download-oriented gallery of
+    every wallpaper-tagged object (see db.WALLPAPER_TAG_NAMES)."""
+    return templates.TemplateResponse(request, "wallpaper.html", {})
+
+
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str):
     rows = db.search(uploaded_by=uploader, limit=1000)
@@ -2932,6 +2939,23 @@ def api_list_brand_assets(request: Request):
             "file_url": f"/f/{asset['slug']}",
         }
         for asset in assets
+    ])
+
+
+@app.get("/api/wallpapers")
+def api_list_wallpapers(request: Request):
+    """List all wallpaper objects (#422) — everything tagged wallpaper /
+    Desktop Picture, newest first. The shape the /wallpaper page consumes."""
+    wallpapers = db.list_wallpapers()
+    return JSONResponse([
+        {
+            "slug": w["slug"],
+            "title": w.get("content_description") or w.get("display_name") or w.get("filename") or w["slug"],
+            "thumb_url": f"/f/{w['slug']}/thumb",
+            "file_url": f"/f/{w['slug']}",
+            "is_file": bool(w.get("stored_filename")),
+        }
+        for w in wallpapers
     ])
 
 

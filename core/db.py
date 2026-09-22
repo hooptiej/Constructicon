@@ -1649,7 +1649,7 @@ def list_recent_posts(limit=10):
 # (title, description, optional cover image) and a hand-ordered set of
 # member posts, rather than being derived from tag membership.
 
-def create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None):
+def create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None, with_writeup=True):
     """Auto-generates a unique slug from title, same dedup-with-numeric-
     suffix pattern as get_or_create_tag.
 
@@ -1683,7 +1683,7 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
         )
         conn.commit()
         project_id = cur.lastrowid
-        return {
+        project = {
             "id": project_id,
             "slug": slug,
             "title": title,
@@ -1698,6 +1698,36 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
         }
     finally:
         conn.close()
+    # #156/#423: every project gets a blank write-up document, wired in here in
+    # the db layer so NO create path can silently skip it — the HTTP routes, the
+    # constructicon_create_project MCP tool, and seed scripts all funnel through
+    # create_project. (#423 caught the MCP tool missing it because the auto-
+    # writeup used to live only in web/app.py's _create_writeup_for_project.)
+    # with_writeup=False is the opt-out for a caller that deliberately wants none.
+    if with_writeup:
+        project["writeup_slug"] = _make_project_writeup(project)
+    return project
+
+
+def _make_project_writeup(project):
+    """Create the blank document-type write-up for a project and wire it up:
+    a capture_event with an empty type_metadata.body, added to the project's
+    items, tagged with the project's linked tag (so it's reachable via tag
+    browsing, #219), and set as the project's writeup_slug. Returns the slug."""
+    from . import storage
+    writeup_slug = storage.make_slug()
+    insert_content(
+        slug=writeup_slug,
+        uploaded_by=SOURCE_AUTHORED,
+        media_type="document",
+        content_description=f"{project['title']} — Write-up",
+        type_metadata={"body": ""},
+    )
+    add_item_to_project(project["id"], writeup_slug)
+    if project.get("tag_id"):
+        attach_tags(writeup_slug, [project["tag_id"]])
+    update_project(project["id"], writeup_slug=writeup_slug)
+    return writeup_slug
 
 
 def resolve_project_cover_slug(project_or_id, _depth=0):

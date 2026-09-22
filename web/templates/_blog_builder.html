@@ -161,6 +161,10 @@
 
   const builderTrigger = document.getElementById('blog-builder-trigger');
   if (builderTrigger) builderTrigger.addEventListener('click', openBuilder);
+
+  // #414: let other surfaces (e.g. project_detail's "Featured in" row) deep-open
+  // the builder straight to a specific entry's editor.
+  window.openBlogEntry = function (slug) { openBuilder(); editEntry(slug); };
   document.getElementById('blog-builder-close').addEventListener('click', closeBuilder);
   backdrop.addEventListener('click', closeBuilder);
   document.addEventListener('keydown', (e) => {

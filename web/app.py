@@ -601,6 +601,14 @@ def _to_project_card(project):
                 if len(body) > char_count:
                     writeup_excerpt += "…"
 
+    # #413: the sort control's Newest/Oldest sorts by the project's effective
+    # timeline date (when the work actually happened — earliest of its items'
+    # real content_dates, per resolve_project_span) rather than created_at (row
+    # import time), so bulk-migrated projects land in true historical order, not
+    # migration order. created_at stays as the client-side fallback for a
+    # project whose items carry no real dates yet.
+    effective_start, _effective_end = timeline.resolve_project_span(
+        project, db.list_project_items(project["id"]))
     return {
         "slug": project["slug"],
         "title": project["title"],
@@ -611,6 +619,7 @@ def _to_project_card(project):
         # by — created_at was already stored on every project row, just never
         # exposed to this card shape before.
         "created_at": project["created_at"],
+        "effective_start": effective_start,
         "writeup_excerpt": writeup_excerpt,
     }
 

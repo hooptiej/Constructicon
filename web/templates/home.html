@@ -146,9 +146,12 @@
         const referenceGrid = document.getElementById('reference-objects-grid');
         const featuredContainer = document.getElementById('featured-project');
         const sortSelect = document.getElementById('projects-sort');
+        // #413: Newest/Oldest sort by the project's effective timeline date
+        // (when the work actually happened), falling back to created_at for a
+        // project whose items have no real dates yet.
         const SORTERS = {
-          newest: (a, b) => b.created_at - a.created_at,
-          oldest: (a, b) => a.created_at - b.created_at,
+          newest: (a, b) => (b.effective_start || b.created_at) - (a.effective_start || a.created_at),
+          oldest: (a, b) => (a.effective_start || a.created_at) - (b.effective_start || b.created_at),
           az: (a, b) => a.title.localeCompare(b.title),
         };
 

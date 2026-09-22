@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1003,6 +1004,45 @@ def constructicon_set_provenance(slug: str, provenance: str | None = None) -> di
     if row is None:
         return None
     return {**_to_public(row), "provenance": row.get("provenance")}
+
+
+@mcp.tool()
+def constructicon_set_content_date(slug: str, date: str | None = None) -> dict | None:
+    """Set or clear an object's content_date — the content's OWN real-world date
+    (#415), the date sibling of constructicon_set_provenance. Distinct from the
+    upload timestamp; it's what the Timeline and date displays key off.
+
+    date:
+      - an ISO date or datetime string, e.g. "2017-07-31" or "2017-07-31 14:30"
+        or "2017-07-31T14:30:00". A naive (offset-less) value is interpreted as
+        Mountain Time (America/Denver), matching the archive's timeline
+        convention; a string carrying an explicit offset is trusted as-is.
+      - a bare unix-seconds number (as a string) is used directly.
+      - None or "" clears the date.
+
+    Returns the updated object (usual public shape plus "content_date" in unix
+    seconds), or None if the object doesn't exist.
+    """
+    if db.get_by_slug(slug) is None:
+        return None
+    if date is None or date.strip() == "":
+        db.set_content_date(slug, None)
+    else:
+        s = date.strip()
+        try:
+            epoch = float(s)  # already unix seconds
+        except ValueError:
+            try:
+                dt = datetime.fromisoformat(s)
+            except ValueError as e:
+                raise ValueError(
+                    f"Unrecognized date {date!r}: use an ISO date/datetime "
+                    f"('YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SS') or unix seconds"
+                ) from e
+            epoch = timeline.source_datetime_to_epoch(dt)  # naive -> Mountain Time
+        db.set_content_date(slug, epoch)
+    row = db.get_by_slug(slug)
+    return {**_to_public(row), "content_date": row.get("content_date")}
 
 
 @mcp.tool()

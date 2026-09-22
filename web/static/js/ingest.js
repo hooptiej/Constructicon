@@ -695,7 +695,7 @@ function createIngestController({ onOpen }) {
     const projects = await res.json();
     projectSelect.querySelectorAll('option[data-project]').forEach(o => o.remove());
     const newOption = projectSelect.querySelector('option[value="__new__"]');
-    const html = projects.map(p => `<option value="${p.id}" data-project>${escapeHtml(p.title)}</option>`).join('');
+    const html = window.projectTree(projects).map(p => `<option value="${p.id}" data-project>${escapeHtml(window.projectIndent(p.depth) + p.title)}</option>`).join('');
     if (newOption) newOption.insertAdjacentHTML('beforebegin', html);
     else projectSelect.insertAdjacentHTML('beforeend', html + '<option value="__new__">+ New project…</option>');
     if (selectId !== undefined) projectSelect.value = String(selectId);

@@ -2929,6 +2929,8 @@ def api_list_wallpapers(request: Request):
             "thumb_url": f"/f/{w['slug']}/thumb",
             "file_url": f"/f/{w['slug']}",
             "is_file": bool(w.get("stored_filename")),
+            "uploaded_at": w.get("timestamp"),
+            "content_date": w.get("content_date"),
         }
         for w in wallpapers
     ])

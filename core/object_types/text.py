@@ -1,14 +1,18 @@
-"""Source code file support (issue #132): raw file text extraction for
-searchable indexing.
+"""Text file support (issue #431): raw file text extraction for searchable
+indexing.
 
-Source code files (PHP, Python, JavaScript, shell scripts, PowerShell, JSON,
-YAML, HTML, CSS, SQL, Lua — #297) are stored as-is with their raw UTF-8 text
-content extracted and indexed for search. No visual thumbnail concept — code
-files are NONE-sourced, same as written posts or archives.
+Text files (Markdown and plain text) are stored as-is with their raw UTF-8
+text content extracted and indexed for search. No visual thumbnail concept —
+text files are NONE-sourced, same as written posts or archives or data files.
+
+Deliberately a separate type from the existing 'document' type (which
+represents authored "Written post" entries — see core/object_types/document.py)
+— this type is for literal file uploads (.md, .txt), not structured authored
+content.
 
 Text extraction reads the file as UTF-8 with best-effort error handling
 (corrupt/legacy encodings are replaced rather than erroring), returning the
-full raw source code as searchable text.
+full raw content as searchable text.
 
 Best-effort, same as every other type's text_extract_fn in this codebase: a
 missing file or unreadable encoding returns "" rather than raising, so a bad
@@ -29,19 +33,19 @@ def _stored_path(row):
 
 
 def extract_text(path):
-    """Raw UTF-8 text content of the code file at `path`, or "" on any
+    """Raw UTF-8 text content of the text file at `path`, or "" on any
     failure (missing file, encoding issues)."""
     if not path:
         return ""
     try:
         return path.read_text(encoding="utf-8", errors="replace").strip()
     except Exception as e:
-        print(f"Code text extraction failed for {path}: {e!r}")
+        print(f"Text extraction failed for {path}: {e!r}")
         return ""
 
 
 def extract_text_for_row(row):
-    """ObjectTypeSpec.text_extract_fn for media_type='code' — see
+    """ObjectTypeSpec.text_extract_fn for media_type='text' — see
     core/ocr.py."""
     path = _stored_path(row)
     return extract_text(path) if path else ""
@@ -51,12 +55,12 @@ def extract_text_for_row(row):
 from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
-    key="code",
-    label="Source code",
+    key="text",
+    label="Text file",
     thumbnail_source=ThumbnailSource.NONE,
     ocr_capable=True,  # Enable OCR background task so text_extract_fn gets called (no actual OCR since no thumbnail)
-    extensions=frozenset({".php", ".py", ".js", ".sh", ".ps1", ".json", ".yaml", ".yml", ".html", ".css", ".sql", ".lua"}),
+    extensions=frozenset({".md", ".txt"}),
     text_extract_fn=extract_text_for_row,
-    badge_icon="💻",
-    badge_text="CODE",
+    badge_icon="📄",
+    badge_text="TEXT",
 ))

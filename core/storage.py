@@ -34,6 +34,7 @@ def _get_max_bytes():
 
 MAX_BYTES = _get_max_bytes()
 MAX_MB = MAX_BYTES // (1024 * 1024)
+MAX_EXTRACTED_TEXT_CHARS = 1_000_000  # #433: cap on text pulled out of any one file (PDF text layer, text/code/data files) — bounds DB row size, the object page's inline text, and search; ~300+ pages of dense text; anything past it is not searchable.
 THUMB_MAX_DIM = 400
 THUMB_BG = (20, 23, 15)  # matches the app's dark page background, for flattened transparency
 EXIF_ORIENTATION_TAG = 0x0112

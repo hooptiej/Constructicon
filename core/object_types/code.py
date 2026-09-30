@@ -29,12 +29,14 @@ def _stored_path(row):
 
 
 def extract_text(path):
-    """Raw UTF-8 text content of the code file at `path`, or "" on any
-    failure (missing file, encoding issues)."""
+    """Raw UTF-8 text content of the code file at `path` (capped at
+    storage.MAX_EXTRACTED_TEXT_CHARS, #433), or "" on any failure (missing
+    file, encoding issues)."""
     if not path:
         return ""
     try:
-        return path.read_text(encoding="utf-8", errors="replace").strip()
+        with path.open(encoding="utf-8", errors="replace") as f:
+            return f.read(storage.MAX_EXTRACTED_TEXT_CHARS).strip()
     except Exception as e:
         print(f"Code text extraction failed for {path}: {e!r}")
         return ""

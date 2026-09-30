@@ -28,6 +28,11 @@ from .. import storage
 # decent OCR source for image-only PDFs (see extract_text_for_row below).
 RENDER_ZOOM = 2.0
 
+# #433: letter/A4 pages at RENDER_ZOOM stay unchanged (1224x1584), oversized
+# drawing sheets are scaled down instead of building a 100+ MB pixmap for a
+# 400 px thumbnail.
+MAX_RENDER_DIM = 2000
+
 
 def _open(path):
     doc = fitz.open(path)
@@ -49,7 +54,10 @@ def render_first_page(path):
         try:
             if doc.page_count == 0:
                 return None
-            pix = doc.load_page(0).get_pixmap(matrix=fitz.Matrix(RENDER_ZOOM, RENDER_ZOOM))
+            page = doc.load_page(0)
+            longest = max(page.rect.width, page.rect.height)
+            zoom = min(RENDER_ZOOM, MAX_RENDER_DIM / longest) if longest > 0 else RENDER_ZOOM
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             return pix.tobytes("png")
         finally:
             doc.close()
@@ -59,18 +67,37 @@ def render_first_page(path):
 
 
 def extract_text(path):
-    """The PDF's embedded text layer, all pages concatenated, or "" if
-    there isn't one (an image-only/scanned PDF), the PDF is
-    corrupt/encrypted, or the file is missing. "" (not None) on the
-    no-text-layer case specifically, so callers can tell "found nothing" and
-    "wasn't even a PDF" apart if they ever need to — today core/ocr.py just
-    treats falsy either way as "fall back to OCR"."""
+    """The PDF's embedded text layer, all pages concatenated (capped at
+    storage.MAX_EXTRACTED_TEXT_CHARS, #433), or "" if there isn't one
+    (an image-only/scanned PDF), the PDF is corrupt/encrypted, or the file
+    is missing. "" (not None) on the no-text-layer case specifically, so
+    callers can tell "found nothing" and "wasn't even a PDF" apart if they
+    ever need to — today core/ocr.py just treats falsy either way as "fall
+    back to OCR"."""
     try:
         doc = _open(path)
         if doc is None:
             return ""
         try:
-            text = "\n".join(page.get_text() for page in doc)
+            cap = storage.MAX_EXTRACTED_TEXT_CHARS
+            text_parts = []
+            running_length = 0
+            pages_read = 0
+            for page_num, page in enumerate(doc):
+                page_text = page.get_text()
+                page_length = len(page_text)
+                if running_length + page_length > cap:
+                    # Adding this page would exceed the cap; truncate here
+                    remaining = cap - running_length
+                    if remaining > 0:
+                        text_parts.append(page_text[:remaining])
+                    print(f"PDF text capped at {cap} chars after {pages_read} of {doc.page_count} pages: {path}")
+                    break
+                text_parts.append(page_text)
+                running_length += page_length
+                pages_read += 1
+            # Slice after joining: the "\n" separators count toward the cap too.
+            text = "\n".join(text_parts)[:cap]
         finally:
             doc.close()
         return text.strip()

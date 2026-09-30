@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, curator, curator_needs, db, embedded_metadata, object_types, ocr, similarity, storage, site_export, thumbnails, timeline
+from core import backup, captions, curator, curator_needs, db, ingest, object_types, ocr, similarity, storage, site_export, timeline
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()
@@ -776,21 +776,6 @@ def _refire_ocr(slug):
     threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
 
 
-def _ensure_capture_thumbnail(slug):
-    """For a CAPTURE-sourced type that ISN'T ocr_capable (STL today — a
-    binary mesh format with no text worth OCR'ing), there's no OCR
-    background task to piggyback a thumbnail render onto the way PDF's is
-    (see core/ocr.py's _ocr_source_path, which calls
-    thumbnails.ensure_thumbnail as a side effect of preparing an OCR
-    source). Without this, get_thumbnail's own lazy-generate fallback below
-    only fires for content-only rows (stored_filename is None), so a
-    file-backed CAPTURE type would silently serve the raw original file
-    instead of a real thumbnail on every request until someone happened to
-    run backfill_thumbnails.py. Scheduled as its own background task,
-    same spirit as OCR, so it doesn't block the upload response."""
-    row = db.get_by_slug(slug)
-    if row is not None:
-        thumbnails.ensure_thumbnail(row)
 
 
 async def _ocr_watchdog():
@@ -1102,7 +1087,7 @@ def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form
                 chosen.append(int(raw))
         if db.get_by_slug(decision["post_slug"]) is not None:
             for pid in chosen:
-                _attach_to_project(decision["post_slug"], pid)
+                ingest.attach_to_project(decision["post_slug"], pid)
                 applied.append(pid)
     db.resolve_pending_decision(decision_id, {"project_ids": applied})
     return JSONResponse({"ok": True, "applied": applied, "remaining": db.count_pending_decisions()})
@@ -1533,103 +1518,47 @@ async def api_upload(
         file_size = file.file.tell()
         file.file.seek(current)
 
-    # Early reject if file exceeds limit before doing the duplicate check
-    if file_size > storage.MAX_BYTES:
-        raise HTTPException(status_code=400, detail=f"File exceeds {storage.MAX_MB}MB limit")
-
     try:
         source_modified_at = float(modified_at) / 1000 if modified_at else None
     except ValueError:
         # Same clean-400 contract type_metadata gets in /api/content (#221),
         # rather than a 500 traceback on a garbage timestamp.
         raise HTTPException(status_code=400, detail="modified_at must be a unix-milliseconds number")
-    dupe = db.find_duplicate(file.filename, file_size, source_modified_at)
-    if dupe is not None:
-        # _friendly_datetime, not a raw strftime with %-d/%-I -- those are the
-        # platform-specific extensions that helper exists to avoid (#211).
-        dupe_date = _friendly_datetime(dupe["timestamp"])
-        raise HTTPException(
-            status_code=409,
-            detail=f"Already uploaded by {dupe['tech']} on {dupe_date} — see /object/{dupe['slug']}",
-        )
-    # media_type from the uploaded file's extension — the only place this
-    # decision has to be extension-based, since that's all /api/upload has
-    # to go on. Everything downstream (thumbnail, OCR, badge, delete,
-    # backup) dispatches off this media_type via core/object_types.py's
-    # registry, not off the extension again.
-    media_type = object_types.detect_media_type(file.filename)
-    if media_type is None:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {Path(file.filename).suffix}")
-    try:
-        slug, stored_filename, _ = await run_in_threadpool(storage.save_stream, file.filename, file.file)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     try:
         tag_list = json.loads(tags) if tags else []
     except json.JSONDecodeError:
         tag_list = []
-    spec = object_types.get_object_type(media_type)
-    db.insert_upload(
-        slug, file.filename, stored_filename, user,
-        description=description, tags=tag_list,
-        client=client or None,
-        file_size=file_size, source_modified_at=source_modified_at,
-        media_type=media_type,
-        ocr_status="pending" if spec.ocr_capable else None,
+
+    result = await run_in_threadpool(
+        lambda: ingest.ingest_file(
+            file.file,
+            file.filename,
+            size=file_size,
+            source=user,
+            run_background=background_tasks.add_task,
+            description=description,
+            tags=tag_list,
+            client=client,
+            source_modified_at=source_modified_at,
+            project_id=project_id,
+            folder_name=folder_name,
+        )
     )
-    # #255: seed content_description/display_name/type_metadata from the
-    # file's own tags (an MP3's ID3 title/artist/album/...). Synchronous
-    # and before the response on purpose: one ffprobe header read, not an
-    # OCR/caption-sized job, and the JSON returned below then already
-    # carries the title for the upload drawer's new card. Dispatches off
-    # spec.embedded_metadata_fn — a type without one is a no-op — and only
-    # ever fills fields the row doesn't have yet; see core/embedded_metadata.py.
-    embedded_metadata.fill_missing(slug)
-    # Runs after this response is sent — OCR happens once the upload/tag step
-    # is actually done, not as part of what the user is waiting on. The client
-    # polls GET /api/image/{slug} to see ocr_status flip from "pending".
-    if spec.ocr_capable:
-        background_tasks.add_task(ocr.run_ocr, slug)
-    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
-        # A CAPTURE-sourced type with no OCR pass to piggyback a thumbnail
-        # render onto (STL today) still needs one generated somewhere —
-        # see _ensure_capture_thumbnail above.
-        background_tasks.add_task(_ensure_capture_thumbnail, slug)
-    # #239: auto-caption suggestion via the local vision model. Its own
-    # background task, its own serialization (core/captions.py's
-    # CAPTION_LOCK + per-image Ollama restart) — deliberately not folded
-    # into OCR's semaphore, it's a different resource (the GPU).
-    if captions.should_caption(spec):
-        background_tasks.add_task(captions.run_caption, slug)
-    _attach_to_project(slug, project_id or None)
-    # #240: name-based auto-tag / auto-project, AFTER the explicit project
-    # pick above so an already-chosen project is excluded from the
-    # candidate set rather than re-asked about. folder_name is the dropped
-    # top-level folder for a folder-drop upload (#134), empty otherwise.
-    _auto_match_upload(slug, [Path(file.filename).stem, folder_name])
-    return JSONResponse(_to_public(db.get_by_slug(slug)))
+
+    if result.duplicate:
+        # _friendly_datetime, not a raw strftime with %-d/%-I -- those are the
+        # platform-specific extensions that helper exists to avoid (#211).
+        dupe_date = _friendly_datetime(result.row["timestamp"])
+        raise HTTPException(
+            status_code=409,
+            detail=f"Already uploaded by {result.row['tech']} on {dupe_date} — see /object/{result.row['slug']}",
+        )
+    elif result.error:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    return JSONResponse(_to_public(result.row))
 
 
-def _auto_match_upload(slug, texts):
-    """#240 glue between core/automatch.py (which decides and applies tags)
-    and _attach_to_project (which owns project side effects: linked tag,
-    first-item cover). Best-effort, same discipline as the OCR/caption
-    background steps: a matching bug must never fail an upload that has
-    already been stored."""
-    try:
-        already_in = [p["id"] for p in db.list_projects_for_post(slug)]
-        result = automatch.apply_to_upload(slug, texts, exclude_project_ids=already_in)
-        if result["project"]:
-            _attach_to_project(slug, result["project"]["id"])
-        if result["tags"] or result["project"] or result["pending_id"]:
-            print(
-                f"automatch {slug}: tags={result['tags']} "
-                f"project={result['project']['title'] if result['project'] else None} "
-                f"pending={result['pending_id']} ({len(result['candidates'])} candidates)",
-                flush=True,
-            )
-    except Exception as e:
-        print(f"automatch failed for {slug}: {e!r}", flush=True)
 
 
 @app.post("/api/content")
@@ -1670,21 +1599,6 @@ async def api_create_content(
     link" field (#184): the client no longer decides youtube-vs-url itself,
     it just posts the URL and lets the server figure out what it is.
     """
-    if media_type is None:
-        if not external_url:
-            raise HTTPException(status_code=400, detail="media_type or external_url is required")
-        media_type = object_types.classify_url(external_url)
-    # #194: a generic web page has no title-fetch path the way YouTube does
-    # (real title via scripts/full_youtube_channel_sync.py's API call) --
-    # without this, content_description stays empty and _to_public's
-    # display_name fallback chain (filename/content_description/slug) shows
-    # the bare random slug on the page title/breadcrumb, with no visible
-    # trace of the URL the owner actually pasted.
-    if media_type == "url" and external_url and not content_description:
-        content_description = external_url
-    spec = object_types.get_object_type(media_type)
-    if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
-        raise HTTPException(status_code=400, detail=f"{spec.label} objects require a file upload — use /api/upload")
     is_desktop_app = request.headers.get(DESKTOP_APP_CLIENT_HEADER) == DESKTOP_APP_CLIENT_VALUE
     user = db.SOURCE_AUTOMATED_UPLOAD if is_desktop_app else db.SOURCE_MANUAL_UPLOAD
     try:
@@ -1699,25 +1613,28 @@ async def api_create_content(
         content_date_epoch = float(content_date) if content_date else None
     except ValueError:
         raise HTTPException(status_code=400, detail="content_date must be a unix-seconds number")
-    slug = storage.make_slug()
-    db.insert_content(
-        slug, user, media_type,
+
+    result = ingest.ingest_content(
+        source=user,
+        run_background=background_tasks.add_task,
+        media_type=media_type,
         external_url=external_url or None,
         content_description=content_description or None,
         content_date=content_date_epoch,
-        description=description, tags=tag_list,
+        description=description,
+        tags=tag_list,
         client=client or None,
         type_metadata=parsed_type_metadata,
+        project_id=project_id,
     )
-    row = db.get_by_slug(slug)
-    if spec.ocr_capable and row["ocr_status"] == "pending":
-        background_tasks.add_task(ocr.run_ocr, slug)
-    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
-        background_tasks.add_task(_ensure_capture_thumbnail, slug)
-    if captions.should_caption(spec):
-        background_tasks.add_task(captions.run_caption, slug)  # #239, see /api/upload
-    _attach_to_project(slug, project_id or None)
-    return JSONResponse(_to_public(db.get_by_slug(slug)))
+
+    if result.error:
+        detail = result.error
+        if result.error.endswith("require a file upload"):
+            detail += " — use /api/upload"
+        raise HTTPException(status_code=400, detail=detail)
+
+    return JSONResponse(_to_public(result.row))
 
 
 def _derive_processing_status(row):
@@ -2246,7 +2163,7 @@ def api_add_object_to_project(request: Request, slug: str, project_id: str = For
         raise HTTPException(status_code=404, detail="not found")
     if db.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="project not found")
-    _attach_to_project(slug, project_id)
+    ingest.attach_to_project(slug, project_id)
     return JSONResponse([_to_project_option(p) for p in db.list_projects_for_post(slug)])
 
 
@@ -2459,7 +2376,7 @@ def api_create_project_from_selection(slugs: list[str] = Form(...), title: str =
     project = db.create_project(title, tag_id=tag["id"])
     for slug in slugs:
         if db.get_by_slug(slug) is not None:
-            _attach_to_project(slug, project["id"])
+            ingest.attach_to_project(slug, project["id"])
     return JSONResponse(_to_project_option(project))
 
 
@@ -2475,9 +2392,9 @@ def api_create_project_from_related(slug: str = Form(...), title: str = Form(...
         raise HTTPException(status_code=404, detail="not found")
     tag = db.get_or_create_tag(title, parent_id=None)
     project = db.create_project(title, tag_id=tag["id"])
-    _attach_to_project(slug, project["id"])
+    ingest.attach_to_project(slug, project["id"])
     for related in db.list_related(slug):
-        _attach_to_project(related["slug"], project["id"])
+        ingest.attach_to_project(related["slug"], project["id"])
     return JSONResponse(_to_project_option(project))
 
 
@@ -3224,44 +3141,6 @@ async def api_set_blog_entry_items(
     return JSONResponse(_to_blog_entry_detail(updated))
 
 
-def _attach_to_project(slug, project_id):
-    """Shared by /api/upload and /api/content: adds the new row to the given
-    project's curated item list (so it shows up on the project's own detail
-    page) and, if that project has a linked tag (see api_create_project /
-    core/db.py's create_project), also tags the row with it — the "tied to
-    the site tags" half of #1, so the object surfaces through tag-based
-    browsing too, not just the project page. A project_id that doesn't
-    resolve to a real project (bad/stale value) is silently ignored rather
-    than failing the whole upload over a cosmetic mismatch.
-
-    #274: also merges the tag's own name into the row's free-text `tags`
-    column (db.add_tags — same merge path a person typing a tag by hand
-    goes through), not just post_tags. Before this, a project-linked tag
-    surfaced the item in tag-tree browsing but never showed up as a chip
-    in the item's own TAGS box on its detail page — an inconsistent, easy
-    to miss picture of "what tags does this item actually have." Once
-    merged in this way it's indistinguishable from a typed tag (by
-    design, per the owner's call on #274) — removing it later from the
-    free-text box fully detaches it, independent of project membership,
-    same as any other typed tag.
-
-    Also auto-sets the project's cover_slug to this item's slug if the
-    project currently has no cover (issue #103) — fires only once per
-    project, on the first item it receives."""
-    if not project_id:
-        return
-    project = db.get_project(project_id)
-    if project is None:
-        return
-    db.add_item_to_project(project["id"], slug)
-    if project.get("tag_id"):
-        db.attach_tags(slug, [project["tag_id"]])
-        tag = db.get_tag(project["tag_id"])
-        if tag:
-            db.add_tags(slug, [tag["name"]])
-    # Auto-set cover to first item if project has no cover yet
-    if not project.get("cover_slug"):
-        db.update_project(project["id"], cover_slug=slug)
 
 
 @app.post("/api/bulk/add-to-project")
@@ -3273,7 +3152,7 @@ def api_bulk_add_to_project(slugs: list[str] = Form(...), project_id: str = Form
     count = 0
     for slug in slugs:
         if db.get_by_slug(slug) is not None:
-            _attach_to_project(slug, project_id)
+            ingest.attach_to_project(slug, project_id)
             count += 1
     return JSONResponse({"count": count})
 

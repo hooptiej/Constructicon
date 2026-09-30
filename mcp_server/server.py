@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, curator_needs, db, embedded_metadata, object_types, ocr, storage, thumbnails, timeline
+from core import backup, curator_needs, db, ingest, object_types, storage, timeline
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
@@ -56,47 +56,37 @@ def _resolve_import_path(rel):
     return candidate
 
 
+def _run_in_thread(fn, *args):
+    """Run a function in a background daemon thread."""
+    threading.Thread(target=fn, args=args, daemon=True).start()
+
+
 def _ingest(filename, fileobj, file_size, description, tags, uploaded_by, source_modified_at) -> dict:
-    """Private helper for file ingestion: all post-validation logic shared by
-    constructicon_upload (base64-decoded) and constructicon_import (server-side path).
+    """Private helper for file ingestion: delegates to core/ingest.py.
+
+    All post-validation logic is now centralized in the ingest module — this tool
+    simply wraps its result for the MCP response format.
 
     Returns {"slug": ..., ..._to_public fields..., "duplicate": False} on success,
     or {"error": "..."} on failure.
     """
-    # Early check: file size guard (#433)
-    if file_size > storage.MAX_BYTES:
-        return {"error": f"File exceeds {storage.MAX_MB}MB limit"}
+    result = ingest.ingest_file(
+        fileobj,
+        filename,
+        size=file_size,
+        source=uploaded_by,
+        run_background=_run_in_thread,
+        description=description,
+        tags=tags,
+        source_modified_at=source_modified_at,
+    )
 
-    dupe = db.find_duplicate(filename, file_size, source_modified_at)
-    if dupe is not None:
-        return {**_to_public(dupe), "duplicate": True}
-    media_type = object_types.detect_media_type(filename)
-    if media_type is None:
-        return {"error": f"Unsupported file type: {Path(filename).suffix}"}
-    spec = object_types.get_object_type(media_type)
-    try:
-        slug, stored_filename, _ = storage.save_stream(filename, fileobj)
-    except ValueError as e:
-        return {"error": str(e)}
-    db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags,
-                      file_size=file_size, source_modified_at=source_modified_at,
-                      media_type=media_type,
-                      ocr_status="pending" if spec.ocr_capable else None)
-    # #255: this tool bypasses /api/upload and calls db.insert_upload
-    # directly, so it has to make the same post-insert call the route does
-    # or MCP-uploaded audio would silently miss its tags. Synchronous for
-    # the same reason as there — one ffprobe header read, and the object
-    # returned below should already carry the title.
-    embedded_metadata.fill_missing(slug)
-    if spec.ocr_capable:
-        # Background thread, not inline (#225): tesseract (up to
-        # OCR_TIMEOUT_SECONDS) plus a cold sentence-transformers load used to
-        # block the tool response. Same pattern constructicon_retry_ocr and
-        # the startup self-heal already use.
-        threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
-    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
-        thumbnails.ensure_thumbnail(db.get_by_slug(slug))
-    return {**_to_public(db.get_by_slug(slug)), "duplicate": False}
+    if result.error:
+        return {"error": result.error}
+    elif result.duplicate:
+        return {**_to_public(result.row), "duplicate": True}
+    else:
+        return {**_to_public(result.row), "duplicate": False}
 
 
 def _to_public(row):
@@ -520,22 +510,27 @@ def constructicon_add_content(media_type: str, external_url: str | None = None, 
 
     For OCR-capable types, OCR runs in the background (#225) -- the returned
     object has ocr_status "pending"; read it back with constructicon_get later.
+
+    Returns a JSON object with the new object's metadata, or {"error": "..."} on failure.
+    Unknown media_type values are rejected (issue #448).
     """
-    spec = object_types.get_object_type(media_type)
-    if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
-        raise ValueError(f"{spec.label} objects require a file upload — use constructicon_upload")
-    slug = storage.make_slug()
-    db.insert_content(
-        slug, uploaded_by, media_type,
-        external_url=external_url, content_description=content_description,
-        description=description, tags=tags, client=None,
+    result = ingest.ingest_content(
+        source=uploaded_by,
+        run_background=_run_in_thread,
+        media_type=media_type,
+        external_url=external_url,
+        content_description=content_description,
+        description=description,
+        tags=tags,
     )
-    row = db.get_by_slug(slug)
-    if spec.ocr_capable and row["ocr_status"] == "pending":
-        threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
-    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
-        thumbnails.ensure_thumbnail(row)
-    return _to_public(db.get_by_slug(slug))
+
+    if result.error:
+        error_msg = result.error
+        if error_msg.endswith("require a file upload"):
+            error_msg += " — use constructicon_upload"
+        return {"error": error_msg}
+    else:
+        return _to_public(result.row)
 
 
 @mcp.tool()

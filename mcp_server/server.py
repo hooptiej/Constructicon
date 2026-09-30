@@ -701,7 +701,7 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str) -> dict 
     if row is None:
         raise ValueError("writeup slug not found")
     if not object_types.can_be_writeup(row):
-        label = row.get("display_name") or row.get("filename") or slug
+        label = object_types.get_object_type(row.get("media_type")).label
         raise ValueError(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
 
     # Add the writeup document to the project items if not already there

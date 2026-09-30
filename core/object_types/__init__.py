@@ -227,7 +227,7 @@ class ObjectTypeSpec:
     # caption). Defaults False so a new type opts in deliberately.
     caption_capable: bool = False
     # Issue #448: preview rendering function for web/export display.
-    # (PreviewContext) -> Markup; required from PR 3 on.
+    # (PreviewContext) -> Markup; enforced at registration, #448.
     preview_fn: object = None
     # Issue #448: tuple of preview asset definitions (deferred to PR 3).
     preview_assets: tuple = ()
@@ -266,13 +266,13 @@ def register(spec):
     Called by each type module at the end of its definition.
 
     Checks for duplicate keys, conflicting url_fallback settings, and that
-    both preview_fn and properties_fn are present (required from PR 3 on).
+    both preview_fn and properties_fn are present (enforced at registration, #448).
     Full registry validation happens after all modules are imported (see _validate_registry).
     """
     if spec.key in OBJECT_TYPES:
         raise ObjectTypeContractError(f"Duplicate object type key: {spec.key}")
 
-    # Enforce preview_fn and properties_fn (required from PR 3 on)
+    # Enforce preview_fn and properties_fn (enforced at registration, #448)
     if spec.preview_fn is None or spec.properties_fn is None:
         raise ObjectTypeContractError(
             f"Object type '{spec.key}' must declare preview_fn and properties_fn "

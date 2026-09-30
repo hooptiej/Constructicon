@@ -2462,7 +2462,7 @@ async def api_update_project(
             if writeup_row is None:
                 raise HTTPException(status_code=400, detail="writeup slug not found")
             if not object_types.can_be_writeup(writeup_row):
-                label = writeup_row.get("display_name") or writeup_row.get("filename") or writeup_slug_value
+                label = object_types.get_object_type(writeup_row.get("media_type")).label
                 raise HTTPException(
                     status_code=400,
                     detail=f"{label} items can't be a project write-up (their type declares no writeup_body_key)"

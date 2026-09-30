@@ -224,9 +224,19 @@ def get_properties(row):
 
 
 # Registration: add this type to the object-type registry
+from . import _preview
+
+
+def preview(ctx):
+    """#449 preview_fn: Native player, poster = the ffmpeg frame thumbnail.
+    None (-> the page's generic fallback) when there's no file to show."""
+    return _preview.video_player(ctx) if ctx.media_url else None
+
+
 from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
+    preview_fn=preview,  # #449
     key="video",
     label="Video file",
     thumbnail_source=ThumbnailSource.CAPTURE,

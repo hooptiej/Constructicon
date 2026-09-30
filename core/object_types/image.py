@@ -185,9 +185,20 @@ def get_properties(row):
         return {}
 
 
+from . import _preview
+
+
+def preview(ctx):
+    """#449 preview_fn: The uploaded file itself, full size (rotation + lightbox keep working via
+    #preview-img).
+    None (-> the page's generic fallback) when there's no file to show."""
+    return _preview.image_viewer(ctx) if ctx.media_url else None
+
+
 from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
+    preview_fn=preview,  # #449
     key="image",
     label="Image",
     thumbnail_source=ThumbnailSource.UPLOADED_FILE,

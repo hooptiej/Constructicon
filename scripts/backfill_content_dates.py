@@ -74,9 +74,10 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core import db, embedded_metadata, timeline  # noqa: E402
+from core import db, embedded_metadata, object_types, timeline  # noqa: E402
 
-DEFAULT_MEDIA_TYPES = ("image", "video")
+# #448: derived from the specs; was hard-coded image+video
+DEFAULT_MEDIA_TYPES = tuple(sorted(k for k, s in object_types.OBJECT_TYPES.items() if s.embedded_metadata_fn))
 
 
 def candidate_rows(media_types, slugs=None):

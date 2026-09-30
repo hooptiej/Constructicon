@@ -22,10 +22,10 @@ job needs.
     sudo docker exec constructicon-web python3 /app/scripts/regenerate_thumbnails.py
     sudo docker exec constructicon-web python3 /app/scripts/regenerate_thumbnails.py --slug <slug> [--slug <slug> ...]
 
-Scope: only rows with a stored image file (storage.IMAGE_EXTENSIONS).
-Fetched/captured thumbnails (youtube, pdf, stl, ...) never had this bug --
-nothing upstream of them carries a camera Orientation tag. With --slug the
-named image rows are regenerated whether or not they carry the tag.
+Scope: only rows whose type's thumbnail_source is UPLOADED_FILE. Fetched/captured
+thumbnails (youtube, pdf, stl, ...) never had this bug -- nothing upstream of them
+carries a camera Orientation tag. With --slug the named image rows are regenerated
+whether or not they carry the tag.
 
 #266 interaction: a row that also has a manual type_metadata.rotation set
 is regenerated like any other, but its rotation value is reported and left
@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image  # noqa: E402
 
-from core import db, storage  # noqa: E402
+from core import db, object_types, storage  # noqa: E402
 
 
 def _orientation(path):
@@ -96,9 +96,10 @@ def main():
     manual_rotation = []
     for row in rows:
         stored = row.get("stored_filename")
-        if not stored or Path(stored).suffix.lower() not in storage.IMAGE_EXTENSIONS:
+        spec = object_types.get_object_type(row.get("media_type"))
+        if not stored or spec.thumbnail_source != object_types.ThumbnailSource.UPLOADED_FILE:
             if explicit:
-                print(f"skip (not an image file): {row['slug']} {row.get('filename')}")
+                print(f"skip (not an uploaded-file type): {row['slug']} {row.get('filename')}")
             continue
         path = storage.path_for(stored)
         if not path.exists():

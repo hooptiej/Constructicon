@@ -16,12 +16,6 @@ from PIL import Image, ImageOps
 
 STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 
-# Extension support has moved to core/object_types/ — each type module now
-# defines its own extensions frozenset. IMAGE_EXTENSIONS is kept here for
-# storage.make_thumbnail()'s use case: deciding whether a file IS an image
-# (and needs a thumbnail generated) vs. something else.
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".tiff", ".tif", ".webp"}
-
 # #433: make file size limit configurable via environment variable
 # so large PDFs/videos can be allowed without a code change
 def _get_max_bytes():
@@ -73,10 +67,11 @@ def thumb_path_for(slug):
 def save_thumbnail_from_bytes(slug, image_bytes):
     """Given raw bytes that decode as an image, generate and save the
     standard downscaled JPEG thumbnail for `slug`. This is the shared
-    primitive behind every object type's thumbnail: an uploaded image file
-    (make_thumbnail, below) and a fetched/captured representative image for
-    non-file types (see core/thumbnails.py) both funnel through here so
-    there's exactly one place that resizes/flattens/encodes a thumbnail.
+    primitive behind every object type's thumbnail: the ingest pipeline calls
+    core/thumbnails.py's ensure_thumbnail which dispatches to this function
+    for UPLOADED_FILE types, and fetched/captured images for non-file types
+    (see core/thumbnails.py) both funnel through here so there's exactly one
+    place that resizes/flattens/encodes a thumbnail.
     """
     try:
         img = exif_upright(Image.open(BytesIO(image_bytes)))
@@ -94,17 +89,13 @@ def save_thumbnail_from_bytes(slug, image_bytes):
         print(f"thumbnail generation failed for {slug}: {e!r}")
 
 
-def make_thumbnail(slug, content, ext):
-    if ext not in IMAGE_EXTENSIONS:
-        return
-    save_thumbnail_from_bytes(slug, content)
-
-
 def save_stream(filename, fileobj, chunk_size=1024*1024):
     """Stream a file-like object to disk in chunks, checking size limits as we go.
     Returns (slug, stored_filename, bytes_written). If the file exceeds MAX_BYTES,
     closes and deletes the partial destination file and raises ValueError.
-    Supports seeking to the start if the fileobj has a seek method."""
+    Supports seeking to the start if the fileobj has a seek method.
+    Thumbnail generation (if needed) is handled by the ingest pipeline via
+    core/thumbnails.py's ensure_thumbnail(), not here."""
     if hasattr(fileobj, "seek"):
         fileobj.seek(0)
 
@@ -126,20 +117,16 @@ def save_stream(filename, fileobj, chunk_size=1024*1024):
         dest.unlink(missing_ok=True)
         raise
 
-    # Images only: the file is read back for the thumbnail, everything else
-    # stays on disk untouched.
-    if ext in IMAGE_EXTENSIONS:
-        make_thumbnail(slug, dest.read_bytes(), ext)
-
     return slug, dest.name, bytes_written
 
 
 def save_file(filename, content):
-    """Save a file to the storage directory and generate a thumbnail if it's
-    an image. Callers are responsible for validating the file extension
-    (via object_types.detect_media_type()) before calling this — this function
-    no longer validates extensions itself (that responsibility moved to the
-    call site in the plugin architecture redesign, issue #82)."""
+    """Save a file to the storage directory. Callers are responsible for validating
+    the file extension (via object_types.detect_media_type()) before calling this —
+    this function no longer validates extensions itself (that responsibility moved to
+    the call site in the plugin architecture redesign, issue #82). Thumbnail generation
+    (if needed) is handled by the ingest pipeline via core/thumbnails.py's
+    ensure_thumbnail(), not here."""
     if len(content) > MAX_BYTES:
         raise ValueError(f"File exceeds {MAX_MB}MB limit")
 

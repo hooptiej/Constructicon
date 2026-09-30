@@ -50,6 +50,7 @@ register(ObjectTypeSpec(
     thumbnail_source=ThumbnailSource.FETCH_URL,
     thumbnail_url_fn=youtube_thumbnail_url,
     ocr_capable=True,
+    url_match_fn=matches,  # #448: content-based URL classification
     # #54: populated by scripts/full_youtube_channel_sync.py from the
     # real YouTube Data API v3 (videos.list's snippet.description and
     # statistics.*) — see that script's module docstring for why these

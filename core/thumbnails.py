@@ -8,8 +8,9 @@ thumbnail_url_fn or capture_fn; nothing here needs to change.
 
 Best-effort throughout: a thumbnail failure (network error, bad URL, capture
 routine not implemented yet) never raises — callers (upload, OCR, the
-backfill script) all treat "no thumbnail" as a normal, recoverable state,
-same as storage.make_thumbnail already did for corrupt uploaded images.
+backfill script) all treat "no thumbnail" as a normal, recoverable state.
+For UPLOADED_FILE types, ensure_thumbnail is called synchronously by the
+ingest pipeline so the upload response's thumb_url is ready immediately.
 """
 
 import httpx
@@ -63,11 +64,11 @@ def ensure_thumbnail(row):
 
 
 def _from_uploaded_file(row):
-    """UPLOADED_FILE-sourced types normally already get their thumbnail at
-    upload time (see storage.save_file -> storage.make_thumbnail); this path
-    exists so ensure_thumbnail is still correct if it's ever called before
-    that's happened, or the thumbnail was lost, without needing a caller to
-    know the difference between object types."""
+    """UPLOADED_FILE-sourced types get their thumbnail via the ingest pipeline
+    calling ensure_thumbnail after insert_upload (#448). This path also handles
+    the case where ensure_thumbnail is called when a thumbnail was lost or
+    didn't exist yet, without needing a caller to know the difference between
+    object types."""
     stored_filename = row.get("stored_filename")
     if not stored_filename:
         return False

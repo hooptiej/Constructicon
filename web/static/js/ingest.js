@@ -33,6 +33,10 @@ function registerProcessing(slug) {
 
 function createIngestController({ onOpen }) {
   const fileInput = document.getElementById('file-input');
+  // #440: the server's upload cap (CONSTRUCTICON_MAX_UPLOAD_MB, rendered onto
+  // the input). The server can only reject an oversize file after the whole
+  // body has arrived, so refuse it here instead, before any bytes move.
+  const maxUploadMb = Number(fileInput.dataset.maxMb) || 0;
   const stagedList = document.getElementById('staged-list');
   const stagedFilesContainer = document.getElementById('staged-files-container');
   const stagedMoreIndicator = document.getElementById('staged-more-indicator');
@@ -265,7 +269,12 @@ function createIngestController({ onOpen }) {
   async function addFiles(fileList, folderName) {
     droppedFolderName = folderName || '';
     onOpen();
+    const tooBig = [];
     for (const file of fileList) {
+      if (maxUploadMb && file.size > maxUploadMb * 1024 * 1024) {
+        tooBig.push(`${file.name} (${Math.round(file.size / 1024 / 1024).toLocaleString()} MB)`);
+        continue;
+      }
       // .url file support (#199) — Windows Internet Shortcut files are plain
       // INI format; extract the URL and stage as a link, same path as pasted links.
       if (file.name.toLowerCase().endsWith('.url')) {
@@ -285,6 +294,10 @@ function createIngestController({ onOpen }) {
       } else {
         stagedFiles.push(file);
       }
+    }
+    if (tooBig.length) {
+      uploadError.textContent = `Not added — over the ${maxUploadMb.toLocaleString()} MB limit: ${tooBig.join(', ')}`;
+      uploadError.style.display = 'block';
     }
     renderStaged();
   }

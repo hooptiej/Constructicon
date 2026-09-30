@@ -15,7 +15,7 @@
       </svg>
       <div class="dropzone-text" id="dropzone-text">Drag files here or click to browse</div>
       <div class="dropzone-hint">Images, PDFs, 3D models, audio, video, code, text and more, up to {{ upload_max_mb }}MB — drop multiple at once</div>
-      <input type="file" id="file-input" name="file" accept="{{ upload_accept }}" multiple style="display:none">
+      <input type="file" id="file-input" name="file" accept="{{ upload_accept }}" data-max-mb="{{ upload_max_mb }}" multiple style="display:none">
     </label>
     <div class="divider" style="margin:14px 0">
       <div class="line"></div><span>OR</span><div class="line"></div>

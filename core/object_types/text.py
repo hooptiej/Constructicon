@@ -1,13 +1,14 @@
-"""Text file support (issue #431): raw file text extraction for searchable
-indexing.
+"""Plain text file support (issue #431; #450 moved Markdown out to
+core/object_types/markdown.py): raw file text extraction for searchable
+indexing, shown verbatim.
 
-Text files (Markdown and plain text) are stored as-is with their raw UTF-8
+Plain text files are stored as-is with their raw UTF-8
 text content extracted and indexed for search. No visual thumbnail concept —
 text files are NONE-sourced, same as written posts or archives or data files.
 
 Deliberately a separate type from the existing 'document' type (which
 represents authored "Written post" entries — see core/object_types/document.py)
-— this type is for literal file uploads (.md, .txt), not structured authored
+— this type is for literal .txt file uploads, not structured authored
 content.
 
 Text extraction reads the file as UTF-8 with best-effort error handling
@@ -110,10 +111,10 @@ from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
     key="text",
-    label="Text file",
+    label="Plain text file",
     thumbnail_source=ThumbnailSource.NONE,
     ocr_capable=True,  # Enable OCR background task so text_extract_fn gets called (no actual OCR since no thumbnail)
-    extensions=frozenset({".md", ".txt"}),
+    extensions=frozenset({".txt"}),
     text_extract_fn=extract_text_for_row,
     properties_fn=get_properties,
     preview_fn=preview,

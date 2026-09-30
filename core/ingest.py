@@ -283,6 +283,10 @@ def ingest_file(
                 f"pre_store_fn returned needs_decision with unregistered provisional_type: {provisional}"
             )
 
+        # The row lives as the provisional type until the owner answers, so
+        # every downstream step (OCR/thumbnail/captions) follows that type,
+        # not the one that was detected.
+        provisional_spec = object_types.get_object_type(provisional)
         db.insert_upload(
             slug, filename, stored_filename, source,
             description=description,
@@ -291,16 +295,19 @@ def ingest_file(
             file_size=size,
             source_modified_at=source_modified_at,
             media_type=provisional,
-            ocr_status="pending" if object_types.get_object_type(provisional).ocr_capable else None,
+            ocr_status="pending" if provisional_spec.ocr_capable else None,
         )
 
         embedded_metadata.fill_missing(slug)
-        post_insert(slug, spec, run_background)
+        post_insert(slug, provisional_spec, run_background)
         attach_to_project(slug, project_id or None)
         auto_match(slug, [Path(filename).stem, folder_name])
 
-        # Queue the pending decision
-        decision_id = db.add_pending_decision("retype", slug, decision.decision)
+        # Queue the pending decision; detected_type lets the question say
+        # what the sniffer thought it was.
+        decision_id = db.add_pending_decision(
+            "retype", slug, {**decision.decision, "detected_type": media_type}
+        )
         return IngestResult(row=db.get_by_slug(slug), pending_decision_id=decision_id)
 
     # action == "accept" — the normal path

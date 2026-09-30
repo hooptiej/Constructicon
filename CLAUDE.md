@@ -113,6 +113,27 @@ exist yet.
   app's own UI would use, rather than writing to the DB directly — see
   individual script docstrings for the reasoning and any exceptions.
 
+## Adding an object type
+
+To add a new object type (issue #448 contract v2):
+
+1. **One new file in `core/object_types/`**: create a module (e.g. `core/object_types/mytype.py`) with:
+   - A `preview(ctx: PreviewContext)` function returning `markupsafe.Markup` HTML or None.
+   - A `properties(row: dict)` function returning a `dict[str, str]` of display properties.
+   - A `register(ObjectTypeSpec(...))` call at the end with both functions, plus optional hooks below.
+
+2. **Required fields**: Every type must declare `preview_fn` and `properties_fn` at registration (enforced, will raise `ObjectTypeContractError` otherwise).
+
+3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), and `sniff_priority` (for resolution when multiple sniffers claim the same extension).
+
+4. **Preview guidance**: previews must escape all data (no raw HTML from untrusted sources; build with `_preview.py` helpers or `markupsafe.escape`) and handle `ctx.mode`: `"live"` (object page) and `"export"` (static site; most types render export markup via the helpers, some deliberately return the download link or `None` to keep the export as it was). A preview that needs its own file reads `ctx.file_path`; never guess at item-dict keys. **Anything expensive goes in `embedded_metadata_fn` (computed once at upload, stored in `type_metadata`), never in `preview_fn`/`properties_fn`, which run on every page view.** Measured lesson: per-view STL mesh parsing took 7.9 s on a real 22 MB file.
+
+5. **Verify BEFORE deploying**: run `docker exec <container> python3 scripts/check_object_types.py` in `constructicon-test` first. It renders every type live + export against hostile synthetic data, flags unescaped output, and exits 1 on any failure. Registration enforcement means **an incomplete type file stops the app from booting at all** (verified: restart loop with `ObjectTypeContractError`), so a bad type deployed to prod = the site is down. Then snapshot real object pages + the static export before/after the change and diff them.
+
+6. **No other changes needed**: All dispatch (thumbnails, OCR, type lists, etc.) works off the registry. No per-media-type branches in templates, no `if media_type == "..."` conditionals in app code — the registry is the single source of truth.
+
+7. **Reference**: see docs/design/object-type-contract-v2.md for the full specification.
+
 ## Data model (verify against `core/db.py`'s `SCHEMA` before trusting this — it evolves)
 
 - **`capture_events`** — the core item table. Despite the name (a holdover

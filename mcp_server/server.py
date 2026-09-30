@@ -689,15 +689,20 @@ def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) 
 def constructicon_set_project_writeup(project_id: str | int, slug: str) -> dict | None:
     """Set a project's write-up document to a given object.
 
-    The object must exist and be a document-type item. The document is also
-    added to the project's items if not already present.
+    The object must exist and be an item whose type declares writeup_body_key
+    (i.e., can serve as a write-up). The item is also added to the project's
+    items if not already present.
     Returns the updated project, or None if not found.
     """
     project = db.get_project(project_id)
     if project is None:
         return None
-    if db.get_by_slug(slug) is None:
+    row = db.get_by_slug(slug)
+    if row is None:
         raise ValueError("writeup slug not found")
+    if not object_types.can_be_writeup(row):
+        label = object_types.get_object_type(row.get("media_type")).label
+        raise ValueError(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
 
     # Add the writeup document to the project items if not already there
     db.add_item_to_project(project["id"], slug)

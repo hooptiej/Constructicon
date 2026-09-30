@@ -39,6 +39,7 @@ register(ObjectTypeSpec(
     badge_text="POST",
     preview_fn=preview,
     properties_fn=get_properties,
+    writeup_body_key="body",
     edit_fields=(
         MetadataField(
             key="body",

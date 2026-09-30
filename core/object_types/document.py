@@ -8,8 +8,12 @@ from . import register, ObjectTypeSpec, ThumbnailSource, MetadataField, _preview
 
 
 def preview(ctx):
-    """#449 preview_fn: text block with the body content (from content_description
-    or description as fallback). Export: bare paragraph."""
+    """#449 preview_fn: the same text the object page's generic fallback showed
+    (content_description, then description). Export renders nothing, as it did
+    before #449: a document's write-up body is exported separately by
+    core/site_export.py, so an extra paragraph here would duplicate/clutter."""
+    if ctx.mode != "live":
+        return None
     text = ctx.item.get("content_description") or ctx.item.get("description") or "No preview available for this content."
     return _preview.text_block(ctx, text)
 

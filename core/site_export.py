@@ -151,7 +151,8 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     media_dir.mkdir(parents=True, exist_ok=True)
 
     # Bundle each rendered item's media (original + rendered thumbnail) and set
-    # its display fields (embed_url / media_file / thumb_file). One copy per slug
+    # its display fields (media_file / thumb_file; embeds come from each type's
+    # preview_fn via the export_preview filter, #449). One copy per slug
     # even if the item appears in multiple projects/entries (#333).
     copied_slugs = set()
     for items_list in list(project_items.values()) + list(entry_items.values()):

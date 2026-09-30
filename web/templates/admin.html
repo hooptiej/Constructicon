@@ -529,27 +529,53 @@
       const thumb = item.post.thumb_url
         ? `<img class="pending-decision-thumb" src="${escapeHtml(item.post.thumb_url)}" alt="">`
         : `<span class="pending-decision-thumb pending-decision-thumb-icon">${escapeHtml(item.post.type_icon || '')}</span>`;
-      const candidates = (item.candidates || []).map((c) => `
-        <label class="pending-decision-candidate">
-          <input type="checkbox" name="project_ids" value="${c.id}"> ${escapeHtml(c.title)}
-        </label>`).join('');
+
+      // Render candidates/options based on decision kind
+      let candidatesHtml = '';
+      let showNoneButton = true;
+      if (item.kind === 'project_match') {
+        candidatesHtml = (item.candidates || []).map((c) => `
+          <label class="pending-decision-candidate">
+            <input type="checkbox" name="project_ids" value="${c.id}"> ${escapeHtml(c.title)}
+          </label>`).join('');
+      } else if (item.kind === 'retype') {
+        showNoneButton = false;
+        const question = item.question || 'Choose a type:';
+        const options = item.options || [];
+        // Find the option with suggested: true, or fall back to current_type
+        let checkedKey = null;
+        const suggestedOpt = options.find((o) => o.suggested);
+        if (suggestedOpt) {
+          checkedKey = suggestedOpt.key;
+        } else {
+          checkedKey = item.current_type;
+        }
+        candidatesHtml = `<div>${escapeHtml(question)}</div>`;
+        candidatesHtml += options.map((o) => {
+          const isChecked = o.key === checkedKey ? 'checked' : '';
+          return `
+            <label class="pending-decision-candidate">
+              <input type="radio" name="choice-${item.id}" value="${escapeHtml(o.key)}" ${isChecked}> ${escapeHtml(o.label)}
+            </label>`;
+        }).join('');
+      }
+
       el.innerHTML = `
         <div class="pending-decision-head">
           ${thumb}
           <a class="pending-decision-title" href="${escapeHtml(item.post.link)}" title="${escapeHtml(item.post.title)}">${escapeHtml(item.post.title)}</a>
         </div>
-        <div class="pending-decision-candidates">${candidates}</div>
+        <div class="pending-decision-candidates">${candidatesHtml}</div>
         <div class="pending-decision-actions">
           <button type="button" class="btn-ms pending-decision-apply">Apply</button>
-          <button type="button" class="btn-ms pending-decision-skip" title="Add to none of these and clear the question">None of these</button>
+          ${showNoneButton ? '<button type="button" class="btn-ms pending-decision-skip" title="Add to none of these and clear the question">None of these</button>' : ''}
           <span class="backup-status pending-decision-msg"></span>
         </div>`;
       const msg = el.querySelector('.pending-decision-msg');
-      async function resolve(ids) {
+      async function resolve(formData) {
         el.querySelectorAll('button').forEach((b) => { b.disabled = true; });
         try {
-          const body = new URLSearchParams();
-          ids.forEach((id) => body.append('project_ids', id));
+          const body = new URLSearchParams(formData);
           const res = await fetch(`/api/pending-decisions/${item.id}/resolve`, { method: 'POST', body });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.detail || `Failed (${res.status})`);
@@ -561,9 +587,25 @@
         }
       }
       el.querySelector('.pending-decision-apply').addEventListener('click', () => {
-        resolve(Array.from(el.querySelectorAll('input[name="project_ids"]:checked')).map((i) => i.value));
+        if (item.kind === 'project_match') {
+          const ids = Array.from(el.querySelectorAll('input[name="project_ids"]:checked')).map((i) => i.value);
+          const formData = new FormData();
+          ids.forEach((id) => formData.append('project_ids', id));
+          resolve(formData);
+        } else if (item.kind === 'retype') {
+          const choice = el.querySelector(`input[name="choice-${item.id}"]:checked`);
+          const formData = new FormData();
+          if (choice) formData.append('choice', choice.value);
+          resolve(formData);
+        }
       });
-      el.querySelector('.pending-decision-skip').addEventListener('click', () => resolve([]));
+      const skipBtn = el.querySelector('.pending-decision-skip');
+      if (skipBtn) {
+        skipBtn.addEventListener('click', () => {
+          const formData = new FormData();
+          resolve(formData);
+        });
+      }
       pendingList.appendChild(el);
     }
   }

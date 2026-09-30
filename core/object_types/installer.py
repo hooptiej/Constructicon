@@ -2,8 +2,11 @@
 
 Formats: .msi (Windows Installer), .pkg/.mpkg (macOS flat packages, xar),
 .xip (Apple signed archive, xar), .deb, .rpm, .msix/.appx (+ bundles).
-.exe is deliberately NOT claimed here: "installer or standalone app?" is
-#446's question, and until then an .exe stays refused as unsupported.
+.exe (#446): only an .exe with a clear installer-framework fingerprint
+(NSIS, Inno Setup, InstallShield, WiX Burn, embedded MSI; see _pe.py) is
+claimed here, by a sniffer that outranks the application type's. Every
+other .exe goes to core/object_types/application.py, which asks the owner.
+A "Reclassify" action on .exe rows is the undo either way.
 
 Everything is header/manifest parsing, done once at upload by
 embedded_metadata_fn and stored under type_metadata[STATS_KEY] (the STL #449
@@ -27,7 +30,7 @@ import zlib
 from pathlib import Path
 
 from .. import storage
-from . import _preview, register, ObjectTypeSpec, ThumbnailSource
+from . import _pe, _preview, register, ObjectTypeSpec, ThumbnailSource, TypeAction
 
 STATS_KEY = "installer_stats"
 # Cap on any one embedded document/member read into memory (TOC, Distribution,
@@ -36,7 +39,7 @@ MAX_MEMBER_BYTES = 16 * 1024 * 1024
 
 EXTENSIONS = frozenset({
     ".msi", ".pkg", ".mpkg", ".xip", ".deb", ".rpm",
-    ".msix", ".appx", ".msixbundle", ".appxbundle",
+    ".msix", ".appx", ".msixbundle", ".appxbundle", ".exe",
 })
 _XAR = {".pkg", ".mpkg", ".xip"}
 _APPX = {".msix", ".appx", ".msixbundle", ".appxbundle"}
@@ -79,6 +82,8 @@ def sniff(path, filename):
         return magic == b"!<arch>\n"
     if ext == ".rpm":
         return magic[:4] == b"\xed\xab\xee\xdb"
+    if ext == ".exe":
+        return _pe.is_pe(path) and _pe.installer_framework(path) is not None
     if ext in _APPX:
         if magic[:4] != b"PK\x03\x04":
             return False
@@ -457,8 +462,22 @@ def _parse_appx(path):
 
 # ---------------------------------------------------------------- hooks
 
+def _parse_exe(path):
+    """An installer .exe: the PE facts plus which framework built it. (An
+    .exe the owner retyped to installer may have no fingerprint: plain
+    "Windows installer".)"""
+    info = _pe.facts(path)
+    framework = _pe.installer_framework(path)
+    info["format"] = f"Windows installer ({framework})" if framework else "Windows installer"
+    for app_only in ("dotnet", "subsystem", "built", "original_filename", "copyright"):
+        info.pop(app_only, None)
+    return info
+
+
 def _parse(path):
     ext = Path(path).suffix.lower()
+    if ext == ".exe":
+        return _parse_exe(path)
     if ext == ".msi":
         return _parse_msi(path)
     if ext in _XAR:
@@ -536,9 +555,16 @@ register(ObjectTypeSpec(
     caption_capable=False,
     extensions=EXTENSIONS,
     sniff_fn=sniff,
+    sniff_priority=10,  # #446: for .exe, runs before the application type's plain-PE sniffer
     properties_fn=get_properties,
     embedded_metadata_fn=get_embedded_metadata,  # parsed once, at upload
     preview_fn=preview,
+    actions=(TypeAction(
+        "reclassify-application", "Reclassify as standalone app",
+        lambda row: _pe.reclassify(row, "application"),
+        confirm="File this .exe as a standalone app instead of an installer?",
+        applies_fn=_pe.is_exe_row,
+    ),),
     badge_icon="\U0001F9F0",  # toolbox
     badge_text="SETUP",
 ))

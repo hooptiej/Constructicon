@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, curator, curator_needs, db, ingest, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
+from core import automatch, backup, captions, curator, curator_needs, db, decisions, ingest, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()
@@ -557,7 +557,8 @@ def _to_object_detail(row):
         "effective_date_display": _friendly_datetime(timeline.resolve_item_date(row)),
         # #448: per-type actions available on this object (e.g. YouTube's "fetch real date" moves here in PR 2).
         # The type file owns the handler; actions are declared in ObjectTypeSpec.actions.
-        "actions": [{"key": a.key, "label": a.label, "confirm": a.confirm} for a in spec.actions],
+        # #446: filter actions to only those that applies_to(row).
+        "actions": [{"key": a.key, "label": a.label, "confirm": a.confirm} for a in spec.actions if a.applies_to(row)],
         # #448: editable form fields for type_metadata. Only includes fields with input set.
         "edit_fields": [{"key": f.key, "label": f.label, "input": f.input, "help_text": f.help_text, "value": (row.get("type_metadata") or {}).get(f.key)} for f in spec.edit_fields if f.input],
         # #449: external link button label (types may override).
@@ -1023,88 +1024,50 @@ def api_set_setting(key: str = Form(...), value: str = Form("")):
 
 @app.get("/api/pending-decisions")
 def api_list_pending_decisions():
-    """#240: every open "ask, don't guess" question for the admin page's
-    queue — today only kind="project_match" (an upload whose name matched
-    more than one project). Each entry carries the object it's about (slim
-    card shape) and, for project_match, the resolved candidate projects.
+    """#240/#446/#448: every open "ask, don't guess" question for the admin
+    page's queue — kind="project_match" (an upload matched multiple projects)
+    or "retype" (a file's type was deferred for owner input). Each entry
+    carries the object it's about (slim card shape) and candidate/option info.
     Decisions whose object or candidates have since vanished are resolved
-    away here as "stale" rather than shown as unanswerable."""
+    as "stale" rather than shown as unanswerable."""
     items = []
-    for decision in db.list_pending_decisions():
-        row = db.get_by_slug(decision["post_slug"])
-        if row is None:
-            db.resolve_pending_decision(decision["id"], {"stale": "object deleted"})
-            continue
+    for item in decisions.list_open():
         entry = {
-            "id": decision["id"],
-            "kind": decision["kind"],
-            "created_at": decision["created_at"],
-            "created_at_display": _friendly_datetime(decision["created_at"]),
-            "post": _to_content_public(row),
-            "payload": decision["payload"],
+            "id": item["id"],
+            "kind": item["kind"],
+            "created_at": item["created_at"],
+            "created_at_display": _friendly_datetime(item["created_at"]),
+            "post": _to_content_public(item["row"]),
+            "payload": item["payload"],
         }
-        if decision["kind"] == automatch.KIND_PROJECT_MATCH:
-            candidates = []
-            for pid in decision["payload"].get("candidate_project_ids", []):
-                project = db.get_project(pid)
-                if project is not None:
-                    candidates.append({"id": project["id"], "title": project["title"], "slug": project["slug"]})
-            if len(candidates) < 2:
-                # Not ambiguous any more (projects deleted/merged since) —
-                # nothing left worth asking; an owner can still file it by
-                # hand from the detail page.
-                db.resolve_pending_decision(decision["id"], {"stale": "fewer than two candidates remain"})
-                continue
-            entry["candidates"] = candidates
+        if item["kind"] == automatch.KIND_PROJECT_MATCH:
+            entry["candidates"] = item.get("candidates", [])
+        elif item["kind"] == "retype":
+            entry["question"] = item.get("question", "")
+            entry["options"] = item.get("options", [])
+            entry["current_type"] = item.get("current_type")
         items.append(entry)
     return JSONResponse({"count": len(items), "items": items})
 
 
 @app.post("/api/pending-decisions/{decision_id}/resolve")
 def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form([]), choice: str = Form("")):
-    """#240/#448: the checkbox-resolve action.
+    """#240/#446/#448: resolve a pending decision with the owner's choice.
 
     For project_match, `project_ids` is whichever candidates were ticked — zero ("none of these"),
-    one, or several, since an item can reasonably belong to more than one project.
-    Only ids that were actually candidates are honored (anything else is ignored, not an error —
-    a stale form can't add the item somewhere it was never asked about). Attaches via
+    one, or several, since an item can belong to multiple projects. Attaches via
     ingest.attach_to_project so the linked tag / cover behavior matches a drawer pick.
 
-    For retype (#448), `choice` is the key of the chosen option from the decision's options list.
-    Only keys that were actually in the options are honored."""
-    decision = db.get_pending_decision(decision_id)
-    if decision is None:
+    For retype, `choice` is the key of the chosen option from the decision's options list."""
+    try:
+        result = decisions.resolve(decision_id, choice=choice, project_ids=project_ids)
+        return JSONResponse(result)
+    except decisions.DecisionNotFound:
         raise HTTPException(status_code=404, detail="No such pending decision")
-    if decision["resolved_at"] is not None:
+    except decisions.DecisionAlreadyResolved:
         raise HTTPException(status_code=409, detail="Already resolved")
-
-    applied = []
-
-    if decision["kind"] == automatch.KIND_PROJECT_MATCH:
-        allowed = {int(pid) for pid in decision["payload"].get("candidate_project_ids", [])}
-        chosen = []
-        for raw in project_ids:
-            raw = raw.strip()
-            if raw.isdigit() and int(raw) in allowed and int(raw) not in chosen:
-                chosen.append(int(raw))
-        if db.get_by_slug(decision["post_slug"]) is not None:
-            for pid in chosen:
-                ingest.attach_to_project(decision["post_slug"], pid)
-                applied.append(pid)
-        db.resolve_pending_decision(decision_id, {"project_ids": applied})
-
-    elif decision["kind"] == "retype":
-        allowed_keys = {o["key"] for o in decision["payload"].get("options", [])}
-        if choice and choice in allowed_keys:
-            if db.get_by_slug(decision["post_slug"]) is not None:
-                ingest.retype(decision["post_slug"], choice, lambda f, *args: None)
-                applied.append(choice)
-        db.resolve_pending_decision(decision_id, {"choice": choice or None})
-
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown decision kind: {decision['kind']}")
-
-    return JSONResponse({"ok": True, "applied": applied, "remaining": db.count_pending_decisions()})
+    except (decisions.UnknownDecisionKind, decisions.InvalidChoice) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/audit-log")
@@ -2104,7 +2067,8 @@ def api_refresh_thumbnail(request: Request, slug: str):
 @app.post("/api/image/{slug}/action/{key}")
 async def api_run_type_action(request: Request, slug: str, key: str):
     """#448: Generic per-type action route. The type file owns the handler;
-    actions are declared in ObjectTypeSpec.actions."""
+    actions are declared in ObjectTypeSpec.actions. #446: actions must
+    applies_to(row) to be runnable."""
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -2116,6 +2080,9 @@ async def api_run_type_action(request: Request, slug: str, key: str):
     action = next((a for a in spec.actions if a.key == key), None)
     if action is None:
         raise HTTPException(status_code=404, detail=f"{spec.label} has no action '{key}'")
+
+    if not action.applies_to(row):
+        raise HTTPException(status_code=404, detail=f"{spec.label} has no action '{key}' for this item")
 
     try:
         result = await run_in_threadpool(action.handler, row)

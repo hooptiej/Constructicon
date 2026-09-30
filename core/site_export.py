@@ -172,7 +172,8 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
             media_url=prefix + item["media_file"] if item.get("media_file") else None,
             thumb_url=prefix + item["thumb_file"] if item.get("thumb_file") else None,
             page_url=item.get("external_url"),
-            mode="export"
+            mode="export",
+            file_path=storage.path_for(item["stored_filename"]) if item.get("stored_filename") else None,
         )
         return object_types.render_preview(spec, ctx)
 

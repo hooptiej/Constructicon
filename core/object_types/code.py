@@ -19,7 +19,7 @@ from pathlib import Path
 from markupsafe import Markup, escape
 
 from .. import storage
-from . import _textstats
+from . import _preview, _textstats
 
 
 # Language detection by extension
@@ -101,7 +101,10 @@ def get_properties(row):
 
 
 def preview(ctx):
-    """#449 preview_fn: syntax-highlighted source code from extracted_text."""
+    """#449 preview_fn: syntax-highlighted source code from extracted_text.
+    The static export keeps its download link (it has no highlighter/CSS)."""
+    if ctx.mode != "live":
+        return _preview.file_icon(ctx)
     text = ctx.item.get("extracted_text") or ""
     if not text:
         return None

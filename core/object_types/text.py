@@ -22,7 +22,7 @@ upload never breaks the upload response or the OCR background task.
 from markupsafe import Markup, escape
 
 from .. import storage
-from . import _textstats
+from . import _preview, _textstats
 
 
 def _stored_path(row):
@@ -87,7 +87,10 @@ def get_properties(row):
 
 
 def preview(ctx):
-    """#449 preview_fn: text content preview (first 50,000 chars max)."""
+    """#449 preview_fn: text content preview (first 50,000 chars max).
+    The static export keeps its download link."""
+    if ctx.mode != "live":
+        return _preview.file_icon(ctx)
     text = ctx.item.get("extracted_text") or ""
     if not text:
         return None

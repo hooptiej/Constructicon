@@ -77,19 +77,23 @@ class TypeAction:
 
 @dataclass(frozen=True)
 class PreviewContext:
-    """Context passed to preview_fn (#448, deferred to PR 3).
+    """Context passed to preview_fn (#449).
 
-    item: The row dict (can be None for synthetic previews).
-    media_url: URL to the media itself (local /f/slug or external URL).
-    thumb_url: URL to a thumbnail image, if available.
-    page_url: URL to the object's detail page.
-    mode: "live" for web display, "export" for static export.
+    item: the prepared item dict (object page) or export item.
+    media_url: URL of the stored file for this render context (live /f/<slug>,
+        or the export's relative media path), None when there's no file.
+    thumb_url: URL of the thumbnail, if any.
+    page_url: the item's external URL, if any.
+    mode: "live" (object page) or "export" (static site).
+    file_path: the stored file on disk (Path) or None. For previews that must
+        read their own file (e.g. a CSV table); never guess at item keys (#449).
     """
     item: dict
     media_url: str | None
     thumb_url: str | None
     page_url: str | None
     mode: str = "live"
+    file_path: object = None
 
 
 @dataclass

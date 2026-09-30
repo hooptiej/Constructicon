@@ -582,6 +582,7 @@ def _to_object_detail(row):
         thumb_url=item.get("thumb_url"),
         page_url=item.get("external_url"),
         mode="live",
+        file_path=storage.path_for(row["stored_filename"]) if row.get("stored_filename") else None,
     ))
     item["preview_assets"] = list(spec.preview_assets)
     return item

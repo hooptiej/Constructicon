@@ -87,9 +87,6 @@
             </a>
             {% endif %}
           </div>
-        {% elif item.preview_html %}
-          {# #449: type-specific preview rendering — code, data, archive, text show their own content. #}
-          {{ item.preview_html | safe }}
         {% elif item.is_file %}
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none">
             <rect x="3" y="4" width="18" height="16" rx="2" stroke="#3F4530" stroke-width="1.4"/>

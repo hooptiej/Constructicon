@@ -298,6 +298,12 @@ def ingest_file(
             ocr_status="pending" if provisional_spec.ocr_capable else None,
         )
 
+        # #448: replaces storage.save_stream's old extension-based save-time
+        # thumbnail; synchronous on purpose so the upload response's thumb_url
+        # is ready immediately, same as before #448.
+        if provisional_spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
+            thumbnails.ensure_thumbnail(db.get_by_slug(slug))
+
         embedded_metadata.fill_missing(slug)
         post_insert(slug, provisional_spec, run_background)
         attach_to_project(slug, project_id or None)
@@ -332,6 +338,12 @@ def ingest_file(
         slug, filename, stored_filename, source,
         **insert_kwargs
     )
+
+    # #448: replaces storage.save_stream's old extension-based save-time
+    # thumbnail; synchronous on purpose so the upload response's thumb_url
+    # is ready immediately, same as before #448.
+    if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
+        thumbnails.ensure_thumbnail(db.get_by_slug(slug))
 
     # #255: seed content_description/display_name/type_metadata from the
     # file's own tags (an MP3's ID3 title/artist/album/...). Synchronous

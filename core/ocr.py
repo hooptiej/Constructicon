@@ -108,10 +108,6 @@ def _ocr_source_path(row, spec):
     """Path to the image OCR should run against for `row`, or None if there
     isn't one (wrong type, or no thumbnail could be produced)."""
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
-        filename = row.get("filename")
-        ext = Path(filename).suffix.lower() if filename else None
-        if ext not in storage.IMAGE_EXTENSIONS:
-            return None
         return storage.path_for(row["stored_filename"])
     # FETCH_URL / CAPTURE types: OCR runs on the generated thumbnail (video
     # thumbnail, stream OSD frame, URL screenshot) — not on anything the

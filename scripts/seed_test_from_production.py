@@ -88,7 +88,7 @@ Running it
   writes nothing):
 
     python scripts/seed_test_from_production.py \
-        --source-db /prod/imagerepo.db --source-storage /prod/storage \
+        --source-db /prod/db/imagerepo.db --source-storage /prod/storage \
         --base-url http://172.16.6.2:80
 
   For real, add --execute. There is no other confirmation: --execute WIPES
@@ -104,7 +104,7 @@ Running it
         -v "/mnt/Storage Pool/Media/constructicon:/prod:ro" \
         -v "$HOME/seed.py:/seed.py:ro" \
         constructicon-test:latest \
-        python3 /seed.py --source-db /prod/imagerepo.db \
+        python3 /seed.py --source-db /prod/db/imagerepo.db \
             --source-storage /prod/storage --base-url http://172.16.6.2:80 --execute
 
   (172.16.6.2 is constructicon-test's address on ollama_default — check

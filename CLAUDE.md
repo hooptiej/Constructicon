@@ -334,21 +334,22 @@ production**: `POST /api/backup` for DB+storage, `cp -r` the code
 directories to a `constructicon-prod-deploy-backup-<timestamp>-<issues>`
 sibling dir (see existing ones on the box for the naming convention).
 
+**The SQLite DB lives in its own directory, never a bare file mount (#453, 2026-09-30).** Both services mount `Media/<instance>/db/` at `/app/data/` with `CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db`. WAL mode keeps `-wal`/`-shm` beside the DB, and the old single-file mount gave web and mcp private copies, which corrupted constructicon-test's DB. Read DB state with a plain `sqlite3.connect(db.DB_PATH)` inside the app container, not a `?mode=ro` URI (that can miss the WAL and show stale rows). Every `/api/backup` result now includes `integrity`.
+
+**Captions are OFF on all four services (`CAPTION_DISABLED=1`) until #454 is fixed.** The per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Don't re-enable or bulk-caption before that fix.
+
 Two containers run side by side on that box:
 
 - **`constructicon-web`** — the real production instance.
 - **`constructicon-test`** — an isolated instance with its own DB/storage,
   used to test changes (e.g. new sync scripts, schema-affecting work)
-  before pointing them at production. **Its browser tab currently reads
-  the same as production's ("Constructicon") — it's supposed to read
-  `DEV-Constructicon`** (standing convention across all of hooptiej's
-  projects, see `~/.claude/CLAUDE.md`'s dev-env-tab-label rule: a `DEV-`
-  *prefix*, not a suffix, so it survives a squeezed-down tab). Not
-  implemented yet — filed as hooptiej/Constructicon#310 (needs a
-  `CONSTRUCTICON_ENV` var mirroring quest-log's `QUEST_LOG_ENV` pattern,
-  wired into `base.html`'s `<title>` block). Check this is actually fixed
-  before assuming a dev/test session can visually tell its tab apart from
-  prod at a glance.
+  before pointing them at production. Its browser tab reads
+  **`DEV-Constructicon`** (#310, done: `CONSTRUCTICON_ENV=dev` in its compose,
+  per the dev-env-tab-label rule in `~/.claude/CLAUDE.md`). That title is
+  also the cheapest "am I pointed at test?" check before anything
+  destructive, e.g. `seed_test_from_production.py --execute` wipes whatever
+  `--base-url` points at. Check the target's `<title>` and that its IP isn't
+  `constructicon-web`'s (container IPs change on recreate).
   `scripts/full_youtube_channel_sync.py`'s
   own docstring is explicit about this discipline: its issue's
   implementation work was scoped to "testing against the isolated

@@ -59,16 +59,16 @@ exist yet.
   Gated per type by `ObjectTypeSpec.caption_capable` (distinct from
   `ocr_capable`: video is captioned but not OCR'd; STL is explicitly
   excluded — wireframe renders produce garbage). Strictly one image at a
-  time under `CAPTION_LOCK`, and the **Ollama container is restarted after
-  every single image** via the Docker Engine API — a long-lived Ollama
-  process doesn't release resources between calls. **Deploy prerequisites
-  for the app container** — join Ollama's compose network (`ollama_default`,
-  external — the ipvlan `questlog-lan` network can't reach the host's
-  published `:11434`) so `http://ollama:11434` resolves, and bind-mount
-  `/var/run/docker.sock`
-  for the restart. Without the socket it degrades to Ollama's own
-  `keep_alive: 0` model unload and logs a warning per image; set
-  `CAPTION_DISABLED=1` to skip captioning entirely. Tune with the admin
+  time under `CAPTION_LOCK`. #454: **No routine restarts; restart only on
+  failure or if Ollama RAM exceeds ceiling, guarded by cooldown + circuit
+  breaker.** Keep-alive model unload is now the primary memory release; restarts
+  (via Docker Engine API) are a safety valve for failures or runaway memory.
+  **Deploy prerequisites for the app container** — join Ollama's compose
+  network (`ollama_default`, external — the ipvlan `questlog-lan` network can't
+  reach the host's published `:11434`) so `http://ollama:11434` resolves,
+  and bind-mount `/var/run/docker.sock` for safety-valve restarts + RAM reading.
+  Without the socket it relies on Ollama's own `keep_alive: 0` model unload;
+  set `CAPTION_DISABLED=1` to skip captioning entirely. Tune with the admin
   page's (`/admin`) "Caption tuning" panel (`POST /api/captions/test`) before
   changing the defaults in that module.
 - **`core/embedded_metadata.py`** (#255, #265) — metadata the uploaded

@@ -1920,7 +1920,7 @@ def captions_review_page(request: Request):
 def api_caption_defaults():
     """#239: what the pipeline actually runs with, so the admin page's
     tuning panel starts from production's real values rather than its own
-    copy of them."""
+    copy of them. #454: includes circuit-breaker status."""
     return JSONResponse({
         "model": captions.OLLAMA_MODEL,
         "prompt": captions.DEFAULT_PROMPT,
@@ -1928,6 +1928,7 @@ def api_caption_defaults():
         "num_predict": captions.DEFAULT_NUM_PREDICT,
         "ollama_up": captions.is_ollama_up(),
         "docker_socket": captions.docker_socket_available(),
+        "breaker": captions.breaker_status(),
     })
 
 
@@ -1941,9 +1942,9 @@ def api_caption_test(
     """#239: the admin page's live tuning panel — one synchronous model call
     against an existing object's real preview image with the given
     settings, WITHOUT writing anything to the row. Goes through the exact
-    same caption_once() cycle as the pipeline (lock + post-call Ollama
-    restart), so a tuning run can never overlap a real one and measures
-    the same thing production will."""
+    same caption_once() cycle as the pipeline (lock + guarded restart on
+    failure or RAM ceiling, #454), so a tuning run can never overlap a real
+    one and measures the same thing production will."""
     row = db.get_by_slug(slug.strip())
     if row is None:
         raise HTTPException(status_code=404, detail="No object with that slug")
@@ -1972,6 +1973,15 @@ def api_caption_test(
         "thumb_url": f"/f/{row['slug']}/thumb" if _has_thumbnail(row, spec) else None,
         "settings": {"temperature": temperature, "num_predict": num_predict, "prompt": prompt.strip() or captions.DEFAULT_PROMPT},
     })
+
+
+@app.post("/api/captions/reset-breaker")
+def api_captions_reset_breaker():
+    """#454: Reset the circuit breaker and consecutive-failure counter,
+    resuming captioning if it was paused. For manual intervention via the
+    admin page when the breaker has opened."""
+    captions.reset_breaker()
+    return JSONResponse({"ok": True, "breaker": captions.breaker_status()})
 
 
 @app.post("/api/image/{slug}")

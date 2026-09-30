@@ -16,21 +16,18 @@ garbage in testing, a hard failure rather than a weak caption.
 
 Concurrency discipline (deliberately NOT the OCR semaphore — different
 resource, different failure mode): CAPTION_LOCK serializes every model call
-process-wide, one image at a time, and the Ollama *container* is restarted
-after every single captioned image. A long-lived Ollama process was
-confirmed (2026-09-09, on a separate real deployment) not to release
-resources between successive inference calls on its own — usage
-accumulates until it's bounced. So the cycle per image is: send one image,
-get the caption, restart the container, wait for it to come back, release
-the lock. Never batch multiple images against one running Ollama process.
-
-The restart goes through the Docker Engine API over a bind-mounted
-/var/run/docker.sock (plain http.client over AF_UNIX — no docker CLI in the
-app image). If the socket isn't mounted (CAPTION_DOCKER_SOCKET missing),
-the restart step degrades to Ollama's own `keep_alive: 0` model-unload
-(already sent on every request as belt-and-braces) plus a loud warning, so
-captioning still works but without the full container bounce the issue
-calls for. Production needs the socket mounted for the real behavior.
+process-wide, one image at a time. Measured 2026-09-09 (separate deployment):
+a long-lived Ollama process doesn't release resources between successive
+calls on its own — usage accumulates until bounced. With keep_alive:0 (now
+the primary unload, not insurance), GPU memory returns to 1-4 MiB per call;
+container RAM stays 1.1-1.65 GB with no upward trend, no GPU errors.
+Per-image restart (#239's original design) cycled the container ~180 times
+during a bulk import on 2026-09-30 and hard-crashed the NAS. New rule (#454):
+no routine restarts; restart only on model-call failure or if Ollama RAM
+exceeds the ceiling (measured peak ~1650 MB, threshold ~3000 MB), guarded
+by a cooldown (600s) and circuit breaker that opens after 3 consecutive
+failures. A process restart resets the breaker. Socket access (for safety-valve
+restarts + RAM reading) is now needed only as this guard, not per-image.
 
 Network: the app container reaches Ollama at CAPTION_OLLAMA_URL (default
 http://ollama:11434 — Docker DNS on Ollama's own compose network, which the
@@ -61,6 +58,20 @@ DOCKER_SOCKET = os.environ.get("CAPTION_DOCKER_SOCKET", "/var/run/docker.sock")
 # Set CAPTION_DISABLED=1 to skip scheduling captions entirely (e.g. a deploy
 # with no Ollama reachable) rather than logging a failure per upload.
 DISABLED = os.environ.get("CAPTION_DISABLED", "") not in ("", "0", "false", "no")
+
+# #454: Guarded restart parameters. RAM ceiling is ~2x the measured peak
+# (1650 MB + headroom). Cooldown prevents thrashing restarts. Circuit breaker
+# opens after max consecutive failures.
+def _parse_env_int(var, default):
+    """Safely parse an env var to int, fall back to default on garbage."""
+    try:
+        return int(os.environ.get(var, default))
+    except (ValueError, TypeError):
+        return default
+
+CAPTION_OLLAMA_MAX_MEM_MB = _parse_env_int("CAPTION_OLLAMA_MAX_MEM_MB", 3072)  # #454
+CAPTION_RESTART_COOLDOWN_SECONDS = _parse_env_int("CAPTION_RESTART_COOLDOWN_SECONDS", 600)  # #454
+CAPTION_MAX_CONSECUTIVE_FAILURES = _parse_env_int("CAPTION_MAX_CONSECUTIVE_FAILURES", 3)  # #454
 
 # Tuned defaults — see module docstring. Exposed via GET /api/captions/defaults
 # so the admin tuning panel starts from what production actually uses.
@@ -111,6 +122,11 @@ RESTART_TIMEOUT_SECONDS = 60
 READY_POLL_SECONDS = 90  # how long to wait for Ollama to answer /api/tags again after a restart
 
 CAPTION_LOCK = threading.Lock()
+
+# #454: Module state (only touched while holding CAPTION_LOCK)
+_last_restart_at = None  # time.monotonic() of the last successful restart
+_consecutive_failures = 0  # count of consecutive caption call failures
+_breaker_reason = None  # str describing why the circuit breaker is open, or None if closed
 
 METADATA_KEY = "auto_caption"
 STATUS_KEY = "auto_caption_status"  # "done" | "failed" (absent = never attempted)
@@ -177,9 +193,8 @@ def generate_caption(image_path, prompt=None, temperature=None, num_predict=None
         "prompt": prompt if prompt is not None else DEFAULT_PROMPT,
         "images": [image_b64],
         "stream": False,
-        # Unload the model as soon as the response is done — cheap insurance
-        # on top of the container restart, and the only unload we get when
-        # the docker socket isn't available.
+        # Unload the model as soon as the response is done — the primary
+        # unload now, not insurance. Releases GPU memory to 1-4 MiB.
         "keep_alive": 0,
         "options": {
             "temperature": DEFAULT_TEMPERATURE if temperature is None else float(temperature),
@@ -211,6 +226,34 @@ def docker_socket_available():
     return os.path.exists(DOCKER_SOCKET)
 
 
+def _ollama_mem_mb():
+    """Read Ollama container's memory usage (MB) via Docker Engine API.
+    Returns int (MB) or None if socket unavailable or any error. Never raises.
+    Memory = usage minus inactive_file cache (or .cache if inactive_file missing).
+    #454: used by the RAM ceiling safety valve."""
+    if not docker_socket_available():
+        return None
+    try:
+        conn = _UnixHTTPConnection(DOCKER_SOCKET, timeout=5)
+        try:
+            conn.request("GET", f"/containers/{OLLAMA_CONTAINER}/stats?stream=false&one-shot=true")
+            resp = conn.getresponse()
+            if resp.status != 200:
+                return None
+            data = json.loads(resp.read().decode("utf-8"))
+            memory_stats = data.get("memory_stats") or {}
+            usage = memory_stats.get("usage", 0)
+            stats = memory_stats.get("stats") or {}
+            # Subtract inactive file cache (more reliable) or falls back to cache.
+            inactive = stats.get("inactive_file") or stats.get("cache", 0)
+            net_usage = max(0, usage - inactive)
+            return int(net_usage / (1024 * 1024))
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
 def restart_ollama_container():
     """POST /containers/{name}/restart via the Engine API, then block until
     Ollama answers /api/tags again. Returns the number of seconds the whole
@@ -237,38 +280,98 @@ def restart_ollama_container():
     raise RuntimeError(f"{OLLAMA_CONTAINER} restarted but Ollama not answering after {READY_POLL_SECONDS}s")
 
 
-def _bounce_after_call():
-    """The post-image restart step. Returns (restarted: bool, seconds).
-    Never raises — a failed restart is logged, not fatal to the caption that
-    was already produced."""
-    try:
-        return True, restart_ollama_container()
-    except Exception as e:
-        print(f"caption: could not restart {OLLAMA_CONTAINER} after call ({e!r}) — relying on keep_alive=0 unload only", flush=True)
+def _maybe_restart(reason):
+    """#454: Guarded restart step. Returns (restarted: bool, seconds).
+    Checks circuit breaker and cooldown before attempting. Never raises."""
+    global _last_restart_at, _breaker_reason
+    if _breaker_reason:
         return False, 0.0
+    if _last_restart_at is not None:
+        elapsed = time.monotonic() - _last_restart_at
+        if elapsed < CAPTION_RESTART_COOLDOWN_SECONDS:
+            print(f"caption: restart wanted ({reason}) but last restart was {elapsed:.1f}s ago; cooling down", flush=True)
+            return False, 0.0
+    try:
+        print(f"caption: restarting {OLLAMA_CONTAINER}: {reason}", flush=True)
+        secs = restart_ollama_container()
+        _last_restart_at = time.monotonic()
+        return True, secs
+    except Exception as e:
+        _breaker_reason = f"Ollama did not come back after restart ({e!r})"
+        print(f"caption: circuit breaker OPEN: {_breaker_reason}", flush=True)
+        return False, 0.0
+
+
+# --- Breaker status and reset ---
+
+def breaker_status():
+    """#454: Returns dict with current circuit-breaker state, memory ceiling,
+    cooldown duration, and seconds since the last restart (if any).
+    Meant for the admin page's status display and the /api/captions/defaults response."""
+    with CAPTION_LOCK:
+        secs_since = None if _last_restart_at is None else time.monotonic() - _last_restart_at
+        return {
+            "open": _breaker_reason is not None,
+            "reason": _breaker_reason,
+            "consecutive_failures": _consecutive_failures,
+            "seconds_since_restart": secs_since,
+            "max_mem_mb": CAPTION_OLLAMA_MAX_MEM_MB,
+            "cooldown_seconds": CAPTION_RESTART_COOLDOWN_SECONDS,
+        }
+
+
+def reset_breaker():
+    """#454: Clears the circuit breaker and failure counter. Under CAPTION_LOCK."""
+    global _consecutive_failures, _breaker_reason
+    with CAPTION_LOCK:
+        _consecutive_failures = 0
+        _breaker_reason = None
 
 
 # --- The one-image cycle ---
 
 def caption_once(image_path, prompt=None, temperature=None, num_predict=None):
-    """The full per-image discipline from #239 point 3, under CAPTION_LOCK:
-    one model call, then a container restart, then release. Returns a dict
-    {caption, elapsed_seconds, restarted, restart_seconds, error}. `error`
-    is set (and caption None) when the model call itself failed — the
-    restart still happens in that case, since whatever the failed call
-    allocated needs releasing just the same."""
+    """#454: The full per-image cycle under CAPTION_LOCK: one model call,
+    optional guarded restart (on failure, or if RAM > ceiling), then release.
+    Returns dict {caption, elapsed_seconds, restarted, restart_seconds,
+    restart_reason, error}. `error` is set (and caption None) on failure.
+    If circuit breaker is open, returns immediately with error message."""
+    global _consecutive_failures, _breaker_reason
     with CAPTION_LOCK:
+        if _breaker_reason:
+            return {
+                "caption": None,
+                "elapsed_seconds": 0.0,
+                "restarted": False,
+                "restart_seconds": 0.0,
+                "restart_reason": None,
+                "error": f"captioning paused: {_breaker_reason}",
+            }
         caption, elapsed, error = None, 0.0, None
+        restarted, restart_seconds, restart_reason = False, 0.0, None
         try:
             caption, elapsed = generate_caption(image_path, prompt=prompt, temperature=temperature, num_predict=num_predict)
+            _consecutive_failures = 0  # reset on success
+            # Check RAM ceiling as safety valve.
+            mem = _ollama_mem_mb()
+            if mem is not None and mem > CAPTION_OLLAMA_MAX_MEM_MB:
+                restart_reason = f"Ollama RAM {mem} MB > {CAPTION_OLLAMA_MAX_MEM_MB} MB"
+                restarted, restart_seconds = _maybe_restart(restart_reason)
         except Exception as e:
             error = repr(e)
-        restarted, restart_seconds = _bounce_after_call()
+            _consecutive_failures += 1
+            if _consecutive_failures >= CAPTION_MAX_CONSECUTIVE_FAILURES:
+                _breaker_reason = f"{_consecutive_failures} consecutive caption failures, last: {error}"
+                print(f"caption: circuit breaker OPEN: {_breaker_reason}", flush=True)
+            else:
+                restart_reason = f"caption call failed: {error}"
+                restarted, restart_seconds = _maybe_restart(restart_reason)
     return {
         "caption": caption,
         "elapsed_seconds": round(elapsed, 2),
         "restarted": restarted,
         "restart_seconds": round(restart_seconds, 2),
+        "restart_reason": restart_reason,
         "error": error,
     }
 
@@ -288,6 +391,11 @@ def _caption_source_path(row, spec):
 
 
 def should_caption(spec):
+    """#454: Return False if breaker is open (captioning paused), in addition
+    to existing checks. Keeps bulk uploads from queueing captions once the
+    breaker has tripped."""
+    if _breaker_reason:
+        return False
     return bool(spec.caption_capable) and not DISABLED
 
 
@@ -364,9 +472,11 @@ def run_caption(slug, start_step=0, cascade=True):
             STEP_KEY: step_index,
             "auto_caption_model": OLLAMA_MODEL,
         })
+        restart_note = ""
+        if result["restarted"]:
+            restart_note = f" restart=yes ({result['restart_seconds']}s, {result['restart_reason']})"
         print(
-            f"caption done for {slug}: step {step_index}, {result['elapsed_seconds']}s model, "
-            f"restart={'yes' if result['restarted'] else 'NO'} ({result['restart_seconds']}s)",
+            f"caption done for {slug}: step {step_index}, {result['elapsed_seconds']}s model{restart_note}",
             flush=True,
         )
     except Exception as e:

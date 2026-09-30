@@ -7,6 +7,7 @@ separately; the original stays untouched for the real hotlink use case
 (embedding in Hudu/Slack) and the detail page's full preview.
 """
 
+import os
 import secrets
 from io import BytesIO
 from pathlib import Path
@@ -20,7 +21,19 @@ STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 # storage.make_thumbnail()'s use case: deciding whether a file IS an image
 # (and needs a thumbnail generated) vs. something else.
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".tiff", ".tif", ".webp"}
-MAX_BYTES = 25 * 1024 * 1024
+
+# #433: make file size limit configurable via environment variable
+# so large PDFs/videos can be allowed without a code change
+def _get_max_bytes():
+    try:
+        max_mb = int(os.getenv("CONSTRUCTICON_MAX_UPLOAD_MB", "25"))
+        return max_mb * 1024 * 1024
+    except ValueError:
+        # Fall back to 25 MB on garbage env value
+        return 25 * 1024 * 1024
+
+MAX_BYTES = _get_max_bytes()
+MAX_MB = MAX_BYTES // (1024 * 1024)
 THUMB_MAX_DIM = 400
 THUMB_BG = (20, 23, 15)  # matches the app's dark page background, for flattened transparency
 EXIF_ORIENTATION_TAG = 0x0112
@@ -83,6 +96,40 @@ def make_thumbnail(slug, content, ext):
     save_thumbnail_from_bytes(slug, content)
 
 
+def save_stream(filename, fileobj, chunk_size=1024*1024):
+    """Stream a file-like object to disk in chunks, checking size limits as we go.
+    Returns (slug, stored_filename, bytes_written). If the file exceeds MAX_BYTES,
+    closes and deletes the partial destination file and raises ValueError.
+    Supports seeking to the start if the fileobj has a seek method."""
+    if hasattr(fileobj, "seek"):
+        fileobj.seek(0)
+
+    ext = Path(filename).suffix.lower()
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    slug = make_slug()
+    dest = STORAGE_DIR / f"{slug}{ext}"
+
+    bytes_written = 0
+    try:
+        with open(dest, "wb") as f:
+            while chunk := fileobj.read(chunk_size):
+                bytes_written += len(chunk)
+                if bytes_written > MAX_BYTES:
+                    raise ValueError(f"File exceeds {MAX_MB}MB limit")
+                f.write(chunk)
+    except BaseException:
+        # Never leave a partial file behind (over-limit, disk full, client gone).
+        dest.unlink(missing_ok=True)
+        raise
+
+    # Images only: the file is read back for the thumbnail, everything else
+    # stays on disk untouched.
+    if ext in IMAGE_EXTENSIONS:
+        make_thumbnail(slug, dest.read_bytes(), ext)
+
+    return slug, dest.name, bytes_written
+
+
 def save_file(filename, content):
     """Save a file to the storage directory and generate a thumbnail if it's
     an image. Callers are responsible for validating the file extension
@@ -90,15 +137,10 @@ def save_file(filename, content):
     no longer validates extensions itself (that responsibility moved to the
     call site in the plugin architecture redesign, issue #82)."""
     if len(content) > MAX_BYTES:
-        raise ValueError(f"File exceeds {MAX_BYTES // (1024*1024)}MB limit")
+        raise ValueError(f"File exceeds {MAX_MB}MB limit")
 
-    ext = Path(filename).suffix.lower()
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    slug = make_slug()
-    dest = STORAGE_DIR / f"{slug}{ext}"
-    dest.write_bytes(content)
-    make_thumbnail(slug, content, ext)
-    return slug, dest.name
+    slug, stored_filename, _ = save_stream(filename, BytesIO(content))
+    return slug, stored_filename
 
 
 def path_for(stored_filename):

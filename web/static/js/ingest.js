@@ -33,6 +33,10 @@ function registerProcessing(slug) {
 
 function createIngestController({ onOpen }) {
   const fileInput = document.getElementById('file-input');
+  // #440: the server's upload cap (CONSTRUCTICON_MAX_UPLOAD_MB, rendered onto
+  // the input). The server can only reject an oversize file after the whole
+  // body has arrived, so refuse it here instead, before any bytes move.
+  const maxUploadMb = Number(fileInput.dataset.maxMb) || 0;
   const stagedList = document.getElementById('staged-list');
   const stagedFilesContainer = document.getElementById('staged-files-container');
   const stagedMoreIndicator = document.getElementById('staged-more-indicator');
@@ -55,6 +59,7 @@ function createIngestController({ onOpen }) {
   // rather than a second parallel upload flow (see issue #25).
   let stagedFiles = [];
   let fileStates = []; // parallel to stagedFiles once upload starts — empty before submit
+  let progressStates = []; // parallel to stagedFiles for XHR progress tracking
   let isUploading = false;
   const MAX_VISIBLE_FILES = 3;
   // Files that have finished (paused briefly, then hidden) or been manually
@@ -163,7 +168,12 @@ function createIngestController({ onOpen }) {
         const metaEl = row.querySelector('.staged-meta');
         if (state) {
           const meta = STATUS_META[state.status];
-          let metaHtml = `<span class="staged-status-dot" style="background:${meta.dot}"></span>${state.message}`;
+          let label = state.message;
+          // Use progress label for uploading status if progress data exists
+          if (state.status === 'uploading' && progressStates[i]) {
+            label = progressLabel(progressStates[i], Date.now());
+          }
+          let metaHtml = `<span class="staged-status-dot" style="background:${meta.dot}"></span>${label}`;
           if (state.status === 'ocr-failed' && state.slug) {
             metaHtml += ` <button type="button" class="staged-retry-ocr-btn" data-index="${i}">Retry</button>`;
           }
@@ -178,6 +188,17 @@ function createIngestController({ onOpen }) {
           // Add visual feedback when a file is completed
           if (state.status === 'done' || state.status === 'ocr-failed') {
             row.classList.add('completed');
+          }
+          // Add progress bar for uploading files
+          if (state.status === 'uploading' && progressStates[i]) {
+            const p = progressStates[i];
+            const pct = p.sent ? 100 : (p.loaded ? Math.floor((p.loaded / p.total) * 100) : 0);
+            const savingClass = p.sent ? ' saving' : '';
+            const progressBar = document.createElement('div');
+            progressBar.className = `staged-progress${savingClass}`;
+            progressBar.innerHTML = `<div class="staged-progress-fill" style="width:${pct}%"></div>`;
+            // Under the name/status text, not as another flex column of the row.
+            metaEl.parentElement.appendChild(progressBar);
           }
         } else {
           metaEl.textContent = file.__isYoutube
@@ -248,7 +269,12 @@ function createIngestController({ onOpen }) {
   async function addFiles(fileList, folderName) {
     droppedFolderName = folderName || '';
     onOpen();
+    const tooBig = [];
     for (const file of fileList) {
+      if (maxUploadMb && file.size > maxUploadMb * 1024 * 1024) {
+        tooBig.push(`${file.name} (${Math.round(file.size / 1024 / 1024).toLocaleString()} MB)`);
+        continue;
+      }
       // .url file support (#199) — Windows Internet Shortcut files are plain
       // INI format; extract the URL and stage as a link, same path as pasted links.
       if (file.name.toLowerCase().endsWith('.url')) {
@@ -268,6 +294,10 @@ function createIngestController({ onOpen }) {
       } else {
         stagedFiles.push(file);
       }
+    }
+    if (tooBig.length) {
+      uploadError.textContent = `Not added — over the ${maxUploadMb.toLocaleString()} MB limit: ${tooBig.join(', ')}`;
+      uploadError.style.display = 'block';
     }
     renderStaged();
   }
@@ -486,8 +516,75 @@ function createIngestController({ onOpen }) {
     return 'timeout';
   }
 
+  // Helper to build the progress label for uploading files
+  function progressLabel(p, now) {
+    // p: { loaded, total, startedAt, lastProgressAt, sent }
+    // now: current time in ms
+    if (p.sent) return 'Saving on server…';
+
+    // lastProgressAt starts at startedAt, so a transfer stuck before its
+    // first byte reports the stall too.
+    let stalledStr = '';
+    if (p.lastProgressAt && (now - p.lastProgressAt) > 15000) {
+      const stalledSecs = Math.round((now - p.lastProgressAt) / 1000);
+      stalledStr = ` · no data for ${stalledSecs}s`;
+    }
+    if (!p.loaded) return `Uploading…${stalledStr}`;
+
+    // floor, so it reads 99% until the last byte is actually out.
+    const pct = Math.floor((p.loaded / p.total) * 100);
+    const mbLoaded = (p.loaded / 1024 / 1024).toFixed(1);
+    const mbTotal = (p.total / 1024 / 1024).toFixed(1);
+    const secondsElapsed = (now - p.startedAt) / 1000;
+    let speedStr = '';
+    if (secondsElapsed > 0.5) {
+      const speed = p.loaded / secondsElapsed;
+      speedStr = ` · ${(speed / 1024 / 1024).toFixed(1)} MB/s`;
+    }
+    return `${pct}% · ${mbLoaded} / ${mbTotal} MB${speedStr}${stalledStr}`;
+  }
+
+  // XHR-based upload with progress tracking
+  function xhrUpload(form, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload', true);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          onProgress(e.loaded, e.total);
+        }
+      };
+
+      xhr.upload.onload = () => {
+        onProgress(null, null, 'sent');
+      };
+
+      xhr.onerror = () => {
+        reject(new Error('Network error'));
+      };
+
+      xhr.onabort = () => {
+        reject(new Error('Network error'));
+      };
+
+      xhr.onload = () => {
+        let json = null;
+        try {
+          json = JSON.parse(xhr.responseText);
+        } catch (e) { /* parse failed */ }
+        resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, json });
+      };
+
+      xhr.send(form);
+    });
+  }
+
   async function uploadAndTrack(file, i, description, tagList, projectId) {
     updateFileStatus(i, 'uploading');
+    const startedAt = Date.now();
+    progressStates[i] = { loaded: 0, total: file.size, startedAt, lastProgressAt: startedAt, sent: false };
+
     const form = new FormData();
     form.append('file', file);
     form.append('description', description);
@@ -496,22 +593,46 @@ function createIngestController({ onOpen }) {
     form.append('modified_at', file.lastModified);
     form.append('folder_name', droppedFolderName || '');
 
+    let lastRenderTime = 0;
+    const renderThrottled = () => {
+      const now = Date.now();
+      if (now - lastRenderTime >= 250) {
+        lastRenderTime = now;
+        renderStaged();
+      }
+    };
+
     let res;
     try {
-      res = await fetch('/api/upload', { method: 'POST', body: form });
+      res = await xhrUpload(form, (loaded, total, signal) => {
+        if (signal === 'sent') {
+          progressStates[i].sent = true;
+          progressStates[i].lastProgressAt = Date.now();
+          renderStaged();
+        } else if (loaded !== null && total !== null) {
+          progressStates[i].loaded = loaded;
+          progressStates[i].total = total;
+          progressStates[i].lastProgressAt = Date.now();
+          renderThrottled();
+        }
+      });
     } catch (err) {
       updateFileStatus(i, 'upload-failed', err.message);
+      progressStates[i] = null;
       return { ok: false, message: `${file.name}: ${err.message}` };
     }
+
     if (!res.ok) {
-      const body = await res.json().catch(() => ({ detail: 'Upload failed' }));
+      const body = res.json || { detail: 'Upload failed' };
       const prefix = res.status === 409 ? 'Duplicate' : 'Upload failed';
       const message = `${prefix} — ${body.detail || 'unknown error'}`;
       updateFileStatus(i, 'upload-failed', message);
+      progressStates[i] = null;
       return { ok: false, message: `${file.name}: ${message}` };
     }
 
-    const item = await res.json();
+    const item = res.json;
+    progressStates[i] = null;
     registerProcessing(item.slug);
     if (item.ocr_status !== 'pending') {
       updateFileStatus(i, 'done', undefined, item.slug);
@@ -627,7 +748,24 @@ function createIngestController({ onOpen }) {
     }
 
     fileStates = stagedFiles.map(() => ({ status: 'queued', message: STATUS_META.queued.label }));
+    progressStates = stagedFiles.map(() => null);
     renderStaged();
+
+    // Stall detection: re-render every 1000ms while uploading to update
+    // stall messages when progress stops (throttled renders won't fire without events)
+    let stallCheckInterval = setInterval(() => {
+      if (!isUploading) { clearInterval(stallCheckInterval); return; }
+      let needsRender = false;
+      const now = Date.now();
+      for (let i = 0; i < progressStates.length; i++) {
+        const p = progressStates[i];
+        if (p && !p.sent && p.lastProgressAt && (now - p.lastProgressAt) > 15000) {
+          needsRender = true;
+          break;
+        }
+      }
+      if (needsRender) renderStaged();
+    }, 1000);
 
     // One at a time, deliberately: even 2 concurrent tesseract runs was
     // enough to push an otherwise-quick image over the OCR timeout, which
@@ -639,6 +777,8 @@ function createIngestController({ onOpen }) {
         ? addContentAndTrack(file.url, i, description, tagList, projectId)
         : uploadAndTrack(file, i, description, tagList, projectId)
     );
+
+    clearInterval(stallCheckInterval);
 
     tags = [];
     renderTags();
@@ -657,6 +797,7 @@ function createIngestController({ onOpen }) {
     if (failures.length === 0) {
       stagedFiles = [];
       fileStates = [];
+      progressStates = [];
       dismissedIndices = new Set();
       droppedFolderName = '';
       renderStaged();
@@ -673,6 +814,7 @@ function createIngestController({ onOpen }) {
     });
     stagedFiles = keptFiles;
     fileStates = keptStates;
+    progressStates = stagedFiles.map(() => null);
     dismissedIndices = new Set();
     renderStaged();
     uploadError.textContent = `Some uploads failed: ${failures.join('; ')}`;

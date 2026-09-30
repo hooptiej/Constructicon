@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import backup, captions, curator, curator_needs, db, ingest, object_types, ocr, similarity, storage, site_export, timeline
+from core import automatch, backup, captions, curator, curator_needs, db, ingest, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()

@@ -11,7 +11,6 @@ via a `run_background` callable — the ingest module never spawns threads or ca
 scheduler itself.
 """
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -288,14 +287,15 @@ def ingest_content(
             )
         media_type = object_types.classify_url(external_url)
 
-    # Validate media_type is registered
-    try:
-        spec = object_types.get_object_type(media_type)
-    except (KeyError, AttributeError):
+    # #448: validate against the registry. get_object_type() never raises --
+    # it falls back to DEFAULT_SPEC -- so a typo'd media_type used to create
+    # a silently broken "unknown" row.
+    if media_type not in object_types.OBJECT_TYPES:
         return IngestResult(
             error=f"Unknown media_type: {media_type}",
             error_kind="invalid"
         )
+    spec = object_types.get_object_type(media_type)
 
     # #194: a generic web page has no title-fetch path the way YouTube does
     # (real title via scripts/full_youtube_channel_sync.py's API call) --
@@ -309,7 +309,8 @@ def ingest_content(
     # Validate that this type doesn't require a file upload
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
         return IngestResult(
-            error=f"{spec.label} objects require a file upload — use /api/upload",
+            # Callers append their own "use X instead" hint (web vs MCP).
+            error=f"{spec.label} objects require a file upload",
             error_kind="invalid"
         )
 

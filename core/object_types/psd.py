@@ -96,10 +96,19 @@ def get_properties(row):
         return {}
 
 
+from . import _preview
+
+
+def preview(ctx):
+    """#449 preview_fn: composited preview + "View original" link. None (-> the page's generic fallback) when there's no thumbnail."""
+    return _preview.thumb_with_original_link(ctx) if ctx.thumb_url else None
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
+    preview_fn=preview,  # #449
     key="psd",
     label="Photoshop document",
     thumbnail_source=ThumbnailSource.CAPTURE,

@@ -129,10 +129,72 @@ def capture_thumbnail(row):
     return render_preview(path) if path else None
 
 
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='stl' — triangle count,
+    dimensions, format (ASCII/binary), watertight status, volume, or {} on
+    any failure."""
+    path = _stored_path(row)
+    if not path:
+        return {}
+    try:
+        mesh = stl_mesh.Mesh.from_file(str(path))
+        props = {}
+
+        # Triangle count
+        props["Triangles"] = f"{len(mesh.vectors):,}"
+
+        # Dimensions from bounding box
+        bbox_min = mesh.min_
+        bbox_max = mesh.max_
+        width = bbox_max[0] - bbox_min[0]
+        height = bbox_max[1] - bbox_min[1]
+        depth = bbox_max[2] - bbox_min[2]
+        props["Dimensions"] = f"{width:.2f} × {height:.2f} × {depth:.2f} (model units)"
+
+        # Format: check if ASCII or binary
+        with open(path, "rb") as f:
+            header = f.read(5)
+        is_ascii = header == b"solid"
+        file_size = path.stat().st_size
+        expected_binary_size = 84 + 50 * len(mesh.vectors)
+        if is_ascii and file_size == expected_binary_size:
+            format_str = "binary"
+        elif is_ascii:
+            format_str = "ASCII"
+        else:
+            format_str = "binary"
+        props["Format"] = format_str
+
+        # Watertight and volume
+        try:
+            if mesh.is_closed():
+                volume, _, _ = mesh.get_mass_properties()
+                props["Watertight"] = "yes"
+                props["Volume"] = f"{abs(volume):.2f} (model units³)"
+            else:
+                props["Watertight"] = "no"
+        except Exception:
+            props["Watertight"] = "unknown"
+
+        return props
+    except Exception as e:
+        print(f"STL properties extraction failed for {path}: {e!r}")
+        return {}
+
+
+from . import _preview
+
+
+def preview(ctx):
+    """#449 preview_fn: rendered isometric preview + "View original" link. None (-> the page's generic fallback) when there's no thumbnail."""
+    return _preview.thumb_with_original_link(ctx) if ctx.thumb_url else None
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
+    preview_fn=preview,  # #449
     key="stl",
     label="3D printing file",
     thumbnail_source=ThumbnailSource.CAPTURE,
@@ -144,6 +206,7 @@ register(ObjectTypeSpec(
     caption_capable=False,
     extensions=frozenset({".stl"}),
     capture_fn=capture_thumbnail,
+    properties_fn=get_properties,  # #449
     badge_icon="\U0001F9CA",  # ice cube — closest built-in glyph to a 3D-printed block
     badge_text="STL",
 ))

@@ -75,20 +75,24 @@ def _ingest(filename, fileobj, file_size, description, tags, uploaded_by, source
         return {"error": f"Unsupported file type: {Path(filename).suffix}"}
     spec = object_types.get_object_type(media_type)
     try:
-        slug, stored_filename, bytes_written = storage.save_stream(filename, fileobj)
+        slug, stored_filename, _ = storage.save_stream(filename, fileobj)
     except ValueError as e:
         return {"error": str(e)}
     db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags,
                       file_size=file_size, source_modified_at=source_modified_at,
                       media_type=media_type,
                       ocr_status="pending" if spec.ocr_capable else None)
-    # #255: post-insert metadata extraction (audio tags, EXIF dates, etc.)
-    # synchronously, so returned object already carries title/dates.
+    # #255: this tool bypasses /api/upload and calls db.insert_upload
+    # directly, so it has to make the same post-insert call the route does
+    # or MCP-uploaded audio would silently miss its tags. Synchronous for
+    # the same reason as there — one ffprobe header read, and the object
+    # returned below should already carry the title.
     embedded_metadata.fill_missing(slug)
     if spec.ocr_capable:
-        # Background thread (#225): tesseract + sentence-transformers load
-        # used to block inline; same pattern constructicon_retry_ocr and
-        # startup self-heal already use.
+        # Background thread, not inline (#225): tesseract (up to
+        # OCR_TIMEOUT_SECONDS) plus a cold sentence-transformers load used to
+        # block the tool response. Same pattern constructicon_retry_ocr and
+        # the startup self-heal already use.
         threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
     elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
         thumbnails.ensure_thumbnail(db.get_by_slug(slug))
@@ -323,16 +327,12 @@ def constructicon_list_import() -> dict:
     files = []
     try:
         for p in sorted(IMPORT_DIR.rglob("*")):
-            # Skip hidden items
-            if any(part.startswith(".") for part in p.relative_to(IMPORT_DIR).parts):
+            rel = p.relative_to(IMPORT_DIR)
+            if any(part.startswith(".") for part in rel.parts):
                 continue
-            # Skip directories
-            if not p.is_file():
-                continue
-            # Verify it's still within IMPORT_DIR (guards against symlink escapes)
-            try:
-                rel = p.relative_to(IMPORT_DIR.resolve())
-            except ValueError:
+            # Same check constructicon_import applies: only list what it would
+            # accept (regular files, symlinks resolving inside the inbox).
+            if _resolve_import_path(rel) is None:
                 continue
             st = p.stat()
             files.append({

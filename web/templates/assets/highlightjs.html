@@ -1,0 +1,14 @@
+{# #449: shared preview asset for code highlighting via highlight.js #}
+<link rel="stylesheet" href="/static/vendor/highlight/atom-one-dark.min.css?v={{ static_version('vendor/highlight/atom-one-dark.min.css') }}">
+<style>
+  .code-preview { width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color, #2A2A2A); }
+  .code-preview pre { margin: 0; max-height: 70vh; overflow: auto; }
+  .code-preview code.hljs { display: block; padding: 1rem 1.15rem; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; line-height: 1.55; tab-size: 2; -moz-tab-size: 2; }
+</style>
+<script src="/static/vendor/highlight/highlight.min.js?v={{ static_version('vendor/highlight/highlight.min.js') }}"></script>
+<script>
+  (function () {
+    const block = document.getElementById('code-preview-block');
+    if (block && window.hljs) hljs.highlightElement(block);
+  })();
+</script>

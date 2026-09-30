@@ -1,0 +1,31 @@
+{# #449: shared preview asset for data table styling #}
+<style>
+  .data-preview {
+    width: 100%;
+    max-height: 70vh;
+    overflow: auto;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #2A2A2A);
+  }
+  .data-preview table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+  .data-preview th {
+    position: sticky;
+    top: 0;
+    background: var(--surface-2, #1c1c1c);
+    border-bottom: 1px solid var(--border-color, #2A2A2A);
+    padding: 4px 8px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px;
+    text-align: left;
+    font-weight: 600;
+  }
+  .data-preview td {
+    padding: 4px 8px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border-color, #2A2A2A);
+  }
+</style>

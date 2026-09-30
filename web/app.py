@@ -583,6 +583,7 @@ def _to_object_detail(row):
         page_url=item.get("external_url"),
         mode="live",
     ))
+    item["preview_assets"] = list(spec.preview_assets)
     return item
 
 

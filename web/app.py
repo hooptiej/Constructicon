@@ -109,6 +109,29 @@ def _scrub_secrets(form_data):
     return scrubbed
 
 
+# #438: request bodies above this aren't read into memory for the audit log —
+# request.body() buffers the whole thing, which for a big /api/upload undid
+# the streaming-to-disk from #433. 25 MB is the old upload cap, so every
+# request that was audited with its fields before still is.
+AUDIT_BODY_MAX_BYTES = 25 * 1024 * 1024
+
+
+def _audit_body_skip_reason(request):
+    """A short marker string if this request's body is too big (or of unknown
+    size for a multipart upload) to buffer for the audit log, else None."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip() or "unknown type"
+    length = request.headers.get("content-length")
+    try:
+        size = int(length) if length is not None else None
+    except ValueError:
+        size = None
+    if size is None:
+        return f"not logged: {content_type}, unknown size" if content_type == "multipart/form-data" else None
+    if size > AUDIT_BODY_MAX_BYTES:
+        return f"not logged: {content_type}, {size / (1024 * 1024):.1f} MB"
+    return None
+
+
 class AuditLoggingMiddleware(BaseHTTPMiddleware):
     """Middleware to capture mutating /api/* requests (POST/PUT/DELETE) into
     the audit_log table. Reads the form body, scrubs secrets, logs the request
@@ -121,7 +144,10 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
         should_audit = is_mutating and is_api
 
         form_data = {}
-        if should_audit and request.method in {"POST", "PUT"}:
+        skip_reason = _audit_body_skip_reason(request) if should_audit else None
+        if skip_reason:
+            form_data = {"_body": skip_reason}
+        elif should_audit and request.method in {"POST", "PUT"}:
             # Read the request body so we can log it. Starlette automatically caches
             # the body after the first read, so the handler can read it again.
             try:

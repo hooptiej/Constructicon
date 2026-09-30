@@ -486,7 +486,7 @@ def _to_object_detail(row):
     media_type = row.get("media_type") or "image"
     spec = object_types.get_object_type(media_type)
     has_thumb = _should_advertise_thumb(row, spec)
-    return {
+    item = {
         "slug": row["slug"],
         # Curator (#341): provenance + highlight so the detail page's classifier
         # controls preselect correctly (and never render Undefined -> tojson 500).
@@ -582,7 +582,20 @@ def _to_object_detail(row):
         "actions": [{"key": a.key, "label": a.label, "confirm": a.confirm} for a in spec.actions],
         # #448: editable form fields for type_metadata. Only includes fields with input set.
         "edit_fields": [{"key": f.key, "label": f.label, "input": f.input, "help_text": f.help_text, "value": (row.get("type_metadata") or {}).get(f.key)} for f in spec.edit_fields if f.input],
+        # #449: external link button label (types may override).
+        "external_link_label": spec.external_link_label,
     }
+    # #449: the type's own preview, built from the finished item dict (not the
+    # raw row) so preview_fn sees display_name/type_label/icon/url/thumb_url.
+    # None -> the template's generic chain renders instead.
+    item["preview_html"] = object_types.render_preview(spec, object_types.PreviewContext(
+        item=item,
+        media_url=item.get("url") if item.get("is_file") else None,
+        thumb_url=item.get("thumb_url"),
+        page_url=item.get("external_url"),
+        mode="live",
+    ))
+    return item
 
 
 def _flatten_tags(nodes):

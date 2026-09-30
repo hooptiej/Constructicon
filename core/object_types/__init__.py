@@ -208,6 +208,10 @@ class ObjectTypeSpec:
     # a badge for free.
     badge_icon: str = "\U0001F4E6"  # package emoji — generic fallback
     badge_text: str = "FILE"
+    # Issue #448: text of the object page's external-link button when the
+    # item has a media_url. A type may override (e.g. YouTube); default
+    # shown to the caller by render_preview's fallback when None.
+    external_link_label: str = "View original ↗"
     # Issue #239: should this type's representative image (the same one OCR
     # runs against — the uploaded file itself, or the generated thumbnail /
     # video frame / rendered raster) be sent to the local vision model for
@@ -293,6 +297,29 @@ def _validate_registry():
             raise ObjectTypeContractError(
                 f"Extension {ext} claimed by {len(non_sniffers)} specs with no sniff_fn: {keys}"
             )
+
+
+def render_preview(spec, ctx):
+    """Render a preview using spec.preview_fn if available.
+
+    Returns None if spec.preview_fn is None.
+    On any exception, prints a warning and returns None (buggy preview
+    falls back to the generic chain in the template).
+
+    Args:
+        spec: ObjectTypeSpec instance
+        ctx: PreviewContext instance
+
+    Returns:
+        markupsafe.Markup HTML or None
+    """
+    if spec.preview_fn is None:
+        return None
+    try:
+        return spec.preview_fn(ctx)
+    except Exception as e:
+        print(f"preview_fn failed for {spec.key}: {e!r}")
+        return None
 
 
 # Auto-discover and import all type modules in this package.

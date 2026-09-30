@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from core import db, storage
+from core import db, storage, object_types
 
 
 def _youtube_embed_url(url):
@@ -178,11 +178,30 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         for item in items_list:
             media_count += _bundle_item_media(item, media_dir, copied_slugs, warnings)
 
+    # Define export_preview filter for Jinja2
+    def export_preview(item, root=""):
+        """Render an item's preview for static export.
+
+        Returns markupsafe.Markup HTML or None if no preview_fn.
+        """
+        spec = object_types.get_object_type(item.get("media_type"))
+        prefix = f"{root}media/" if root else "media/"
+        ctx = object_types.PreviewContext(
+            item=item,
+            media_url=prefix + item["media_file"] if item.get("media_file") else None,
+            thumb_url=prefix + item["thumb_file"] if item.get("thumb_file") else None,
+            page_url=item.get("external_url"),
+            mode="export"
+        )
+        return object_types.render_preview(spec, ctx)
+
     # Set up Jinja2 environment
     env = Environment(
         loader=FileSystemLoader(EXPORT_TEMPLATES_DIR),
         autoescape=select_autoescape(enabled_extensions=("html",)),
     )
+    # Register the export_preview filter
+    env.filters["export_preview"] = export_preview
 
     # Render pages
     # 1. Home page (index.html)

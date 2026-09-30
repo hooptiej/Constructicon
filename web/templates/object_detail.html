@@ -28,6 +28,7 @@
             </svg>
             <span class="label">File removed — sensitive content. Metadata kept for correlation.</span>
           </div>
+        {% elif item.preview_html %}{{ item.preview_html }}
         {% elif item.is_image_file %}
           <img id="preview-img" src="{{ item.url }}" alt="{{ item.filename }}" title="Click to view full size"{% if item.type_metadata.rotation %} style="transform:rotate({{ item.type_metadata.rotation }}deg)"{% endif %}>
         {% elif item.media_type == 'youtube' and item.youtube_embed_url %}
@@ -188,6 +189,14 @@
           {% if item.source_modified_at_display %}<span>Originally created {{ item.source_modified_at_display }}</span>{% endif %}
           {% for label, value in item.properties.items() %}<span>{{ label }}: {{ value }}</span>{% endfor %}
         </div>
+      </div>
+      {% endif %}
+
+      {% if item.actions %}
+      <div class="detail-panel type-actions">
+        {% for a in item.actions %}
+        <button type="button" class="btn-secondary type-action-btn" data-action="{{ a.key }}" data-confirm="{{ a.confirm }}">{{ a.label }}</button>
+        {% endfor %}
       </div>
       {% endif %}
 
@@ -1408,6 +1417,26 @@ document.addEventListener('constructicon:upload-complete', (e) => {
   }
   loadSimilar();
 }
+
+// #448: generic type-action buttons for per-type handlers
+document.querySelectorAll('.type-action-btn').forEach(btn => {
+  btn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const action = btn.dataset.action;
+    const confirm_msg = btn.dataset.confirm;
+    if (confirm_msg && !confirm(confirm_msg)) return;
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/image/{{ item.slug }}/action/${encodeURIComponent(action)}`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || 'Action failed');
+      location.reload();
+    } catch (err) {
+      btn.disabled = false;
+      alert(err.message);
+    }
+  });
+});
 
 // --- Lightbox: click the preview image for a full-size pop-out ---
 const lightboxBackdrop = document.getElementById('lightbox-backdrop');

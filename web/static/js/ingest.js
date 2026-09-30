@@ -188,12 +188,13 @@ function createIngestController({ onOpen }) {
           // Add progress bar for uploading files
           if (state.status === 'uploading' && progressStates[i]) {
             const p = progressStates[i];
-            const pct = p.loaded ? Math.round((p.loaded / p.total) * 100) : 0;
+            const pct = p.sent ? 100 : (p.loaded ? Math.floor((p.loaded / p.total) * 100) : 0);
             const savingClass = p.sent ? ' saving' : '';
             const progressBar = document.createElement('div');
             progressBar.className = `staged-progress${savingClass}`;
             progressBar.innerHTML = `<div class="staged-progress-fill" style="width:${pct}%"></div>`;
-            row.appendChild(progressBar);
+            // Under the name/status text, not as another flex column of the row.
+            metaEl.parentElement.appendChild(progressBar);
           }
         } else {
           metaEl.textContent = file.__isYoutube
@@ -506,9 +507,19 @@ function createIngestController({ onOpen }) {
   function progressLabel(p, now) {
     // p: { loaded, total, startedAt, lastProgressAt, sent }
     // now: current time in ms
-    if (!p.loaded) return 'Uploading…';
+    if (p.sent) return 'Saving on server…';
 
-    const pct = Math.round((p.loaded / p.total) * 100);
+    // lastProgressAt starts at startedAt, so a transfer stuck before its
+    // first byte reports the stall too.
+    let stalledStr = '';
+    if (p.lastProgressAt && (now - p.lastProgressAt) > 15000) {
+      const stalledSecs = Math.round((now - p.lastProgressAt) / 1000);
+      stalledStr = ` · no data for ${stalledSecs}s`;
+    }
+    if (!p.loaded) return `Uploading…${stalledStr}`;
+
+    // floor, so it reads 99% until the last byte is actually out.
+    const pct = Math.floor((p.loaded / p.total) * 100);
     const mbLoaded = (p.loaded / 1024 / 1024).toFixed(1);
     const mbTotal = (p.total / 1024 / 1024).toFixed(1);
     const secondsElapsed = (now - p.startedAt) / 1000;
@@ -517,14 +528,6 @@ function createIngestController({ onOpen }) {
       const speed = p.loaded / secondsElapsed;
       speedStr = ` · ${(speed / 1024 / 1024).toFixed(1)} MB/s`;
     }
-
-    let stalledStr = '';
-    if (p.lastProgressAt && !p.sent && (now - p.lastProgressAt) > 15000) {
-      const stalledSecs = Math.round((now - p.lastProgressAt) / 1000);
-      stalledStr = ` · no data for ${stalledSecs}s`;
-    }
-
-    if (p.sent) return 'Saving on server…';
     return `${pct}% · ${mbLoaded} / ${mbTotal} MB${speedStr}${stalledStr}`;
   }
 
@@ -566,7 +569,8 @@ function createIngestController({ onOpen }) {
 
   async function uploadAndTrack(file, i, description, tagList, projectId) {
     updateFileStatus(i, 'uploading');
-    progressStates[i] = { loaded: 0, total: file.size, startedAt: Date.now(), lastProgressAt: null, sent: false };
+    const startedAt = Date.now();
+    progressStates[i] = { loaded: 0, total: file.size, startedAt, lastProgressAt: startedAt, sent: false };
 
     const form = new FormData();
     form.append('file', file);

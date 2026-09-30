@@ -23,6 +23,7 @@ from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Bac
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
@@ -80,6 +81,7 @@ templates.env.globals["is_dev"] = _IS_DEV
 # rather than hardcoding it in templates. This ensures web/templates/_upload_drawer.html
 # and web/templates/_gallery_drawer.html stay in sync with newly added types.
 templates.env.globals["upload_accept"] = ",".join(object_types.accepted_extensions())
+templates.env.globals["upload_max_mb"] = storage.MAX_MB
 
 
 # --- Audit logging middleware ---
@@ -1495,8 +1497,20 @@ async def api_upload(
     # browser UI.
     is_desktop_app = request.headers.get(DESKTOP_APP_CLIENT_HEADER) == DESKTOP_APP_CLIENT_VALUE
     user = db.SOURCE_AUTOMATED_UPLOAD if is_desktop_app else db.SOURCE_MANUAL_UPLOAD
-    content = await file.read()
-    file_size = len(content)
+
+    # #433: get file size early for duplicate check; use file.size if available,
+    # otherwise measure via seek/tell
+    file_size = file.size
+    if file_size is None:
+        current = file.file.tell()
+        file.file.seek(0, 2)
+        file_size = file.file.tell()
+        file.file.seek(current)
+
+    # Early reject if file exceeds limit before doing the duplicate check
+    if file_size > storage.MAX_BYTES:
+        raise HTTPException(status_code=400, detail=f"File exceeds {storage.MAX_MB}MB limit")
+
     try:
         source_modified_at = float(modified_at) / 1000 if modified_at else None
     except ValueError:
@@ -1521,7 +1535,7 @@ async def api_upload(
     if media_type is None:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {Path(file.filename).suffix}")
     try:
-        slug, stored_filename = storage.save_file(file.filename, content)
+        slug, stored_filename, _ = await run_in_threadpool(storage.save_stream, file.filename, file.file)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     try:

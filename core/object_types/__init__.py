@@ -68,11 +68,26 @@ class TypeAction:
 
     handler: Callable that takes a row dict and returns a dict of updates.
     confirm: Optional confirmation message to show before applying.
+    applies_fn: Optional (row) -> bool (#446). When set, the action is only
+        offered (object page) and only runnable (action route) on rows it
+        returns True for, e.g. "Reclassify" only on .exe installers. None =
+        every row of the type.
     """
     key: str
     label: str
     handler: object
     confirm: str = ""
+    applies_fn: object = None
+
+    def applies_to(self, row):
+        """True when this action is offered for `row` (see applies_fn)."""
+        if self.applies_fn is None:
+            return True
+        try:
+            return bool(self.applies_fn(row))
+        except Exception as e:
+            print(f"TypeAction {self.key!r} applies_fn failed: {e!r}", flush=True)
+            return False
 
 
 @dataclass(frozen=True)
@@ -136,7 +151,9 @@ class PreStore:
     def needs_decision(cls, kind, question, options, provisional_type):
         """Defer to the owner: ask a question with a list of options, and store provisionally under provisional_type.
 
-        options: list of {"key", "label"} dicts
+        options: list of {"key", "label"} dicts; a key must be a registered
+        media_type (answering retypes the row to it). Optionally one option
+        carries "suggested": True (#446): the admin queue preselects it.
         """
         return cls(
             action="needs_decision",

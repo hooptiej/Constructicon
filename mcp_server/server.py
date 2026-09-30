@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, curator_needs, db, ingest, object_types, ocr, storage, timeline
+from core import backup, curator_needs, db, decisions, ingest, object_types, ocr, storage, timeline
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
@@ -1319,6 +1319,97 @@ def constructicon_dismiss_need(nudge_key: str, snooze_until: float | None = None
     return {"ok": True}
 
 
+@mcp.tool()
+def constructicon_list_pending_decisions() -> list[dict]:
+    """#240/#446/#448: List all open pending decisions, with automatic stale-cleanup.
+
+    The "Needs your input" queue surfaces two decision kinds:
+    - project_match: an upload matched multiple project titles (pick which to attach to)
+    - retype: a file's type was deferred (pick the actual media type)
+
+    Returns a list of dicts, each with:
+        {
+            "id": int (decision id),
+            "kind": "project_match" | "retype",
+            "slug": str (capture_events.slug),
+            "title": str (object display name),
+            "media_type": str (current media_type),
+            "created_at": float (UTC unix seconds),
+            "question": str (retype only),
+            "options": [{"key": str, "label": str, ...}] (retype only),
+            "candidates": [{"id": int, "title": str, "slug": str}] (project_match only),
+        }
+
+    Decisions become stale and are automatically resolved if:
+    - The object (post_slug) has been deleted
+    - A project_match has fewer than 2 candidates remaining
+
+    For a retype question, answer with constructicon_resolve_pending_decision
+    and one option's key as `choice`; the option whose key equals the item's
+    current media_type means "keep it as it is".
+    """
+    result = []
+    for item in decisions.list_open():
+        row = item["row"]
+        # Use the same title logic as the web endpoint
+        title = row.get("display_name") or row.get("filename") or row.get("content_description") or row["slug"]
+
+        entry = {
+            "id": item["id"],
+            "kind": item["kind"],
+            "slug": item["post_slug"],
+            "title": title,
+            "media_type": row.get("media_type"),
+            "created_at": item["created_at"],
+        }
+
+        if item["kind"] == "project_match":
+            entry["candidates"] = item.get("candidates", [])
+        elif item["kind"] == "retype":
+            entry["question"] = item.get("question", "")
+            entry["options"] = item.get("options", [])
+
+        result.append(entry)
+
+    return result
+
+
+@mcp.tool()
+def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", project_ids: list[int] | None = None) -> dict:
+    """#240/#446/#448: Resolve a pending decision with the owner's choice.
+
+    For project_match decisions:
+        project_ids: list of project IDs to attach to (may be empty for "none of these")
+        choice: unused
+
+    For retype decisions:
+        choice: the media_type key to retype to (or empty to skip)
+        project_ids: unused
+
+    Returns:
+        {"ok": true, "applied": [...], "remaining": count}
+        where "applied" is the list of actions taken (project ids or the choice)
+
+    On error:
+        {"error": "reason"} with one of:
+        - "No such pending decision"
+        - "Already resolved"
+        - "Unknown decision kind"
+    """
+    if project_ids is None:
+        project_ids = []
+
+    try:
+        result = decisions.resolve(decision_id, choice=choice, project_ids=project_ids)
+        return result
+    except decisions.DecisionNotFound as e:
+        return {"error": str(e)}
+    except decisions.DecisionAlreadyResolved as e:
+        return {"error": str(e)}
+    except (decisions.UnknownDecisionKind, decisions.InvalidChoice) as e:
+        return {"error": str(e)}
+
+
 def constructicon_run_type_action(slug: str, action: str) -> dict:
     """#448: Run a per-type action on an object. Actions are declared per type
     (ObjectTypeSpec.actions). See constructicon_get for the available actions
@@ -1341,6 +1432,8 @@ def constructicon_run_type_action(slug: str, action: str) -> dict:
     action_obj = next((a for a in spec.actions if a.key == action), None)
     if action_obj is None:
         return {"error": f"{spec.label} has no action '{action}'"}
+    if not action_obj.applies_to(row):  # #446: e.g. Reclassify is .exe-only
+        return {"error": f"{spec.label} has no action '{action}' for this item"}
 
     try:
         result = action_obj.handler(row)

@@ -113,6 +113,27 @@ exist yet.
   app's own UI would use, rather than writing to the DB directly — see
   individual script docstrings for the reasoning and any exceptions.
 
+## Adding an object type
+
+To add a new object type (issue #448 contract v2):
+
+1. **One new file in `core/object_types/`**: create a module (e.g. `core/object_types/mytype.py`) with:
+   - A `preview(ctx: PreviewContext)` function returning `markupsafe.Markup` HTML or None.
+   - A `properties(row: dict)` function returning a `dict[str, str]` of display properties.
+   - A `register(ObjectTypeSpec(...))` call at the end with both functions, plus optional hooks below.
+
+2. **Required fields**: Every type must declare `preview_fn` and `properties_fn` at registration (enforced, will raise `ObjectTypeContractError` otherwise).
+
+3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), and `sniff_priority` (for resolution when multiple sniffers claim the same extension).
+
+4. **Preview guidance**: previews must escape all data (no raw HTML from untrusted sources) and handle `ctx.mode` ("live" for the object page, "export" for static site export). Export mode often returns None since the template's own export rendering takes over; see existing types for examples.
+
+5. **Verify before deploying**: Run `docker exec <container> python3 scripts/check_object_types.py` inside the target container. It tests all types end-to-end, checks that synthetic data is properly escaped, and confirms the contract is met. See its docstring for full details.
+
+6. **No other changes needed**: All dispatch (thumbnails, OCR, type lists, etc.) works off the registry. No per-media-type branches in templates, no `if media_type == "..."` conditionals in app code — the registry is the single source of truth.
+
+7. **Reference**: see docs/design/object-type-contract-v2.md for the full specification.
+
 ## Data model (verify against `core/db.py`'s `SCHEMA` before trusting this — it evolves)
 
 - **`capture_events`** — the core item table. Despite the name (a holdover

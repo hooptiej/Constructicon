@@ -248,7 +248,7 @@
       </a>
       <div class="project-item-selectors">
         <input type="radio" class="project-cover-selector" name="cover" data-slug="{{ entry.slug }}" title="Set as project cover" {% if entry.slug == project.cover_slug %}checked{% endif %}>
-        {% if entry.media_type == 'document' %}
+        {% if entry.writeup_capable %}
         <input type="radio" class="project-writeup-selector" name="writeup" data-slug="{{ entry.slug }}" title="Set as write-up" {% if entry.slug == project.writeup_slug %}checked{% endif %}>
         {% endif %}
         <button type="button" class="remove-item-btn" title="Remove from this project" style="border:none;background:none;padding:4px 8px;cursor:pointer;color:var(--text);font-size:14px;display:none">×</button>

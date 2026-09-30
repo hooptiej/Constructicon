@@ -251,6 +251,11 @@ class ObjectTypeSpec:
     actions: tuple = ()  # tuple[TypeAction]
     # Issue #448: form fields for editing type_metadata.
     edit_fields: tuple = ()  # tuple[MetadataField]
+    # Issue #448: the key in type_metadata that holds the write-up text body
+    # (if any). A type whose items can serve as a project's write-up declares
+    # this (e.g. document.py sets it to "body"); None means this type cannot
+    # be a project write-up. Used by can_be_writeup() and writeup_body().
+    writeup_body_key: str | None = None
 
 
 OBJECT_TYPES = {}
@@ -260,11 +265,19 @@ def register(spec):
     """Register an ObjectTypeSpec in the global OBJECT_TYPES registry.
     Called by each type module at the end of its definition.
 
-    Checks for duplicate keys and conflicting url_fallback settings.
+    Checks for duplicate keys, conflicting url_fallback settings, and that
+    both preview_fn and properties_fn are present (required from PR 3 on).
     Full registry validation happens after all modules are imported (see _validate_registry).
     """
     if spec.key in OBJECT_TYPES:
         raise ObjectTypeContractError(f"Duplicate object type key: {spec.key}")
+
+    # Enforce preview_fn and properties_fn (required from PR 3 on)
+    if spec.preview_fn is None or spec.properties_fn is None:
+        raise ObjectTypeContractError(
+            f"Object type '{spec.key}' must declare preview_fn and properties_fn "
+            "(see docs/design/object-type-contract-v2.md)"
+        )
 
     # Check url_fallback conflicts: only one type can have url_fallback=True globally
     if spec.url_fallback:
@@ -301,6 +314,43 @@ def _validate_registry():
             raise ObjectTypeContractError(
                 f"Extension {ext} claimed by {len(non_sniffers)} specs with no sniff_fn: {keys}"
             )
+
+
+def writeup_body(row):
+    """Extract the write-up text body from a row, if the row's type supports it.
+
+    Returns the text body (str, possibly empty) if the type declares writeup_body_key,
+    or None if the type doesn't support write-ups. Handles missing keys gracefully.
+
+    Args:
+        row: a capture_events row dict
+
+    Returns:
+        str (empty if present but falsy) or None
+    """
+    media_type = row.get("media_type")
+    spec = get_object_type(media_type)
+    if spec.writeup_body_key is None:
+        return None
+    type_metadata = row.get("type_metadata") or {}
+    return type_metadata.get(spec.writeup_body_key) or ""
+
+
+def can_be_writeup(row_or_media_type):
+    """Check if a row or media type can serve as a project write-up.
+
+    Args:
+        row_or_media_type: a capture_events row dict, or a media_type string
+
+    Returns:
+        bool: True if the type declares writeup_body_key (can be a write-up)
+    """
+    if isinstance(row_or_media_type, dict):
+        media_type = row_or_media_type.get("media_type")
+    else:
+        media_type = row_or_media_type
+    spec = get_object_type(media_type)
+    return spec.writeup_body_key is not None
 
 
 def render_preview(spec, ctx):

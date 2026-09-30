@@ -122,7 +122,11 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         if project.get("writeup_slug"):
             doc = db.get_by_slug(project["writeup_slug"])
             if doc:
-                project["writeup"] = doc.get("type_metadata", {}).get("body", "") or ""
+                project["writeup"] = object_types.writeup_body(doc) or ""
+                if project["writeup"] is None:
+                    # Non-writeup type was set somehow, treat as empty with a warning
+                    print(f"Warning: project '{project['slug']}' writeup_slug points to non-writeup type, treating as empty")
+                    project["writeup"] = ""
 
     # Gather blog entries
     if blog_entry_slugs is None:

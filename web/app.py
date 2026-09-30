@@ -617,7 +617,7 @@ def _to_project_card(project):
     if project.get("writeup_slug"):
         writeup_doc = db.get_by_slug(project["writeup_slug"])
         if writeup_doc:
-            body = writeup_doc.get("type_metadata", {}).get("body", "")
+            body = object_types.writeup_body(writeup_doc) or ""
             if body:
                 # Truncate to ~200 chars at a word boundary
                 words = body.split()
@@ -1254,7 +1254,7 @@ def project_detail_page(request: Request, slug: str):
     if project.get("writeup_slug"):
         writeup_doc = db.get_by_slug(project["writeup_slug"])
         if writeup_doc:
-            writeup_body = writeup_doc.get("type_metadata", {}).get("body", "")
+            writeup_body = object_types.writeup_body(writeup_doc) or ""
     effective_start, effective_end = timeline.resolve_project_span(project, raw_items)
     # Timeline feature: per-item effective dates for this project's own
     # content rail -- single points (no endDate), unlike the gallery
@@ -1294,6 +1294,7 @@ def project_detail_page(request: Request, slug: str):
             "kind": "item",
             "sort_date": effective_date,
             "date_display": _friendly_date(effective_date),
+            "writeup_capable": object_types.can_be_writeup(raw),
             **public,
         })
     for child in child_projects:
@@ -2455,6 +2456,17 @@ async def api_update_project(
     writeup_slug_value = ...  # "..." means don't update writeup_slug
     if writeup_slug is not None:
         writeup_slug_value = writeup_slug if writeup_slug else None
+        # Validate that writeup_slug (if non-empty) points to a writeup-capable type
+        if writeup_slug_value:
+            writeup_row = db.get_by_slug(writeup_slug_value)
+            if writeup_row is None:
+                raise HTTPException(status_code=400, detail="writeup slug not found")
+            if not object_types.can_be_writeup(writeup_row):
+                label = writeup_row.get("display_name") or writeup_row.get("filename") or writeup_slug_value
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{label} items can't be a project write-up (their type declares no writeup_body_key)"
+                )
 
     # (#356): Handle cover_project_id (borrow a child project's cover).
     # Same raw-form presence logic as parent_id: distinguish "not submitted"

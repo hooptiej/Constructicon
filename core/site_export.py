@@ -9,7 +9,6 @@ import json
 import shutil
 import subprocess
 import time
-import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -17,28 +16,10 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from core import db, storage, object_types
 
 
-def _youtube_embed_url(url):
-    """Return a YouTube /embed/<id> URL for a watch / youtu.be / embed link, or
-    None if the URL isn't a recognizable YouTube link. The templates must NOT
-    parse this themselves — the naive split() approach produced /embed/watch for
-    the common youtube.com/watch?v=<id> form (#331)."""
-    if not url or ("youtube.com" not in url and "youtu.be" not in url):
-        return None
-    parsed = urllib.parse.urlparse(url)
-    if "youtu.be" in (parsed.netloc or ""):
-        vid = parsed.path.lstrip("/").split("/")[0]
-    elif "/embed/" in (parsed.path or ""):
-        vid = parsed.path.split("/embed/")[-1].split("/")[0]
-    else:
-        vid = (urllib.parse.parse_qs(parsed.query or "").get("v") or [None])[0]
-    return f"https://www.youtube.com/embed/{vid}" if vid else None
-
-
 def _bundle_item_media(item, media_dir, copied_slugs, warnings):
     """Bundle one item's media into media_dir and set its display fields.
 
     Sets on the item dict:
-      - embed_url: YouTube /embed URL (or None)
       - media_file: filename of the copied original (e.g. "<slug>.stl"), or None
       - thumb_file: filename of the copied rendered thumbnail ("<slug>_thumb.jpg"),
         or None. Every previewable type has a thumbnail (what /f/<slug>/thumb
@@ -46,7 +27,6 @@ def _bundle_item_media(item, media_dir, copied_slugs, warnings):
         web-native image (#333).
     Copies each file at most once per slug (an item can appear in several
     projects/entries). Returns the number of NEW files copied."""
-    item["embed_url"] = _youtube_embed_url(item.get("external_url"))
     item["media_file"] = None
     item["thumb_file"] = None
     slug = item["slug"]

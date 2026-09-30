@@ -21,10 +21,6 @@
             <video src="{{ root | default('') }}media/{{ item.media_file }}" controls preload="metadata" class="item-media"></video>
             {% elif item.media_type == 'audio' and item.media_file %}
             <audio src="{{ root | default('') }}media/{{ item.media_file }}" controls preload="metadata"></audio>
-            {% elif item.embed_url %}
-            <div class="youtube-embed">
-                <iframe width="560" height="315" src="{{ item.embed_url }}" frameborder="0" allowfullscreen></iframe>
-            </div>
             {% elif item.thumb_file %}
             {% if item.media_file %}
             <a href="{{ root | default('') }}media/{{ item.media_file }}"><img src="{{ root | default('') }}media/{{ item.thumb_file }}" alt="{{ alt }}" class="item-media"></a>

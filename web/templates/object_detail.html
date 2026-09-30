@@ -31,10 +31,6 @@
         {% elif item.preview_html %}{{ item.preview_html }}
         {% elif item.is_image_file %}
           <img id="preview-img" src="{{ item.url }}" alt="{{ item.filename }}" title="Click to view full size"{% if item.type_metadata.rotation %} style="transform:rotate({{ item.type_metadata.rotation }}deg)"{% endif %}>
-        {% elif item.media_type == 'youtube' and item.youtube_embed_url %}
-          <div class="video-embed-wrap">
-            <iframe src="{{ item.youtube_embed_url }}" title="{{ item.display_name }}" allowfullscreen loading="lazy"></iframe>
-          </div>
         {% elif item.is_audio_file %}
           {# #28: audio has no visual frame to capture (thumbnail_source is
              NONE — see core/object_types.py), so it gets its own explicit
@@ -134,48 +130,17 @@
       </div>
       {% endif %}
 
-      {% if item.media_type == 'youtube' or item.content_description or item.content_date_display or item.external_url %}
+      {% if item.content_description or item.content_date_display or item.external_url %}
       <div class="content-meta-panel">
         {% if item.content_description %}<p class="content-meta-desc">{{ item.content_description }}</p>{% endif %}
         <div class="detail-meta">
           {% if item.content_date_display %}<span>Published {{ item.content_date_display }}</span>{% endif %}
           {% if item.external_url %}
           <a class="external-link-btn" href="{{ item.external_url }}" target="_blank" rel="noopener">
-            {% if item.media_type == 'youtube' %}Watch on YouTube ↗{% else %}View original ↗{% endif %}
+            {{ item.external_link_label }}
           </a>
           {% endif %}
-          {% if item.media_type == 'youtube' %}
-          {# #275: per-item re-fetch of the real publishedAt on demand,
-             reusing scripts/full_youtube_channel_sync.py's single-video
-             correction logic (POST /api/image/{slug}/fetch-real-date)
-             rather than needing that whole-channel batch script for a
-             one-off correction. #}
-          <button type="button" class="ocr-retry-btn" id="fetch-real-date-btn">Fetch real date</button>
-          {% endif %}
         </div>
-        {# #54: real YouTube Data API stats/metadata — see
-           core/object_types.py's "youtube" metadata_fields and
-           scripts/full_youtube_channel_sync.py, which is what populates
-           type_metadata for youtube rows. item.type_metadata is always a
-           dict (possibly empty — e.g. a row the sync script hasn't reached
-           yet), so this whole block simply doesn't render until it has. #}
-        {% if item.media_type == 'youtube' and item.type_metadata %}
-        <div class="detail-meta" style="margin-top:6px">
-          {% if item.type_metadata.view_count is not none %}<span>{{ "{:,}".format(item.type_metadata.view_count) }} views</span>{% endif %}
-          {% if item.type_metadata.like_count is not none %}<span>{{ "{:,}".format(item.type_metadata.like_count) }} likes</span>{% endif %}
-          {% if item.type_metadata.comment_count is not none %}<span>{{ "{:,}".format(item.type_metadata.comment_count) }} comments</span>{% endif %}
-          {% if item.type_metadata.author %}<span>By {{ item.type_metadata.author }}</span>{% endif %}
-        </div>
-        {% if item.type_metadata.description %}
-        <details class="ocr-disclosure" style="display:block;margin-top:6px">
-          <summary>
-            <svg class="disclosure-caret" width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Full description
-          </summary>
-          <pre class="ocr-text mono">{{ item.type_metadata.description }}</pre>
-        </details>
-        {% endif %}
-        {% endif %}
       </div>
       {% endif %}
 
@@ -412,24 +377,6 @@ let ocrText = {{ item.extracted_text | tojson }};
 // already use), so it survives a reload and shows up on cards too (see
 // cardRotationStyle in each card-rendering template).
 let currentRotation = {{ (item.type_metadata.get('rotation') or 0) | tojson }};
-const fetchRealDateBtn = document.getElementById('fetch-real-date-btn');
-if (fetchRealDateBtn) {
-  fetchRealDateBtn.addEventListener('click', async () => {
-    const originalText = fetchRealDateBtn.textContent;
-    fetchRealDateBtn.disabled = true;
-    fetchRealDateBtn.textContent = 'Fetching…';
-    try {
-      const res = await fetch('/api/image/{{ item.slug }}/fetch-real-date', { method: 'POST' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.detail || 'Failed to fetch real date');
-      window.location.reload(); // simplest way to reflect the corrected Published date
-    } catch (err) {
-      fetchRealDateBtn.disabled = false;
-      fetchRealDateBtn.textContent = originalText;
-      alert(err.message);
-    }
-  });
-}
 
 const rotateBtn = document.getElementById('rotate-btn');
 if (rotateBtn) {

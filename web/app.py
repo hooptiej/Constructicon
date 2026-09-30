@@ -390,17 +390,6 @@ def _to_public(row):
     }
 
 
-def _youtube_embed_url(external_url):
-    """Builds a canonical embed URL from whatever YouTube URL shape is
-    stored in external_url. Returns None if it doesn't look like a YouTube
-    link at all — the template falls back to a plain external-link CTA in
-    that case rather than rendering a broken iframe. Video-ID extraction is
-    centralized in object_types.extract_youtube_id so this and the static
-    thumbnail URL (see core/object_types.py's youtube_thumbnail_url) can't
-    drift apart."""
-    video_id = object_types.extract_youtube_id(external_url)
-    return f"https://www.youtube.com/embed/{video_id}" if video_id else None
-
 
 def _friendly_date(epoch):
     """'%-d'-style formatting (no leading zero) without relying on the
@@ -526,7 +515,6 @@ def _to_object_detail(row):
         "url": f"/f/{row['slug']}" if is_file else None,
         "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
         "external_url": row.get("external_url"),
-        "youtube_embed_url": _youtube_embed_url(row.get("external_url")) if media_type == "youtube" else None,
         "content_description": row.get("content_description"),
         "content_date_display": _friendly_date(row.get("content_date")),
         # #54: freeform per-type metadata (view/like/comment counts, full
@@ -1767,71 +1755,6 @@ def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks
         raise HTTPException(status_code=400, detail=f"OCR isn't available for {spec.label} content")
     db.set_ocr_status(slug, "pending")
     background_tasks.add_task(ocr.run_ocr, slug)
-    return JSONResponse(_to_public(db.get_by_slug(slug)))
-
-
-def _fetch_youtube_published_date(video_id, api_key):
-    """Single-video counterpart to scripts/full_youtube_channel_sync.py's
-    batch fetch_video_metadata (#275) -- looks up just one video's real
-    publishedAt via the YouTube Data API, for the per-item "fetch real
-    date" button below, rather than needing that whole-channel batch
-    script for a one-off correction. Returns epoch seconds, or None if the
-    video has no publishedAt / isn't found (deleted or private).
-    Raises RuntimeError on an actual API failure (bad key, network, etc.)
-    so the caller can report a real error instead of silently no-op'ing.
-    """
-    import urllib.error
-    import urllib.parse
-    import urllib.request
-
-    url = "https://www.googleapis.com/youtube/v3/videos?" + urllib.parse.urlencode(
-        {"part": "snippet", "id": video_id, "key": api_key}
-    )
-    try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"YouTube Data API request failed ({e.code})") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"Couldn't reach the YouTube Data API ({e.reason})") from e
-    items = data.get("items") or []
-    if not items:
-        return None
-    published_at = items[0].get("snippet", {}).get("publishedAt")
-    if not published_at:
-        return None
-    try:
-        return datetime.fromisoformat(published_at.replace("Z", "+00:00")).timestamp()
-    except (ValueError, AttributeError):
-        return None
-
-
-@app.post("/api/image/{slug}/fetch-real-date")
-def api_fetch_real_date(slug: str):
-    """#275: manual per-item trigger (YouTube item detail page) to re-fetch
-    just this one video's real publishedAt on demand, reusing the same
-    YouTube Data API lookup + db.set_content_date write path
-    scripts/full_youtube_channel_sync.py's bulk correction pass already
-    uses -- without needing that whole-channel script for a single
-    correction."""
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
-    if row.get("media_type") != "youtube":
-        raise HTTPException(status_code=400, detail="Only available for YouTube items")
-    video_id = object_types.extract_youtube_id(row.get("external_url"))
-    if not video_id:
-        raise HTTPException(status_code=400, detail="Couldn't determine this item's YouTube video id")
-    api_key = db.get_setting("youtube_data_api_key")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="No YouTube Data API key is set (see the admin page's API Keys section)")
-    try:
-        published_at = _fetch_youtube_published_date(video_id, api_key)
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    if published_at is None:
-        raise HTTPException(status_code=404, detail="YouTube has no published date for this video (it may be deleted or private)")
-    db.set_content_date(slug, published_at)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 

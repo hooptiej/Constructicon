@@ -96,7 +96,8 @@ def extract_text(path):
                 text_parts.append(page_text)
                 running_length += page_length
                 pages_read += 1
-            text = "\n".join(text_parts)
+            # Slice after joining: the "\n" separators count toward the cap too.
+            text = "\n".join(text_parts)[:cap]
         finally:
             doc.close()
         return text.strip()

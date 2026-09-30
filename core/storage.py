@@ -9,7 +9,6 @@ separately; the original stays untouched for the real hotlink use case
 
 import os
 import secrets
-import shutil
 from io import BytesIO
 from pathlib import Path
 
@@ -111,37 +110,22 @@ def save_stream(filename, fileobj, chunk_size=1024*1024):
     dest = STORAGE_DIR / f"{slug}{ext}"
 
     bytes_written = 0
-    f = None
     try:
-        f = open(dest, "wb")
-        while True:
-            chunk = fileobj.read(chunk_size)
-            if not chunk:
-                break
-            bytes_written += len(chunk)
-            if bytes_written > MAX_BYTES:
-                f.close()
-                if dest.exists():
-                    dest.unlink()
-                raise ValueError(f"File exceeds {MAX_MB}MB limit")
-            f.write(chunk)
-        f.close()
-    except Exception as e:
-        if f is not None:
-            try:
-                f.close()
-            except Exception:
-                pass
-        if dest.exists():
-            try:
-                dest.unlink()
-            except Exception:
-                pass
+        with open(dest, "wb") as f:
+            while chunk := fileobj.read(chunk_size):
+                bytes_written += len(chunk)
+                if bytes_written > MAX_BYTES:
+                    raise ValueError(f"File exceeds {MAX_MB}MB limit")
+                f.write(chunk)
+    except BaseException:
+        # Never leave a partial file behind (over-limit, disk full, client gone).
+        dest.unlink(missing_ok=True)
         raise
 
-    # Generate thumbnail for images by reading the saved file
+    # Images only: the file is read back for the thumbnail, everything else
+    # stays on disk untouched.
     if ext in IMAGE_EXTENSIONS:
-        save_thumbnail_from_bytes(slug, dest.read_bytes())
+        make_thumbnail(slug, dest.read_bytes(), ext)
 
     return slug, dest.name, bytes_written
 

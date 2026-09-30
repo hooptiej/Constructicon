@@ -334,6 +334,10 @@ production**: `POST /api/backup` for DB+storage, `cp -r` the code
 directories to a `constructicon-prod-deploy-backup-<timestamp>-<issues>`
 sibling dir (see existing ones on the box for the naming convention).
 
+**The SQLite DB lives in its own directory, never a bare file mount (#453, 2026-09-30).** Both services mount `Media/<instance>/db/` at `/app/data/` with `CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db`. WAL mode keeps `-wal`/`-shm` beside the DB, and the old single-file mount gave web and mcp private copies, which corrupted constructicon-test's DB. Read DB state with a plain `sqlite3.connect(db.DB_PATH)` inside the app container, not a `?mode=ro` URI (that can miss the WAL and show stale rows). Every `/api/backup` result now includes `integrity`.
+
+**Captions are OFF on all four services (`CAPTION_DISABLED=1`) until #454 is fixed.** The per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Don't re-enable or bulk-caption before that fix.
+
 Two containers run side by side on that box:
 
 - **`constructicon-web`** — the real production instance.

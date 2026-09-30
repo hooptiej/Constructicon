@@ -135,6 +135,9 @@ def _to_public(row):
         # so every MCP object read carries brand kit metadata.
         "is_brand_asset": bool(row.get("is_brand_asset")),
         "brand_role": row.get("brand_role"),
+        # #448: per-type actions available on this object (e.g. YouTube's "fetch real date" moves here in PR 2).
+        # The type file owns the handler; actions are declared in ObjectTypeSpec.actions.
+        "actions": [a.key for a in spec.actions],
     }
 
 
@@ -1309,6 +1312,44 @@ def constructicon_dismiss_need(nudge_key: str, snooze_until: float | None = None
     action = "snooze" if snooze_until is not None else "dismiss"
     db.add_curator_dismissal(nudge_key, action, snooze_until=snooze_until)
     return {"ok": True}
+
+
+def constructicon_run_type_action(slug: str, action: str) -> dict:
+    """#448: Run a per-type action on an object. Actions are declared per type
+    (ObjectTypeSpec.actions). See constructicon_get for the available actions
+    on a specific object.
+
+    slug: object slug
+    action: action key (e.g. "fetch_youtube_metadata")
+
+    Returns {ok: true, action: key, item: {...}} with the updated object.
+    On error: {error: "reason"}.
+    """
+    row = db.get_by_slug(slug)
+    if row is None:
+        return {"error": "not found"}
+
+    if row.get("redacted"):
+        return {"error": "object is redacted"}
+
+    spec = object_types.get_object_type(row.get("media_type"))
+    action_obj = next((a for a in spec.actions if a.key == action), None)
+    if action_obj is None:
+        return {"error": f"{spec.label} has no action '{action}'"}
+
+    try:
+        result = action_obj.handler(row)
+    except Exception as e:
+        print(f"Action '{action}' failed: {e!r}", flush=True)
+        return {"error": f"Action '{action}' failed: {e}"}
+
+    updated_row = db.get_by_slug(slug)
+    return {
+        "ok": True,
+        "action": action,
+        **(result or {}),
+        "item": _to_public(updated_row)
+    }
 
 
 if __name__ == "__main__":

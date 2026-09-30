@@ -577,6 +577,11 @@ def _to_object_detail(row):
         "display_date_override": row.get("display_date_override"),
         "display_date_override_input": _datetime_local_value(row.get("display_date_override")),
         "effective_date_display": _friendly_datetime(timeline.resolve_item_date(row)),
+        # #448: per-type actions available on this object (e.g. YouTube's "fetch real date" moves here in PR 2).
+        # The type file owns the handler; actions are declared in ObjectTypeSpec.actions.
+        "actions": [{"key": a.key, "label": a.label, "confirm": a.confirm} for a in spec.actions],
+        # #448: editable form fields for type_metadata. Only includes fields with input set.
+        "edit_fields": [{"key": f.key, "label": f.label, "input": f.input, "help_text": f.help_text, "value": (row.get("type_metadata") or {}).get(f.key)} for f in spec.edit_fields if f.input],
     }
 
 
@@ -2155,6 +2160,37 @@ def api_refresh_thumbnail(request: Request, slug: str):
             "ok": False,
             "error": "Failed to generate thumbnail (see logs for details)"
         })
+
+
+@app.post("/api/image/{slug}/action/{key}")
+async def api_run_type_action(request: Request, slug: str, key: str):
+    """#448: Generic per-type action route. The type file owns the handler;
+    actions are declared in ObjectTypeSpec.actions."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+    if row.get("redacted"):
+        raise HTTPException(status_code=409, detail="object is redacted")
+
+    spec = object_types.get_object_type(row.get("media_type"))
+    action = next((a for a in spec.actions if a.key == key), None)
+    if action is None:
+        raise HTTPException(status_code=404, detail=f"{spec.label} has no action '{key}'")
+
+    try:
+        result = await run_in_threadpool(action.handler, row)
+    except Exception as e:
+        print(f"Action '{key}' failed: {e!r}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Action '{key}' failed: {e}")
+
+    updated_row = db.get_by_slug(slug)
+    return JSONResponse({
+        "ok": True,
+        "action": key,
+        **(result or {}),
+        "item": _to_public(updated_row)
+    })
 
 
 @app.post("/api/image/{slug}/related")

@@ -47,7 +47,10 @@ def _snapshot_db(dest_path):
     even if another connection is mid-write, and never blocks/locks the
     source for writers (source connection is opened read-only-ish; the
     backup() call takes its own short-lived read lock per page)."""
-    source = sqlite3.connect(f"file:{db.DB_PATH}?mode=ro", uri=True)
+    # #453: a plain connection, not `?mode=ro`. A read-only URI connection
+    # that can't use the WAL index can read the main file without the WAL
+    # and snapshot stale rows. backup() still only reads from the source.
+    source = sqlite3.connect(db.DB_PATH, timeout=30)
     try:
         dest = sqlite3.connect(dest_path)
         try:
@@ -56,6 +59,16 @@ def _snapshot_db(dest_path):
             dest.close()
     finally:
         source.close()
+
+
+def _integrity(db_path):
+    """'ok', or the first few PRAGMA integrity_check complaints (#453)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = [r[0] for r in conn.execute("PRAGMA integrity_check").fetchmany(5)]
+    finally:
+        conn.close()
+    return "ok" if rows == ["ok"] else rows
 
 
 def _existing_backups():
@@ -85,6 +98,10 @@ def create_backup():
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_db = Path(tmp_dir) / "imagerepo.db"
         _snapshot_db(tmp_db)
+        # #453: report the snapshot's integrity with every backup so corruption
+        # can't sit unnoticed. Never blocks the backup: a copy of a damaged DB
+        # is still worth keeping.
+        integrity = _integrity(tmp_db)
 
         # Write to a .part file first so a crash/kill mid-zip never leaves a
         # half-written archive sitting there looking like a real backup.
@@ -107,4 +124,5 @@ def create_backup():
         "path": str(dest),
         "size": stat.st_size,
         "created_at": stat.st_mtime,
+        "integrity": integrity,
     }

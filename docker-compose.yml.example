@@ -1,6 +1,9 @@
 version: "3.8"
 
 services:
+  # #453: mount the DB's DIRECTORY, never the bare imagerepo.db file. SQLite runs in
+  # WAL mode, which keeps -wal/-shm next to the DB; with a file-only mount each
+  # container gets private copies and web + mcp corrupt the shared database.
   constructicon-web:
     build: .
     container_name: constructicon-web
@@ -11,9 +14,10 @@ services:
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
       - ./storage:/app/storage
-      - ./imagerepo.db:/app/imagerepo.db
+      - ./db:/app/data
     environment:
       - IMAGEREPO_BASE_URL=http://10.0.1.78:8000
+      - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
     command: uvicorn web.app:app --host 0.0.0.0 --port 8000
 
   constructicon-mcp:
@@ -24,9 +28,10 @@ services:
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
       - ./storage:/app/storage
-      - ./imagerepo.db:/app/imagerepo.db
+      - ./db:/app/data
     environment:
       - CONSTRUCTICON_BASE_URL=http://constructicon-web:8000
+      - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
     command: python -m mcp_server.server
     depends_on:
       - constructicon-web
@@ -45,7 +50,8 @@ services:
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
       - ./storage-test:/app/storage
-      - ./imagerepo-test.db:/app/imagerepo.db
+      - ./db-test:/app/data
     environment:
       - IMAGEREPO_BASE_URL=http://10.0.1.78:8001
+      - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
     command: uvicorn web.app:app --host 0.0.0.0 --port 8000

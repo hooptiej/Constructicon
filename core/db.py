@@ -1,6 +1,7 @@
 """SQLite index for Constructicon. One row per upload."""
 
 import json
+import os
 import re
 import sqlite3
 import time
@@ -10,7 +11,11 @@ from pathlib import Path
 # direction of import can't cycle; it's here for list_project_items' sort.
 from . import timeline
 
-DB_PATH = Path(__file__).resolve().parent.parent / "imagerepo.db"
+# #453: overridable so the DB can live in its own bind-mounted DIRECTORY.
+# WAL mode keeps -wal/-shm next to the DB file; with only the file
+# bind-mounted, each container (web, mcp) got private copies of those and
+# the two processes corrupted the shared DB. Default unchanged for local runs.
+DB_PATH = Path(os.environ.get("CONSTRUCTICON_DB_PATH") or Path(__file__).resolve().parent.parent / "imagerepo.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS capture_events (

@@ -76,6 +76,11 @@ templates.env.globals["static_version"] = static_version
 _IS_DEV = os.getenv("CONSTRUCTICON_ENV", "prod").strip().lower() == "dev"
 templates.env.globals["is_dev"] = _IS_DEV
 
+# #431: derive the file upload accept list from the object_types registry
+# rather than hardcoding it in templates. This ensures web/templates/_upload_drawer.html
+# and web/templates/_gallery_drawer.html stay in sync with newly added types.
+templates.env.globals["upload_accept"] = ",".join(object_types.accepted_extensions())
+
 
 # --- Audit logging middleware ---
 

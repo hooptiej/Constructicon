@@ -157,6 +157,13 @@ def detect_media_type(filename):
     return None
 
 
+def accepted_extensions():
+    """Return a sorted list of all file extensions accepted by registered
+    types. Used by web upload pickers to derive the accept attribute value
+    dynamically from the registry rather than hardcoding it."""
+    return sorted({e for spec in OBJECT_TYPES.values() for e in spec.extensions})
+
+
 def classify_url(url):
     """Classify an external URL into a media_type key. Checks YouTube first
     (to avoid misclassifying youtu.be/youtube links as generic URLs), then

@@ -9,36 +9,17 @@ import json
 import shutil
 import subprocess
 import time
-import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from core import db, storage
-
-
-def _youtube_embed_url(url):
-    """Return a YouTube /embed/<id> URL for a watch / youtu.be / embed link, or
-    None if the URL isn't a recognizable YouTube link. The templates must NOT
-    parse this themselves — the naive split() approach produced /embed/watch for
-    the common youtube.com/watch?v=<id> form (#331)."""
-    if not url or ("youtube.com" not in url and "youtu.be" not in url):
-        return None
-    parsed = urllib.parse.urlparse(url)
-    if "youtu.be" in (parsed.netloc or ""):
-        vid = parsed.path.lstrip("/").split("/")[0]
-    elif "/embed/" in (parsed.path or ""):
-        vid = parsed.path.split("/embed/")[-1].split("/")[0]
-    else:
-        vid = (urllib.parse.parse_qs(parsed.query or "").get("v") or [None])[0]
-    return f"https://www.youtube.com/embed/{vid}" if vid else None
+from core import db, storage, object_types
 
 
 def _bundle_item_media(item, media_dir, copied_slugs, warnings):
     """Bundle one item's media into media_dir and set its display fields.
 
     Sets on the item dict:
-      - embed_url: YouTube /embed URL (or None)
       - media_file: filename of the copied original (e.g. "<slug>.stl"), or None
       - thumb_file: filename of the copied rendered thumbnail ("<slug>_thumb.jpg"),
         or None. Every previewable type has a thumbnail (what /f/<slug>/thumb
@@ -46,7 +27,6 @@ def _bundle_item_media(item, media_dir, copied_slugs, warnings):
         web-native image (#333).
     Copies each file at most once per slug (an item can appear in several
     projects/entries). Returns the number of NEW files copied."""
-    item["embed_url"] = _youtube_embed_url(item.get("external_url"))
     item["media_file"] = None
     item["thumb_file"] = None
     slug = item["slug"]
@@ -171,18 +151,39 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     media_dir.mkdir(parents=True, exist_ok=True)
 
     # Bundle each rendered item's media (original + rendered thumbnail) and set
-    # its display fields (embed_url / media_file / thumb_file). One copy per slug
+    # its display fields (media_file / thumb_file; embeds come from each type's
+    # preview_fn via the export_preview filter, #449). One copy per slug
     # even if the item appears in multiple projects/entries (#333).
     copied_slugs = set()
     for items_list in list(project_items.values()) + list(entry_items.values()):
         for item in items_list:
             media_count += _bundle_item_media(item, media_dir, copied_slugs, warnings)
 
+    # Define export_preview filter for Jinja2
+    def export_preview(item, root=""):
+        """Render an item's preview for static export.
+
+        Returns markupsafe.Markup HTML or None if no preview_fn.
+        """
+        spec = object_types.get_object_type(item.get("media_type"))
+        prefix = f"{root}media/" if root else "media/"
+        ctx = object_types.PreviewContext(
+            item=item,
+            media_url=prefix + item["media_file"] if item.get("media_file") else None,
+            thumb_url=prefix + item["thumb_file"] if item.get("thumb_file") else None,
+            page_url=item.get("external_url"),
+            mode="export",
+            file_path=storage.path_for(item["stored_filename"]) if item.get("stored_filename") else None,
+        )
+        return object_types.render_preview(spec, ctx)
+
     # Set up Jinja2 environment
     env = Environment(
         loader=FileSystemLoader(EXPORT_TEMPLATES_DIR),
         autoescape=select_autoescape(enabled_extensions=("html",)),
     )
+    # Register the export_preview filter
+    env.filters["export_preview"] = export_preview
 
     # Render pages
     # 1. Home page (index.html)

@@ -14,16 +14,13 @@
         {% for item in items %}
         <div class="item">
             {% set alt = item.display_name or item.filename or item.slug %}
-            {% if item.media_type in ['image', 'gif', 'svg'] and item.media_file %}
+            {% set ph = item | export_preview(root | default('')) %}{% if ph %}{{ ph }}
+            {% elif item.media_type in ['image', 'gif', 'svg'] and item.media_file %}
             <img src="{{ root | default('') }}media/{{ item.media_file }}" alt="{{ alt }}" class="item-media">
             {% elif item.media_type == 'video' and item.media_file %}
             <video src="{{ root | default('') }}media/{{ item.media_file }}" controls preload="metadata" class="item-media"></video>
             {% elif item.media_type == 'audio' and item.media_file %}
             <audio src="{{ root | default('') }}media/{{ item.media_file }}" controls preload="metadata"></audio>
-            {% elif item.embed_url %}
-            <div class="youtube-embed">
-                <iframe width="560" height="315" src="{{ item.embed_url }}" frameborder="0" allowfullscreen></iframe>
-            </div>
             {% elif item.thumb_file %}
             {% if item.media_file %}
             <a href="{{ root | default('') }}media/{{ item.media_file }}"><img src="{{ root | default('') }}media/{{ item.thumb_file }}" alt="{{ alt }}" class="item-media"></a>

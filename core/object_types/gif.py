@@ -48,9 +48,19 @@ def get_properties(row):
         return {}
 
 
+from . import _preview
+
+
+def preview(ctx):
+    """#449 preview_fn: The animated file itself, same viewer as a still image.
+    None (-> the page's generic fallback) when there's no file to show."""
+    return _preview.image_viewer(ctx) if ctx.media_url else None
+
+
 from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
+    preview_fn=preview,  # #449
     key="gif",
     label="Animated GIF",
     thumbnail_source=ThumbnailSource.UPLOADED_FILE,

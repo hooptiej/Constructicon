@@ -86,16 +86,74 @@ def capture_thumbnail(row):
     return render_glyph_sample(path) if path else None
 
 
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='font' — family, style,
+    version, designer, foundry, glyph count, or {} on any failure."""
+    path = _stored_path(row)
+    if not path:
+        return {}
+    try:
+        from fontTools.ttLib import TTFont
+        font = TTFont(str(path), lazy=True, fontNumber=0)
+        props = {}
+
+        try:
+            name_table = font["name"]
+
+            # Extract name table entries
+            family = name_table.getDebugName(1)
+            if family:
+                props["Family"] = family
+
+            style = name_table.getDebugName(2)
+            if style:
+                props["Style"] = style
+
+            version = name_table.getDebugName(5)
+            if version:
+                props["Version"] = version
+
+            designer = name_table.getDebugName(9)
+            if designer:
+                props["Designer"] = designer
+
+            foundry = name_table.getDebugName(8)
+            if foundry:
+                props["Foundry"] = foundry
+
+            # Glyph count
+            if "maxp" in font:
+                glyph_count = font["maxp"].numGlyphs
+                props["Glyphs"] = f"{glyph_count:,}"
+        finally:
+            font.close()
+
+        return props
+    except Exception as e:
+        print(f"Font properties extraction failed for {path}: {e!r}")
+        return {}
+
+
+from . import _preview
+
+
+def preview(ctx):
+    """#449 preview_fn: glyph sample + "View original" link. None (-> the page's generic fallback) when there's no thumbnail."""
+    return _preview.thumb_with_original_link(ctx) if ctx.thumb_url else None
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
+    preview_fn=preview,  # #449
     key="font",
     label="Font",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=False,  # The rendered text is synthetic (always the same pangram), not meaningful to search
     extensions=frozenset({".ttf", ".otf"}),
     capture_fn=capture_thumbnail,
+    properties_fn=get_properties,  # #449
     badge_icon="🔤",
     badge_text="FONT",
 ))

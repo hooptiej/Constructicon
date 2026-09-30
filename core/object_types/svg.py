@@ -114,10 +114,92 @@ def extract_text_for_row(row):
     return extract_text(path) if path else ""
 
 
+def _round_len(value):
+    """'299.6886688232422' -> '299.69', '77.816841mm' -> '77.82mm', '200' -> '200'.
+    Anything that isn't number+unit is returned unchanged (#449)."""
+    import re
+    m = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*([a-zA-Z%]*)\s*", value or "")
+    if not m:
+        return value
+    return f"{float(m.group(1)):.2f}".rstrip("0").rstrip(".") + m.group(2)
+
+
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='svg' — dimensions, viewBox,
+    title, description, element count, embedded raster count, or {} on any
+    failure."""
+    path = _stored_path(row)
+    if not path:
+        return {}
+    try:
+        # Skip very large files
+        if path.stat().st_size > 10 * 1024 * 1024:
+            return {}
+
+        import defusedxml.ElementTree as DefusedET
+        tree = DefusedET.parse(path)
+        root = tree.getroot()
+        props = {}
+
+        # Extract width/height/viewBox from root attributes
+        width = root.get("width")
+        height = root.get("height")
+        if width and height:
+            props["Dimensions"] = f"{_round_len(width)} × {_round_len(height)}"
+
+        viewbox = root.get("viewBox")
+        if viewbox:
+            props["viewBox"] = " ".join(_round_len(v) for v in viewbox.replace(",", " ").split())
+
+        # Extract title and description
+        for elem in root:
+            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+            if tag == "title":
+                text = "".join(elem.itertext()).strip()
+                if text:
+                    props["Title"] = text[:200]
+                break
+
+        for elem in root:
+            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+            if tag == "desc":
+                text = "".join(elem.itertext()).strip()
+                if text:
+                    props["Description"] = text[:200]
+                break
+
+        # Count elements and images
+        elem_count = len(list(root.iter()))
+        props["Elements"] = f"{elem_count:,}"
+
+        image_count = 0
+        for elem in root.iter():
+            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+            if tag == "image":
+                image_count += 1
+        if image_count > 0:
+            props["Embedded rasters"] = str(image_count)
+
+        return props
+    except Exception as e:
+        print(f"SVG properties extraction failed for {path}: {e!r}")
+        return {}
+
+
+from . import _preview
+
+
+def preview(ctx):
+    """#449 preview_fn: an SVG in an <img> element (safe because <img> can't run scripts).
+    Shows the real vector image on the object page. None (-> the page's generic fallback) when there's no file."""
+    return _preview.image_viewer(ctx) if ctx.media_url else None
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
+    preview_fn=preview,  # #449
     key="svg",
     label="Vector graphic (SVG)",
     # A browser can display an SVG directly, but the gallery/detail
@@ -132,6 +214,7 @@ register(ObjectTypeSpec(
     extensions=frozenset({".svg"}),
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,  # <text> elements read directly, no OCR needed when present
+    properties_fn=get_properties,  # #449
     badge_icon="\U0001F4D0",  # triangular ruler
     badge_text="SVG",
 ))

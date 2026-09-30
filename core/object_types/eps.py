@@ -54,7 +54,7 @@ def render_raster(path):
     with tempfile.TemporaryDirectory() as tmp:
         out_path = Path(tmp) / "out.png"
         try:
-            result = subprocess.run(
+            subprocess.run(
                 [
                     "gs",
                     "-dNOPAUSE", "-dBATCH", "-dSAFER",
@@ -94,10 +94,87 @@ def capture_thumbnail(row):
     return render_raster(path) if path else None
 
 
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='eps' — reads first 256 KB,
+    extracts DSC comments (BoundingBox, Title, Creator, CreationDate, LanguageLevel),
+    or {} on any failure."""
+    path = _stored_path(row)
+    if not path:
+        return {}
+    try:
+        with open(path, "rb") as f:
+            data = f.read(256 * 1024)  # first 256 KB
+
+        # Check for DOS-EPS binary header
+        if data.startswith(b"\xc5\xd0\xd3\xc6"):
+            # Binary EPS: extract PostScript section offset/length
+            if len(data) >= 12:
+                offset = int.from_bytes(data[4:8], byteorder="little")
+                length = int.from_bytes(data[8:12], byteorder="little")
+                if offset < len(data) and offset + length <= len(data):
+                    ps_data = data[offset:offset+length]
+                    return _parse_eps_dsc(ps_data.decode("latin-1", errors="ignore"))
+
+        # Text EPS: decode directly
+        text = data.decode("latin-1", errors="ignore")
+        return _parse_eps_dsc(text)
+    except Exception as e:
+        print(f"EPS properties extraction failed for {path}: {e!r}")
+        return {}
+
+
+def _parse_eps_dsc(text):
+    """Parse DSC comments from EPS text."""
+    props = {}
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("%%BoundingBox:"):
+            parts = line.split(":", 1)[1].strip().split()
+            if len(parts) >= 4:
+                try:
+                    llx, lly, urx, ury = map(int, parts[:4])
+                    w, h = urx - llx, ury - lly
+                    props["Size"] = f"{w:g} × {h:g} pt ({w/72:.2f} × {h/72:.2f} in)"
+                except (ValueError, ZeroDivisionError):
+                    pass
+        elif line.startswith("%%Title:"):
+            title = line.split(":", 1)[1].strip()
+            if title.startswith("(") and title.endswith(")"):
+                title = title[1:-1]
+            if title:
+                props["Title"] = title
+        elif line.startswith("%%Creator:"):
+            creator = line.split(":", 1)[1].strip()
+            if creator.startswith("(") and creator.endswith(")"):
+                creator = creator[1:-1]
+            if creator:
+                props["Creator"] = creator
+        elif line.startswith("%%CreationDate:"):
+            created = line.split(":", 1)[1].strip()
+            if created.startswith("(") and created.endswith(")"):
+                created = created[1:-1]
+            if created:
+                props["Created"] = created
+        elif line.startswith("%%LanguageLevel:"):
+            level = line.split(":", 1)[1].strip()
+            if level:
+                props["PostScript level"] = level
+    return props
+
+
+from . import _preview
+
+
+def preview(ctx):
+    """#449 preview_fn: rendered raster + "View original" link. None (-> the page's generic fallback) when there's no thumbnail."""
+    return _preview.thumb_with_original_link(ctx) if ctx.thumb_url else None
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
+    preview_fn=preview,  # #449
     key="eps",
     label="Vector graphic (EPS)",
     # Ghostscript-rendered raster (core/eps.py) — a real system binary,
@@ -109,6 +186,7 @@ register(ObjectTypeSpec(
     caption_capable=True,  # #239: the Ghostscript-rendered raster
     extensions=frozenset({".eps"}),
     capture_fn=capture_thumbnail,
+    properties_fn=get_properties,  # #449
     badge_icon="\U0001F5A8️",  # printer — PostScript's original target device
     badge_text="EPS",
 ))

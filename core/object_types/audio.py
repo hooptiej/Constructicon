@@ -197,9 +197,21 @@ def get_properties(row):
         return props
 
 
+from . import _preview
+
+
+def preview(ctx):
+    """#449 preview_fn: Native player under the type icon. The file's tags (title/artist/album/
+    ...) are NOT repeated here: they're already in the Properties panel via
+    get_properties above (#449 dropped the duplicate tag block).
+    None (-> the page's generic fallback) when there's no file to show."""
+    return _preview.audio_player(ctx) if ctx.media_url else None
+
+
 from . import register, ObjectTypeSpec, ThumbnailSource, MetadataField
 
 register(ObjectTypeSpec(
+    preview_fn=preview,  # #449
     key="audio",
     label="Audio file",
     thumbnail_source=ThumbnailSource.NONE,

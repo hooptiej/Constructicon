@@ -77,19 +77,23 @@ class TypeAction:
 
 @dataclass(frozen=True)
 class PreviewContext:
-    """Context passed to preview_fn (#448, deferred to PR 3).
+    """Context passed to preview_fn (#449).
 
-    item: The row dict (can be None for synthetic previews).
-    media_url: URL to the media itself (local /f/slug or external URL).
-    thumb_url: URL to a thumbnail image, if available.
-    page_url: URL to the object's detail page.
-    mode: "live" for web display, "export" for static export.
+    item: the prepared item dict (object page) or export item.
+    media_url: URL of the stored file for this render context (live /f/<slug>,
+        or the export's relative media path), None when there's no file.
+    thumb_url: URL of the thumbnail, if any.
+    page_url: the item's external URL, if any.
+    mode: "live" (object page) or "export" (static site).
+    file_path: the stored file on disk (Path) or None. For previews that must
+        read their own file (e.g. a CSV table); never guess at item keys (#449).
     """
     item: dict
     media_url: str | None
     thumb_url: str | None
     page_url: str | None
     mode: str = "live"
+    file_path: object = None
 
 
 @dataclass
@@ -208,6 +212,10 @@ class ObjectTypeSpec:
     # a badge for free.
     badge_icon: str = "\U0001F4E6"  # package emoji — generic fallback
     badge_text: str = "FILE"
+    # Issue #448: text of the object page's external-link button when the
+    # item has a media_url. A type may override (e.g. YouTube); default
+    # shown to the caller by render_preview's fallback when None.
+    external_link_label: str = "View original ↗"
     # Issue #239: should this type's representative image (the same one OCR
     # runs against — the uploaded file itself, or the generated thumbnail /
     # video frame / rendered raster) be sent to the local vision model for
@@ -293,6 +301,29 @@ def _validate_registry():
             raise ObjectTypeContractError(
                 f"Extension {ext} claimed by {len(non_sniffers)} specs with no sniff_fn: {keys}"
             )
+
+
+def render_preview(spec, ctx):
+    """Render a preview using spec.preview_fn if available.
+
+    Returns None if spec.preview_fn is None.
+    On any exception, prints a warning and returns None (buggy preview
+    falls back to the generic chain in the template).
+
+    Args:
+        spec: ObjectTypeSpec instance
+        ctx: PreviewContext instance
+
+    Returns:
+        markupsafe.Markup HTML or None
+    """
+    if spec.preview_fn is None:
+        return None
+    try:
+        return spec.preview_fn(ctx)
+    except Exception as e:
+        print(f"preview_fn failed for {spec.key}: {e!r}")
+        return None
 
 
 # Auto-discover and import all type modules in this package.

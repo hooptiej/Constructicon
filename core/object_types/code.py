@@ -16,8 +16,27 @@ upload never breaks the upload response or the OCR background task.
 """
 
 from pathlib import Path
+from markupsafe import Markup, escape
 
 from .. import storage
+from . import _preview, _textstats
+
+
+# Language detection by extension
+_LANGUAGE_MAP = {
+    ".py": "Python",
+    ".js": "JavaScript",
+    ".php": "PHP",
+    ".sh": "Shell",
+    ".ps1": "PowerShell",
+    ".json": "JSON",
+    ".yaml": "YAML",
+    ".yml": "YAML",
+    ".html": "HTML",
+    ".css": "CSS",
+    ".sql": "SQL",
+    ".lua": "Lua",
+}
 
 
 def _stored_path(row):
@@ -49,6 +68,51 @@ def extract_text_for_row(row):
     return extract_text(path) if path else ""
 
 
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='code': Language, Lines,
+    Encoding, Line endings. Returns {} on any failure."""
+    path = _stored_path(row)
+    if not path:
+        return {}
+
+    filename = row.get("filename") or ""
+    props = {}
+
+    # Language from extension
+    ext = Path(filename).suffix.lower() if filename else ""
+    if ext in _LANGUAGE_MAP:
+        props["Language"] = _LANGUAGE_MAP[ext]
+
+    # Text stats
+    stats = _textstats.text_file_stats(path, storage.MAX_EXTRACTED_TEXT_CHARS)
+    if stats:
+        if "lines" in stats:
+            line_count = stats["lines"]
+            if stats.get("truncated"):
+                props["Lines"] = f"{line_count:,} (first {storage.MAX_EXTRACTED_TEXT_CHARS // (1024*1024)}+ MB)"
+            else:
+                props["Lines"] = f"{line_count:,}"
+        if "encoding" in stats:
+            props["Encoding"] = stats["encoding"]
+        if "line_endings" in stats and stats["line_endings"] != "none":
+            props["Line endings"] = stats["line_endings"]
+
+    return props
+
+
+def preview(ctx):
+    """#449 preview_fn: syntax-highlighted source code from extracted_text.
+    The static export keeps its download link (it has no highlighter/CSS)."""
+    if ctx.mode != "live":
+        return _preview.file_icon(ctx)
+    text = ctx.item.get("extracted_text") or ""
+    if not text:
+        return None
+    return Markup(
+        f'<div class="code-preview"><pre><code id="code-preview-block" class="hljs">{escape(text)}</code></pre></div>'
+    )
+
+
 # Registration: add this type to the object-type registry
 from . import register, ObjectTypeSpec, ThumbnailSource
 
@@ -59,6 +123,9 @@ register(ObjectTypeSpec(
     ocr_capable=True,  # Enable OCR background task so text_extract_fn gets called (no actual OCR since no thumbnail)
     extensions=frozenset({".php", ".py", ".js", ".sh", ".ps1", ".json", ".yaml", ".yml", ".html", ".css", ".sql", ".lua"}),
     text_extract_fn=extract_text_for_row,
+    properties_fn=get_properties,
+    preview_fn=preview,
+    preview_assets=("highlightjs",),
     badge_icon="💻",
     badge_text="CODE",
 ))

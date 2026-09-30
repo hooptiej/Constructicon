@@ -350,10 +350,26 @@ back to it: `tar czf - core web mcp_server scripts assets | ssh ... 'cd
 .../constructicon && tar xzf -'`, confirmed working 2026-09-03 deploying
 #103/#95/#88+#90/#92+#93 this way.
 
-Either way — script or fallback — **take a real backup first for
-production**: `POST /api/backup` for DB+storage, `cp -r` the code
-directories to a `constructicon-prod-deploy-backup-<timestamp>-<issues>`
-sibling dir (see existing ones on the box for the naming convention).
+**Pre-deploy backup = a ZFS snapshot, taken by `scripts/deploy.sh` itself
+(#442, 2026-09-30).** Prod's data (DB dir + storage) lives in its own dataset,
+`Storage Pool/Media/constructicon`. deploy.sh snapshots it as
+`@predeploy-<timestamp>-<commit being replaced>` before touching anything
+(instant, atomic across DB/WAL/files, only stores later changes) and keeps the
+newest 10. A failed snapshot aborts the deploy; `--no-snapshot` opts out.
+constructicon-test's data sits inside the shared `Storage Pool/Media` dataset,
+so its deploys skip the snapshot (by design, don't snapshot 2.75 TB for a test).
+- **Restore data:** read-only copies are browsable at
+  `/mnt/Storage Pool/Media/constructicon/.zfs/snapshot/<name>/` (e.g. copy the
+  DB file back with the app stopped). `sudo zfs rollback` discards everything
+  newer than the snapshot, so that's an owner call, never automatic.
+- **Restore code:** git. The snapshot name records the commit that was running.
+  The old `cp -r` of code dirs is retired (it only duplicated git).
+- `POST /api/backup` (full DB+storage zip, retention 3) is now for manual or
+  off-box exports, not a routine pre-deploy step. Its result includes
+  `integrity` (#453).
+- The fallback tar-over-ssh path doesn't snapshot: run
+  `sudo zfs snapshot "Storage Pool/Media/constructicon@predeploy-<ts>-manual"`
+  first.
 
 **The SQLite DB lives in its own directory, never a bare file mount (#453, 2026-09-30).** Both services mount `Media/<instance>/db/` at `/app/data/` with `CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db`. WAL mode keeps `-wal`/`-shm` beside the DB, and the old single-file mount gave web and mcp private copies, which corrupted constructicon-test's DB. Read DB state with a plain `sqlite3.connect(db.DB_PATH)` inside the app container, not a `?mode=ro` URI (that can miss the WAL and show stale rows). Every `/api/backup` result now includes `integrity`.
 

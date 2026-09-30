@@ -446,6 +446,22 @@ def constructicon_list_redacted() -> list[dict]:
 
 
 @mcp.tool()
+def constructicon_list_restricted() -> list[dict]:
+    """List every restricted object: private keys, certificates, CSRs (#443).
+
+    Restricted objects are the owner's private reference. They're kept out
+    of constructicon_search and tag walks and never exported to the public
+    site, but DO appear in constructicon_get_project for projects they're
+    attached to (e.g. a repo's deploy key). This is the full list. Each
+    entry adds "projects" (titles and slugs it's attached to).
+    """
+    return [
+        {**_to_public(r), "projects": [{"title": p["title"], "slug": p["slug"]} for p in db.list_projects_for_post(r["slug"])]}
+        for r in db.list_restricted()
+    ]
+
+
+@mcp.tool()
 def constructicon_delete(slug: str) -> bool:
     """Fully delete an object — file and all metadata. Irreversible."""
     row = db.get_by_slug(slug)

@@ -1128,6 +1128,41 @@ def list_uploaders(query=None, client=None):
         conn.close()
 
 
+def _not_restricted(prefix=""):
+    """#443: SQL fragment (" AND <prefix>media_type NOT IN (...)", or "" when
+    no type is restricted) that keeps restricted types (private keys and
+    certificates) out of GENERAL BROWSING queries: search/gallery, home
+    lists, tag pages, unfiled. Deliberately NOT applied to project items,
+    related items or blog-entry items: the owner attaches keys to projects
+    on purpose, and exports filter them separately (object_types.is_restricted).
+    Type keys are registry identifiers, validated before being inlined."""
+    from core import object_types  # lazy: type modules import db
+    keys = object_types.restricted_types()
+    if not keys:
+        return ""
+    assert all(re.fullmatch(r"[a-z0-9_]+", k) for k in keys), keys
+    return f" AND {prefix}media_type NOT IN ({', '.join(repr(k) for k in keys)})"
+
+
+def list_restricted():
+    """#443: every non-redacted row of a restricted type, newest first, for
+    the admin pane's "Keys & certificates" list (and the MCP)."""
+    from core import object_types  # lazy: type modules import db
+    keys = object_types.restricted_types()
+    if not keys:
+        return []
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM capture_events WHERE redacted = 0 AND media_type IN ({', '.join('?' * len(keys))}) "
+            "ORDER BY timestamp DESC",
+            keys,
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False):
     """Keyword/filter search over capture_events, most recent first.
 
@@ -1158,7 +1193,9 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, inclu
     try:
         clauses, params = [], []
         if not include_redacted:
-            clauses.append("redacted = 0")
+            # #443: restricted types ride with redaction: the enumerate-
+            # everything callers (include_redacted=True) still see them.
+            clauses.append("redacted = 0" + _not_restricted())
         if not include_brand:
             clauses.append("is_brand_asset = 0")
         if query:
@@ -1636,7 +1673,7 @@ def list_posts_for_tag(tag_id, include_descendants=True, limit=50):
     try:
         rows = conn.execute(
             f"SELECT DISTINCT ce.* FROM capture_events ce JOIN post_tags pt ON pt.post_slug = ce.slug "
-            f"WHERE pt.tag_id IN ({placeholders}) AND ce.redacted = 0 ORDER BY ce.timestamp DESC LIMIT ?",
+            f"WHERE pt.tag_id IN ({placeholders}) AND ce.redacted = 0{_not_restricted('ce.')} ORDER BY ce.timestamp DESC LIMIT ?",
             tag_ids + [limit],
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
@@ -1650,7 +1687,7 @@ def list_recent_posts(limit=10):
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT * FROM capture_events WHERE redacted = 0 ORDER BY timestamp DESC LIMIT ?", (limit,)
+            "SELECT * FROM capture_events WHERE redacted = 0" + _not_restricted() + " ORDER BY timestamp DESC LIMIT ?", (limit,)
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:
@@ -2102,7 +2139,7 @@ def list_unfiled_items(limit=10000, include_brand=False):
         brand_clause = "" if include_brand else "AND ce.is_brand_asset = 0 "
         rows = conn.execute(
             "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-            "WHERE pi.post_slug IS NULL AND ce.redacted = 0 " + brand_clause +
+            "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + _not_restricted("ce.") + " " + brand_clause +
             "ORDER BY ce.timestamp DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -2125,7 +2162,7 @@ def list_loose_reference_objects(limit=500):
     try:
         rows = conn.execute(
             "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-            "WHERE ce.provenance = 'reference' AND ce.redacted = 0 AND pi.post_slug IS NULL "
+            "WHERE ce.provenance = 'reference' AND ce.redacted = 0" + _not_restricted("ce.") + " AND pi.post_slug IS NULL "
             "ORDER BY ce.rowid DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -2156,7 +2193,7 @@ def list_recent_items_by_type(limit_per_type=10, include_brand=False):
         # Fetch all distinct media_types that have at least one (non-redacted,
         # #282) row -- a type whose only rows are redacted gets no tab.
         media_type_rows = conn.execute(
-            "SELECT DISTINCT media_type FROM capture_events WHERE redacted = 0" + brand_clause
+            "SELECT DISTINCT media_type FROM capture_events WHERE redacted = 0" + _not_restricted() + brand_clause
         ).fetchall()
 
         result = {}

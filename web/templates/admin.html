@@ -78,6 +78,21 @@
       <div id="admin-redacted-list" class="admin-redacted-list"></div>
     </section>
 
+    <!-- Keys & certificates (#443) — every item of a restricted type. They
+         stay out of general browsing (home, gallery/search, tags, unfiled)
+         and out of every export, but show on the projects they're attached
+         to; this list is where the loose ones live. Locking it down properly
+         is #467 (authentication). -->
+    <section class="admin-panel">
+      <div class="admin-panel-header">
+        <div>
+          <h2>Keys &amp; certificates <span id="admin-restricted-count" class="apikey-status"></span></h2>
+          <div class="admin-row-hint">Your private reference: kept out of general browsing and never exported to the site. Shown on projects you attach them to. Access control comes with authentication (#467).</div>
+        </div>
+      </div>
+      <div id="admin-restricted-list" class="admin-redacted-list"></div>
+    </section>
+
     <!-- API Keys (#55) — general secrets store for the app itself, starting
          with a YouTube Data API key (real view/like/comment counts, full
          descriptions, tags, duration — see #54) rather than wiring a key in
@@ -681,6 +696,49 @@
     } catch (err) { /* leave whatever's shown */ }
   }
   loadRedacted();
+
+  // Keys & certificates (#443) — read-only list of restricted items: the
+  // type's first property (e.g. "Contents: 1 certificate, 1 private key")
+  // as the summary line, and the projects each one is attached to.
+  const restrictedList = document.getElementById('admin-restricted-list');
+  const restrictedCount = document.getElementById('admin-restricted-count');
+
+  function renderRestricted(data) {
+    const items = (data && data.items) || [];
+    restrictedCount.textContent = items.length ? `(${items.length})` : '';
+    restrictedList.innerHTML = '';
+    if (items.length === 0) {
+      restrictedList.innerHTML = '<div class="audit-log-empty">No keys or certificates stored</div>';
+      return;
+    }
+    for (const item of items) {
+      const el = document.createElement('div');
+      el.className = 'redacted-item';
+      const props = Object.entries(item.properties || {});
+      const summary = props.length ? `${props[0][0]}: ${props[0][1]}` : (item.type_label || '');
+      const projects = (item.projects || []).map((p) =>
+        `<a href="/project/${encodeURIComponent(p.slug)}">${escapeHtml(p.title)}</a>`).join(', ');
+      el.innerHTML = `
+        <div class="redacted-item-head">
+          <span class="pending-decision-thumb pending-decision-thumb-icon">${escapeHtml(item.type_icon || '')}</span>
+          <div class="redacted-item-text">
+            <a class="pending-decision-title" href="${escapeHtml(item.link)}" title="${escapeHtml(item.display_name)}">${escapeHtml(item.display_name)}</a>
+            <div class="redacted-item-meta">${escapeHtml(summary)}</div>
+            <div class="redacted-item-meta">${projects ? `On: ${projects}` : 'Not on any project'}</div>
+          </div>
+        </div>`;
+      restrictedList.appendChild(el);
+    }
+  }
+
+  async function loadRestricted() {
+    try {
+      const res = await fetch('/api/restricted');
+      if (!res.ok) return;
+      renderRestricted(await res.json());
+    } catch (err) { /* leave whatever's shown */ }
+  }
+  loadRestricted();
 
   // Audit log (#122) — recent mutating API calls for debugging/recovery.
   // 50 rows here vs. the pop-out's 20: a full-row panel has the room, and

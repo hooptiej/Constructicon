@@ -273,6 +273,14 @@ class ObjectTypeSpec:
     # this (e.g. document.py sets it to "body"); None means this type cannot
     # be a project write-up. Used by can_be_writeup() and writeup_body().
     writeup_body_key: str | None = None
+    # Issue #443: items of this type are the owner's private reference
+    # (e.g. private keys). Stored whole, and still shown where the owner
+    # deliberately puts them (project pages, related items, the admin pane's
+    # Restricted list, direct links), but kept out of general browsing (home
+    # lists, gallery/search, tag pages, unfiled) and NEVER exported: the
+    # static site (the public "museum") and project zips skip them. Access
+    # control proper is #467 (authentication).
+    restricted: bool = False
 
 
 OBJECT_TYPES = {}
@@ -508,6 +516,17 @@ DEFAULT_SPEC = ObjectTypeSpec(
 
 def get_object_type(media_type):
     return OBJECT_TYPES.get(media_type, DEFAULT_SPEC)
+
+
+def restricted_types():
+    """#443: sorted keys of every registered type with restricted=True."""
+    return sorted(k for k, s in OBJECT_TYPES.items() if s.restricted)
+
+
+def is_restricted(row):
+    """#443: True when this row's type is restricted, so it must never be
+    exported (core/site_export.py, core/project_export.py)."""
+    return get_object_type((row or {}).get("media_type")).restricted
 
 
 # Re-export extract_youtube_id for backward compatibility with existing callers

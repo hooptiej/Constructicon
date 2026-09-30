@@ -1100,6 +1100,25 @@ def api_list_redacted():
     return JSONResponse({"count": len(items), "items": items})
 
 
+@app.get("/api/restricted")
+def api_list_restricted():
+    """#443: every item of a restricted type (private keys, certificates),
+    for the admin page's "Keys & certificates" list. They're kept out of
+    general browsing and never exported, so this (plus the projects they're
+    attached to) is where they live until authentication (#467) locks them
+    properly. Each carries its type's properties and the projects it's on."""
+    items = []
+    for row in db.list_restricted():
+        spec = object_types.get_object_type(row.get("media_type"))
+        items.append({
+            **_to_public(row),
+            "link": f"/object/{row['slug']}",
+            "properties": _call_properties_fn(spec, row),
+            "projects": [{"title": p["title"], "slug": p["slug"]} for p in db.list_projects_for_post(row["slug"])],
+        })
+    return JSONResponse({"count": len(items), "items": items})
+
+
 @app.get("/api/admin/storage-stats")
 def api_storage_stats():
     """#352: storage statistics for the admin page. Returns:

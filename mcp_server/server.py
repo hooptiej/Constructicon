@@ -9,6 +9,7 @@ in a Constructicon instance. Runs as a sidecar alongside constructicon-web.
 """
 
 import base64
+import io
 import json
 import os
 import sys
@@ -24,7 +25,78 @@ from core import backup, curator_needs, db, embedded_metadata, object_types, ocr
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
+# #433 part 3: a read-only bind-mounted inbox (host: Media/constructicon/import,
+# reachable over SMB) so large files are ingested by server-side path instead of
+# base64 through one MCP message; never written to or deleted from by the app.
+IMPORT_DIR = Path(os.getenv("CONSTRUCTICON_IMPORT_DIR", "/app/import"))
+
+# #433: base64 inflates ~33% and the whole payload rides one MCP message;
+# a 500 MB file would be ~670 MB of JSON
+DOWNLOAD_INLINE_MAX_BYTES = 25 * 1024 * 1024
+
 mcp = MCPServer(name="constructicon-mcp")
+
+
+def _resolve_import_path(rel):
+    """Resolve a relative path within IMPORT_DIR, rejecting absolute paths
+    and escapes (../ or symlinks outside IMPORT_DIR). Returns Path | None."""
+    # Reject absolute paths and path traversal attempts
+    if Path(rel).is_absolute():
+        return None
+    candidate = (IMPORT_DIR / rel).resolve()
+    # Ensure the resolved path stays within IMPORT_DIR bounds
+    try:
+        candidate.relative_to(IMPORT_DIR.resolve())
+    except ValueError:
+        # candidate is outside IMPORT_DIR
+        return None
+    # Verify it's a file and exists
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
+def _ingest(filename, fileobj, file_size, description, tags, uploaded_by, source_modified_at) -> dict:
+    """Private helper for file ingestion: all post-validation logic shared by
+    constructicon_upload (base64-decoded) and constructicon_import (server-side path).
+
+    Returns {"slug": ..., ..._to_public fields..., "duplicate": False} on success,
+    or {"error": "..."} on failure.
+    """
+    # Early check: file size guard (#433)
+    if file_size > storage.MAX_BYTES:
+        return {"error": f"File exceeds {storage.MAX_MB}MB limit"}
+
+    dupe = db.find_duplicate(filename, file_size, source_modified_at)
+    if dupe is not None:
+        return {**_to_public(dupe), "duplicate": True}
+    media_type = object_types.detect_media_type(filename)
+    if media_type is None:
+        return {"error": f"Unsupported file type: {Path(filename).suffix}"}
+    spec = object_types.get_object_type(media_type)
+    try:
+        slug, stored_filename, _ = storage.save_stream(filename, fileobj)
+    except ValueError as e:
+        return {"error": str(e)}
+    db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags,
+                      file_size=file_size, source_modified_at=source_modified_at,
+                      media_type=media_type,
+                      ocr_status="pending" if spec.ocr_capable else None)
+    # #255: this tool bypasses /api/upload and calls db.insert_upload
+    # directly, so it has to make the same post-insert call the route does
+    # or MCP-uploaded audio would silently miss its tags. Synchronous for
+    # the same reason as there — one ffprobe header read, and the object
+    # returned below should already carry the title.
+    embedded_metadata.fill_missing(slug)
+    if spec.ocr_capable:
+        # Background thread, not inline (#225): tesseract (up to
+        # OCR_TIMEOUT_SECONDS) plus a cold sentence-transformers load used to
+        # block the tool response. Same pattern constructicon_retry_ocr and
+        # the startup self-heal already use.
+        threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
+    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
+        thumbnails.ensure_thumbnail(db.get_by_slug(slug))
+    return {**_to_public(db.get_by_slug(slug)), "duplicate": False}
 
 
 def _to_public(row):
@@ -143,36 +215,7 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
     already reflects them. A tagless file simply gets none of that.
     """
     content = base64.b64decode(content_base64)
-    dupe = db.find_duplicate(filename, len(content), source_modified_at)
-    if dupe is not None:
-        return {**_to_public(dupe), "duplicate": True}
-    media_type = object_types.detect_media_type(filename)
-    if media_type is None:
-        return {"error": f"Unsupported file type: {Path(filename).suffix}"}
-    spec = object_types.get_object_type(media_type)
-    try:
-        slug, stored_filename = storage.save_file(filename, content)
-    except ValueError as e:
-        return {"error": str(e)}
-    db.insert_upload(slug, filename, stored_filename, uploaded_by, description, tags,
-                      file_size=len(content), source_modified_at=source_modified_at,
-                      media_type=media_type,
-                      ocr_status="pending" if spec.ocr_capable else None)
-    # #255: this tool bypasses /api/upload and calls db.insert_upload
-    # directly, so it has to make the same post-insert call the route does
-    # or MCP-uploaded audio would silently miss its tags. Synchronous for
-    # the same reason as there — one ffprobe header read, and the object
-    # returned below should already carry the title.
-    embedded_metadata.fill_missing(slug)
-    if spec.ocr_capable:
-        # Background thread, not inline (#225): tesseract (up to
-        # OCR_TIMEOUT_SECONDS) plus a cold sentence-transformers load used to
-        # block the tool response. Same pattern constructicon_retry_ocr and
-        # the startup self-heal already use.
-        threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
-    elif spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
-        thumbnails.ensure_thumbnail(db.get_by_slug(slug))
-    return {**_to_public(db.get_by_slug(slug)), "duplicate": False}
+    return _ingest(filename, io.BytesIO(content), len(content), description, tags, uploaded_by, source_modified_at)
 
 
 @mcp.tool()
@@ -203,6 +246,10 @@ def constructicon_download(slug: str) -> dict | None:
     Takes a slug and returns the file's content base64-encoded, along with
     filename and media_type for round-trip upload/download cycles.
 
+    For files larger than the inline limit (~25MB), returns metadata + a stable
+    hotlink URL instead of base64 — fetch it from the URL to avoid inflating
+    the MCP message payload beyond practical limits (#433).
+
     Returns None if the object is not found, or an error dict if the object
     has no uploaded file (e.g., a YouTube link or other content-only object).
     """
@@ -214,6 +261,18 @@ def constructicon_download(slug: str) -> dict | None:
     path = storage.path_for(row["stored_filename"])
     if not path.exists():
         return {"error": "File missing on disk"}
+    size = path.stat().st_size
+    if size > DOWNLOAD_INLINE_MAX_BYTES:
+        # Return URL instead of base64 for large files
+        return {
+            "slug": row["slug"],
+            "filename": row["filename"],
+            "media_type": row.get("media_type") or "image",
+            "size_bytes": size,
+            "url": _to_public(row)["url"],
+            "content_base64": None,
+            "note": f"File is {size // (1024*1024)} MB, over the {DOWNLOAD_INLINE_MAX_BYTES // (1024*1024)} MB inline limit; fetch it from url instead.",
+        }
     content = path.read_bytes()
     return {
         "slug": row["slug"],
@@ -221,6 +280,81 @@ def constructicon_download(slug: str) -> dict | None:
         "media_type": row.get("media_type") or "image",
         "content_base64": base64.b64encode(content).decode("utf-8"),
     }
+
+
+@mcp.tool()
+def constructicon_import(path: str, description: str = "", tags: list[str] | None = None,
+                        uploaded_by: str = db.SOURCE_AUTHORED,
+                        source_modified_at: float | None = None) -> dict:
+    """Import a file already sitting in the server-side import inbox.
+
+    Use this for large files (up to the server's upload limit, e.g. hundreds of MB)
+    that are impractical to send base64 via constructicon_upload. Path is relative
+    to the inbox (e.g. "drawings/set-A.pdf"); anything resolving outside the inbox
+    is refused. The file is COPIED into storage and left in place in the inbox.
+
+    The stored filename is the file's basename. source_modified_at defaults to the
+    file's own mtime, so re-importing the same unchanged file returns the existing
+    object with duplicate: true. Same OCR/metadata behavior and return shape as
+    constructicon_upload.
+    """
+    if not IMPORT_DIR.is_dir():
+        return {"error": f"Import inbox {IMPORT_DIR} is not mounted on this server"}
+    p = _resolve_import_path(path)
+    if p is None:
+        return {"error": f"Not a file inside the import inbox: {path}"}
+    st = p.stat()
+    with p.open("rb") as f:
+        return _ingest(p.name, f, st.st_size, description, tags, uploaded_by,
+                      source_modified_at if source_modified_at is not None else st.st_mtime)
+
+
+@mcp.tool()
+def constructicon_list_import() -> dict:
+    """List files waiting in the import inbox (recursive).
+
+    Returns {"inbox": str(IMPORT_DIR), "max_upload_mb": storage.MAX_MB,
+    "files": [{"path": <posix path relative to inbox>, "size_bytes": n,
+    "modified_at": mtime, "supported": bool(detect_media_type)}]} sorted by path,
+    skipping hidden files/dirs (name starting with ".") and anything that resolves
+    outside the inbox. If the inbox isn't mounted return {"error": ...}.
+
+    Caps the listing at 1000 files and adds "truncated": True if more.
+    """
+    if not IMPORT_DIR.is_dir():
+        return {"error": f"Import inbox {IMPORT_DIR} is not mounted on this server"}
+
+    files = []
+    try:
+        for p in sorted(IMPORT_DIR.rglob("*")):
+            rel = p.relative_to(IMPORT_DIR)
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            # Same check constructicon_import applies: only list what it would
+            # accept (regular files, symlinks resolving inside the inbox).
+            if _resolve_import_path(rel) is None:
+                continue
+            st = p.stat()
+            files.append({
+                "path": rel.as_posix(),
+                "size_bytes": st.st_size,
+                "modified_at": st.st_mtime,
+                "supported": object_types.detect_media_type(p.name) is not None,
+            })
+            if len(files) >= 1000:
+                break
+    except Exception as e:
+        return {"error": f"Error listing import inbox: {e}"}
+
+    truncated = len(files) >= 1000
+    result = {
+        "inbox": str(IMPORT_DIR),
+        "max_upload_mb": storage.MAX_MB,
+        "files": files,
+    }
+    if truncated:
+        result["truncated"] = True
+    return result
 
 
 @mcp.tool()

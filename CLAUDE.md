@@ -336,7 +336,7 @@ sibling dir (see existing ones on the box for the naming convention).
 
 **The SQLite DB lives in its own directory, never a bare file mount (#453, 2026-09-30).** Both services mount `Media/<instance>/db/` at `/app/data/` with `CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db`. WAL mode keeps `-wal`/`-shm` beside the DB, and the old single-file mount gave web and mcp private copies, which corrupted constructicon-test's DB. Read DB state with a plain `sqlite3.connect(db.DB_PATH)` inside the app container, not a `?mode=ro` URI (that can miss the WAL and show stale rows). Every `/api/backup` result now includes `integrity`.
 
-**Captions are OFF on all four services (`CAPTION_DISABLED=1`) until #454 is fixed.** The per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Don't re-enable or bulk-caption before that fix.
+**Captions: guarded, not per-image-restarted (#454, 2026-09-30).** The old per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Captions are back ON everywhere with the #454 safety valve (restart only on failure / RAM ceiling, 10-min cooldown, circuit breaker; status in `GET /api/captions/defaults` → `breaker`, reset via `POST /api/captions/reset-breaker`). All four services join `ollama_default`. Only the **web** services mount `/var/run/docker.sock`; the MCP services deliberately don't (#458), so only web can do safety-valve restarts. After a reboot, check `ollama` is actually running: it can fail to start before the NVIDIA driver loads (see #454).
 
 Two containers run side by side on that box:
 

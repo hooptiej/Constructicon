@@ -70,7 +70,7 @@ Registration fails if two specs claim the same extension and fewer than one of t
 
 ### `pre_store_fn(candidate) -> PreStore`
 
-It runs after type detection, before the file is saved or the row inserted. It sees the spooled temp file.
+It runs after type detection and before the row is inserted. **As built (#448):** `ingest_file` saves the upload to storage first, so both `sniff_fn` and `pre_store_fn` get a real file path. The file is deleted if the type is unsupported after sniffing, on `reject`, and on `metadata_only`, so no bytes outlive a refusal.
 
 ```python
 PreStore.accept(**row_overrides)        # e.g. url: content_description=<url>
@@ -114,7 +114,7 @@ ingest.ingest_content(*, external_url=None, media_type=None, source, description
                       type_metadata=None, content_date=None, project_id=None) -> IngestResult
 ```
 
-`ingest_file` runs these steps in order: size guard → dupe check → `detect_media_type(filename, path)` (sniff) → `pre_store_fn` → save (`storage.save_stream`) → insert → embedded metadata → post-insert dispatch (text pipeline / capture thumb / captions) → project attach → automatch.
+`ingest_file` runs these steps in order: size guard → dupe check → extension check → save (`storage.save_stream`) → `detect_media_type(filename, path)` (sniff) → `pre_store_fn` → insert → embedded metadata → post-insert dispatch (text pipeline / capture thumb / captions) → project attach → automatch.
 
 `ingest_content` runs: validate or classify the type (`url_match_fn`, `url_fallback`) → `pre_store_fn` → insert → post-insert dispatch → project attach.
 

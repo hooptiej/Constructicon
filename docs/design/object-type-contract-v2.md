@@ -89,7 +89,7 @@ PreStore.needs_decision(kind, question, options, provisional_type)
 
 ### `edit_fields`
 
-`MetadataField`s with an `input` kind (`text`, `textarea`, `markdown`). The object page renders them generically, and saves go through the existing `type_metadata` update with keys validated against the spec. Document's write-up editor moves here.
+`MetadataField`s with an `input` kind (`text`, `textarea`, `markdown`). The object page renders them generically, and saves go through the existing `type_metadata` update. **As built (#448): edit_fields only drive what the page offers to edit. There's no new write-side validation**, because scripts and pipelines legitimately write undeclared `type_metadata` keys (rotation, auto-caption, YouTube counts). Document's write-up editor moves here.
 
 ## 2. One ingest pipeline (`core/ingest.py`)
 

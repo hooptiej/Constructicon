@@ -16,13 +16,15 @@ garbage in testing, a hard failure rather than a weak caption.
 
 Concurrency discipline (deliberately NOT the OCR semaphore — different
 resource, different failure mode): CAPTION_LOCK serializes every model call
-process-wide, one image at a time. Measured 2026-09-09 (separate deployment):
-a long-lived Ollama process doesn't release resources between successive
-calls on its own — usage accumulates until bounced. With keep_alive:0 (now
-the primary unload, not insurance), GPU memory returns to 1-4 MiB per call;
-container RAM stays 1.1-1.65 GB with no upward trend, no GPU errors.
-Per-image restart (#239's original design) cycled the container ~180 times
-during a bulk import on 2026-09-30 and hard-crashed the NAS. New rule (#454):
+process-wide, one image at a time. History: #239 restarted the Ollama
+container after every image, based on a 2026-09-09 observation on a
+separate deployment that a long-lived Ollama didn't release resources
+between calls. On 2026-09-30 that per-image restart cycled the GPU container
+~180 times during a bulk import and hard-crashed the whole NAS. Measured on
+this box right after (70 images, ~140 calls, no restarts): with
+keep_alive:0 (now the primary unload, not insurance) GPU memory returns to
+1-4 MiB after every call, container RAM stays 1.1-1.65 GB with no upward
+trend, and there were no GPU errors. New rule (#454):
 no routine restarts; restart only on model-call failure or if Ollama RAM
 exceeds the ceiling (measured peak ~1650 MB, threshold ~3000 MB), guarded
 by a cooldown (600s) and circuit breaker that opens after 3 consecutive
@@ -307,17 +309,19 @@ def _maybe_restart(reason):
 def breaker_status():
     """#454: Returns dict with current circuit-breaker state, memory ceiling,
     cooldown duration, and seconds since the last restart (if any).
-    Meant for the admin page's status display and the /api/captions/defaults response."""
-    with CAPTION_LOCK:
-        secs_since = None if _last_restart_at is None else time.monotonic() - _last_restart_at
-        return {
-            "open": _breaker_reason is not None,
-            "reason": _breaker_reason,
-            "consecutive_failures": _consecutive_failures,
-            "seconds_since_restart": secs_since,
-            "max_mem_mb": CAPTION_OLLAMA_MAX_MEM_MB,
-            "cooldown_seconds": CAPTION_RESTART_COOLDOWN_SECONDS,
-        }
+    Meant for the admin page's status display and the /api/captions/defaults response.
+    Deliberately does NOT take CAPTION_LOCK: that lock is held for a whole
+    model call (up to GENERATE_TIMEOUT_SECONDS), and a status read must not
+    stall an HTTP request behind a caption in progress."""
+    secs_since = None if _last_restart_at is None else time.monotonic() - _last_restart_at
+    return {
+        "open": _breaker_reason is not None,
+        "reason": _breaker_reason,
+        "consecutive_failures": _consecutive_failures,
+        "seconds_since_restart": secs_since,
+        "max_mem_mb": CAPTION_OLLAMA_MAX_MEM_MB,
+        "cooldown_seconds": CAPTION_RESTART_COOLDOWN_SECONDS,
+    }
 
 
 def reset_breaker():

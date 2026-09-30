@@ -28,9 +28,14 @@ codebase should need to change.
 
 import importlib
 import pkgutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+
+
+class ObjectTypeContractError(Exception):
+    """Raised when object type spec registration or validation fails."""
+    pass
 
 
 class ThumbnailSource(Enum):
@@ -54,6 +59,90 @@ class MetadataField:
     label: str
     required: bool = False
     help_text: str = ""
+    input: str = ""  # "" = not editable; "text" | "textarea" | "markdown"
+
+
+@dataclass(frozen=True)
+class TypeAction:
+    """An action available on rows of this type (#448).
+
+    handler: Callable that takes a row dict and returns a dict of updates.
+    confirm: Optional confirmation message to show before applying.
+    """
+    key: str
+    label: str
+    handler: object
+    confirm: str = ""
+
+
+@dataclass(frozen=True)
+class PreviewContext:
+    """Context passed to preview_fn (#448, deferred to PR 3).
+
+    item: The row dict (can be None for synthetic previews).
+    media_url: URL to the media itself (local /f/slug or external URL).
+    thumb_url: URL to a thumbnail image, if available.
+    page_url: URL to the object's detail page.
+    mode: "live" for web display, "export" for static export.
+    """
+    item: dict
+    media_url: str | None
+    thumb_url: str | None
+    page_url: str | None
+    mode: str = "live"
+
+
+@dataclass
+class IngestCandidate:
+    """Input to pre_store_fn: the minimal facts about an incoming file/content (#448)."""
+    filename: str | None
+    path: object  # pathlib.Path | None
+    media_type: str
+    source: str
+    external_url: str | None = None
+    content_description: str | None = None
+    type_metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class PreStore:
+    """Decision returned by pre_store_fn (#448): accept, reject, or defer to the owner."""
+    action: str  # "accept" | "reject" | "metadata_only" | "needs_decision"
+    reason: str = ""  # for "reject": human-readable reason
+    row_overrides: dict = field(default_factory=dict)  # allowed: content_description, content_date, type_metadata
+    type_metadata: dict | None = None  # for "metadata_only": per-type properties to store
+    decision: dict | None = None  # for "needs_decision": {"kind", "question", "options", "provisional_type"}
+
+    @classmethod
+    def accept(cls, **row_overrides):
+        """Accept the upload with optional field overrides."""
+        return cls(action="accept", row_overrides=row_overrides)
+
+    @classmethod
+    def reject(cls, reason):
+        """Reject the upload with a human-readable reason."""
+        return cls(action="reject", reason=reason)
+
+    @classmethod
+    def metadata_only(cls, type_metadata):
+        """Accept the content but skip storing the file (e.g. for URL-only content that needs special handling)."""
+        return cls(action="metadata_only", type_metadata=type_metadata)
+
+    @classmethod
+    def needs_decision(cls, kind, question, options, provisional_type):
+        """Defer to the owner: ask a question with a list of options, and store provisionally under provisional_type.
+
+        options: list of {"key", "label"} dicts
+        """
+        return cls(
+            action="needs_decision",
+            decision={
+                "kind": kind,
+                "question": question,
+                "options": options,
+                "provisional_type": provisional_type,
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -129,6 +218,31 @@ class ObjectTypeSpec:
     # degenerate repeated-punctuation garbage in testing, not just a weak
     # caption). Defaults False so a new type opts in deliberately.
     caption_capable: bool = False
+    # Issue #448: preview rendering function for web/export display.
+    # (PreviewContext) -> Markup; required from PR 3 on.
+    preview_fn: object = None
+    # Issue #448: tuple of preview asset definitions (deferred to PR 3).
+    preview_assets: tuple = ()
+    # Issue #448: content-based detection for file uploads.
+    # (path: Path, filename: str) -> bool — True if this file's bytes match the type.
+    # If None, extension-only matching; if present, called after extension match.
+    sniff_fn: object = None
+    # Issue #448: priority order for sniffers claiming the same extension.
+    # Higher wins; ties broken by key order. Ignored if sniff_fn is None.
+    sniff_priority: int = 0
+    # Issue #448: pre-storage decision hook.
+    # (IngestCandidate) -> PreStore; decides accept/reject/metadata_only/needs_decision.
+    pre_store_fn: object = None
+    # Issue #448: external URL classifier.
+    # (url: str) -> bool — True if this URL matches the type's domain/pattern.
+    url_match_fn: object = None
+    # Issue #448: is this the fallback type for URLs that don't match any sniff_fn?
+    # Exactly one type per extension can have url_fallback=True (checked at registry init).
+    url_fallback: bool = False
+    # Issue #448: actions available on rows of this type.
+    actions: tuple = ()  # tuple[TypeAction]
+    # Issue #448: form fields for editing type_metadata.
+    edit_fields: tuple = ()  # tuple[MetadataField]
 
 
 OBJECT_TYPES = {}
@@ -136,24 +250,112 @@ OBJECT_TYPES = {}
 
 def register(spec):
     """Register an ObjectTypeSpec in the global OBJECT_TYPES registry.
-    Called by each type module at the end of its definition."""
+    Called by each type module at the end of its definition.
+
+    Checks for duplicate keys and conflicting url_fallback settings.
+    Full registry validation happens after all modules are imported (see _validate_registry).
+    """
+    if spec.key in OBJECT_TYPES:
+        raise ObjectTypeContractError(f"Duplicate object type key: {spec.key}")
+
+    # Check url_fallback conflicts: only one type can have url_fallback=True globally
+    if spec.url_fallback:
+        for existing_spec in OBJECT_TYPES.values():
+            if existing_spec.url_fallback:
+                raise ObjectTypeContractError(
+                    f"Multiple url_fallback specs registered: {existing_spec.key} and {spec.key}"
+                )
+
     OBJECT_TYPES[spec.key] = spec
     return spec
+
+
+def _validate_registry():
+    """After all modules are imported, check that extension ambiguities are resolvable.
+
+    For each extension claimed by 2+ specs: exactly one must have sniff_fn=None (the fallback).
+    Raises ObjectTypeContractError if unresolvable (2+ non-sniffer claimants).
+    """
+    extensions_to_specs = {}
+    for spec in OBJECT_TYPES.values():
+        for ext in spec.extensions:
+            if ext not in extensions_to_specs:
+                extensions_to_specs[ext] = []
+            extensions_to_specs[ext].append(spec)
+
+    for ext, specs in extensions_to_specs.items():
+        if len(specs) <= 1:
+            continue
+        # Multiple specs claim this extension — check for fallback ambiguity
+        non_sniffers = [s for s in specs if s.sniff_fn is None]
+        if len(non_sniffers) > 1:
+            keys = ", ".join(s.key for s in non_sniffers)
+            raise ObjectTypeContractError(
+                f"Extension {ext} claimed by {len(non_sniffers)} specs with no sniff_fn: {keys}"
+            )
 
 
 # Auto-discover and import all type modules in this package.
 for _, name, _ in pkgutil.iter_modules(__path__):
     importlib.import_module(f"{__name__}.{name}")
 
+# Validate the registry after all modules are imported
+_validate_registry()
 
-def detect_media_type(filename):
-    """Given a filename, return the media_type key if its extension
-    matches a registered type, or None if unsupported. Used to classify
-    uploads before calling storage.save_file()."""
+
+def detect_media_type(filename, path=None):
+    """Detect the media_type of a file using extension and optional content-based sniffing.
+
+    Args:
+        filename: Original filename (used for extension detection).
+        path: Optional Path to the file on disk (used for sniff_fn if available).
+
+    Returns:
+        The media_type key if a match is found, or None if unsupported.
+
+    Algorithm:
+        1. Extract extension from filename.
+        2. Find all specs that claim this extension.
+        3. If no specs claim it, return None.
+        4. Sort specs with sniff_fn by (-sniff_priority, key).
+        5. If path is provided, try each sniffer in order:
+           - If sniff_fn(Path(path), filename) returns True, return that spec's key.
+           - Exceptions logged as warnings, treated as False.
+        6. If no sniffer matched (or no path), use the fallback spec (sniff_fn=None) if available.
+        7. Otherwise, return the first sniffer's key if path=None, or None if only sniffers and no path.
+    """
     ext = Path(filename).suffix.lower()
-    for spec in OBJECT_TYPES.values():
-        if ext in spec.extensions:
-            return spec.key
+    candidates = [s for s in OBJECT_TYPES.values() if ext in s.extensions]
+
+    if not candidates:
+        return None
+
+    # Separate sniffers from fallback
+    sniffers = [s for s in candidates if s.sniff_fn is not None]
+    sniffers.sort(key=lambda s: (-s.sniff_priority, s.key))
+    fallback = next((s for s in candidates if s.sniff_fn is None), None)
+
+    # If path is provided, try sniffers
+    if path is not None:
+        for sniffer in sniffers:
+            try:
+                if sniffer.sniff_fn(Path(path), filename):
+                    return sniffer.key
+            except Exception as e:
+                print(f"sniff_fn failed for {sniffer.key}: {e!r}", flush=True)
+
+        # If no sniffer matched, use fallback if available
+        if fallback:
+            return fallback.key
+        # Only sniffers and none matched, return None
+        return None
+
+    # No path provided: use fallback if available, else first sniffer
+    if fallback:
+        return fallback.key
+    if sniffers:
+        return sniffers[0].key
+
     return None
 
 
@@ -165,13 +367,25 @@ def accepted_extensions():
 
 
 def classify_url(url):
-    """Classify an external URL into a media_type key. Checks YouTube first
-    (to avoid misclassifying youtu.be/youtube links as generic URLs), then
-    defaults to 'url' as a fallback. Returns a media_type key suitable for
-    passing to db.insert_content()."""
-    from . import youtube
-    if youtube.matches(url):
-        return "youtube"
+    """Classify an external URL into a media_type key.
+
+    Algorithm:
+        1. Iterate through registered specs (sorted by key for determinism).
+        2. If spec.url_match_fn(url) returns True, return that spec's key.
+        3. Otherwise, use the spec with url_fallback=True, if any.
+        4. Fallback: return "url" (the default generic type).
+    """
+    # Try matching specs in deterministic order
+    for spec in sorted(OBJECT_TYPES.values(), key=lambda s: s.key):
+        if spec.url_match_fn and spec.url_match_fn(url):
+            return spec.key
+
+    # Use url_fallback spec if available
+    for spec in OBJECT_TYPES.values():
+        if spec.url_fallback:
+            return spec.key
+
+    # Final fallback to generic "url" type
     return "url"
 
 

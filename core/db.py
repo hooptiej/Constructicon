@@ -669,6 +669,16 @@ def set_ocr_status(slug, status):
         conn.close()
 
 
+def set_media_type(slug, media_type):
+    """#448: retype a row to a different media_type. Used by core/ingest.py's retype()."""
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE capture_events SET media_type = ? WHERE slug = ?", (media_type, slug))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def list_stale_pending_ocr(older_than_seconds):
     """Rows stuck at ocr_status='pending' for suspiciously long — the
     watchdog re-fires these rather than assuming they're just queued behind

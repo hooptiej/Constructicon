@@ -24,12 +24,29 @@ class IngestResult:
     - row: The created/found row dict, or None if error/duplicate (check duplicate flag).
     - duplicate: True if this is an existing row (file already uploaded).
     - error: Human-readable error message, or None if successful.
-    - error_kind: Category of error — one of "too_large", "unsupported", "invalid", or None.
+    - error_kind: Category of error — one of "too_large", "unsupported", "invalid", "rejected", or None.
+    - pending_decision_id: #448: if action is "needs_decision", the id of the pending_decisions row queued.
     """
     row: dict | None = None
     duplicate: bool = False
     error: str | None = None
     error_kind: str | None = None
+    pending_decision_id: int | None = None
+
+
+def _apply_pre_store(spec, candidate):
+    """#448: Helper to invoke pre_store_fn if present, or return accept().
+
+    Args:
+        spec: ObjectTypeSpec for this item's media_type.
+        candidate: IngestCandidate with file/content details.
+
+    Returns:
+        PreStore decision.
+    """
+    if spec.pre_store_fn:
+        return spec.pre_store_fn(candidate)
+    return object_types.PreStore.accept()
 
 
 def attach_to_project(slug, project_id):
@@ -189,7 +206,7 @@ def ingest_file(
     if dupe is not None:
         return IngestResult(row=dupe, duplicate=True)
 
-    # Media type detection
+    # Media type detection (extension-only check first, no path yet)
     media_type = object_types.detect_media_type(filename)
     if media_type is None:
         return IngestResult(
@@ -208,16 +225,105 @@ def ingest_file(
             error_kind="too_large"
         )
 
-    # Insert into database
+    # Now with the path available, detect media_type again (may sniff the content)
+    path = storage.path_for(stored_filename)
+    media_type_sniffed = object_types.detect_media_type(filename, path)
+
+    # If sniffing failed to find a type, the file isn't supported
+    if media_type_sniffed is None:
+        path.unlink(missing_ok=True)
+        return IngestResult(
+            error=f"Unsupported file type: {Path(filename).suffix}",
+            error_kind="unsupported"
+        )
+
+    # Use sniffed type if different
+    if media_type_sniffed != media_type:
+        media_type = media_type_sniffed
+        spec = object_types.get_object_type(media_type)
+
+    # #448: pre-store hook — allows the type to reject, skip, or defer
+    candidate = object_types.IngestCandidate(
+        filename=filename,
+        path=path,
+        media_type=media_type,
+        source=source,
+    )
+    decision = _apply_pre_store(spec, candidate)
+
+    if decision.action == "reject":
+        path.unlink(missing_ok=True)
+        return IngestResult(
+            error=decision.reason,
+            error_kind="rejected"
+        )
+
+    if decision.action == "metadata_only":
+        path.unlink(missing_ok=True)
+        db.insert_upload(
+            slug, filename, None, source,
+            description=description,
+            tags=tags or [],
+            client=client or None,
+            file_size=size,
+            source_modified_at=source_modified_at,
+            media_type=media_type,
+            type_metadata=decision.type_metadata,
+        )
+        attach_to_project(slug, project_id or None)
+        auto_match(slug, [Path(filename).stem, folder_name])
+        return IngestResult(row=db.get_by_slug(slug))
+
+    if decision.action == "needs_decision":
+        # Provisional type must be registered
+        provisional = decision.decision["provisional_type"]
+        if provisional not in object_types.OBJECT_TYPES:
+            path.unlink(missing_ok=True)
+            raise object_types.ObjectTypeContractError(
+                f"pre_store_fn returned needs_decision with unregistered provisional_type: {provisional}"
+            )
+
+        db.insert_upload(
+            slug, filename, stored_filename, source,
+            description=description,
+            tags=tags or [],
+            client=client or None,
+            file_size=size,
+            source_modified_at=source_modified_at,
+            media_type=provisional,
+            ocr_status="pending" if object_types.get_object_type(provisional).ocr_capable else None,
+        )
+
+        embedded_metadata.fill_missing(slug)
+        post_insert(slug, spec, run_background)
+        attach_to_project(slug, project_id or None)
+        auto_match(slug, [Path(filename).stem, folder_name])
+
+        # Queue the pending decision
+        decision_id = db.add_pending_decision("retype", slug, decision.decision)
+        return IngestResult(row=db.get_by_slug(slug), pending_decision_id=decision_id)
+
+    # action == "accept" — the normal path
+    # Apply row_overrides (only allowed keys: content_description, content_date, type_metadata)
+    insert_kwargs = {
+        "description": description,
+        "tags": tags or [],
+        "client": client or None,
+        "file_size": size,
+        "source_modified_at": source_modified_at,
+        "media_type": media_type,
+        "ocr_status": "pending" if spec.ocr_capable else None,
+    }
+
+    for key, value in decision.row_overrides.items():
+        if key in ("content_description", "content_date", "type_metadata"):
+            insert_kwargs[key] = value
+        else:
+            print(f"Ignoring unrecognized row_override key: {key}", flush=True)
+
     db.insert_upload(
         slug, filename, stored_filename, source,
-        description=description,
-        tags=tags or [],
-        client=client or None,
-        file_size=size,
-        source_modified_at=source_modified_at,
-        media_type=media_type,
-        ocr_status="pending" if spec.ocr_capable else None,
+        **insert_kwargs
     )
 
     # #255: seed content_description/display_name/type_metadata from the
@@ -297,15 +403,6 @@ def ingest_content(
         )
     spec = object_types.get_object_type(media_type)
 
-    # #194: a generic web page has no title-fetch path the way YouTube does
-    # (real title via scripts/full_youtube_channel_sync.py's API call) --
-    # without this, content_description stays empty and _to_public's
-    # display_name fallback chain (filename/content_description/slug) shows
-    # the bare random slug on the page title/breadcrumb, with no visible
-    # trace of the URL the owner actually pasted.
-    if media_type == "url" and external_url and not content_description:
-        content_description = external_url
-
     # Validate that this type doesn't require a file upload
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
         return IngestResult(
@@ -314,17 +411,47 @@ def ingest_content(
             error_kind="invalid"
         )
 
+    # #448: pre-store hook — for content, reject/metadata_only/needs_decision are type-file bugs
+    candidate = object_types.IngestCandidate(
+        filename=None,
+        path=None,
+        media_type=media_type,
+        source=source,
+        external_url=external_url,
+        content_description=content_description,
+        type_metadata=type_metadata,
+    )
+    decision = _apply_pre_store(spec, candidate)
+
+    if decision.action != "accept":
+        raise object_types.ObjectTypeContractError(
+            f"Type {spec.key}'s pre_store_fn returned '{decision.action}' for content-only ingest; "
+            f"only 'accept' is valid for rows with no uploaded file"
+        )
+
     # Create slug and insert
     slug = storage.make_slug()
+
+    # Apply row_overrides (only allowed keys: content_description, content_date, type_metadata)
+    insert_kwargs = {
+        "description": description,
+        "tags": tags or [],
+        "client": client or None,
+        "type_metadata": type_metadata,
+    }
+
+    for key, value in decision.row_overrides.items():
+        if key in ("content_description", "content_date", "type_metadata"):
+            insert_kwargs[key] = value
+        else:
+            print(f"Ignoring unrecognized row_override key: {key}", flush=True)
+
     db.insert_content(
         slug, source, media_type,
         external_url=external_url or None,
-        content_description=content_description or None,
-        content_date=content_date,
-        description=description,
-        tags=tags or [],
-        client=client or None,
-        type_metadata=type_metadata,
+        content_description=insert_kwargs.get("content_description", content_description),
+        content_date=insert_kwargs.get("content_date", content_date),
+        **{k: v for k, v in insert_kwargs.items() if k not in ("content_description", "content_date")}
     )
 
     # Background tasks
@@ -334,3 +461,41 @@ def ingest_content(
     attach_to_project(slug, project_id or None)
 
     return IngestResult(row=db.get_by_slug(slug))
+
+
+def retype(slug, new_media_type, run_background):
+    """#448: Change a row's media_type to a different registered type.
+
+    Resets OCR status if the new type is OCR-capable, deletes any existing
+    thumbnail, and re-runs embedded metadata extraction and post-insert steps.
+
+    Args:
+        slug: The row's slug.
+        new_media_type: The new media_type key (must be registered).
+        run_background: Callable to schedule background work.
+
+    Returns:
+        The updated row dict, or raises ObjectTypeContractError if new_media_type is unregistered.
+    """
+    if new_media_type not in object_types.OBJECT_TYPES:
+        raise object_types.ObjectTypeContractError(f"Unknown media_type: {new_media_type}")
+
+    spec = object_types.get_object_type(new_media_type)
+
+    # Update the media_type
+    db.set_media_type(slug, new_media_type)
+
+    # Reset OCR status if the new type is OCR-capable
+    if spec.ocr_capable:
+        db.set_ocr_status(slug, "pending")
+
+    # Delete any existing thumbnail
+    storage.thumb_path_for(slug).unlink(missing_ok=True)
+
+    # Re-run embedded metadata extraction
+    embedded_metadata.fill_missing(slug)
+
+    # Re-run post-insert steps (OCR, thumbnail, captions)
+    post_insert(slug, spec, run_background)
+
+    return db.get_by_slug(slug)

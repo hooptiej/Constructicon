@@ -68,7 +68,8 @@ def _ingest(filename, fileobj, file_size, description, tags, uploaded_by, source
     simply wraps its result for the MCP response format.
 
     Returns {"slug": ..., ..._to_public fields..., "duplicate": False} on success,
-    or {"error": "..."} on failure.
+    or {"error": "..."} on failure. May include "pending_decision_id" if the type's
+    pre_store_fn deferred to the owner (#448).
     """
     result = ingest.ingest_file(
         fileobj,
@@ -84,9 +85,15 @@ def _ingest(filename, fileobj, file_size, description, tags, uploaded_by, source
     if result.error:
         return {"error": result.error}
     elif result.duplicate:
-        return {**_to_public(result.row), "duplicate": True}
+        response = {**_to_public(result.row), "duplicate": True}
+        if result.pending_decision_id:
+            response["pending_decision_id"] = result.pending_decision_id
+        return response
     else:
-        return {**_to_public(result.row), "duplicate": False}
+        response = {**_to_public(result.row), "duplicate": False}
+        if result.pending_decision_id:
+            response["pending_decision_id"] = result.pending_decision_id
+        return response
 
 
 def _to_public(row):

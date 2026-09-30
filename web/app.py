@@ -1063,21 +1063,25 @@ def api_list_pending_decisions():
 
 
 @app.post("/api/pending-decisions/{decision_id}/resolve")
-def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form([])):
-    """#240: the checkbox-resolve action. For project_match, `project_ids`
-    is whichever candidates were ticked — zero ("none of these"), one, or
-    several, since an item can reasonably belong to more than one project.
-    Only ids that were actually candidates are honored (anything else is
-    ignored, not an error — a stale form can't add the item somewhere it
-    was never asked about). Attaches via _attach_to_project so the linked
-    tag / cover behavior matches a drawer pick, then marks the decision
-    resolved with what was applied."""
+def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form([]), choice: str = Form("")):
+    """#240/#448: the checkbox-resolve action.
+
+    For project_match, `project_ids` is whichever candidates were ticked — zero ("none of these"),
+    one, or several, since an item can reasonably belong to more than one project.
+    Only ids that were actually candidates are honored (anything else is ignored, not an error —
+    a stale form can't add the item somewhere it was never asked about). Attaches via
+    ingest.attach_to_project so the linked tag / cover behavior matches a drawer pick.
+
+    For retype (#448), `choice` is the key of the chosen option from the decision's options list.
+    Only keys that were actually in the options are honored."""
     decision = db.get_pending_decision(decision_id)
     if decision is None:
         raise HTTPException(status_code=404, detail="No such pending decision")
     if decision["resolved_at"] is not None:
         raise HTTPException(status_code=409, detail="Already resolved")
+
     applied = []
+
     if decision["kind"] == automatch.KIND_PROJECT_MATCH:
         allowed = {int(pid) for pid in decision["payload"].get("candidate_project_ids", [])}
         chosen = []
@@ -1089,7 +1093,19 @@ def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form
             for pid in chosen:
                 ingest.attach_to_project(decision["post_slug"], pid)
                 applied.append(pid)
-    db.resolve_pending_decision(decision_id, {"project_ids": applied})
+        db.resolve_pending_decision(decision_id, {"project_ids": applied})
+
+    elif decision["kind"] == "retype":
+        allowed_keys = {o["key"] for o in decision["payload"].get("options", [])}
+        if choice and choice in allowed_keys:
+            if db.get_by_slug(decision["post_slug"]) is not None:
+                ingest.retype(decision["post_slug"], choice, lambda f, *args: None)
+                applied.append(choice)
+        db.resolve_pending_decision(decision_id, {"choice": choice or None})
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown decision kind: {decision['kind']}")
+
     return JSONResponse({"ok": True, "applied": applied, "remaining": db.count_pending_decisions()})
 
 
@@ -1556,7 +1572,10 @@ async def api_upload(
     elif result.error:
         raise HTTPException(status_code=400, detail=result.error)
 
-    return JSONResponse(_to_public(result.row))
+    response = _to_public(result.row)
+    if result.pending_decision_id:
+        response["pending_decision_id"] = result.pending_decision_id
+    return JSONResponse(response)
 
 
 
@@ -1634,7 +1653,10 @@ async def api_create_content(
             detail += " — use /api/upload"
         raise HTTPException(status_code=400, detail=detail)
 
-    return JSONResponse(_to_public(result.row))
+    response = _to_public(result.row)
+    if result.pending_decision_id:
+        response["pending_decision_id"] = result.pending_decision_id
+    return JSONResponse(response)
 
 
 def _derive_processing_status(row):

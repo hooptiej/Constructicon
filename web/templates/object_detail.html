@@ -31,48 +31,6 @@
         {% elif item.preview_html %}{{ item.preview_html }}
         {% elif item.is_image_file %}
           <img id="preview-img" src="{{ item.url }}" alt="{{ item.filename }}" title="Click to view full size"{% if item.type_metadata.rotation %} style="transform:rotate({{ item.type_metadata.rotation }}deg)"{% endif %}>
-        {% elif item.is_audio_file %}
-          {# #28: audio has no visual frame to capture (thumbnail_source is
-             NONE — see core/object_types.py), so it gets its own explicit
-             branch rather than falling into the generic thumb_url one
-             below, same as the YouTube embed above needs its own branch
-             distinct from a generic CAPTURE thumbnail. #}
-          <div class="audio-preview">
-            <div class="audio-preview-icon">{{ item.icon }}</div>
-            {# #290: the file's own tags, right in the preview rather than
-               only on the Properties panel further down. Read straight off
-               the row -- #255 already put the title in content_description
-               and artist/album/track/year/genre in type_metadata (the key
-               names are core/object_types/audio.py's metadata_fields), so
-               no per-page ffprobe here. A tagless file (the DASH->mp3
-               remux case) says so explicitly instead of leaving dead space. #}
-            {% set audio_tags = item.type_metadata %}
-            {% if item.content_description or audio_tags.artist or audio_tags.album or audio_tags.track or audio_tags.year or audio_tags.genre %}
-            <div class="audio-tags">
-              {% if item.content_description %}<div class="audio-tag-title">{{ item.content_description }}</div>{% endif %}
-              {% if audio_tags.artist %}<div class="audio-tag-artist">{{ audio_tags.artist }}</div>{% endif %}
-              {% if audio_tags.album or audio_tags.track or audio_tags.year or audio_tags.genre %}
-              <div class="audio-tag-row">
-                {% if audio_tags.album %}<span><span class="audio-tag-label">Album</span>{{ audio_tags.album }}</span>{% endif %}
-                {% if audio_tags.track %}<span><span class="audio-tag-label">Track</span>{{ audio_tags.track }}</span>{% endif %}
-                {% if audio_tags.year %}<span><span class="audio-tag-label">Year</span>{{ audio_tags.year }}</span>{% endif %}
-                {% if audio_tags.genre %}<span><span class="audio-tag-label">Genre</span>{{ audio_tags.genre }}</span>{% endif %}
-              </div>
-              {% endif %}
-            </div>
-            {% else %}
-            <div class="audio-tags audio-tags-empty">No tags found</div>
-            {% endif %}
-            <audio controls preload="metadata" src="{{ item.url }}"></audio>
-          </div>
-        {% elif item.is_video_file %}
-          {# #92: video files with CAPTURE-sourced thumbnails (a frame
-             extracted by ffmpeg at upload time). The poster attribute shows
-             the thumbnail before playback, giving a visual preview same as
-             galleries show for all types. #}
-          <div class="video-preview">
-            <video controls preload="metadata" poster="{{ item.thumb_url }}" src="{{ item.url }}"></video>
-          </div>
         {% elif item.thumb_url %}
           {# Generic CAPTURE-sourced preview — a PDF's rendered first page
              today, a future stream/URL screenshot tomorrow (see
@@ -93,14 +51,6 @@
             <circle cx="8" cy="9" r="1.6" stroke="#3F4530" stroke-width="1.4"/>
             <path d="M3 16L8.5 11.5L13 15L16.5 12L21 16" stroke="#3F4530" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-        {% elif item.media_type == 'url' and item.external_url %}
-          {# #197: no capture_fn exists yet to generate a real screenshot
-             (see core/object_types/url.py), so this is a real clickable
-             link rather than a dead thumbnail/lightbox or unclickable
-             plain text. #}
-          <div class="content-text-preview">
-            <a href="{{ item.external_url }}" target="_blank" rel="noopener" class="external-link-btn">{{ item.external_url }}</a>
-          </div>
         {% else %}
           <div class="content-text-preview">
             <p>{{ item.content_description or item.description or 'No preview available for this content.' }}</p>
@@ -266,12 +216,17 @@
             {% if item.display_date_override %}Manually set.{% else %}Computed: {{ item.effective_date_display }}{% endif %}
           </div>
         </div>
-        {% if item.media_type == 'document' %}
+        {# #449: generic edit fields per type, replacing the document-only WRITE-UP block #}
+        {% for f in item.edit_fields %}
         <div class="field" style="margin-top:15px">
-          <label>WRITE-UP</label>
-          <textarea class="input" id="document-body-textarea" name="document_body" rows="8" placeholder="Write your document here…">{{ item.type_metadata.get('body', '') }}</textarea>
+          <label>{{ f.label }}</label>
+          {% if f.input in ('textarea', 'markdown') %}
+          <textarea class="input edit-field" data-key="{{ f.key }}" rows="8" placeholder="{{ f.help_text }}">{{ f.value or '' }}</textarea>
+          {% else %}
+          <input class="input edit-field" type="text" data-key="{{ f.key }}" placeholder="{{ f.help_text }}" value="{{ f.value or '' }}">
+          {% endif %}
         </div>
-        {% endif %}
+        {% endfor %}
         <div class="field" style="margin-top:15px">
           <label>TAGS</label>
           <div class="tag-input-box" id="tag-box">
@@ -953,10 +908,13 @@ document.getElementById('detail-form').addEventListener('submit', async (e) => {
   // editor above) — client/GET /api/clients/sync_clients.py are left
   // alone per #1's decision, this just stops the detail page's save form
   // from touching that field at all.
-  // #156: for document-type items, include the body in type_metadata
-  const documentBodyTextarea = document.getElementById('document-body-textarea');
-  if (documentBodyTextarea) {
-    form.append('type_metadata', JSON.stringify({ body: documentBodyTextarea.value }));
+  // #449: collect all edit-field inputs (per-type metadata fields) into type_metadata
+  const fields = {};
+  document.querySelectorAll('.edit-field').forEach((el) => {
+    fields[el.dataset.key] = el.value;
+  });
+  if (Object.keys(fields).length > 0) {
+    form.append('type_metadata', JSON.stringify(fields));
   }
   const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
   if (res.ok) {

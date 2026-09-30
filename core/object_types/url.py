@@ -15,7 +15,8 @@ This pre_store_fn seeded the URL itself as the description — no title-fetch AP
 just "the URL is better than nothing" behavior.
 """
 
-from . import register, ObjectTypeSpec, ThumbnailSource, PreStore, IngestCandidate
+from urllib.parse import urlparse
+from . import register, ObjectTypeSpec, ThumbnailSource, PreStore, IngestCandidate, _preview
 
 
 def url_pre_store(candidate: IngestCandidate) -> PreStore:
@@ -23,6 +24,50 @@ def url_pre_store(candidate: IngestCandidate) -> PreStore:
     if candidate.external_url and not candidate.content_description:
         return PreStore.accept(content_description=candidate.external_url)
     return PreStore.accept()
+
+
+def preview(ctx):
+    """#449 preview_fn: clickable link card with the URL.
+    Live: external link button. Export: bare <a> with optional label."""
+    url = ctx.item.get("external_url")
+    if not url:
+        return None
+    label = ctx.item.get("display_name") if ctx.mode == "export" else None
+    return _preview.link_card(ctx, url, label=label or url)
+
+
+def get_properties(row):
+    """#449 properties_fn: Domain (without www.), Scheme (uppercase), Path (if not / or empty)."""
+    url = row.get("external_url")
+    if not url:
+        return {}
+
+    try:
+        parsed = urlparse(url)
+        props = {}
+
+        # Domain (without leading "www.")
+        netloc = parsed.netloc
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        if netloc:
+            props["Domain"] = netloc
+
+        # Scheme (uppercase)
+        if parsed.scheme:
+            props["Scheme"] = parsed.scheme.upper()
+
+        # Path (only if not empty or /)
+        path = parsed.path
+        if path and path != "/":
+            if len(path) > 120:
+                path = path[:117] + "…"
+            props["Path"] = path
+
+        return props
+    except Exception as e:
+        print(f"URL properties extraction failed for {url}: {e!r}")
+        return {}
 
 
 register(ObjectTypeSpec(
@@ -33,6 +78,8 @@ register(ObjectTypeSpec(
     url_fallback=True,  # #448: the fallback for URLs that don't match any specific type
     pre_store_fn=url_pre_store,  # #448: implement #194 rule
     capture_fn=None,  # TODO(future issue): screenshot the page
+    preview_fn=preview,
+    properties_fn=get_properties,
     badge_icon="\U0001F517",
     badge_text="WEB",
 ))

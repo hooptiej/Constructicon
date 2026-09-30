@@ -502,16 +502,6 @@ def _to_object_detail(row):
         # missed .webp/.bmp/.tiff/.ico, which image.py registers, so those
         # uploads fell through to the 400px-thumbnail branch instead.
         "is_image_file": is_file and spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE,
-        # #28: drives the <audio controls> mini player branch in
-        # object_detail.html. media_type-based rather than an
-        # extension-suffix check, since "audio" is registered ahead of
-        # _to_object_detail via core/object_types.py and nothing here needs
-        # to know its exact extensions.
-        "is_audio_file": is_file and media_type == "audio",
-        # #92: drives the <video controls> player branch in object_detail.html,
-        # following the is_audio_file pattern — media_type-based check rather
-        # than extension tuple, since "video" is registered in object_types.py.
-        "is_video_file": is_file and media_type == "video",
         "url": f"/f/{row['slug']}" if is_file else None,
         "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
         "external_url": row.get("external_url"),

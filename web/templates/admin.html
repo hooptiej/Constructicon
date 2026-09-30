@@ -152,11 +152,12 @@
          philosophy as every other subjective-tuning control in this repo:
          an objective tool beats a guess-deploy-eyeball cycle. Each run goes
          through the exact pipeline cycle (POST /api/captions/test →
-         core/captions.py caption_once: lock, one call, Ollama restart), so
-         the timings shown are what production will see. Nothing here
-         writes to the object. Full-row panel: controls on the left, the
-         preview image and model output on the right, so a long caption has
-         real width to wrap into instead of a 300px column. -->
+         core/captions.py caption_once: lock, one call, guarded restart on
+         failure or RAM ceiling, #454), so the timings shown are what
+         production will see. Nothing here writes to the object. Full-row
+         panel: controls on the left, the preview image and model output on
+         the right, so a long caption has real width to wrap into instead of
+         a 300px column. -->
     <section class="admin-panel admin-panel-wide admin-caption-tuning">
       <div class="admin-panel-header">
         <div>

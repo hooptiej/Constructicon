@@ -114,6 +114,16 @@ def extract_text_for_row(row):
     return extract_text(path) if path else ""
 
 
+def _round_len(value):
+    """'299.6886688232422' -> '299.69', '77.816841mm' -> '77.82mm', '200' -> '200'.
+    Anything that isn't number+unit is returned unchanged (#449)."""
+    import re
+    m = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*([a-zA-Z%]*)\s*", value or "")
+    if not m:
+        return value
+    return f"{float(m.group(1)):.2f}".rstrip("0").rstrip(".") + m.group(2)
+
+
 def get_properties(row):
     """ObjectTypeSpec.properties_fn for media_type='svg' — dimensions, viewBox,
     title, description, element count, embedded raster count, or {} on any
@@ -135,11 +145,11 @@ def get_properties(row):
         width = root.get("width")
         height = root.get("height")
         if width and height:
-            props["Dimensions"] = f"{width} × {height}"
+            props["Dimensions"] = f"{_round_len(width)} × {_round_len(height)}"
 
         viewbox = root.get("viewBox")
         if viewbox:
-            props["viewBox"] = viewbox
+            props["viewBox"] = " ".join(_round_len(v) for v in viewbox.replace(",", " ").split())
 
         # Extract title and description
         for elem in root:

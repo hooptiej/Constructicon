@@ -129,56 +129,76 @@ def capture_thumbnail(row):
     return render_preview(path) if path else None
 
 
-def get_properties(row):
-    """ObjectTypeSpec.properties_fn for media_type='stl' — triangle count,
-    dimensions, format (ASCII/binary), watertight status, volume, or {} on
-    any failure."""
-    path = _stored_path(row)
-    if not path:
-        return {}
+# #449: full mesh stats are too slow to compute on every page view (7.9 s for
+# a real 22 MB / 465k-triangle file), so they're computed ONCE at upload by
+# get_embedded_metadata (core/embedded_metadata.py runs it synchronously in
+# the ingest pipeline) and stored under type_metadata[STATS_KEY]. The page
+# only formats what's stored; until then it shows header-only facts.
+STATS_KEY = "stl_stats"
+
+
+def _binary_triangle_count(path):
+    """Triangle count from a binary STL's header (uint32 at byte 80), or None
+    if the file isn't a well-formed binary STL. Constant time."""
+    size = path.stat().st_size
+    if size < 84:
+        return None
+    with open(path, "rb") as f:
+        f.seek(80)
+        n = int.from_bytes(f.read(4), "little")
+    return n if size == 84 + 50 * n else None
+
+
+def get_embedded_metadata(path):
+    """ObjectTypeSpec.embedded_metadata_fn for media_type='stl' (#449): the
+    full mesh stats, computed once at upload and stored in type_metadata.
+    Uses numpy-stl's EXACT watertight check (the fast one warns it can give
+    false positives/negatives); it's affordable because it runs once.
+    Returns {} on any failure, like every other embedded_metadata_fn."""
     try:
         mesh = stl_mesh.Mesh.from_file(str(path))
-        props = {}
-
-        # Triangle count
-        props["Triangles"] = f"{len(mesh.vectors):,}"
-
-        # Dimensions from bounding box
-        bbox_min = mesh.min_
-        bbox_max = mesh.max_
-        width = bbox_max[0] - bbox_min[0]
-        height = bbox_max[1] - bbox_min[1]
-        depth = bbox_max[2] - bbox_min[2]
-        props["Dimensions"] = f"{width:.2f} × {height:.2f} × {depth:.2f} (model units)"
-
-        # Format: check if ASCII or binary
-        with open(path, "rb") as f:
-            header = f.read(5)
-        is_ascii = header == b"solid"
-        file_size = path.stat().st_size
-        expected_binary_size = 84 + 50 * len(mesh.vectors)
-        if is_ascii and file_size == expected_binary_size:
-            format_str = "binary"
-        elif is_ascii:
-            format_str = "ASCII"
-        else:
-            format_str = "binary"
-        props["Format"] = format_str
-
-        # Watertight and volume
-        try:
-            if mesh.is_closed():
-                volume, _, _ = mesh.get_mass_properties()
-                props["Watertight"] = "yes"
-                props["Volume"] = f"{abs(volume):.2f} (model units³)"
-            else:
-                props["Watertight"] = "no"
-        except Exception:
-            props["Watertight"] = "unknown"
-
-        return props
+        dims = [float(v) for v in (mesh.max_ - mesh.min_)]
+        stats = {
+            "triangles": int(len(mesh.vectors)),
+            "dims": dims,
+            "format": "binary" if _binary_triangle_count(path) is not None else "ASCII",
+            "watertight": bool(mesh.is_closed(exact=True)),
+        }
+        if stats["watertight"]:
+            volume, _, _ = mesh.get_mass_properties()
+            stats["volume"] = abs(float(volume))
+        return {"type_metadata": {STATS_KEY: stats}}
     except Exception as e:
-        print(f"STL properties extraction failed for {path}: {e!r}")
+        print(f"STL stats extraction failed for {path}: {e!r}")
+        return {}
+
+
+def get_properties(row):
+    """ObjectTypeSpec.properties_fn for media_type='stl': formats the stats
+    stored at upload (see get_embedded_metadata). Rows without them yet (not
+    backfilled) get only header facts. Never parses the mesh here."""
+    try:
+        stats = (row.get("type_metadata") or {}).get(STATS_KEY)
+        if stats:
+            x, y, z = stats["dims"]
+            props = {
+                "Triangles": f"{stats['triangles']:,}",
+                "Dimensions": f"{x:.2f} × {y:.2f} × {z:.2f} (model units)",
+                "Format": stats["format"],
+                "Watertight": "yes" if stats["watertight"] else "no",
+            }
+            if stats.get("volume") is not None:
+                props["Volume"] = f"{stats['volume']:.2f} (model units³)"
+            return props
+        path = _stored_path(row)
+        if not path:
+            return {}
+        n = _binary_triangle_count(path)
+        if n is not None:
+            return {"Triangles": f"{n:,}", "Format": "binary"}
+        return {"Format": "ASCII"}
+    except Exception as e:
+        print(f"STL properties failed for {row.get('slug')}: {e!r}")
         return {}
 
 
@@ -207,6 +227,7 @@ register(ObjectTypeSpec(
     extensions=frozenset({".stl"}),
     capture_fn=capture_thumbnail,
     properties_fn=get_properties,  # #449
+    embedded_metadata_fn=get_embedded_metadata,  # #449: stats once, at upload
     badge_icon="\U0001F9CA",  # ice cube — closest built-in glyph to a 3D-printed block
     badge_text="STL",
 ))

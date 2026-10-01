@@ -2,7 +2,8 @@
 searchable indexing.
 
 Source code files (PHP, Python, JavaScript, shell scripts, PowerShell, JSON,
-YAML, HTML, CSS, SQL, Lua — #297) are stored as-is with their raw UTF-8 text
+YAML, HTML, CSS, SQL, Lua — #297; Arduino .ino and C/C++ sources and
+headers — #469) are stored as-is with their raw UTF-8 text
 content extracted and indexed for search. No visual thumbnail concept — code
 files are NONE-sourced, same as written posts or archives.
 
@@ -36,6 +37,28 @@ _LANGUAGE_MAP = {
     ".css": "CSS",
     ".sql": "SQL",
     ".lua": "Lua",
+    # #469: Arduino and the C family
+    ".ino": "Arduino (C++)",
+    ".c": "C",
+    ".h": "C/C++ header",
+    ".cpp": "C++",
+    ".cc": "C++",
+    ".cxx": "C++",
+    ".hpp": "C++ header",
+    ".hh": "C++ header",
+}
+
+# #469: highlight.js language per extension, so the preview doesn't rely on
+# auto-detection (which can't tell C from C++ from Arduino reliably). Only
+# languages in the bundled build (web/static/vendor/highlight/highlight.min.js);
+# anything not listed (e.g. .ps1, which the bundle lacks) falls back to
+# auto-detection.
+_HLJS_LANGUAGE = {
+    ".py": "python", ".js": "javascript", ".php": "php", ".sh": "bash",
+    ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".html": "xml",
+    ".css": "css", ".sql": "sql", ".lua": "lua",
+    ".ino": "cpp", ".c": "c", ".h": "cpp", ".cpp": "cpp", ".cc": "cpp",
+    ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp",
 }
 
 
@@ -108,8 +131,10 @@ def preview(ctx):
     text = ctx.item.get("extracted_text") or ""
     if not text:
         return None
+    lang = _HLJS_LANGUAGE.get(Path(ctx.item.get("filename") or "").suffix.lower())
+    css = f"hljs language-{lang}" if lang else "hljs"  # #469: explicit language when known
     return Markup(
-        f'<div class="code-preview"><pre><code id="code-preview-block" class="hljs">{escape(text)}</code></pre></div>'
+        f'<div class="code-preview"><pre><code id="code-preview-block" class="{css}">{escape(text)}</code></pre></div>'
     )
 
 
@@ -121,7 +146,7 @@ register(ObjectTypeSpec(
     label="Source code",
     thumbnail_source=ThumbnailSource.NONE,
     ocr_capable=True,  # Enable OCR background task so text_extract_fn gets called (no actual OCR since no thumbnail)
-    extensions=frozenset({".php", ".py", ".js", ".sh", ".ps1", ".json", ".yaml", ".yml", ".html", ".css", ".sql", ".lua"}),
+    extensions=frozenset(_LANGUAGE_MAP),  # #469: one list, so Language and accepted extensions can't drift
     text_extract_fn=extract_text_for_row,
     properties_fn=get_properties,
     preview_fn=preview,

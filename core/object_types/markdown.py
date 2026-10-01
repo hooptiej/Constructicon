@@ -13,9 +13,9 @@ javascript:/vbscript:/file:/data: link targets.
 Text extraction for search is shared with the text type (same #433 cap).
 """
 
-from markdown_it import MarkdownIt
 from markupsafe import Markup
 
+from .. import markdown_render  # #471: the one shared, safe renderer
 from . import register, ObjectTypeSpec, ThumbnailSource
 from .text import extract_text, extract_text_for_row, _stored_path
 
@@ -24,12 +24,11 @@ from .text import extract_text, extract_text_for_row, _stored_path
 MAX_RENDER_CHARS = 200_000
 MAX_OUTLINE_HEADINGS = 12
 
-_md = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
 
 
 def _tokens(text):
     try:
-        return _md.parse(text)
+        return markdown_render.parse(text)
     except Exception as e:
         print(f"Markdown parse failed: {e!r}")
         return []
@@ -79,11 +78,11 @@ def preview(ctx):
     if not text:
         return None
     truncated = len(text) > MAX_RENDER_CHARS
-    html = _md.render(text[:MAX_RENDER_CHARS])
+    html = markdown_render.render(text[:MAX_RENDER_CHARS], breaks=False)  # standard Markdown line handling for .md files
     if truncated:
-        html += f'<p class="muted">…truncated, showing the first {MAX_RENDER_CHARS:,} characters</p>'
+        html += Markup(f'<p class="muted">…truncated, showing the first {MAX_RENDER_CHARS:,} characters</p>')  # Markup, or += would escape it
     if ctx.mode == "live":
-        return Markup(f'<div class="markdown-body">{html}</div>')
+        return Markup(f'<div class="markdown-body markdown-file">{html}</div>')
     return Markup(html)
 
 

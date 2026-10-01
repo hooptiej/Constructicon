@@ -12,7 +12,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from core import db, storage
+from core import db, object_types, storage
 
 
 def export_project(project_id_or_slug):
@@ -32,7 +32,9 @@ def export_project(project_id_or_slug):
         raise ValueError(f"Project not found: {project_id_or_slug}")
 
     # Fetch all items in this project
-    items = db.list_project_items(project["id"])
+    # #443: never hand restricted items (private keys/certs) to whatever
+    # reads this zip (it's meant for offline/agent analysis).
+    items = [i for i in db.list_project_items(project["id"]) if not object_types.is_restricted(i)]
 
     # Fetch writeup body if writeup_slug is set
     writeup_body = None

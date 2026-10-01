@@ -114,7 +114,9 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     # project["writeup"] for the template (#337, same pattern as project_export).
     project_items = {}  # project_id -> list of items
     for project_id, project in projects.items():
-        items = db.list_project_items(project_id)
+        # #443: restricted items (keys/certs) can sit on a project in the
+        # owner's reference, but never in the museum.
+        items = [i for i in db.list_project_items(project_id) if not object_types.is_restricted(i)]
         project_items[project_id] = items
         if not items:
             warnings.append(f"Project '{project['slug']}' has no items")
@@ -146,7 +148,7 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     entry_items = {}  # entry_id -> list of items with sort_order and note
     for entry_id in blog_entries_dict:
         entry_projects[entry_id] = db.list_entry_projects(entry_id)
-        entry_items[entry_id] = db.list_entry_items(entry_id)
+        entry_items[entry_id] = [i for i in db.list_entry_items(entry_id) if not object_types.is_restricted(i)]  # #443
         if not entry_items[entry_id]:
             warnings.append(f"Blog entry '{blog_entries_dict[entry_id]['slug']}' has no attachments")
 

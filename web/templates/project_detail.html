@@ -205,7 +205,7 @@
         <a href="/object/{{ project.writeup_slug }}?from=project:{{ project.slug }}">Open document</a>
         {% endif %}
       </div>
-      <div class="project-writeup-featured-body">{{ writeup_body }}</div>
+      <div class="project-writeup-featured-body markdown-body">{{ writeup_body | markdown }}</div>
     </div>
     {% endif %}
     {% for entry in grid_entries %}
@@ -1044,4 +1044,6 @@ convertHobbyConfirm.addEventListener('click', async () => {
 })();
 </script>
 
+{# #471: prose styles for the rendered write-up body #}
+{% if writeup_body %}{% include 'assets/prose.html' %}{% endif %}
 {% endblock %}

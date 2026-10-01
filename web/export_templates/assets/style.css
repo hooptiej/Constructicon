@@ -220,6 +220,18 @@ li {
     margin-bottom: 2rem;
 }
 
+/* #471: write-ups and blog bodies are rendered Markdown now */
+.writeup h1, .writeup h2, .writeup h3, .writeup h4,
+.post-body h1, .post-body h2, .post-body h3, .post-body h4 { margin: 1.5em 0 0.5em; line-height: 1.3; }
+.writeup ul, .writeup ol, .post-body ul, .post-body ol { padding-left: 1.6em; margin: 0 0 1em; }
+.writeup blockquote, .post-body blockquote { margin: 0 0 1em; padding-left: 1em; border-left: 3px solid #ddd; color: #666; }
+.writeup code, .post-body code { font-family: ui-monospace, monospace; font-size: 0.9em; background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; }
+.writeup pre, .post-body pre { background: #f4f4f4; padding: 0.8em 1em; border-radius: 6px; overflow: auto; }
+.writeup pre code, .post-body pre code { background: none; padding: 0; }
+.writeup table, .post-body table { border-collapse: collapse; margin: 0 0 1em; }
+.writeup th, .writeup td, .post-body th, .post-body td { border: 1px solid #ddd; padding: 0.3em 0.7em; }
+.writeup img, .post-body img { max-width: 100%; }
+
 .entry-projects,
 .entry-items {
     margin-top: 2rem;

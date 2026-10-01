@@ -43,7 +43,7 @@
     {% if project.writeup %}
     <section class="writeup">
         <h3>About This Project</h3>
-        {{ project.writeup | safe }}
+        {{ project.writeup | markdown }}{# #471: safe Markdown, was | safe (raw HTML) #}
     </section>
     {% endif %}
 

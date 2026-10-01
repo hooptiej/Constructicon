@@ -9,7 +9,7 @@
 
     {% if entry.body %}
     <div class="post-body">
-        {{ entry.body | safe }}
+        {{ entry.body | markdown }}{# #471: safe Markdown, was | safe (raw HTML) #}
     </div>
     {% endif %}
 

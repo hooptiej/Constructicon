@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, curator, curator_needs, db, decisions, ingest, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
+from core import automatch, backup, captions, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()
@@ -68,6 +68,8 @@ def static_version(relative_path):
 
 
 templates.env.globals["static_version"] = static_version
+# #471: safe Markdown -> HTML for authored bodies (write-ups); raw HTML off.
+templates.env.filters["markdown"] = markdown_render.render
 
 # #310: environment awareness for the browser tab title. constructicon-test
 # sets CONSTRUCTICON_ENV=dev in its compose so its tab reads "DEV-..." and is
@@ -618,7 +620,9 @@ def _to_project_card(project):
     if project.get("writeup_slug"):
         writeup_doc = db.get_by_slug(project["writeup_slug"])
         if writeup_doc:
-            body = object_types.writeup_body(writeup_doc) or ""
+            # #471: excerpt from the rendered text, not raw Markdown (no
+            # stray "##" / "**" / "[link](url)" in the home page card).
+            body = markdown_render.to_text(object_types.writeup_body(writeup_doc) or "")
             if body:
                 # Truncate to ~200 chars at a word boundary
                 words = body.split()

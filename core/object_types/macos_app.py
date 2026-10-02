@@ -175,6 +175,11 @@ def _stored_path(row):
     return p if p.exists() else None
 
 
+def has_thumbnail(row):
+    """has_thumbnail_fn: only apps whose bundle carries an .icns icon."""
+    return bool(((row.get("type_metadata") or {}).get(STATS_KEY) or {}).get("icon"))
+
+
 def capture_thumbnail(row):
     """capture_fn: the app's own icon, largest size Pillow can read, as PNG."""
     path = _stored_path(row)
@@ -261,6 +266,7 @@ register(ObjectTypeSpec(
     sniff_fn=sniff,  # claims only app zips; other .zip files fall through to archive
     sniff_priority=10,
     capture_fn=capture_thumbnail,
+    has_thumbnail_fn=has_thumbnail,  # #478: no icon -> show the type badge
     properties_fn=get_properties,
     embedded_metadata_fn=get_embedded_metadata,
     preview_fn=preview,

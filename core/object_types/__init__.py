@@ -181,6 +181,14 @@ class ObjectTypeSpec:
     # that as "no thumbnail available" rather than an error, so registering
     # a CAPTURE-sourced type ahead of its capture routine existing is safe.
     capture_fn: object = None
+    # Issue #478: optional (row) -> bool for a CAPTURE type whose files only
+    # SOMETIMES carry a picture (an Office document with or without its
+    # embedded preview, a macOS app with or without an .icns icon). False
+    # means "no thumbnail for this row": no /f/<slug>/thumb is advertised, so
+    # tiles and pages show the type's icon instead of a broken image. Base it
+    # on what embedded_metadata_fn stored at upload; never open the file here.
+    # None = every row of the type has one (the old behavior).
+    has_thumbnail_fn: object = None
     # (row: dict) -> extracted text str, or None/"" if this row has no usable
     # embedded text layer. core/ocr.py tries this FIRST, before ever running
     # OCR — a text-layer PDF (issue #13) is the first type to use this, but

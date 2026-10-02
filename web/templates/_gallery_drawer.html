@@ -190,14 +190,14 @@
     e.preventDefault();
     dragDepth = 0;
     dragging = false;
-    let folderEntry = null;
+    // #475: read everything synchronously; a DataTransfer is unreadable once
+    // this handler awaits anything.
     const items = e.dataTransfer.items;
-    if (items && items.length) {
-      for (const item of items) {
-        const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
-        if (entry && entry.isDirectory) { folderEntry = entry; break; }
-      }
-    }
+    const entries = items ? Array.from(items).map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean) : [];
+    const droppedFiles = Array.from(e.dataTransfer.files || []);
+    if (entries.some(entry => entry.isDirectory)) pinned = true;
+    if (await ingest.stageBundleDrop(entries)) return; // macOS .app etc. -> one zip each
+    const folderEntry = entries.find(entry => entry.isDirectory) || null;
     if (folderEntry) {
       pinned = true;
       const files = await ingest.walkDirectory(folderEntry);
@@ -207,9 +207,9 @@
       }
       return;
     }
-    if (e.dataTransfer.files.length) {
+    if (droppedFiles.length) {
       pinned = true; // stay open through the upload, like a real drawer would
-      ingest.addFiles(e.dataTransfer.files);
+      ingest.addFiles(droppedFiles);
     }
   });
 })();

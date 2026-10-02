@@ -458,11 +458,127 @@ function createIngestController({ onOpen }) {
     });
   }
 
+  // #475: macOS bundles. A .app (and the other packages below) is a folder
+  // that Finder shows as one item; walking it like a normal folder uploaded
+  // its hundreds of internals as loose files. Instead a bundle is packed
+  // into ONE stored (uncompressed, so fast) zip in the browser, named
+  // "Foo.app.zip", which the server's macos_app type (or the archive type,
+  // for non-app bundles) receives as a single object. fflate (vendored,
+  // web/static/vendor/fflate) is loaded only when a bundle is dropped.
+  // Caveats: the browser can't see Unix permissions or symlinks, so the
+  // archived zip is a faithful record of the contents, not a runnable copy;
+  // and the zip is built in memory, hence MAX_BUNDLE_BYTES (above it, the
+  // owner is told to Compress in Finder and drop the .zip instead).
+  const BUNDLE_EXTS = ['.app', '.framework', '.bundle', '.plugin', '.kext', '.appex', '.prefpane',
+    '.rtfd', '.pages', '.numbers', '.key', '.sparsebundle', '.photoslibrary', '.xcodeproj',
+    '.xcworkspace', '.playground'];
+  const MAX_BUNDLE_BYTES = 1024 * 1024 * 1024;
+
+  function isBundle(entry) {
+    if (!entry || !entry.isDirectory) return false;
+    const name = entry.name.toLowerCase();
+    return BUNDLE_EXTS.some(ext => name.endsWith(ext));
+  }
+
+  let fflateLoading = null;
+  function loadFflate() {
+    if (window.fflate) return Promise.resolve(window.fflate);
+    fflateLoading = fflateLoading || new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/static/vendor/fflate/fflate.min.js';
+      s.onload = () => resolve(window.fflate);
+      s.onerror = () => { fflateLoading = null; reject(new Error('could not load the zip library')); };
+      document.head.appendChild(s);
+    });
+    return fflateLoading;
+  }
+
+  // Every file under a bundle, with its zip path ("Foo.app/Contents/...").
+  async function listBundle(dirEntry, prefix) {
+    const out = [];
+    for (const child of await readAllEntries(dirEntry.createReader())) {
+      if (child.isFile) {
+        out.push({ path: prefix + child.name, file: await new Promise((resolve, reject) => child.file(resolve, reject)) });
+      } else if (child.isDirectory) {
+        out.push(...await listBundle(child, prefix + child.name + '/'));
+      }
+    }
+    return out;
+  }
+
+  // Bundle folder -> one File ("Foo.app.zip"). Throws with an owner-facing
+  // message when it can't (too big, zip library failed to load, read error).
+  async function zipBundle(dirEntry) {
+    const name = dirEntry.name;
+    dropzoneText.textContent = `Reading ${name}…`;
+    const entries = await listBundle(dirEntry, name + '/');
+    const total = entries.reduce((n, e) => n + e.file.size, 0);
+    if (total > MAX_BUNDLE_BYTES) {
+      throw new Error(`${name} is ${(total / 1024 / 1024 / 1024).toFixed(1)} GB unpacked, too big to pack in the browser. In Finder: right-click → Compress, then drop the .zip.`);
+    }
+    const fflate = await loadFflate();
+    const chunks = [];
+    let failure = null;
+    const zip = new fflate.Zip((err, chunk) => { if (err) failure = err; else chunks.push(chunk); });
+    for (let i = 0; i < entries.length; i++) {
+      const { path, file } = entries[i];
+      dropzoneText.textContent = `Packing ${name}… ${i + 1}/${entries.length} files`;
+      const member = new fflate.ZipPassThrough(path);
+      member.mtime = file.lastModified;
+      zip.add(member);
+      member.push(new Uint8Array(await file.arrayBuffer()), true);
+      if (failure) throw failure;
+    }
+    zip.end();
+    if (failure) throw failure;
+    const newest = entries.reduce((t, e) => Math.max(t, e.file.lastModified || 0), 0);
+    return new File(chunks, `${name}.zip`, { type: 'application/zip', lastModified: newest || Date.now() });
+  }
+
+  // zipBundle, but errors surface in the drawer instead of throwing.
+  async function packBundle(dirEntry) {
+    try {
+      return await zipBundle(dirEntry);
+    } catch (err) {
+      uploadError.textContent = `Couldn't pack ${dirEntry.name}: ${err.message || err}`;
+      uploadError.style.display = 'block';
+      onOpen();
+      return null;
+    }
+  }
+
+  // A drop whose only folders are bundles (e.g. one or more .apps, maybe with
+  // loose files alongside): each bundle becomes one zip, loose files stay
+  // files, and there's NO folder-named project (that's for real folders).
+  // `entries` must be collected synchronously in the drop handler (a
+  // DataTransfer is unreadable once the handler yields). Returns true when
+  // it handled the drop.
+  async function stageBundleDrop(entries) {
+    const dirs = entries.filter(e => e.isDirectory);
+    if (!dirs.length || !dirs.every(isBundle)) return false;
+    const files = [];
+    for (const entry of entries) {
+      if (isBundle(entry)) {
+        const zipped = await packBundle(entry);
+        if (zipped) files.push(zipped);
+      } else if (entry.isFile) {
+        files.push(await new Promise((resolve, reject) => entry.file(resolve, reject)));
+      }
+    }
+    if (files.length) await addFiles(files);
+    else renderStaged();
+    return true;
+  }
+
   async function walkDirectory(dirEntry) {
     const files = [];
     async function walk(entry) {
       if (entry.isFile) {
         files.push(await new Promise((resolve, reject) => entry.file(resolve, reject)));
+      } else if (isBundle(entry)) {
+        // #475: a bundle inside a dropped folder stays one item
+        const zipped = await packBundle(entry);
+        if (zipped) files.push(zipped);
       } else if (entry.isDirectory) {
         for (const child of await readAllEntries(entry.createReader())) await walk(child);
       }
@@ -858,5 +974,5 @@ function createIngestController({ onOpen }) {
   // close mechanics differ per caller, so the actual window 'drop' listener
   // stays in each template) — addFiles for a plain file drop/pick,
   // walkDirectory + selectProjectForFolder for a folder drop.
-  return { addFiles, walkDirectory, selectProjectForFolder };
+  return { addFiles, walkDirectory, selectProjectForFolder, stageBundleDrop };
 }

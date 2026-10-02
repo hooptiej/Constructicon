@@ -286,6 +286,13 @@ def _has_thumbnail(row, spec=None):
     spec = spec or object_types.get_object_type(row.get("media_type"))
     if spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE and spec.capture_fn is None:
         return False
+    if spec.has_thumbnail_fn is not None:
+        # #478: the type knows per row (e.g. a .docx saved without a preview)
+        try:
+            return bool(spec.has_thumbnail_fn(row))
+        except Exception as e:
+            print(f"has_thumbnail_fn failed for {row.get('slug')}: {e!r}", flush=True)
+            return False
     return spec.thumbnail_source != object_types.ThumbnailSource.NONE
 
 
@@ -3437,6 +3444,16 @@ def get_thumbnail(slug: str):
         # transiently. Try once, synchronously, so a first page load isn't
         # stuck with a permanently broken thumbnail just because of timing.
         thumbnails.ensure_thumbnail(row)
+    spec = object_types.get_object_type(row.get("media_type"))
+    if spec.thumbnail_source != object_types.ThumbnailSource.UPLOADED_FILE and not storage.thumb_path_for(slug).exists():
+        # #478: a CAPTURE/FETCH type's thumbnail is generated, never the file
+        # itself. Try once (e.g. a capture the background task hasn't done);
+        # if there's still nothing, 404 rather than falling back to the
+        # original, which served a .docx/.zip/.stl to an <img> tag.
+        if row.get("stored_filename"):
+            thumbnails.ensure_thumbnail(row)
+        if not storage.thumb_path_for(slug).exists():
+            raise HTTPException(status_code=404, detail="no thumbnail for this item")
     path = storage.thumb_path_or_original(slug, row["stored_filename"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="file missing on disk")

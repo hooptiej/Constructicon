@@ -1,0 +1,36 @@
+{#- One group of the details panel (#515), shared by the project and item pages.
+
+     {% from "_details_group.html" import dp_group %}
+     {{ dp_group("status", "STATUS", view_markup, edit_markup) }}
+
+     view   the fact sheet (a <dl class="dp-rows">), shown by default
+     edit   the group's form controls, shown after Edit; Save and Cancel are added here
+     static always-visible extra content below the group (read-only chips, thumbnails)
+     done_only  for groups whose controls act immediately (chip add/remove): one "Done" button
+     editable   false for a group with nothing to edit (the read-from-the-file group)
+     All three markup arguments are `{% set x %}...{% endset %}` blocks, which Jinja keeps
+     as already-escaped Markup, so nothing here marks anything |safe. Behaviour: static/js/details.js. -#}
+{% macro dp_group(name, title, view, edit="", static="", wide=false, done_only=false, editable=true) -%}
+<section class="dp-group{% if wide %} dp-group-wide{% endif %}" data-group="{{ name }}" aria-labelledby="dp-h-{{ name }}">
+  <div class="dp-group-head">
+    <h2 class="dp-group-title" id="dp-h-{{ name }}">{{ title }}</h2>
+    {% if editable %}<button type="button" class="dp-edit-btn" aria-expanded="false" aria-controls="dp-edit-{{ name }}" aria-label="Edit {{ title | lower }}">Edit</button>{% endif %}
+  </div>
+  <div class="dp-view">{{ view }}</div>
+  {% if editable %}
+  <form class="dp-edit" id="dp-edit-{{ name }}" hidden novalidate aria-label="Edit {{ title | lower }}">
+    {{ edit }}
+    <p class="dp-error" role="alert"></p>
+    <div class="dp-actions">
+      {% if done_only %}
+      <button type="submit" class="dp-btn dp-btn-primary dp-save">Done</button>
+      {% else %}
+      <button type="button" class="dp-btn dp-cancel">Cancel</button>
+      <button type="submit" class="dp-btn dp-btn-primary dp-save">Save</button>
+      {% endif %}
+    </div>
+  </form>
+  {% endif %}
+  {% if static %}<div class="dp-static">{{ static }}</div>{% endif %}
+</section>
+{%- endmacro %}

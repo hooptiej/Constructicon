@@ -2,73 +2,56 @@
 {% block title %}{{ project.title }} — Constructicon{% endblock %}
 {% block body %}
 {% from "_card.html" import card %}
+{% from "_details_group.html" import dp_group %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
 {% include "_export_builder.html" %}
 <div class="app-main">
-  <a class="back-link" href="/">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    Back to projects
-  </a>
+  <span class="dp-status-live" id="dp-status-live" role="status" aria-live="polite"></span>
+  {% set is_group = card_status.kind in ('family', 'collection') %}
 
-  {# V2 cards 8.3: the breadcrumb is the card's home chain (resolve_home walked upward), top first. #}
-  <nav class="detail-crumbs" aria-label="Breadcrumb">
-    {% for crumb in home_crumbs %}
-    <a href="{{ crumb.href }}">{{ crumb.title }}</a>
-    <span aria-hidden="true">&rsaquo;</span>
-    {% endfor %}
-    <span class="detail-crumb-current" id="project-breadcrumb-current">{{ project.title }}</span>
-  </nav>
-
-  <div class="project-detail-header">
-    <div>
-      {# #241: click the title (or the pencil) to rename in place — see the
-         title-edit script at the bottom, same immediate-effect pattern as
-         the cover/writeup/status selectors. #}
-      <h1 class="page-title title-edit" id="project-title-edit">
-        <span class="title-edit-text" id="project-title-text" title="Click to rename">{{ project.title }}</span>
-        <button type="button" class="title-edit-btn" id="project-title-edit-btn" title="Rename project" aria-label="Rename project">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 20H8L18.5 9.5C19.3284 8.67157 19.3284 7.32843 18.5 6.5L17.5 5.5C16.6716 4.67157 15.3284 4.67157 14.5 5.5L4 16V20Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 7L17 11" stroke="currentColor" stroke-width="1.8"/></svg>
-        </button>
-      </h1>
-      <p class="title-edit-error" id="project-title-error" style="display:none"></p>
-      {% if project.description %}<p class="page-subtitle">{{ project.description }}</p>{% endif %}
-      {# "Part of" nesting (3.7) is for cards that only make sense inside another;
-         a family or collection can't be nested (use membership, below). #}
-      <div style="margin-top:12px;display:flex;align-items:center;gap:12px;font-size:13px{% if card_status.kind in ('family', 'collection') %};display:none{% endif %}">
-        <label>Part of:</label>
-        <select id="parent-project-select" style="padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px">
-          <option value="">— None —</option>
-        </select>
+  {# #515: breadcrumb (the card's home chain, top first) + the More menu. The old "Back to projects"
+     link is the Home crumb; Convert to hobby and Delete project moved into More. #}
+  <div class="dp-topbar">
+    <nav class="dp-crumbs" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <span aria-hidden="true">&rsaquo;</span>
+      {% for crumb in home_crumbs %}
+      <a href="{{ crumb.href }}">{{ crumb.title }}</a>
+      <span aria-hidden="true">&rsaquo;</span>
+      {% endfor %}
+      <span class="dp-crumb-current" id="project-breadcrumb-current" aria-current="page">{{ project.title }}</span>
+    </nav>
+    <div class="dp-topbar-actions">
+      <div class="dp-more" data-dp-more>
+        <button type="button" class="dp-btn dp-more-btn" id="project-more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="project-more-menu">More <span aria-hidden="true">&#9662;</span></button>
+        <div class="dp-menu" id="project-more-menu" role="menu" aria-labelledby="project-more-btn" hidden>
+          <button type="button" role="menuitem" id="convert-to-hobby-btn" title="Convert this project to a hobby">Convert to hobby</button>
+          <button type="button" role="menuitem" class="dp-menu-danger" id="delete-project-btn" title="Delete this project (orphan children, detach objects)">Delete project</button>
+        </div>
       </div>
     </div>
-    <div style="display:flex;align-items:center;gap:8px">
-      {# V2 cards: kind + stage (+ stop reason) replace the single legacy status select.
-         Activity is derived from the stage (grouped below), never chosen on its own;
-         the server validates every combination (same rules as the MCP tools). #}
-      <select id="project-kind-select" class="project-status-pill" aria-label="Kind" title="Kind" style="width:fit-content;border:none;cursor:pointer">
-        {% for k in card_kinds %}<option value="{{ k.key }}" {% if card_status.kind == k.key %}selected{% endif %}>{{ k.label }}</option>{% endfor %}
-      </select>
-      <select id="project-stage-select" class="project-status-pill" aria-label="Stage" title="Stage" style="width:fit-content;border:none;cursor:pointer">
-        {% for grp in ['active', 'inactive'] %}
-        <optgroup label="{{ grp | capitalize }}">
-          {% for s in card_stages if s.activity == grp %}<option value="{{ s.key }}" {% if card_status.stage == s.key %}selected{% endif %}>{{ s.label }}</option>{% endfor %}
-        </optgroup>
-        {% endfor %}
-      </select>
-      <select id="project-stop-reason-select" class="project-status-pill" aria-label="Stop reason" title="Why it stopped" style="width:fit-content;border:none;cursor:pointer;{% if card_status.stage != 'stopped' %}display:none{% endif %}">
-        {% for r in card_stop_reasons %}<option value="{{ r.key }}" {% if card_status.stop_reason == r.key %}selected{% endif %}>{{ r.label }}</option>{% endfor %}
-      </select>
-      <p class="status-confirm" id="status-confirm" style="display:none;font-size:12px;color:#6E6B57;margin:0">Saved.</p>
-      <p class="status-error" id="status-error" style="display:none;font-size:12px;color:#C0392B;margin:0" role="alert"></p>
-      {% if card_open_decisions %}
-      <a href="/admin" class="project-status-pill" style="text-decoration:none" title="{{ card_open_decisions | map(attribute='question') | join(' / ') }}">needs your input</a>
-      {% endif %}
-      <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
-        <button type="button" class="btn-secondary" id="convert-to-hobby-btn" title="Convert this project to a hobby" style="white-space:nowrap">Convert to hobby</button>
-        <button type="button" class="btn-danger" id="delete-project-btn" title="Delete this project (orphan children, detach objects)" style="white-space:nowrap">Delete project</button>
+  </div>
+
+  <div class="dp-hero">
+    <div class="dp-hero-left">
+      <div class="detail-header-card">{{ card(header_card, "full") }}</div>
+    </div>
+
+    <div class="dp-side">
+      <div>
+        {# #241: click the title (or the pencil) to rename in place — see the title-edit script at the bottom. #}
+        <h1 class="dp-title title-edit" id="project-title-edit">
+          <span class="title-edit-text" id="project-title-text" title="Click to rename">{{ project.title }}</span>
+          <button type="button" class="title-edit-btn" id="project-title-edit-btn" title="Rename project" aria-label="Rename project">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20H8L18.5 9.5C19.3284 8.67157 19.3284 7.32843 18.5 6.5L17.5 5.5C16.6716 4.67157 15.3284 4.67157 14.5 5.5L4 16V20Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 7L17 11" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+        </h1>
+        <p class="title-edit-error" id="project-title-error" style="display:none" role="alert"></p>
+        {% if project.description %}<p class="dp-subtitle">{{ project.description }}</p>{% endif %}
       </div>
+
       {# Curator Stage 2: per-project health indicator #}
       {% if project_score %}
       {% set _applicable = project_score.checklist | rejectattr('excused') | list %}
@@ -84,225 +67,274 @@
       </span>
       {% endif %}
       {% endif %}
-    </div>
-    {# #381: In-hobbies gets its own full-width row instead of being smooshed
-       into the header action block next to Convert/Delete. #}
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
-      <label style="font-size:12px;color:var(--text-muted)">In hobbies:</label>
-      <div id="hobby-chips-container" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-height:24px"></div>
-      <select id="add-to-hobby-select" class="input" style="max-width:200px;font-size:12px">
-        <option value="">+ Add to hobby…</option>
-      </select>
-    </div>
-    {# V2 cards 3.4 / 3.5 / 3.12: whereabouts (+ note), card provenance (+ credit),
-       highlight. Whereabouts only applies to a thing / project / collection. Each
-       control saves on change; the server validates (same rules as the MCP tools). #}
-    <div id="card-extra-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:12px">
-      <span id="whereabouts-group" style="display:{% if card_extra.whereabouts_applies %}inline-flex{% else %}none{% endif %};align-items:center;gap:6px">
-        <label for="whereabouts-select" style="color:var(--text-muted)">Whereabouts:</label>
-        <select id="whereabouts-select" class="input" style="font-size:12px">
+
+      {# "Needs your input": only when this card has open decisions. Accept resolves with the suggested
+         answer, Choose... offers the options (single-pick) or opens the admin queue (multi-pick). #}
+      {% for d in card_open_decisions %}
+      <div class="dp-needs" role="group" aria-label="Needs your input" data-decision-id="{{ d.decision_id }}" data-multi="{{ 1 if d.multi else 0 }}" data-suggested='{{ d.suggested_keys | tojson }}'>
+        <span class="dp-needs-dot" aria-hidden="true"></span>
+        <div class="dp-needs-text">
+          Needs your input: <strong>{{ d.field or d.need }}</strong>. {{ d.question }}
+          {% if d.suggested_labels %}Suggested: {{ d.suggested_labels | join(', ') }}{% if d.suggested_reason %} ({{ d.suggested_reason }}){% endif %}.{% endif %}
+        </div>
+        <div class="dp-needs-actions">
+          {% if d.suggested_labels %}<button type="button" class="dp-btn dp-btn-primary dp-needs-accept">Accept</button>{% endif %}
+          {% if d.multi %}
+          <a class="dp-btn" href="/admin#decision-{{ d.decision_id }}">Choose&hellip;</a>
+          {% else %}
+          <button type="button" class="dp-btn dp-needs-choose" aria-expanded="false">Choose&hellip;</button>
+          {% endif %}
+        </div>
+        {% if not d.multi %}
+        <div class="dp-needs-actions dp-needs-chooser" hidden>
+          <label class="dp-sr-label" for="needs-pick-{{ d.decision_id }}">Answer</label>
+          <select class="input dp-needs-pick" id="needs-pick-{{ d.decision_id }}">
+            {% for o in d.options %}<option value="{{ o.key }}"{% if o.key in d.suggested_keys %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
+          </select>
+          <button type="button" class="dp-btn dp-needs-apply">Use this answer</button>
+        </div>
+        {% endif %}
+        <p class="dp-needs-error" role="alert" hidden></p>
+      </div>
+      {% endfor %}
+
+      {# ---- IDENTITY ---- #}
+      {% set identity_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Kind</dt><dd>{{ card_status.kind_label }}{% if card_open_decisions | selectattr('need', 'equalto', 'card_kind') | list %} <span class="dp-muted">(question open)</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Hobbies</dt><dd>{% for h in project_hobbies %}<a href="/hobby/{{ h.slug }}">{{ h.name }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
+        <div class="dp-row"><dt>{{ 'Members' if is_group else 'Family' }}</dt><dd>{% for c in (family_info.members if is_group else family_info.families) %}<a href="/project/{{ c.slug }}">{{ c.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
+        {% if not is_group %}<div class="dp-row"><dt>Part of</dt><dd>{% if parent_card %}<a href="/project/{{ parent_card.slug }}">{{ parent_card.title }}</a>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>{% endif %}
+      </dl>
+      {% endset %}
+      {% set identity_edit %}
+      {# V2 cards: kind. The server validates every combination (same rules as the MCP tools). #}
+      <div class="dp-field">
+        <label for="project-kind-select">Kind</label>
+        <select id="project-kind-select" class="input">
+          {% for k in card_kinds %}<option value="{{ k.key }}" {% if card_status.kind == k.key %}selected{% endif %}>{{ k.label }}</option>{% endfor %}
+        </select>
+      </div>
+      {# #381 / #365: hobbies the card is in (add / remove act immediately) #}
+      <div class="dp-field">
+        <span class="dp-label" id="hobby-chips-label">Hobbies</span>
+        <div id="hobby-chips-container" class="dp-chips" role="group" aria-labelledby="hobby-chips-label"></div>
+        <label class="dp-sr-label" for="add-to-hobby-select">Add to hobby</label>
+        <select id="add-to-hobby-select" class="input">
+          <option value="">+ Add to hobby…</option>
+        </select>
+      </div>
+      {# V2 cards 3.6: a family or collection lists its MEMBERS; any other card shows the families it is IN.
+         Membership is not nesting: no file moves. Add / remove act immediately. #}
+      <div class="dp-field" id="family-row">
+        <span class="dp-label" id="family-chips-label">{% if is_group %}Members{% else %}In family{% endif %}</span>
+        <div id="family-chips-container" class="dp-chips" role="group" aria-labelledby="family-chips-label">
+          {% for c in (family_info.members if is_group else family_info.families) %}
+          <span class="chip family-chip" data-card-id="{{ c.id }}">
+            <a href="/project/{{ c.slug }}">{{ c.title }}</a>
+            <span class="dp-muted">{{ c.kind_label }}</span>
+            <button type="button" class="dp-chip-x family-chip-remove" data-card-id="{{ c.id }}" title="Remove" aria-label="Remove {{ c.title }}">&times;</button>
+          </span>
+          {% else %}
+          <span class="dp-muted">{% if is_group %}No members yet.{% else %}Not in any family or collection.{% endif %}</span>
+          {% endfor %}
+        </div>
+        <label class="dp-sr-label" for="family-add-select">{% if is_group %}Add member{% else %}Add to family{% endif %}</label>
+        <select id="family-add-select" class="input">
+          <option value="">{% if is_group %}+ Add member…{% else %}+ Add to family…{% endif %}</option>
+        </select>
+        <p id="family-error" class="dp-error" role="alert"></p>
+      </div>
+      {# "Part of" nesting (3.7) is for cards that only make sense inside another; a family or collection can't be nested. #}
+      {% if not is_group %}
+      <div class="dp-field">
+        <label for="parent-project-select">Part of</label>
+        <select id="parent-project-select" class="input">
+          <option value="">— None —</option>
+        </select>
+      </div>
+      {% endif %}
+      {% endset %}
+
+      {# ---- STATUS ---- #}
+      {% set status_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Stage</dt><dd>{{ (card_status.activity or '') | capitalize }}{% if card_status.activity %} &middot; {% endif %}{{ card_status.stage_label or '—' }}{% if card_status.stage == 'stopped' and card_status.stop_reason_label %} <span class="dp-muted">({{ card_status.stop_reason_label }})</span>{% endif %}</dd></div>
+        {% if card_extra.whereabouts_applies %}
+        <div class="dp-row"><dt>Whereabouts</dt><dd>{% if card_extra.whereabouts_label %}{{ card_extra.whereabouts_label }}{% if card_extra.whereabouts_note %} <span class="dp-muted">&middot; {{ card_extra.whereabouts_note }}</span>{% endif %}{% else %}<span class="dp-muted">Not recorded</span>{% endif %}</dd></div>
+        {% endif %}
+        <div class="dp-row"><dt>Highlight</dt><dd>{{ 'Yes' if card_extra.highlight else 'No' }}</dd></div>
+      </dl>
+      {% endset %}
+      {% set status_edit %}
+      {# V2 cards: stage (+ stop reason). Activity is derived from the stage, never chosen on its own. #}
+      <div class="dp-field">
+        <label for="project-stage-select">Stage</label>
+        <select id="project-stage-select" class="input">
+          {% for grp in ['active', 'inactive'] %}
+          <optgroup label="{{ grp | capitalize }}">
+            {% for s in card_stages if s.activity == grp %}<option value="{{ s.key }}" {% if card_status.stage == s.key %}selected{% endif %}>{{ s.label }}</option>{% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="dp-field" id="stop-reason-field" {% if card_status.stage != 'stopped' %}hidden{% endif %}>
+        <label for="project-stop-reason-select">Why it stopped</label>
+        <select id="project-stop-reason-select" class="input">
+          {% for r in card_stop_reasons %}<option value="{{ r.key }}" {% if card_status.stop_reason == r.key %}selected{% endif %}>{{ r.label }}</option>{% endfor %}
+        </select>
+      </div>
+      {# V2 cards 3.4 / 3.12: whereabouts (+ note; a thing / project / collection only) and highlight #}
+      {% if card_extra.whereabouts_applies %}
+      <div class="dp-field">
+        <label for="whereabouts-select">Whereabouts</label>
+        <select id="whereabouts-select" class="input">
           <option value="">— not recorded —</option>
           {% for o in card_whereabouts_options %}<option value="{{ o.key }}" {% if card_extra.whereabouts == o.key %}selected{% endif %}>{{ o.label }}</option>{% endfor %}
         </select>
-        <input type="text" id="whereabouts-note" class="input" placeholder="note (e.g. 'on the shelf in the garage')" value="{{ card_extra.whereabouts_note or '' }}" maxlength="200" style="font-size:12px;width:220px">
-      </span>
-      <span style="display:inline-flex;align-items:center;gap:6px">
-        <label for="provenance-select" style="color:var(--text-muted)">Provenance:</label>
-        <select id="provenance-select" class="input" style="font-size:12px">
+        <label class="dp-sr-label" for="whereabouts-note">Whereabouts note</label>
+        <input type="text" id="whereabouts-note" class="input" placeholder="note (e.g. 'on the shelf in the garage')" value="{{ card_extra.whereabouts_note or '' }}" maxlength="200">
+      </div>
+      {% endif %}
+      <div class="dp-field dp-field-inline">
+        <input type="checkbox" id="card-highlight" {% if card_extra.highlight %}checked{% endif %}>
+        <label for="card-highlight">Highlight</label>
+      </div>
+      {% endset %}
+
+      {# ---- ORIGIN ---- #}
+      {% set origin_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Provenance</dt><dd>{% if card_extra.provenance_label %}{{ card_extra.provenance_label }}{% else %}<span class="dp-muted">Not set</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Credit</dt><dd>{% if card_extra.provenance_credit %}{{ card_extra.provenance_credit }}{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>
+      </dl>
+      {% endset %}
+      {% set origin_edit %}
+      {# V2 cards 3.5: card provenance (+ credit) #}
+      <div class="dp-field">
+        <label for="provenance-select">Provenance</label>
+        <select id="provenance-select" class="input">
           <option value="">— not recorded —</option>
           {% for o in card_provenance_options %}<option value="{{ o.key }}" {% if card_extra.provenance == o.key %}selected{% endif %}>{{ o.label }}</option>{% endfor %}
         </select>
-        <input type="text" id="provenance-credit" class="input" placeholder="credit (who designed it / where from)" value="{{ card_extra.provenance_credit or '' }}" maxlength="200" style="font-size:12px;width:240px">
-      </span>
-      <label style="display:inline-flex;align-items:center;gap:4px;color:var(--text-muted)">
-        <input type="checkbox" id="card-highlight" {% if card_extra.highlight %}checked{% endif %}> Highlight
-      </label>
-      <span id="card-extra-msg" style="font-size:12px;color:#6E6B57"></span>
-    </div>
-    {# V2 cards 3.10: home (breadcrumb / export link target). Automatic unless overridden; not a thing to curate. #}
-    <div id="home-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:12px">
-      <label for="home-select" style="color:var(--text-muted)">Home:</label>
-      <select id="home-select" class="input" style="font-size:12px;max-width:260px">
-        <option value="">Automatic{% if card_home.title %} ({{ card_home.title }}){% endif %}</option>
-        <optgroup label="Cards">{% for o in home_card_options %}<option value="{{ o.value }}" {% if card_home_value == o.value %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</optgroup>
-        <optgroup label="Hobbies">{% for o in home_hobby_options %}<option value="{{ o.value }}" {% if card_home_value == o.value %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</optgroup>
-      </select>
-      <span style="color:var(--text-muted)">{% if card_home.type %}currently: {{ card_home.title }} ({{ card_home.source }}){% else %}currently: the home page{% endif %}</span>
-      <button type="button" id="unnest-btn" class="btn" style="font-size:12px;{% if not project.parent_id %}display:none{% endif %}" title="Take this card out of its parent">Unnest</button>
-      <span id="home-msg" style="color:#6E6B57"></span>
-    </div>
-    {# V2 cards 3.6: family / collection membership. A family or collection card
-       lists its MEMBERS (and can take more); any other card shows the families it
-       is IN (a card can be in several). Membership is not nesting: no file moves. #}
-    {% set is_group = card_status.kind in ('family', 'collection') %}
-    <div id="family-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
-      <label style="font-size:12px;color:var(--text-muted)">{% if is_group %}Members:{% else %}In family:{% endif %}</label>
-      <div id="family-chips-container" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-height:24px">
-        {% for c in (family_info.members if is_group else family_info.families) %}
-        <span class="family-chip" data-card-id="{{ c.id }}" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--chip);border:1px solid var(--border);border-radius:100px;padding:3px 10px">
-          <a href="/project/{{ c.slug }}" style="color:var(--text);text-decoration:none">{{ c.title }}</a>
-          <span style="color:var(--text-muted);font-size:11px">{{ c.kind_label }}</span>
-          <button type="button" class="family-chip-remove" data-card-id="{{ c.id }}" title="Remove" aria-label="Remove {{ c.title }}" style="border:none;background:none;cursor:pointer;color:var(--text-muted);padding:0;font-size:14px;line-height:1">&times;</button>
-        </span>
-        {% else %}
-        <span style="font-size:12px;color:var(--text-muted)">{% if is_group %}No members yet.{% else %}Not in any family or collection.{% endif %}</span>
-        {% endfor %}
       </div>
-      <select id="family-add-select" class="input" style="max-width:220px;font-size:12px">
-        <option value="">{% if is_group %}+ Add member…{% else %}+ Add to family…{% endif %}</option>
-      </select>
-      <span id="family-error" class="error-text" style="display:none;font-size:12px"></span>
-    </div>
-    {# #408 / V2 cards 3.8: typed links, grouped by type. A link "a <type> b" reads
-       forward on the source card and in reverse on the target ("Built for" / "Made
-       for this"); `related` is symmetric. The picker adds a link in either direction;
-       a typed link over a related pair upgrades it, related over a typed pair is
-       refused (the server's message is shown). #}
-    <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-top:10px">
-      <label style="font-size:12px;color:var(--text-muted);padding-top:4px">Links:</label>
-      <div id="links-container" style="display:flex;flex-direction:column;gap:6px;min-height:24px"></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-        <select id="link-type-select" class="input" style="max-width:170px;font-size:12px" aria-label="Link type">
+      <div class="dp-field">
+        <label for="provenance-credit">Credit</label>
+        <input type="text" id="provenance-credit" class="input" placeholder="credit (who designed it / where from)" value="{{ card_extra.provenance_credit or '' }}" maxlength="200">
+      </div>
+      {% endset %}
+
+      {# ---- DATES ---- #}
+      {% set dates_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Starts</dt><dd>{{ effective_start_display }} <span class="dp-muted">({{ 'set by hand' if project.start_date_override else 'from files' }})</span></dd></div>
+        <div class="dp-row"><dt>Ends</dt><dd>{{ effective_end_display }} <span class="dp-muted">({{ 'set by hand' if project.end_date_override else 'from files' }})</span></dd></div>
+      </dl>
+      {% endset %}
+      {% set dates_edit %}
+      <div class="dp-field">
+        <label for="start-date-input">Timeline start</label>
+        <div class="dp-link-row">
+          <input class="input" type="datetime-local" id="start-date-input" value="{{ start_date_input or '' }}" style="width:auto">
+          <button type="button" class="dp-btn" id="start-date-reset">Reset</button>
+        </div>
+        <p class="dp-note">{% if project.start_date_override %}Manually set.{% else %}Computed: {{ effective_start_display }}{% endif %}</p>
+      </div>
+      <div class="dp-field">
+        <label for="end-date-input">Timeline end</label>
+        <div class="dp-link-row">
+          <input class="input" type="datetime-local" id="end-date-input" value="{{ end_date_input or '' }}" style="width:auto">
+          <button type="button" class="dp-btn" id="end-date-reset">Reset</button>
+        </div>
+        <p class="dp-note">{% if project.end_date_override %}Manually set.{% else %}Computed: {{ effective_end_display }}{% endif %}</p>
+      </div>
+      {% endset %}
+
+      {# ---- STRUCTURE ---- #}
+      {% set structure_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Inside</dt><dd>{% for c in timeline_children %}<a href="/project/{{ c.slug }}">{{ c.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
+        <div class="dp-row"><dt>Home</dt><dd>{% if card_home.type %}<a href="{{ '/hobby/' if card_home.type == 'hobby' else '/project/' }}{{ card_home.slug }}">{{ card_home.title }}</a> <span class="dp-muted">({{ 'chosen' if card_home.source == 'override' else 'automatic' }})</span>{% else %}The home page <span class="dp-muted">(automatic)</span>{% endif %}</dd></div>
+      </dl>
+      {% endset %}
+      {% set structure_edit %}
+      {# V2 cards 3.10: home (breadcrumb / export link target). Automatic unless overridden. #}
+      <div class="dp-field">
+        <label for="home-select">Home</label>
+        <select id="home-select" class="input">
+          <option value="">Automatic{% if card_home.title %} ({{ card_home.title }}){% endif %}</option>
+          <optgroup label="Cards">{% for o in home_card_options %}<option value="{{ o.value }}" {% if card_home_value == o.value %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</optgroup>
+          <optgroup label="Hobbies">{% for o in home_hobby_options %}<option value="{{ o.value }}" {% if card_home_value == o.value %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</optgroup>
+        </select>
+        <p class="dp-note">{% if card_home.type %}Currently: {{ card_home.title }} ({{ card_home.source }}){% else %}Currently: the home page{% endif %}</p>
+      </div>
+      <div class="dp-field">
+        <button type="button" id="unnest-btn" class="dp-btn" style="align-self:flex-start;{% if not project.parent_id %}display:none{% endif %}" title="Take this card out of its parent">Unnest from its parent</button>
+        <p class="dp-note">To take a child out of this card, use the file grid below.</p>
+      </div>
+      {% endset %}
+
+      {# ---- LINKS ---- #}
+      {% set links_view %}
+      <dl class="dp-rows">
+        {% for lbl, grp in links | groupby('label') %}
+        <div class="dp-row"><dt>{{ lbl }}</dt><dd>{% for l in grp %}<a href="/project/{{ l.slug }}">{{ l.title }}</a>{% if not loop.last %} &middot; {% endif %}{% endfor %}</dd></div>
+        {% else %}
+        <div class="dp-row"><dt>Links</dt><dd><span class="dp-muted">None yet</span></dd></div>
+        {% endfor %}
+      </dl>
+      {% endset %}
+      {% set links_edit %}
+      {# #408 / V2 cards 3.8: typed links, grouped by type. A link "a <type> b" reads forward on the source card
+         and in reverse on the target; `related` is symmetric. Add / retype / remove act immediately; the server's
+         refusal (a typed link over a related pair, etc.) is shown in place. #}
+      <div id="links-container" class="dp-static" role="group" aria-label="Current links"></div>
+      <div class="dp-field">
+        <label for="link-type-select">Link type</label>
+        <select id="link-type-select" class="input">
           {% for t in link_types %}
           <option value="{{ t.key }}|out">{{ t.forward }}{% if t.key == 'related' %} (peer){% endif %}…</option>
           {% if t.key != 'related' %}<option value="{{ t.key }}|in">{{ t.reverse }}…</option>{% endif %}
           {% endfor %}
         </select>
-        <select id="link-target-select" class="input" style="max-width:220px;font-size:12px" aria-label="Link to">
+        <label class="dp-sr-label" for="link-target-select">Link to</label>
+        <select id="link-target-select" class="input">
           <option value="">+ Link to a card…</option>
         </select>
+        <p id="links-error" class="dp-error" role="alert"></p>
       </div>
-      <span id="links-error" class="error-text" style="display:none;font-size:12px"></span>
-    </div>
+      {% endset %}
+      {# #414: blog entries that feature this project. Read-only — the link is created on the blog side; each
+         entry opens the Blog builder via window.openBlogEntry (exposed by _blog_builder.html). #}
+      {% set links_static %}
+      {% if featured_entries %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Featured in</dt><dd>
+          {% for e in featured_entries %}<a href="#" onclick="window.openBlogEntry({{ e.slug | tojson }}); return false;">{{ e.title }}</a>{% if e.status != 'ready' %} <span class="dp-muted">(draft)</span>{% endif %}{% if not loop.last %} &middot; {% endif %}{% endfor %}
+        </dd></div>
+      </dl>
+      {% else %}
+      <dl class="dp-rows"><div class="dp-row"><dt>Featured in</dt><dd><span class="dp-muted">&mdash;</span></dd></div></dl>
+      {% endif %}
+      {% endset %}
 
-    {# #414: blog entries that feature this project. Read-only — the link is
-       created on the blog side (blog_entry_projects); each chip opens the Blog
-       builder to that entry via window.openBlogEntry (exposed by
-       _blog_builder.html, which this page includes). Only shown when non-empty. #}
-    {% if featured_entries %}
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
-      <label style="font-size:12px;color:var(--text-muted)">Featured in:</label>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        {% for e in featured_entries %}
-        <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--chip);border:1px solid var(--border);border-radius:100px;padding:3px 10px">
-          <a href="#" onclick="window.openBlogEntry({{ e.slug | tojson }}); return false;" style="color:var(--text);text-decoration:none">{{ e.title }}</a>
-          {% if e.status != 'ready' %}<span style="color:var(--text-muted);font-size:11px">draft</span>{% endif %}
-        </span>
-        {% endfor %}
-      </div>
-    </div>
-    {% endif %}
-    <script>
-    (function () {
-      const SLUG = {{ project.slug | tojson }};
-      const LINK_TYPES = {{ link_types | tojson }};
-      let links = {{ links | tojson }};
-      let allProjects = [];
-      const container = document.getElementById('links-container');
-      const select = document.getElementById('link-target-select');
-      const typeSelect = document.getElementById('link-type-select');
-      const errEl = document.getElementById('links-error');
-      function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-      function showError(msg) { errEl.textContent = msg || ''; errEl.style.display = msg ? '' : 'none'; }
-      async function post(url, fields) {
-        const fd = new FormData(); Object.keys(fields).forEach(k => fd.append(k, fields[k]));
-        const r = await fetch(url, { method: 'POST', body: fd });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) { showError((data.error && data.error.message) || data.detail || 'Could not change that link.'); return false; }
-        showError(''); links = data.links || links; render(); refreshPicker(); return true;
-      }
-      // "a <type> b": for an `out` link this card is a; for an `in` link the other card is.
-      function pair(l) { return l.direction === 'in' ? [l.slug, SLUG] : [SLUG, l.slug]; }
-      function render() {
-        container.innerHTML = '';
-        if (!links.length) {
-          container.innerHTML = '<span style="font-size:12px;color:var(--text-muted)">none yet</span>';
-          return;
-        }
-        const groups = [];
-        links.forEach(l => {
-          const key = l.type + '|' + l.direction;
-          let g = groups.find(x => x.key === key);
-          if (!g) { g = { key, label: l.label, items: [] }; groups.push(g); }
-          g.items.push(l);
-        });
-        groups.forEach(g => {
-          const row = document.createElement('div');
-          row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center';
-          row.innerHTML = '<span style="font-size:11px;color:var(--text-muted);min-width:84px">' + esc(g.label) + '</span>';
-          g.items.forEach(l => {
-            const chip = document.createElement('span');
-            chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--chip);border:1px solid var(--border);border-radius:100px;padding:3px 10px';
-            chip.innerHTML = '<a href="/project/' + encodeURIComponent(l.slug) + '" style="color:var(--text);text-decoration:none">' + esc(l.title) + '</a>';
-            const retype = document.createElement('select');
-            retype.className = 'input'; retype.title = 'Change this link type'; retype.setAttribute('aria-label', 'Change link type');
-            retype.style.cssText = 'font-size:11px;padding:0 2px;max-width:92px';
-            retype.innerHTML = '<option value="">type…</option>' + LINK_TYPES.filter(t => t.key !== l.type)
-              .map(t => '<option value="' + t.key + '">' + esc(t.forward) + '</option>').join('');
-            retype.onchange = async () => {
-              if (!retype.value) return;
-              const [a, b] = pair(l);
-              await post('/api/links/retype', { a, b, from_type: l.type, to_type: retype.value });
-              retype.value = '';
-            };
-            const x = document.createElement('button');
-            x.type = 'button'; x.textContent = '\u00d7'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove');
-            x.style.cssText = 'background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;line-height:1;padding:0';
-            x.onclick = () => { const [a, b] = pair(l); post('/api/links/remove', { a, b, type: l.type }); };
-            chip.appendChild(retype); chip.appendChild(x); row.appendChild(chip);
-          });
-          container.appendChild(row);
-        });
-      }
-      function refreshPicker() {
-        // Any card but this one can be picked: a pair may carry several typed links, and the
-        // server refuses the combinations that can't coexist, with a clear message.
-        select.querySelectorAll('option:not([value=""])').forEach(o => o.remove());
-        allProjects.filter(p => p.slug !== SLUG)
-          .forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.title; select.appendChild(o); });
-      }
-      select.addEventListener('change', async () => {
-        const other = select.value; if (!other) return; select.value = '';
-        const [type, dir] = typeSelect.value.split('|');
-        const [a, b] = dir === 'in' ? [other, SLUG] : [SLUG, other];
-        await post('/api/links', { a, b, type });
-      });
-      fetch('/api/projects').then(r => r.ok ? r.json() : []).then(d => { allProjects = d; refreshPicker(); }).catch(() => {});
-      render();
-    })();
-    </script>
-    <div class="hazard-stripe" style="width:64px"></div>
-    <div class="detail-header-card">{{ card(header_card, "full") }}</div>
-    {% if timeline_children or timeline_items %}
-    <div class="project-video-timeline-panel-label">Project Timeline</div>
-    <div class="project-video-timeline-panel">
-      <div class="project-video-timeline" id="project-video-timeline"></div>
-    </div>
-    {% endif %}
-  </div>
-
-  <div style="margin-top:12px;display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
-    <div>
-      <label style="display:block;margin-bottom:4px">TIMELINE START</label>
-      <div style="display:flex;gap:8px;align-items:center">
-        <input class="input" type="datetime-local" id="start-date-input" value="{{ start_date_input or '' }}">
-        <button type="button" class="btn-secondary" id="start-date-reset">Reset</button>
-      </div>
-      <div style="font-size:12px;color:var(--placeholder);margin-top:4px">
-        {% if project.start_date_override %}Manually set.{% else %}Computed: {{ effective_start_display }}{% endif %}
-      </div>
-    </div>
-    <div>
-      <label style="display:block;margin-bottom:4px">TIMELINE END</label>
-      <div style="display:flex;gap:8px;align-items:center">
-        <input class="input" type="datetime-local" id="end-date-input" value="{{ end_date_input or '' }}">
-        <button type="button" class="btn-secondary" id="end-date-reset">Reset</button>
-      </div>
-      <div style="font-size:12px;color:var(--placeholder);margin-top:4px">
-        {% if project.end_date_override %}Manually set.{% else %}Computed: {{ effective_end_display }}{% endif %}
+      <div class="dp-panel">
+        {{ dp_group("identity", "IDENTITY", identity_view, identity_edit, done_only=false) }}
+        {{ dp_group("status", "STATUS", status_view, status_edit) }}
+        {{ dp_group("origin", "ORIGIN", origin_view, origin_edit) }}
+        {{ dp_group("dates", "DATES", dates_view, dates_edit) }}
+        {{ dp_group("structure", "STRUCTURE", structure_view, structure_edit) }}
+        {{ dp_group("links", "LINKS", links_view, links_edit, links_static, done_only=true) }}
       </div>
     </div>
   </div>
+
+  {% if timeline_children or timeline_items %}
+  <div class="project-video-timeline-panel-label">Project Timeline</div>
+  <div class="project-video-timeline-panel">
+    <div class="project-video-timeline" id="project-video-timeline"></div>
+  </div>
+  {% endif %}
 
   {% if writeup_body %}
   <div class="project-writeup-solo">
@@ -480,234 +512,6 @@
 </div>
 
 <script>
-// Family / collection membership (V2 cards 3.6). SELF-CONTAINED, same as the
-// hobbies block below. On a group card the chips are its members; elsewhere they
-// are the families this card is in. Every change is a core operation (validated,
-// logged); a refusal's message is shown in place and nothing changes.
-(function() {
-  const isGroup = {{ (card_status.kind in ('family', 'collection')) | tojson }};
-  const thisId = {{ project.id | tojson }};
-  const inChips = new Set({{ ((family_info.members if card_status.kind in ('family', 'collection') else family_info.families) | map(attribute='id') | list) | tojson }});
-  const select = document.getElementById('family-add-select');
-  const errBox = document.getElementById('family-error');
-  function showErr(msg) { errBox.textContent = msg; errBox.style.display = msg ? '' : 'none'; }
-  async function call(familyId, memberId, action) {
-    const res = await fetch(`/api/families/${familyId}/${action}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `member=${encodeURIComponent(memberId)}`
-    });
-    if (res.ok) { window.location.reload(); return; }
-    const body = await res.json().catch(() => ({}));
-    showErr(body.detail || 'Could not change membership');
-  }
-  fetch('/api/projects').then(r => r.json()).then(projects => {
-    const wantGroup = !isGroup;  // a member picks a family; a family picks members
-    projects.filter(p => p.id !== thisId && !inChips.has(p.id) && ((p.kind === 'family' || p.kind === 'collection') === wantGroup))
-      .forEach(p => {
-        const o = document.createElement('option');
-        o.value = p.id; o.textContent = p.title;
-        select.appendChild(o);
-      });
-  }).catch(() => {});
-  select.addEventListener('change', () => {
-    if (!select.value) return;
-    showErr('');
-    if (isGroup) call(thisId, select.value, 'members/add');
-    else call(select.value, thisId, 'members/add');
-  });
-  document.querySelectorAll('.family-chip-remove').forEach(btn => {
-    btn.addEventListener('click', () => {
-      showErr('');
-      const other = btn.dataset.cardId;
-      if (isGroup) call(thisId, other, 'members/remove');
-      else call(other, thisId, 'members/remove');
-    });
-  });
-})();
-
-// In hobbies (#365): add project to hobby, render chips, manage list
-// SELF-CONTAINED — embed all data via Jinja to avoid cross-scope variable
-// references (see #498's "lesson" comment above for why this matters).
-(function() {
-  const projectId = {{ project.id | tojson }};
-  const projectSlug = {{ project.slug | tojson }};
-  let currentHobbies = {{ project_hobbies | tojson }};
-
-  const chipsContainer = document.getElementById('hobby-chips-container');
-  const addSelect = document.getElementById('add-to-hobby-select');
-
-  async function fetchAllHobbies() {
-    try {
-      const res = await fetch('/api/hobbies');
-      return await res.json();
-    } catch (e) {
-      console.error('Failed to fetch hobbies:', e);
-      return [];
-    }
-  }
-
-  function renderChips() {
-    chipsContainer.innerHTML = '';
-    if (currentHobbies.length === 0) {
-      const note = document.createElement('span');
-      note.style.fontSize = '12px';
-      note.style.color = 'var(--text-muted)';
-      note.textContent = 'Not in any hobby yet.';
-      chipsContainer.appendChild(note);
-    } else {
-      currentHobbies.forEach(hobby => {
-        const chip = document.createElement('span');
-        chip.className = 'chip';
-
-        const link = document.createElement('a');
-        link.href = `/hobby/${hobby.slug}`;
-        link.textContent = hobby.name;
-        link.style.textDecoration = 'none';
-        link.style.color = 'inherit';
-        chip.appendChild(link);
-
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.textContent = '×';
-        btn.style.marginLeft = '4px';
-        btn.addEventListener('click', () => removeFromHobby(hobby.id));
-        chip.appendChild(btn);
-
-        chipsContainer.appendChild(chip);
-      });
-    }
-  }
-
-  async function loadHobbyOptions() {
-    const allHobbies = await fetchAllHobbies();
-    const currentIds = new Set(currentHobbies.map(h => h.id));
-
-    // Remove all option children except the first (placeholder)
-    Array.from(addSelect.querySelectorAll('option')).slice(1).forEach(o => o.remove());
-
-    // Add options for hobbies not yet in the project
-    const html = allHobbies
-      .filter(h => !currentIds.has(h.id))
-      .map(h => `<option value="${h.id}" data-hobby-slug="${h.slug}" data-hobby-name="${h.name}">${h.name}</option>`)
-      .join('');
-
-    if (html) {
-      addSelect.insertAdjacentHTML('beforeend', html);
-    }
-  }
-
-  async function addToHobby(hobbyId) {
-    const form = new FormData();
-    form.append('project_id', projectId);
-
-    try {
-      const res = await fetch(`/api/hobby/${hobbyId}/add-project`, {
-        method: 'POST',
-        body: form
-      });
-
-      if (res.ok) {
-        // Add hobby to current list
-        const hobbyOption = addSelect.querySelector(`option[value="${hobbyId}"]`);
-        if (hobbyOption) {
-          const hobby = {
-            id: hobbyId,
-            name: hobbyOption.dataset.hobbyName,
-            slug: hobbyOption.dataset.hobbySlug
-          };
-          currentHobbies.push(hobby);
-        }
-
-        renderChips();
-        loadHobbyOptions();
-        addSelect.value = '';
-
-        // Brief success indication
-        showSuccess();
-      } else {
-        const body = await res.json().catch(() => ({}));
-        showError(body.detail || 'Failed to add to hobby');
-      }
-    } catch (error) {
-      console.error('Error adding to hobby:', error);
-      showError('Network error');
-    }
-  }
-
-  async function removeFromHobby(hobbyId) {
-    const form = new FormData();
-    form.append('project_id', projectId);
-
-    try {
-      const res = await fetch(`/api/hobby/${hobbyId}/remove-project`, {
-        method: 'POST',
-        body: form
-      });
-
-      if (res.ok) {
-        // Remove hobby from current list
-        currentHobbies = currentHobbies.filter(h => h.id !== hobbyId);
-
-        renderChips();
-        loadHobbyOptions();
-
-        // Brief success indication
-        showSuccess();
-      } else {
-        showError('Failed to remove from hobby');
-      }
-    } catch (error) {
-      console.error('Error removing from hobby:', error);
-      showError('Network error');
-    }
-  }
-
-  function showSuccess() {
-    const msg = document.createElement('div');
-    msg.style.fontSize = '12px';
-    msg.style.color = '#3FA34D';
-    msg.style.position = 'fixed';
-    msg.style.bottom = '20px';
-    msg.style.right = '20px';
-    msg.style.padding = '8px 12px';
-    msg.style.background = 'var(--bg-2)';
-    msg.style.borderRadius = '4px';
-    msg.style.border = '1px solid #3FA34D';
-    msg.textContent = 'Updated.';
-    document.body.appendChild(msg);
-    setTimeout(() => msg.remove(), 2000);
-  }
-
-  function showError(detail) {
-    const msg = document.createElement('div');
-    msg.style.fontSize = '12px';
-    msg.style.color = '#C0392B';
-    msg.style.position = 'fixed';
-    msg.style.bottom = '20px';
-    msg.style.right = '20px';
-    msg.style.padding = '8px 12px';
-    msg.style.background = 'var(--bg-2)';
-    msg.style.borderRadius = '4px';
-    msg.style.border = '1px solid #C0392B';
-    msg.textContent = detail || 'Error.';
-    document.body.appendChild(msg);
-    setTimeout(() => msg.remove(), 4000);
-  }
-
-  addSelect.addEventListener('change', function() {
-    const val = this.value;
-    if (!val) return;
-    addToHobby(parseInt(val));
-  });
-
-  // Initial render
-  renderChips();
-  loadHobbyOptions();
-})();
-</script>
-
-<script>
 let currentCoverSlug = {{ project.cover_slug | tojson }};
 let currentCoverProjectId = {{ project.cover_project_id | tojson }};
 let currentWriteupSlug = {{ project.writeup_slug | tojson }};
@@ -819,245 +623,363 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
     }
   });
 });
+</script>
 
-// Timeline start/end overrides: same immediate-effect POST pattern as the
-// status selector below, one field each so setting start doesn't disturb end.
-function wireTimelineDateField(inputId, resetId, fieldName, resetFieldName) {
-  const input = document.getElementById(inputId);
-  const resetBtn = document.getElementById(resetId);
-  input.addEventListener('change', async function () {
-    if (!this.value) return;
-    const response = await fetch(`/api/projects/${projectId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `${fieldName}=${encodeURIComponent(this.value)}`,
-    });
-    if (!response.ok) {
-      console.error(`Failed to update ${fieldName}:`, response.status);
-    }
-  });
-  resetBtn.addEventListener('click', async function () {
-    const response = await fetch(`/api/projects/${projectId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `${resetFieldName}=true`,
-    });
-    if (response.ok) {
-      input.value = '';
-      window.location.reload();
-    } else {
-      alert('Reset failed');
-    }
-  });
-}
-wireTimelineDateField('start-date-input', 'start-date-reset', 'start_date', 'reset_start_date');
-wireTimelineDateField('end-date-input', 'end-date-reset', 'end_date', 'reset_end_date');
-
-// Status selector (#160-followup): active/archived, same immediate-effect
-// pattern as the cover/writeup selectors above.
-// V2 cards: kind / stage / stop-reason controls. The server validates every
-// combination and answers 422 {error:{code,message}, detail} on a violation;
-// the control snaps back and the message is shown.
-const kindSelect = document.getElementById('project-kind-select');
-const stageSelect = document.getElementById('project-stage-select');
-const stopReasonSelect = document.getElementById('project-stop-reason-select');
-const statusConfirm = document.getElementById('status-confirm');
-const statusError = document.getElementById('status-error');
-let currentCard = {
-  kind: {{ card_status.kind | tojson }},
-  stage: {{ card_status.stage | tojson }},
-  stop_reason: {{ (card_status.stop_reason or 'abandoned') | tojson }},
-};
-function syncStopReasonVisibility() {
-  stopReasonSelect.style.display = stageSelect.value === 'stopped' ? '' : 'none';
-}
-async function saveCardFields(fields) {
-  statusConfirm.style.display = 'none';
-  statusError.style.display = 'none';
-  try {
-    const response = await fetch(`/api/projects/${projectId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(fields).toString()
-    });
-    if (response.ok) {
-      currentCard = { kind: kindSelect.value, stage: stageSelect.value, stop_reason: stopReasonSelect.value };
-      statusConfirm.style.display = 'block';
-      setTimeout(() => { statusConfirm.style.display = 'none'; }, 2000);
-    } else {
-      const body = await response.json().catch(() => ({}));
-      statusError.textContent = body.detail || `Couldn't save (${response.status})`;
-      statusError.style.display = 'block';
-      kindSelect.value = currentCard.kind;
-      stageSelect.value = currentCard.stage;
-      stopReasonSelect.value = currentCard.stop_reason;
-      syncStopReasonVisibility();
-    }
-  } catch (error) {
-    console.error('Error updating card:', error);
-    kindSelect.value = currentCard.kind;
-    stageSelect.value = currentCard.stage;
-    stopReasonSelect.value = currentCard.stop_reason;
-    syncStopReasonVisibility();
-  }
-}
-kindSelect.addEventListener('change', () => saveCardFields({ kind: kindSelect.value }));
-stageSelect.addEventListener('change', () => {
-  syncStopReasonVisibility();
-  const fields = { stage: stageSelect.value };
-  if (stageSelect.value === 'stopped') fields.stop_reason = stopReasonSelect.value;
-  saveCardFields(fields);
-});
-stopReasonSelect.addEventListener('change', () => {
-  saveCardFields({ stage: 'stopped', stop_reason: stopReasonSelect.value });
-});
-
-// V2 cards 3.4 / 3.5 / 3.12: whereabouts, provenance, highlight controls.
+<script>
+// #515: the project page's details-panel groups. Each group's Save calls the SAME endpoints the old
+// scattered controls called (POST /api/projects/{id}, .../whereabouts, .../provenance, .../highlight,
+// .../home, .../unnest, /api/hobby/{id}/add-project, /api/families/..., /api/links...). The generic
+// edit/save/cancel mechanics are in static/js/details.js. A refusal from the server (a CardError, 409/422,
+// {error:{code,message}} plus `detail`) is thrown as an Error so the group shows it inline.
 (function () {
-  const wSel = document.getElementById('whereabouts-select');
-  const wNote = document.getElementById('whereabouts-note');
-  const pSel = document.getElementById('provenance-select');
-  const pCredit = document.getElementById('provenance-credit');
-  const hl = document.getElementById('card-highlight');
-  const msg = document.getElementById('card-extra-msg');
-  if (!wSel || !pSel) return;
-  let saved = {
-    whereabouts: wSel.value, whereabouts_note: wNote.value,
-    provenance: pSel.value, provenance_credit: pCredit.value, highlight: hl.checked,
-  };
-  function say(text, bad) {
-    msg.textContent = text;
-    msg.style.color = bad ? '#C0392B' : '#6E6B57';
-    if (!bad) setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, 2000);
+  const DP = window.DetailsPanel;
+  const PROJECT_ID = {{ project.id | tojson }};
+  const SLUG = {{ project.slug | tojson }};
+
+  function errText(body, res) {
+    return (body && body.error && body.error.message) || (body && body.detail) || `Couldn't save (${res.status})`;
   }
-  async function post(path, fields) {
-    const res = await fetch(`/api/projects/${projectId}/${path}`, {
+  async function postForm(url, fields) {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(fields).toString(),
     });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((body.error && body.error.message) || body.detail || `Couldn't save (${res.status})`);
+    if (!res.ok) throw new Error(errText(body, res));
     return body;
   }
-  function revert() {
-    wSel.value = saved.whereabouts; wNote.value = saved.whereabouts_note;
-    pSel.value = saved.provenance; pCredit.value = saved.provenance_credit; hl.checked = saved.highlight;
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function opt(value, text, selected) {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = text;
+    if (selected) { o.selected = true; o.defaultSelected = true; }
+    return o;
   }
-  async function saveWhereabouts() {
-    try {
-      await post('whereabouts', { whereabouts: wSel.value, note: wNote.value });
-      saved.whereabouts = wSel.value; saved.whereabouts_note = wNote.value; say('Saved.');
-    } catch (e) { revert(); say(e.message, true); }
-  }
-  async function saveProvenance() {
-    try {
-      await post('provenance', { provenance: pSel.value, credit: pCredit.value });
-      saved.provenance = pSel.value; saved.provenance_credit = pCredit.value; say('Saved.');
-    } catch (e) { revert(); say(e.message, true); }
-  }
-  wSel.addEventListener('change', saveWhereabouts);
-  wNote.addEventListener('change', saveWhereabouts);
-  pSel.addEventListener('change', saveProvenance);
-  pCredit.addEventListener('change', saveProvenance);
-  hl.addEventListener('change', async () => {
-    try { await post('highlight', { on: hl.checked ? '1' : '0' }); saved.highlight = hl.checked; say('Saved.'); }
-    catch (e) { revert(); say(e.message, true); }
-  });
-  // Changing kind to one where whereabouts doesn't apply hides the control.
-  kindSelect.addEventListener('change', () => {
-    const applies = ['thing', 'project', 'collection'].includes(kindSelect.value);
-    document.getElementById('whereabouts-group').style.display = applies ? 'inline-flex' : 'none';
-  });
-})();
 
-// V2 cards 3.10 / 3.7: home override and unnest.
-(function () {
-  const sel = document.getElementById('home-select');
-  const msg = document.getElementById('home-msg');
-  const unnest = document.getElementById('unnest-btn');
-  if (!sel) return;
-  let saved = sel.value;
-  function say(t, bad) { msg.textContent = t; msg.style.color = bad ? '#C0392B' : '#6E6B57'; }
-  async function post(path, fields) {
-    const res = await fetch(`/api/projects/${projectId}/${path}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(fields).toString(),
+  // ---- IDENTITY: kind, parent (saved on Save); hobbies + family chips act immediately ----
+  const kindSel = document.getElementById('project-kind-select');
+  const parentSel = document.getElementById('parent-project-select');
+  let savedKind = kindSel.value;
+  let savedParent = String(currentParentId || '');
+
+  DP.register('identity', {
+    save: async () => {
+      if (kindSel.value !== savedKind) {
+        await postForm(`/api/projects/${PROJECT_ID}`, { kind: kindSel.value });
+        savedKind = kindSel.value;
+      }
+      if (parentSel && parentSel.value !== savedParent) {
+        // replace=1: the owner picking a different parent here means "move it"; the API alone
+        // refuses a second parent unless told to replace.
+        await postForm(`/api/projects/${PROJECT_ID}`, { parent_id: parentSel.value, replace: '1' });
+        savedParent = parentSel.value;
+      }
+    },
+  });
+
+  if (parentSel) {
+    // Filter out this project and its descendants (the backend's cycle check is the real guard; this just
+    // keeps the dropdown from offering a choice guaranteed to be rejected). Families / collections can't be a parent.
+    fetch('/api/projects').then(r => r.json()).then(projects => {
+      const childrenByParent = {};
+      for (const p of projects) if (p.parent_id != null) (childrenByParent[p.parent_id] ||= []).push(p.id);
+      const excluded = new Set([PROJECT_ID]);
+      let frontier = [PROJECT_ID];
+      while (frontier.length) { frontier = frontier.flatMap(id => childrenByParent[id] || []); frontier.forEach(id => excluded.add(id)); }
+      projects.filter(p => !excluded.has(p.id) && p.kind !== 'family' && p.kind !== 'collection')
+        .forEach(p => parentSel.appendChild(opt(p.id, p.title, p.id === currentParentId)));
+      parentSel.value = savedParent;
+    }).catch(err => console.error('Failed to load projects:', err));
+  }
+
+  // Family / collection membership (V2 cards 3.6). On a group card the chips are its members; elsewhere
+  // they are the families this card is in. Every change is a core operation (validated, logged).
+  (function () {
+    const isGroup = {{ (card_status.kind in ('family', 'collection')) | tojson }};
+    const inChips = new Set({{ ((family_info.members if card_status.kind in ('family', 'collection') else family_info.families) | map(attribute='id') | list) | tojson }});
+    const select = document.getElementById('family-add-select');
+    const errBox = document.getElementById('family-error');
+    function showErr(msg) { errBox.textContent = msg || ''; }
+    async function call(familyId, memberId, action) {
+      const res = await fetch(`/api/families/${familyId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `member=${encodeURIComponent(memberId)}`
+      });
+      if (res.ok) { window.location.reload(); return; }
+      const body = await res.json().catch(() => ({}));
+      showErr(errText(body, res));
+    }
+    fetch('/api/projects').then(r => r.json()).then(projects => {
+      const wantGroup = !isGroup;  // a member picks a family; a family picks members
+      projects.filter(p => p.id !== PROJECT_ID && !inChips.has(p.id) && ((p.kind === 'family' || p.kind === 'collection') === wantGroup))
+        .forEach(p => select.appendChild(opt(p.id, p.title)));
+    }).catch(() => {});
+    select.addEventListener('change', () => {
+      if (!select.value) return;
+      showErr('');
+      if (isGroup) call(PROJECT_ID, select.value, 'members/add');
+      else call(select.value, PROJECT_ID, 'members/add');
     });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((body.error && body.error.message) || body.detail || `Couldn't save (${res.status})`);
-    return body;
-  }
-  sel.addEventListener('change', async () => {
-    try { await post('home', { target: sel.value }); saved = sel.value; say('Saved.'); }
-    catch (e) { sel.value = saved; say(e.message, true); }
-  });
-  if (unnest) unnest.addEventListener('click', async () => {
-    try { await post('unnest', {}); say('Unnested. Reloading...'); location.reload(); }
-    catch (e) { say(e.message, true); }
-  });
-})();
-
-// Parent project selector (#133)
-const parentSelect = document.getElementById('parent-project-select');
-async function loadParentProjects() {
-  try {
-    const res = await fetch('/api/projects');
-    const projects = await res.json();
-    // Filter out this project and its descendants to prevent cycles.
-    // The backend's cycle check (core/db.py's update_project) is the real
-    // guard — this is just keeping the dropdown from offering a choice
-    // guaranteed to be rejected.
-    const childrenByParent = {};
-    for (const p of projects) {
-      if (p.parent_id != null) (childrenByParent[p.parent_id] ||= []).push(p.id);
-    }
-    const excludedIds = new Set([projectId]);
-    let frontier = [projectId];
-    while (frontier.length) {
-      frontier = frontier.flatMap(id => childrenByParent[id] || []);
-      frontier.forEach(id => excludedIds.add(id));
-    }
-    // Families and collections can't be a parent either (the backend refuses).
-    const validParents = projects.filter(p => !excludedIds.has(p.id) && p.kind !== 'family' && p.kind !== 'collection');
-    const html = validParents
-      .map(p => `<option value="${p.id}" ${p.id === currentParentId ? 'selected' : ''}>${p.title}</option>`)
-      .join('');
-    parentSelect.innerHTML = '<option value="">— None —</option>' + html;
-    parentSelect.value = String(currentParentId || '');
-  } catch (err) {
-    console.error('Failed to load projects:', err);
-  }
-}
-
-parentSelect.addEventListener('change', async function() {
-  const newParentId = this.value;
-  const previousValue = String(currentParentId || '');
-  try {
-    const response = await fetch(`/api/projects/${projectId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      // replace=1: the owner picking a different parent here means "move it";
-      // the API alone refuses a second parent unless told to replace.
-      body: `parent_id=${encodeURIComponent(newParentId)}&replace=1`
+    document.querySelectorAll('.family-chip-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        showErr('');
+        const other = btn.dataset.cardId;
+        if (isGroup) call(PROJECT_ID, other, 'members/remove');
+        else call(other, PROJECT_ID, 'members/remove');
+      });
     });
-    if (response.ok) {
-      currentParentId = newParentId ? parseInt(newParentId) : null;
-      // Optionally refresh the page to show updated breadcrumbs/hierarchy
-      // window.location.reload();
-    } else {
-      const body = await response.json().catch(() => ({}));
-      alert('Error: ' + (body.detail || 'Failed to update parent project'));
-      this.value = previousValue;
+  })();
+
+  // In hobbies (#365): add / remove act immediately, chips re-render in place.
+  (function () {
+    let currentHobbies = {{ project_hobbies | tojson }};
+    const chipsContainer = document.getElementById('hobby-chips-container');
+    const addSelect = document.getElementById('add-to-hobby-select');
+    let allHobbies = [];
+
+    function renderChips() {
+      chipsContainer.innerHTML = '';
+      if (!currentHobbies.length) {
+        const note = document.createElement('span');
+        note.className = 'dp-muted';
+        note.textContent = 'Not in any hobby yet.';
+        chipsContainer.appendChild(note);
+        return;
+      }
+      currentHobbies.forEach(hobby => {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        const link = document.createElement('a');
+        link.href = `/hobby/${encodeURIComponent(hobby.slug)}`;
+        link.textContent = hobby.name;
+        chip.appendChild(link);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dp-chip-x';
+        btn.textContent = '×';
+        btn.title = 'Remove';
+        btn.setAttribute('aria-label', 'Remove from ' + hobby.name);
+        btn.addEventListener('click', () => change(hobby.id, 'remove-project'));
+        chip.appendChild(btn);
+        chipsContainer.appendChild(chip);
+      });
     }
-  } catch (error) {
-    console.error('Error updating parent:', error);
-    this.value = previousValue;
-  }
-});
+    function renderOptions() {
+      Array.from(addSelect.querySelectorAll('option')).slice(1).forEach(o => o.remove());
+      const have = new Set(currentHobbies.map(h => h.id));
+      allHobbies.filter(h => !have.has(h.id)).forEach(h => addSelect.appendChild(opt(h.id, h.name)));
+      addSelect.value = '';
+    }
+    async function change(hobbyId, action) {
+      const form = new FormData();
+      form.append('project_id', PROJECT_ID);
+      DP.error('identity', '');
+      try {
+        const res = await fetch(`/api/hobby/${hobbyId}/${action}`, { method: 'POST', body: form });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          DP.error('identity', errText(body, res));
+          return;
+        }
+        if (action === 'add-project') {
+          const h = allHobbies.find(x => x.id === hobbyId);
+          if (h && !currentHobbies.some(x => x.id === hobbyId)) currentHobbies.push({ id: h.id, name: h.name, slug: h.slug });
+        } else {
+          currentHobbies = currentHobbies.filter(h => h.id !== hobbyId);
+        }
+        DP.markDirty('identity');
+        renderChips();
+        renderOptions();
+      } catch (e) {
+        DP.error('identity', 'Network error.');
+      }
+    }
+    addSelect.addEventListener('change', () => {
+      const v = parseInt(addSelect.value, 10);
+      if (v) change(v, 'add-project');
+    });
+    fetch('/api/hobbies').then(r => r.json()).then(d => { allHobbies = d; renderOptions(); }).catch(() => {});
+    renderChips();
+  })();
 
-loadParentProjects();
+  // ---- STATUS: stage (+ stop reason), whereabouts (+ note), highlight ----
+  (function () {
+    const stageSel = document.getElementById('project-stage-select');
+    const stopSel = document.getElementById('project-stop-reason-select');
+    const stopField = document.getElementById('stop-reason-field');
+    const wSel = document.getElementById('whereabouts-select');
+    const wNote = document.getElementById('whereabouts-note');
+    const hl = document.getElementById('card-highlight');
+    let saved = {
+      stage: stageSel.value, stop: stopSel.value,
+      w: wSel ? wSel.value : '', wn: wNote ? wNote.value : '', hl: hl.checked,
+    };
+    function syncStop() { stopField.hidden = stageSel.value !== 'stopped'; }
+    stageSel.addEventListener('change', syncStop);
+    DP.register('status', {
+      cancel: syncStop,
+      save: async () => {
+        const stageChanged = stageSel.value !== saved.stage || (stageSel.value === 'stopped' && stopSel.value !== saved.stop);
+        if (stageChanged) {
+          const f = { stage: stageSel.value };
+          if (stageSel.value === 'stopped') f.stop_reason = stopSel.value;
+          await postForm(`/api/projects/${PROJECT_ID}`, f);
+          saved.stage = stageSel.value; saved.stop = stopSel.value;
+        }
+        if (wSel && (wSel.value !== saved.w || wNote.value !== saved.wn)) {
+          await postForm(`/api/projects/${PROJECT_ID}/whereabouts`, { whereabouts: wSel.value, note: wNote.value });
+          saved.w = wSel.value; saved.wn = wNote.value;
+        }
+        if (hl.checked !== saved.hl) {
+          await postForm(`/api/projects/${PROJECT_ID}/highlight`, { on: hl.checked ? '1' : '0' });
+          saved.hl = hl.checked;
+        }
+      },
+    });
+  })();
 
+  // ---- ORIGIN: provenance + credit ----
+  (function () {
+    const pSel = document.getElementById('provenance-select');
+    const pCredit = document.getElementById('provenance-credit');
+    let saved = { p: pSel.value, c: pCredit.value };
+    DP.register('origin', {
+      save: async () => {
+        if (pSel.value !== saved.p || pCredit.value !== saved.c) {
+          await postForm(`/api/projects/${PROJECT_ID}/provenance`, { provenance: pSel.value, credit: pCredit.value });
+          saved = { p: pSel.value, c: pCredit.value };
+        }
+      },
+    });
+  })();
+
+  // ---- DATES: timeline start / end overrides (Reset acts immediately) ----
+  (function () {
+    function wire(inputId, resetId, field, resetField) {
+      const input = document.getElementById(inputId);
+      const resetBtn = document.getElementById(resetId);
+      resetBtn.addEventListener('click', async () => {
+        try {
+          await postForm(`/api/projects/${PROJECT_ID}`, { [resetField]: 'true' });
+          input.value = '';
+          window.location.reload();
+        } catch (e) { DP.error('dates', 'Reset failed: ' + e.message); }
+      });
+      return { input, field, saved: input.value };
+    }
+    const fields = [
+      wire('start-date-input', 'start-date-reset', 'start_date', 'reset_start_date'),
+      wire('end-date-input', 'end-date-reset', 'end_date', 'reset_end_date'),
+    ];
+    DP.register('dates', {
+      save: async () => {
+        for (const f of fields) {
+          if (f.input.value && f.input.value !== f.saved) {
+            await postForm(`/api/projects/${PROJECT_ID}`, { [f.field]: f.input.value });
+            f.saved = f.input.value;
+          }
+        }
+      },
+    });
+  })();
+
+  // ---- STRUCTURE: home override, unnest ----
+  (function () {
+    const sel = document.getElementById('home-select');
+    const unnest = document.getElementById('unnest-btn');
+    let saved = sel.value;
+    DP.register('structure', {
+      save: async () => {
+        if (sel.value !== saved) { await postForm(`/api/projects/${PROJECT_ID}/home`, { target: sel.value }); saved = sel.value; }
+      },
+    });
+    if (unnest) unnest.addEventListener('click', async () => {
+      try { await postForm(`/api/projects/${PROJECT_ID}/unnest`, {}); location.reload(); }
+      catch (e) { DP.error('structure', e.message); }
+    });
+  })();
+
+  // ---- LINKS: typed links (add / retype / remove act immediately) ----
+  (function () {
+    const LINK_TYPES = {{ link_types | tojson }};
+    let links = {{ links | tojson }};
+    let allProjects = [];
+    const container = document.getElementById('links-container');
+    const select = document.getElementById('link-target-select');
+    const typeSelect = document.getElementById('link-type-select');
+    const errEl = document.getElementById('links-error');
+    function showError(msg) { errEl.textContent = msg || ''; }
+    async function post(url, fields) {
+      const fd = new FormData(); Object.keys(fields).forEach(k => fd.append(k, fields[k]));
+      const r = await fetch(url, { method: 'POST', body: fd });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { showError((data.error && data.error.message) || data.detail || 'Could not change that link.'); return false; }
+      showError(''); links = data.links || links; DP.markDirty('links'); render(); refreshPicker(); return true;
+    }
+    // "a <type> b": for an `out` link this card is a; for an `in` link the other card is.
+    function pair(l) { return l.direction === 'in' ? [l.slug, SLUG] : [SLUG, l.slug]; }
+    function render() {
+      container.innerHTML = '';
+      if (!links.length) {
+        container.innerHTML = '<span class="dp-muted">None yet</span>';
+        return;
+      }
+      const groups = [];
+      links.forEach(l => {
+        const key = l.type + '|' + l.direction;
+        let g = groups.find(x => x.key === key);
+        if (!g) { g = { key, label: l.label, items: [] }; groups.push(g); }
+        g.items.push(l);
+      });
+      groups.forEach(g => {
+        const row = document.createElement('div');
+        row.className = 'dp-link-row';
+        row.innerHTML = '<span class="dp-link-label">' + esc(g.label) + '</span>';
+        g.items.forEach(l => {
+          const chip = document.createElement('span');
+          chip.className = 'dp-link-chip';
+          chip.innerHTML = '<a href="/project/' + encodeURIComponent(l.slug) + '">' + esc(l.title) + '</a>';
+          const retype = document.createElement('select');
+          retype.className = 'input'; retype.title = 'Change this link type'; retype.setAttribute('aria-label', 'Change link type for ' + l.title);
+          retype.innerHTML = '<option value="">type…</option>' + LINK_TYPES.filter(t => t.key !== l.type)
+            .map(t => '<option value="' + esc(t.key) + '">' + esc(t.forward) + '</option>').join('');
+          retype.onchange = async () => {
+            if (!retype.value) return;
+            const [a, b] = pair(l);
+            await post('/api/links/retype', { a, b, from_type: l.type, to_type: retype.value });
+            retype.value = '';
+          };
+          const x = document.createElement('button');
+          x.type = 'button'; x.className = 'dp-chip-x'; x.textContent = '×'; x.title = 'Remove';
+          x.setAttribute('aria-label', 'Remove link to ' + l.title);
+          x.onclick = () => { const [a, b] = pair(l); post('/api/links/remove', { a, b, type: l.type }); };
+          chip.appendChild(retype); chip.appendChild(x); row.appendChild(chip);
+        });
+        container.appendChild(row);
+      });
+    }
+    function refreshPicker() {
+      // Any card but this one can be picked: a pair may carry several typed links, and the server refuses
+      // the combinations that can't coexist, with a clear message.
+      select.querySelectorAll('option:not([value=""])').forEach(o => o.remove());
+      allProjects.filter(p => p.slug !== SLUG).forEach(p => select.appendChild(opt(p.slug, p.title)));
+    }
+    select.addEventListener('change', async () => {
+      const other = select.value; if (!other) return; select.value = '';
+      const [type, dir] = typeSelect.value.split('|');
+      const [a, b] = dir === 'in' ? [other, SLUG] : [SLUG, other];
+      await post('/api/links', { a, b, type });
+    });
+    fetch('/api/projects').then(r => r.ok ? r.json() : []).then(d => { allProjects = d; refreshPicker(); }).catch(() => {});
+    DP.register('links', { doneOnly: true });
+    render();
+  })();
+})();
+</script>
+
+<script>
 // Inline title rename (#241). Click the title text or the pencil to swap in
 // an input; Enter or blur saves via the existing POST /api/projects/{id}
 // (title=...), Escape cancels. An empty/unchanged value is a no-op — the
@@ -1188,7 +1110,8 @@ convertHobbyConfirm.addEventListener('click', async () => {
     const summary = body.summary || {};
     const hobbyName = body.name || convertProjectTitle;
     const hobbySlug = body.slug;
-    convertHobbySuccess.innerHTML = `Made "${hobbyName}" a hobby — moved ${summary.children_moved || 0} sub-project${summary.children_moved === 1 ? '' : 's'} and ${summary.items_moved || 0} object${summary.items_moved === 1 ? '' : 's'}. <a href="/hobby/${hobbySlug}" style="color:inherit;text-decoration:underline">View hobby</a>`;
+    const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    convertHobbySuccess.innerHTML = `Made "${escHtml(hobbyName)}" a hobby — moved ${summary.children_moved || 0} sub-project${summary.children_moved === 1 ? '' : 's'} and ${summary.items_moved || 0} object${summary.items_moved === 1 ? '' : 's'}. <a href="/hobby/${encodeURIComponent(hobbySlug)}" style="color:inherit;text-decoration:underline">View hobby</a>`;
     convertHobbySuccess.style.display = 'block';
 
     // Redirect after a brief delay

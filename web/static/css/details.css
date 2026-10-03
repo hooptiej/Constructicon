@@ -1,0 +1,130 @@
+/* One details panel for the project and item pages (#515). Markup lives in
+   templates/project_detail.html and object_detail.html; behaviour in static/js/details.js.
+   Colours come from the app tokens (style.css) and the card tokens (cards.css).
+   Each group is a fact sheet by default (.dp-view); Edit swaps in its form (.dp-edit). */
+
+.dp-topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dp-topbar-actions { display: flex; gap: 8px; align-items: center; }
+.dp-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); min-width: 0; }
+.dp-crumbs a { color: var(--text-2); text-decoration: none; border-bottom: 1px dotted; }
+.dp-crumbs a:hover { color: var(--accent); }
+.dp-crumb-current { color: var(--text); font-weight: 500; overflow-wrap: anywhere; }
+
+.dp-btn {
+  font: inherit; font-size: 12px; background: var(--surface); color: var(--text-2);
+  border: 1px solid var(--border-strong); border-radius: 6px; padding: 7px 12px; cursor: pointer;
+}
+.dp-btn:hover, .dp-btn:focus-visible { border-color: var(--accent); color: var(--accent); }
+.dp-btn:focus-visible, .dp-edit-btn:focus-visible, .dp-menu button:focus-visible { outline: 2px solid var(--card-pip-on); outline-offset: 2px; }
+.dp-btn-primary { background: var(--card-pip-on); color: #17191E; border-color: transparent; font-weight: 600; }
+.dp-btn-primary:hover, .dp-btn-primary:focus-visible { color: #17191E; background: #F3D98A; }
+.dp-btn:disabled { opacity: .55; cursor: default; }
+
+/* More menu */
+.dp-more { position: relative; }
+.dp-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 230px; padding: 6px;
+  background: var(--card); border: 1px solid var(--border-strong); border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 2px;
+}
+.dp-menu[hidden] { display: none; }
+.dp-menu button {
+  font: inherit; font-size: 13px; text-align: left; background: none; border: 0; border-radius: 6px;
+  padding: 8px 10px; color: var(--text); cursor: pointer;
+}
+.dp-menu button:hover, .dp-menu button:focus-visible { background: var(--chip); }
+.dp-menu .dp-menu-danger { color: var(--hazard-red); }
+.dp-menu .dp-menu-warn { color: var(--warn); }
+
+/* Layout: preview/card on the left, everything else on the right */
+.dp-hero { display: flex; gap: 36px; align-items: flex-start; flex-wrap: wrap; }
+.dp-hero-left { flex: 0 0 auto; width: 320px; max-width: 100%; display: flex; flex-direction: column; gap: 12px; }
+.dp-hero-left.dp-wide { width: auto; flex: 1 1 440px; max-width: 700px; }
+.dp-side { flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.dp-title { margin: 0; font-family: var(--card-font-display); font-weight: 700; font-size: 34px; color: var(--text); overflow-wrap: anywhere; }
+.dp-preview-tools { display: flex; gap: 8px; flex-wrap: wrap; }
+.dp-subtitle { margin: 0; color: var(--text-2); font-size: 14px; }
+
+/* Needs your input */
+.dp-needs {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: 10px;
+  background: #2B2615; box-shadow: inset 0 0 0 1px #5A4A1E;
+}
+.dp-needs-dot { width: 8px; height: 8px; border-radius: 4px; background: var(--card-pip-on); flex-shrink: 0; }
+.dp-needs-text { flex: 1 1 260px; min-width: 0; font-size: 14px; color: #F0E2B6; overflow-wrap: anywhere; }
+.dp-needs-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dp-needs .dp-btn { color: #F0E2B6; border-color: #5A4A1E; background: transparent; }
+.dp-needs .dp-btn-primary { background: var(--card-pip-on); color: #17191E; border-color: transparent; }
+.dp-needs select { max-width: 220px; }
+.dp-needs-error { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--hazard-red-soft); }
+
+/* The panel */
+.dp-panel {
+  border-radius: 12px; background: var(--card); box-shadow: inset 0 0 0 1px var(--border-strong);
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden;
+}
+.dp-group {
+  padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0;
+  border-bottom: 1px solid var(--border-strong); border-right: 1px solid var(--border-strong);
+}
+.dp-group[data-mode="edit"] { background: #232733; background: color-mix(in srgb, var(--card) 80%, #4C5BA0 20%); }
+.dp-group-wide { grid-column: 1 / -1; }
+.dp-group-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.dp-group-title { margin: 0; font-family: var(--card-font-mono); font-weight: 500; font-size: 12px; letter-spacing: .1em; color: var(--card-pip-on); }
+.dp-edit-btn {
+  font-family: var(--card-font-mono); font-size: 11px; background: transparent; color: var(--text-2);
+  border: 1px solid var(--border-stronger); border-radius: 5px; padding: 3px 9px; cursor: pointer;
+}
+.dp-edit-btn:hover { border-color: var(--accent); color: var(--accent); }
+.dp-edit-btn[aria-expanded="true"] { border-color: var(--card-pip-on); color: var(--card-pip-on); }
+
+.dp-rows { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.dp-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.dp-row dt { font-size: 13px; color: var(--text-3); }
+.dp-row dd { margin: 0; font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.dp-row dd a { color: var(--card-pip-on); text-decoration: none; }
+.dp-row dd a:hover { text-decoration: underline; }
+.dp-muted { color: var(--text-3); }
+.dp-pre { white-space: pre-wrap; }
+.dp-static { display: flex; flex-direction: column; gap: 8px; }
+
+.dp-edit { display: flex; flex-direction: column; gap: 12px; }
+.dp-edit[hidden], .dp-view[hidden], .dp-field[hidden], .dp-needs [hidden] { display: none; }
+.dp-sr-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.dp-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.dp-field > label, .dp-field > .dp-label { font-size: 12px; color: var(--text-3); }
+.dp-field .input, .dp-field select, .dp-field textarea { width: 100%; max-width: 100%; font-size: 13px; }
+.dp-field-inline { flex-direction: row; align-items: center; gap: 8px; }
+.dp-field-inline > label { font-size: 13px; color: var(--text-2); }
+.dp-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; min-height: 24px; }
+.dp-chips .chip a { color: inherit; text-decoration: none; }
+.dp-chip-x { background: none; border: 0; color: var(--text-3); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 0 0 2px; }
+.dp-chip-x:hover, .dp-chip-x:focus-visible { color: var(--hazard-red); }
+.dp-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
+.dp-error { margin: 0; font-size: 12px; color: var(--hazard-red-soft); }
+.dp-error:empty { display: none; }
+.dp-note { font-size: 12px; color: var(--text-3); margin: 0; }
+.dp-link-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.dp-link-row > .dp-link-label { font-size: 11px; color: var(--text-3); min-width: 84px; }
+.dp-link-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; background: var(--chip); border: 1px solid var(--border); border-radius: 100px; padding: 3px 10px; }
+.dp-link-chip a { color: var(--text); text-decoration: none; }
+.dp-link-chip select { font-size: 11px; padding: 0 2px; max-width: 92px; }
+.dp-status-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.dp-flash { font-size: 12px; color: var(--accent); margin: 0; }
+
+/* item page: related thumbs only show their remove (x) while the group is being edited */
+.dp-group:not([data-mode="edit"]) .related-remove { display: none; }
+.dp-group .ocr-panel { gap: 8px; }
+.dp-group .related-panel-header { flex-wrap: wrap; }
+.dp-below { display: flex; flex-direction: column; gap: 16px; }
+
+@media (max-width: 760px) {
+  .dp-panel { grid-template-columns: minmax(0, 1fr); }
+  .dp-group { border-right: 0; }
+  .dp-hero { gap: 20px; }
+  .dp-hero-left, .dp-hero-left.dp-wide { width: 100%; }
+  .dp-hero-left .cx { margin: 0 auto; }
+  .dp-title { font-size: 26px; }
+  .dp-row { grid-template-columns: 92px minmax(0, 1fr); }
+  .dp-menu { right: 0; left: auto; max-width: calc(100vw - 32px); }
+}

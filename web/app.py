@@ -1307,6 +1307,21 @@ def gallery_page_redirect(request: Request):
     return RedirectResponse("/", status_code=308)
 
 
+def _decision_strip(decision):
+    """#515: one open card decision as the project page's "Needs your input" strip
+    shows it: the summary plus whether it is a multi-pick question, the labels of the
+    suggested answer(s), and the suggested key(s) for the Accept button. A decision
+    with no suggestion gets no Accept (only Choose)."""
+    d = cards.decision_summary(decision)
+    suggested = d.get("suggested")
+    keys = suggested if isinstance(suggested, list) else ([suggested] if suggested else [])
+    labels = {o["key"]: o["label"] for o in d["options"]}
+    d["multi"] = isinstance(suggested, list) or d["need"] in (cards.KIND_CARD_BUILT_FOR, cards.KIND_CARD_FAMILY_MEMBERS)
+    d["suggested_keys"] = [k for k in keys if k in labels]
+    d["suggested_labels"] = [labels[k] for k in d["suggested_keys"]]
+    return d
+
+
 @app.get("/project/{slug}", response_class=HTMLResponse)
 def project_detail_page(request: Request, slug: str):
     project = db.get_project(slug)
@@ -1442,7 +1457,9 @@ def project_detail_page(request: Request, slug: str):
             "card_extra": cards.whereabouts_fields(project),
             "card_whereabouts_options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
             "card_provenance_options": [{"key": k, "label": card_rules.CARD_PROVENANCE_LABELS[k]} for k in card_rules.CARD_PROVENANCE],
-            "card_open_decisions": [cards.decision_summary(d) for d in cards.open_card_decisions(project["slug"])],
+            "card_open_decisions": [_decision_strip(d) for d in cards.open_card_decisions(project["slug"])],
+            # #515: the "Part of" parent, for the Identity group's fact sheet.
+            "parent_card": db.get_project(project["parent_id"]) if project.get("parent_id") else None,
             # V2 cards 3.10: resolved home + the choices for the manual override.
             "card_home": cards.resolve_home(project["id"]),
             "card_home_value": (f"{project['home_kind']}:{project['home_ref']}" if project.get("home_kind") else ""),
@@ -1570,6 +1587,18 @@ def object_detail_page(request: Request, slug: str):
     # #137: breadcrumb navigation — read the from param and build the breadcrumb list
     from_param = request.query_params.get("from")
     breadcrumbs = _build_breadcrumbs(from_param, item["display_name"])
+    if not from_param and item["projects"]:
+        # #515: arriving with no `from`, the trail goes through the item's home project
+        # (its most recently updated one), then that card's own home chain above it.
+        home = item["projects"][0]
+        trail = [{"label": "Home", "href": "/"}]
+        for h in reversed(cards.home_chain(home["id"])):
+            if h.get("title"):
+                trail.append({"label": h["title"],
+                              "href": f"/hobby/{h['slug']}" if h["type"] == "hobby" else f"/project/{h['slug']}"})
+        trail.append({"label": home["title"], "href": f"/project/{home['slug']}"})
+        trail.append({"label": item["display_name"], "href": None})
+        breadcrumbs = trail
     return templates.TemplateResponse(
         request, "object_detail.html",
         {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "PROVENANCE_TYPES": PROVENANCE_TYPES, "BRAND_ROLES": BRAND_ROLES},

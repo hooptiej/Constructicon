@@ -1089,7 +1089,10 @@ def api_list_pending_decisions():
                 "question": item["question"],
                 "options": [
                     {"key": o["key"], "label": o.get("label", o["key"]), "reason": o.get("reason"),
-                     "suggested": o["key"] == item["suggested"]}
+                     # `suggested` is one key, or a list of keys for a multi-pick question
+                     # (card_family_members pre-ticks every suggested-yes candidate).
+                     "suggested": (o["key"] in item["suggested"]) if isinstance(item["suggested"], list)
+                     else o["key"] == item["suggested"]}
                     for o in item["options"]
                 ],
                 "suggested": item["suggested"],
@@ -1409,6 +1412,8 @@ def project_detail_page(request: Request, slug: str):
             "card_stop_reasons": [{"key": r, "label": card_rules.STOP_REASON_LABELS[r]} for r in card_rules.STOP_REASONS],
             "card_status": cards.status_fields(project),
             "card_open_decisions": [cards.decision_summary(d) for d in cards.open_card_decisions(project["slug"])],
+            # V2 cards 3.6: families this card is in / members of this family or collection.
+            "family_info": cards.family_fields(project),
             "project_score": project_score,
             "project_hobbies": [{"id": h["id"], "name": h["name"], "slug": h["slug"]} for h in project_hobbies],
             # #408: peer project links for the Related-projects widget.
@@ -2421,6 +2426,10 @@ def api_create_project(request: Request, title: str = Form(...), parent_id: str 
     stop_reason = stop_reason or None
     card_rules.validate_status(card_rules.validate_kind(kind or card_rules.DEFAULT_KIND),
                                stage or card_rules.DEFAULT_STAGE, stop_reason)
+    if parent_id_int is not None:
+        # Nest rules (3.7) guard creation too; checked before the tag is minted.
+        card_rules.validate_nest({"id": None, "kind": kind or card_rules.DEFAULT_KIND, "title": title,
+                                  "parent_id": None}, db.get_project(parent_id_int), ())
     tag = db.get_or_create_tag(title, parent_id=None)
     project = db.create_project(title, tag_id=tag["id"], parent_id=parent_id_int,
                                 kind=kind, stage=stage, stop_reason=stop_reason, actor="owner-ui")
@@ -2524,13 +2533,20 @@ async def api_update_project(
                 parent_id_int = int(raw_parent)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid parent_id")
-            # Compare against the resolved row's id, not the path param
-            # (project_id may be a slug; #217).
-            if parent_id_int == project["id"]:
-                raise HTTPException(status_code=400, detail="A project cannot be its own parent")
-            if db.get_project(parent_id_int) is None:
-                raise HTTPException(status_code=400, detail="Parent project not found")
+            # Self / missing parent / cycle / group kind / second parent are all
+            # refused by core.cards.nest below (CardError -> 409/404 with a code).
             parent_id_value = parent_id_int
+    replace_parent = str(_form.get("replace") or "").strip().lower() in ("1", "true", "yes", "on")
+    card_warnings = []
+    # "Part of" (V2 cards 3.7) goes through core.cards first, so a refusal happens
+    # before anything else in this request is written.
+    if parent_id_value is None:
+        cards.unnest(project["id"], actor="owner-ui")
+        parent_id_value = ...
+    elif parent_id_value is not ...:
+        card_warnings.extend(cards.nest(project["id"], parent_id_value, replace=replace_parent,
+                                        actor="owner-ui").warnings)
+        parent_id_value = ...
 
     writeup_slug_value = ...  # "..." means don't update writeup_slug
     if writeup_slug is not None:
@@ -2571,7 +2587,6 @@ async def api_update_project(
     # V2 cards: kind / stage / stop_reason / activity go through core.cards (the same
     # validators the MCP uses; a violation is a CardError -> HTTP 422). The legacy
     # `status` word is translated to a stage; the legacy column itself is frozen.
-    card_warnings = []
     if status:
         legacy = card_rules.legacy_to_status(status)
         if legacy["kind"] and not kind:
@@ -2636,11 +2651,24 @@ def api_orphan_child(project_id: str, child_id: str = Form(...)):
     if child.get("parent_id") != parent_id:
         raise HTTPException(status_code=400, detail="Child is not a child of this project")
 
-    try:
-        updated = db.update_project(child_id, parent_id=None)
-        return JSONResponse(updated or {})
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    cards.unnest(child["id"], actor="owner-ui")
+    return JSONResponse(db.get_project(child["id"]) or {})
+
+
+@app.post("/api/families/{family_id}/members/add")
+def api_family_add_member(family_id: str, member: str = Form(...)):
+    """V2 cards 3.6: put `member` (card id or slug) in a family or collection.
+    Many-to-many; adding twice is a no-op. Rule violations are CardErrors
+    (422 bad_membership). Not nesting: no file moves."""
+    result = cards.add_to_family(family_id, member, actor="owner-ui")
+    return JSONResponse(result.to_dict())
+
+
+@app.post("/api/families/{family_id}/members/remove")
+def api_family_remove_member(family_id: str, member: str = Form(...)):
+    """V2 cards 3.6: take `member` out of a family or collection (no-op if absent)."""
+    result = cards.remove_from_family(family_id, member, actor="owner-ui")
+    return JSONResponse(result.to_dict())
 
 
 @app.post("/api/projects/{project_id}/remove-item")

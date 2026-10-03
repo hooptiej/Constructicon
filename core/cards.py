@@ -10,6 +10,9 @@ these; no rule lives anywhere else.
 Piece 1 scope: set_status, set_kind, resolve_decision (for the card_* decision
 kinds), list_needs_decision (stored decisions only), plus the helpers the
 Curator and the pages use to read a card's live status.
+
+Piece 3 adds families/collections (add_to_family, remove_from_family), "part of"
+nesting (nest, unnest) and the card_family_members decision resolution.
 """
 
 import time
@@ -25,10 +28,12 @@ KIND_CARD_KIND = "card_kind"
 KIND_CARD_FAMILY_MEMBERS = "card_family_members"
 CARD_DECISION_KINDS = (KIND_CARD_STATUS, KIND_CARD_BUILT_FOR, KIND_CARD_KIND, KIND_CARD_FAMILY_MEMBERS)
 
-# Patch ops the decision resolver can apply today. link / add_to_family arrive
-# with pieces 4 and 3; an option whose patch needs them stays unresolvable (the
-# decision remains open) until then.
+# Patch ops the single-card decision resolver can apply. `link` arrives with
+# piece 4; an option whose patch needs it stays unresolvable (the decision
+# remains open) until then. card_family_members decisions use their own
+# multi-card path (_apply_family_patches) with FAMILY_PATCH_OPS.
 SUPPORTED_PATCH_OPS = ("set_status", "set_kind")
+FAMILY_PATCH_OPS = ("unnest", "add_to_family")
 
 # Computed needs (never stored, always current) that list_needs_decision merges in.
 NEED_HOBBY_INACTIVE_WITH_ACTIVE_WORK = "hobby_inactive_with_active_work"
@@ -125,6 +130,10 @@ def set_kind(card, kind, *, force=False, dry_run=False, actor=changes.ACTOR_MCP,
         if db.list_child_projects(row["id"]):
             raise CardError("nest_group_kind",
                             f"A {kind} can't have nested cards; unnest its children first (use membership instead).")
+    if kind in card_rules.GROUP_KINDS and db.list_families_for_member(row["id"]):
+        raise CardError("bad_membership",
+                        f"'{row['title']}' is a member of a family or collection, and a {kind} can't be a member; "
+                        "take it out of those first.")
     members = 0
     if old_kind in card_rules.GROUP_KINDS and kind != old_kind:
         members = db.count_family_members(row["id"])
@@ -143,9 +152,92 @@ def set_kind(card, kind, *, force=False, dry_run=False, actor=changes.ACTOR_MCP,
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
         if members and force:
-            db.clear_family_members(row["id"])
+            db.clear_family_members(row["id"], op="set_kind", actor=actor, batch_id=batch_id,
+                                    affected_slugs=[row["slug"]])
         db.update_card_columns(row["id"], fields, "set_kind", actor, batch_id=batch_id)
     return Result(True, rows, warnings, batch_id, dry_run)
+
+
+# --- Nesting ("part of") and families (3.6, 3.7) ----------------------------------
+
+def _slug_of(card_id):
+    c = db.get_project(card_id) if card_id is not None else None
+    return c["slug"] if c else None
+
+
+def nest(child, parent, *, replace=False, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Makes `child` part of `parent` (parent_id). Rules (3.7, card_rules.validate_nest):
+    no self/cycle, neither end a family or collection, and a card that already
+    has a different parent is refused (nest_second_parent) unless replace=True."""
+    row, parent_row = get_card(child), get_card(parent)
+    db.check_nest(row, parent_row["id"], replace=replace)
+    old = row.get("parent_id")
+    rows = []
+    warnings = []
+    if old != parent_row["id"]:
+        rows = [{"card": row["slug"], "field": "parent", "before": _slug_of(old), "after": parent_row["slug"]}]
+        if old is not None:
+            warnings.append(f"Moved '{row['title']}' out of '{_slug_of(old)}' into '{parent_row['title']}'.")
+        if row.get("activity") and parent_row.get("activity") and row["activity"] != parent_row["activity"]:
+            warnings.append(f"'{row['title']}' is {row['activity']} but '{parent_row['title']}' is {parent_row['activity']}.")
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and rows:
+        db.update_card_columns(row["id"], {"parent_id": parent_row["id"]}, "nest", actor, batch_id=batch_id)
+    return Result(True, rows, warnings, batch_id, dry_run)
+
+
+def unnest(child, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None, _op="unnest"):
+    """Takes `child` out of its parent (it becomes top-level). No-op when it has none."""
+    row = get_card(child)
+    old = row.get("parent_id")
+    rows = []
+    if old is not None:
+        rows = [{"card": row["slug"], "field": "parent", "before": _slug_of(old), "after": None}]
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and rows:
+        db.update_card_columns(row["id"], {"parent_id": None}, _op, actor, batch_id=batch_id)
+    return Result(True, rows, [], batch_id, dry_run)
+
+
+def add_to_family(family, member, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None, _op="add_to_family"):
+    """Adds `member` to a family or collection (many-to-many; a card can be in
+    several). Validated by card_rules.validate_membership. Adding twice is a no-op."""
+    fam, mem = get_card(family), get_card(member)
+    card_rules.validate_membership(fam, mem)
+    exists = db.is_family_member(fam["id"], mem["id"])
+    rows = [] if exists else [{"card": mem["slug"], "field": "in_family", "before": None, "after": fam["slug"]}]
+    warnings = [f"'{mem['title']}' is already in '{fam['title']}'."] if exists else []
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and not exists:
+        db.add_family_member(fam["id"], mem["id"], _op, actor, batch_id=batch_id,
+                             affected_slugs=[fam["slug"], mem["slug"]])
+    return Result(True, rows, warnings, batch_id, dry_run)
+
+
+def remove_from_family(family, member, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Takes `member` out of a family or collection. No-op if it wasn't in it.
+    Neither card is otherwise changed."""
+    fam, mem = get_card(family), get_card(member)
+    exists = db.is_family_member(fam["id"], mem["id"])
+    rows = [{"card": mem["slug"], "field": "in_family", "before": fam["slug"], "after": None}] if exists else []
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and exists:
+        db.remove_family_member(fam["id"], mem["id"], "remove_from_family", actor, batch_id=batch_id,
+                                affected_slugs=[fam["slug"], mem["slug"]])
+    return Result(True, rows, [], batch_id, dry_run)
+
+
+def family_fields(card):
+    """Membership facts for pages and tools: the families/collections this card is
+    in, and (for a group kind) its members."""
+    def slim(c):
+        return {"id": c["id"], "slug": c["slug"], "title": c["title"], "kind": c.get("kind") or "project",
+                "kind_label": card_rules.kind_label(c.get("kind") or "project"), "stage": c.get("stage"),
+                "activity": c.get("activity")}
+    out = {"families": [slim(f) for f in db.list_families_for_member(card["id"])], "members": []}
+    if (card.get("kind") or "project") in card_rules.GROUP_KINDS:
+        out["members"] = [slim(m) for m in db.list_family_members(card["id"])]
+    return out
 
 
 # --- Reading a card's live status ------------------------------------------------
@@ -225,6 +317,55 @@ def _apply_patch(card_row, patch, actor, batch_id):
         raise
 
 
+def _apply_family_patches(family_row, patches_by_option, actor, batch_id):
+    """card_family_members resolution (4.5). The chosen options' patch ops are
+    pooled and run in a safe order: unnest the chosen children, turn the card into
+    a family (if it isn't one), then add the members. The order matters because a
+    card with nested children can't become a family, and a non-family can't take
+    members. Everything is validated up front so a refusal leaves nothing
+    half-applied (the decision stays open and the CardError propagates)."""
+    ops = [op for patch in patches_by_option for op in patch]
+    for op in ops:
+        if op.get("op") not in FAMILY_PATCH_OPS:
+            raise CardError("unsupported_patch", f"Unsupported answer step: {op.get('op')!r}.")
+    unnests = [op for op in ops if op["op"] == "unnest"]
+    adds = [op for op in ops if op["op"] == "add_to_family"]
+    fam = db.get_project(family_row["id"]) or family_row
+    is_group = (fam.get("kind") or "project") in card_rules.GROUP_KINDS
+
+    unnest_ids = set()
+    for op in unnests:
+        unnest_ids.add(get_card(op["card"])["id"])
+    prospective = {**fam, "kind": fam["kind"] if is_group else "family"}
+    if not is_group:
+        remaining = [c["title"] for c in db.list_child_projects(fam["id"]) if c["id"] not in unnest_ids]
+        if remaining:
+            raise CardError(
+                "nest_group_kind",
+                f"'{fam['title']}' can't become a family while {', '.join(remaining[:5])} are still nested under it. "
+                "Choose them as members too, or unnest them first.")
+        if fam.get("parent_id") is not None:
+            raise CardError("nest_group_kind",
+                            f"'{fam['title']}' is part of another card; a family can't be nested. Unnest it first.")
+        if db.list_families_for_member(fam["id"]):
+            raise CardError("bad_membership",
+                            f"'{fam['title']}' is a member of another family, and a family can't be a member.")
+    members = []
+    for op in adds:
+        m = get_card(op["member"])
+        card_rules.validate_membership(prospective, m)
+        members.append(m)
+
+    for op in unnests:
+        child = get_card(op["card"])
+        if child.get("parent_id") == fam["id"]:
+            unnest(child["id"], actor=actor, batch_id=batch_id, _op="resolve_decision")
+    if not is_group:
+        set_kind(fam["id"], "family", actor=actor, batch_id=batch_id)
+    for m in members:
+        add_to_family(fam["id"], m["id"], actor=actor, batch_id=batch_id, _op="resolve_decision")
+
+
 def resolve_decision(decision_id, choice=None, choices=None, actor=changes.ACTOR_MCP):
     """Resolves one card_* decision. `choice` is an option key (single-choice
     questions); `choices` is a list of option keys (multi-choice questions, e.g.
@@ -261,9 +402,12 @@ def resolve_decision(decision_id, choice=None, choices=None, actor=changes.ACTOR
         raise _decisions.DecisionNotFound(f"The card for decision {decision_id} no longer exists")
 
     batch_id = changes.new_batch_id()
-    for key in picked:
-        _apply_patch(card_row, options[key].get("patch") or [], actor, batch_id)
-        card_row = db.get_project(card_row["id"]) or card_row
+    if decision["kind"] == KIND_CARD_FAMILY_MEMBERS:
+        _apply_family_patches(card_row, [options[k].get("patch") or [] for k in picked], actor, batch_id)
+    else:
+        for key in picked:
+            _apply_patch(card_row, options[key].get("patch") or [], actor, batch_id)
+            card_row = db.get_project(card_row["id"]) or card_row
     db.resolve_pending_decision(decision_id, {
         "choice": picked[0] if len(picked) == 1 else picked,
         "applied_batch": batch_id,

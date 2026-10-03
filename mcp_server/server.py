@@ -631,8 +631,10 @@ def constructicon_create_project(title: str, description: str = "", cover_slug: 
     Also creates a root-level tag with the same name and links it, so tagged
     objects surface through both project and tag browsing.
 
-    parent_id optionally links this project to a parent project (#133),
-    enabling a simple hierarchy of nested projects.
+    parent_id optionally makes this card "part of" a parent card (#133). Nesting
+    rules apply (a family or collection can't be a parent or be nested; the parent
+    must exist): a violation returns {"ok": false, "error": {"code": "nest_group_kind"
+    | "not_found", ...}}.
 
     kind: project (default) | thing | action | family | collection | event.
     stage: in_progress (default) | in_use | idea | paused | done | stopped
@@ -645,6 +647,13 @@ def constructicon_create_project(title: str, description: str = "", cover_slug: 
     try:
         card_rules.validate_status(card_rules.validate_kind(kind or card_rules.DEFAULT_KIND),
                                    stage or card_rules.DEFAULT_STAGE, stop_reason)
+        if parent_id is not None:
+            # Nest rules (3.7) guard creation too; checked before the tag is minted.
+            parent_row = db.get_project(parent_id)
+            if parent_row is None:
+                raise card_rules.CardError("not_found", f"No such parent card: {parent_id!r}")
+            card_rules.validate_nest({"id": None, "kind": kind or card_rules.DEFAULT_KIND, "title": title,
+                                      "parent_id": None}, parent_row, ())
         tag = db.get_or_create_tag(title, parent_id=None)
         project = db.create_project(title, description=description, cover_slug=cover_slug, tag_id=tag["id"],
                                     parent_id=parent_id, kind=kind, stage=stage, stop_reason=stop_reason, actor="mcp")
@@ -800,6 +809,8 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
     - kind, activity, stage, stop_reason (+ labels) and needs_input: the live V2 status;
       `status` is the frozen legacy v1 word
     - open_decisions: any still-open questions about this card (with the suggested answer)
+    - families: the families/collections this card is in; members: the members of this
+      card when it is a family or collection; children: cards nested under it ("part of")
     - items: list of objects in the project (with their tags)
     - cover: the cover object if cover_slug is set, else None
     - writeup: the writeup document object if writeup_slug is set, else None
@@ -840,6 +851,11 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
         "cover": cover,
         "writeup": writeup,
         "open_decisions": [cards.decision_summary(d) for d in cards.open_card_decisions(project["slug"])],
+        # V2 cards 3.6/3.7: families this card is in, members (if it is a family or
+        # collection), and the cards nested under it ("part of").
+        **cards.family_fields(project),
+        "children": [{"id": c["id"], "slug": c["slug"], "title": c["title"]}
+                     for c in db.list_child_projects(project["id"])],
     }
 
 
@@ -1435,6 +1451,64 @@ def constructicon_set_kind(card: str | int, kind: str, force: bool = False, dry_
 
 
 @mcp.tool()
+def constructicon_nest(child: str | int, parent: str | int, replace: bool = False, dry_run: bool = False) -> dict:
+    """Make `child` PART OF `parent` (nesting: the child only makes sense inside its
+    parent, e.g. a Lua script inside the truck it runs on). V2 cards 3.7.
+
+    Refused with {"ok": false, "error": {code, message}}:
+    - nest_self: a card can't be part of itself
+    - nest_cycle: the parent is already nested under the child
+    - nest_group_kind: a family or collection can't be nested or be a parent (use
+      constructicon_add_to_family instead)
+    - nest_second_parent: the child is already part of another card; pass
+      replace=true to move it (or constructicon_unnest first)
+
+    Independent of family membership. dry_run=true previews. Returns
+    {ok, dry_run, changes, warnings, batch_id}.
+    """
+    try:
+        return cards.nest(child, parent, replace=replace, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_unnest(child: str | int, dry_run: bool = False) -> dict:
+    """Take `child` out of its parent so it stands on its own (no-op if it has none)."""
+    try:
+        return cards.unnest(child, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_add_to_family(family: str | int, member: str | int, dry_run: bool = False) -> dict:
+    """Put `member` in a family or collection (V2 cards 3.6). Membership is
+    many-to-many: a card can be in several families, and a family has many members;
+    it is NOT nesting and moves no files. Adding twice is a no-op.
+
+    `family` must be a card of kind family or collection; `member` must not be one
+    (families don't contain each other). Violations return
+    {"ok": false, "error": {"code": "bad_membership", ...}}. dry_run=true previews.
+    Returns {ok, dry_run, changes, warnings, batch_id}.
+    """
+    try:
+        return cards.add_to_family(family, member, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_remove_from_family(family: str | int, member: str | int, dry_run: bool = False) -> dict:
+    """Take `member` out of a family or collection (no-op if it wasn't in it).
+    Neither card is otherwise changed."""
+    try:
+        return cards.remove_from_family(family, member, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
 def constructicon_list_needs_decision(kind: str | None = None, need: str | None = None,
                                       hobby: str | None = None, limit: int | None = None) -> list[dict]:
     """List cards waiting on an owner decision, with a suggested answer for each.
@@ -1442,7 +1516,8 @@ def constructicon_list_needs_decision(kind: str | None = None, need: str | None 
     Two sources. STORED questions queued by the v1 -> v2 migration:
     need = card_status (done vs in use / paused vs collection), card_built_for
     (a means-to-an-end card: which card was it built for), card_kind (Thing or
-    Project?); answer one with constructicon_resolve_pending_decision
+    Project?), card_family_members (is this nested-parent really a family, and which
+    cards belong in it: pick several); answer one with constructicon_resolve_pending_decision
     (decision_id, choice = an option key). COMPUTED needs, recomputed on every
     call and never stored (decision_id is null; card_slug is null and hobby_slug
     is set, since they belong to a hobby): need = hobby_inactive_with_active_work
@@ -1603,7 +1678,10 @@ def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", p
     For V2 card decisions (kind card_status / card_built_for / card_kind, slug
     "card:<project slug>"):
         choice: one option key from constructicon_list_pending_decisions (e.g. "in_use")
-        choices: several option keys for multi-answer questions (card_built_for)
+        choices: several option keys for multi-answer questions (card_built_for,
+        card_family_members). A family answer turns the card into a family, adds the
+        picked cards as members and takes any picked nested child out of the nesting
+        (all in one logged batch); "none" leaves everything as it is.
         The option's change runs through the same validators as a manual edit; if it
         is invalid today the decision stays open and {"ok": false, "error": {code,
         message}} comes back. card_built_for answers that create a link (a candidate

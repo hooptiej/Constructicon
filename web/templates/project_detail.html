@@ -35,8 +35,10 @@
       </h1>
       <p class="title-edit-error" id="project-title-error" style="display:none"></p>
       {% if project.description %}<p class="page-subtitle">{{ project.description }}</p>{% endif %}
-      <div style="margin-top:12px;display:flex;align-items:center;gap:12px;font-size:13px">
-        <label>Parent project:</label>
+      {# "Part of" nesting (3.7) is for cards that only make sense inside another;
+         a family or collection can't be nested (use membership, below). #}
+      <div style="margin-top:12px;display:flex;align-items:center;gap:12px;font-size:13px{% if card_status.kind in ('family', 'collection') %};display:none{% endif %}">
+        <label>Part of:</label>
         <select id="parent-project-select" style="padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px">
           <option value="">— None —</option>
         </select>
@@ -92,6 +94,28 @@
       <select id="add-to-hobby-select" class="input" style="max-width:200px;font-size:12px">
         <option value="">+ Add to hobby…</option>
       </select>
+    </div>
+    {# V2 cards 3.6: family / collection membership. A family or collection card
+       lists its MEMBERS (and can take more); any other card shows the families it
+       is IN (a card can be in several). Membership is not nesting: no file moves. #}
+    {% set is_group = card_status.kind in ('family', 'collection') %}
+    <div id="family-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
+      <label style="font-size:12px;color:var(--text-muted)">{% if is_group %}Members:{% else %}In family:{% endif %}</label>
+      <div id="family-chips-container" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-height:24px">
+        {% for c in (family_info.members if is_group else family_info.families) %}
+        <span class="family-chip" data-card-id="{{ c.id }}" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--chip);border:1px solid var(--border);border-radius:100px;padding:3px 10px">
+          <a href="/project/{{ c.slug }}" style="color:var(--text);text-decoration:none">{{ c.title }}</a>
+          <span style="color:var(--text-muted);font-size:11px">{{ c.kind_label }}</span>
+          <button type="button" class="family-chip-remove" data-card-id="{{ c.id }}" title="Remove" aria-label="Remove {{ c.title }}" style="border:none;background:none;cursor:pointer;color:var(--text-muted);padding:0;font-size:14px;line-height:1">&times;</button>
+        </span>
+        {% else %}
+        <span style="font-size:12px;color:var(--text-muted)">{% if is_group %}No members yet.{% else %}Not in any family or collection.{% endif %}</span>
+        {% endfor %}
+      </div>
+      <select id="family-add-select" class="input" style="max-width:220px;font-size:12px">
+        <option value="">{% if is_group %}+ Add member…{% else %}+ Add to family…{% endif %}</option>
+      </select>
+      <span id="family-error" class="error-text" style="display:none;font-size:12px"></span>
     </div>
     {# #408: peer project links (mirrors the "In hobbies" row above). Resolves
        the weak_connections nudge's related-projects half, which had no UI. #}
@@ -343,6 +367,52 @@
 </div>
 
 <script>
+// Family / collection membership (V2 cards 3.6). SELF-CONTAINED, same as the
+// hobbies block below. On a group card the chips are its members; elsewhere they
+// are the families this card is in. Every change is a core operation (validated,
+// logged); a refusal's message is shown in place and nothing changes.
+(function() {
+  const isGroup = {{ (card_status.kind in ('family', 'collection')) | tojson }};
+  const thisId = {{ project.id | tojson }};
+  const inChips = new Set({{ ((family_info.members if card_status.kind in ('family', 'collection') else family_info.families) | map(attribute='id') | list) | tojson }});
+  const select = document.getElementById('family-add-select');
+  const errBox = document.getElementById('family-error');
+  function showErr(msg) { errBox.textContent = msg; errBox.style.display = msg ? '' : 'none'; }
+  async function call(familyId, memberId, action) {
+    const res = await fetch(`/api/families/${familyId}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `member=${encodeURIComponent(memberId)}`
+    });
+    if (res.ok) { window.location.reload(); return; }
+    const body = await res.json().catch(() => ({}));
+    showErr(body.detail || 'Could not change membership');
+  }
+  fetch('/api/projects').then(r => r.json()).then(projects => {
+    const wantGroup = !isGroup;  // a member picks a family; a family picks members
+    projects.filter(p => p.id !== thisId && !inChips.has(p.id) && ((p.kind === 'family' || p.kind === 'collection') === wantGroup))
+      .forEach(p => {
+        const o = document.createElement('option');
+        o.value = p.id; o.textContent = p.title;
+        select.appendChild(o);
+      });
+  }).catch(() => {});
+  select.addEventListener('change', () => {
+    if (!select.value) return;
+    showErr('');
+    if (isGroup) call(thisId, select.value, 'members/add');
+    else call(select.value, thisId, 'members/add');
+  });
+  document.querySelectorAll('.family-chip-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      showErr('');
+      const other = btn.dataset.cardId;
+      if (isGroup) call(thisId, other, 'members/remove');
+      else call(other, thisId, 'members/remove');
+    });
+  });
+})();
+
 // In hobbies (#365): add project to hobby, render chips, manage list
 // SELF-CONTAINED — embed all data via Jinja to avoid cross-scope variable
 // references (see #498's "lesson" comment above for why this matters).
@@ -749,7 +819,8 @@ async function loadParentProjects() {
       frontier = frontier.flatMap(id => childrenByParent[id] || []);
       frontier.forEach(id => excludedIds.add(id));
     }
-    const validParents = projects.filter(p => !excludedIds.has(p.id));
+    // Families and collections can't be a parent either (the backend refuses).
+    const validParents = projects.filter(p => !excludedIds.has(p.id) && p.kind !== 'family' && p.kind !== 'collection');
     const html = validParents
       .map(p => `<option value="${p.id}" ${p.id === currentParentId ? 'selected' : ''}>${p.title}</option>`)
       .join('');
@@ -767,7 +838,9 @@ parentSelect.addEventListener('change', async function() {
     const response = await fetch(`/api/projects/${projectId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `parent_id=${encodeURIComponent(newParentId)}`
+      // replace=1: the owner picking a different parent here means "move it";
+      // the API alone refuses a second parent unless told to replace.
+      body: `parent_id=${encodeURIComponent(newParentId)}&replace=1`
     });
     if (response.ok) {
       currentParentId = newParentId ? parseInt(newParentId) : null;

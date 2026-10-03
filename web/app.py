@@ -639,55 +639,18 @@ def _project_effective_cover_url(project):
     return _project_cover_url(effective_slug) if effective_slug else None
 
 
-def _to_project_card(project):
-    writeup_excerpt = None
-    if project.get("writeup_slug"):
-        writeup_doc = db.get_by_slug(project["writeup_slug"])
-        if writeup_doc:
-            # #471: excerpt from the rendered text, not raw Markdown (no
-            # stray "##" / "**" / "[link](url)" in the home page card).
-            body = markdown_render.to_text(object_types.writeup_body(writeup_doc) or "")
-            if body:
-                # Truncate to ~200 chars at a word boundary
-                words = body.split()
-                excerpt_words = []
-                char_count = 0
-                for word in words:
-                    if char_count + len(word) + 1 > 200:
-                        break
-                    excerpt_words.append(word)
-                    char_count += len(word) + 1
-                writeup_excerpt = " ".join(excerpt_words)
-                if len(body) > char_count:
-                    writeup_excerpt += "…"
-
-    # #413: the sort control's Newest/Oldest sorts by the project's effective
-    # timeline date (when the work actually happened — earliest of its items'
-    # real content_dates, per resolve_project_span) rather than created_at (row
-    # import time), so bulk-migrated projects land in true historical order, not
-    # migration order. created_at stays as the client-side fallback for a
-    # project whose items carry no real dates yet.
-    effective_start, _effective_end = timeline.resolve_project_span(
-        project, db.list_project_items(project["id"]))
-    return {
-        "slug": project["slug"],
-        "title": project["title"],
-        "description": project["description"],
-        "status": project["status"],
-        **cards.status_fields(project),
-        "cover_url": _project_effective_cover_url(project),
-        # #56: front-page sort control needs a date to sort "Newest"/"Oldest"
-        # by — created_at was already stored on every project row, just never
-        # exposed to this card shape before.
-        "created_at": project["created_at"],
-        "effective_start": effective_start,
-        "writeup_excerpt": writeup_excerpt,
-    }
+def _to_card_face(project):
+    """One home-page card (docs/design/v2-cards.md 8.1): core.cards.card_face (which reuses
+    card_level / resolve_home / list_links) plus the cover URL, which needs the web layer's
+    thumb-route knowledge. The home page reads the live kind / activity / stage only."""
+    face = cards.card_face(project)
+    face["cover_url"] = _project_effective_cover_url(project)
+    return face
 
 
 def _to_timeline_project(project):
     """Shape for one entry on the gallery timeline rail (web/static/js/timeline-rail.js).
-    Unlike _to_project_card, this includes children (is_child) -- the rail
+    Unlike _to_card_face, this includes children (is_child) -- the rail
     shows every project, the grid deliberately doesn't (#149)."""
     items = db.list_project_items(project["id"])
     effective_start, effective_end = timeline.resolve_project_span(project, items)
@@ -898,10 +861,22 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
             media_type = row.get("media_type") or "image"
             spec = object_types.get_object_type(media_type)
             has_thumb = _should_advertise_thumb(row, spec)
+            title = row.get("display_name") or row.get("content_description") or row["filename"] or row["slug"]
+            # Asset card (8.1): display name, the file's effective date, thumbnail, type
+            # line = media type label, provenance footer; no pips, no counts.
             reference_objects.append({
                 "slug": row["slug"],
-                "title": row.get("display_name") or row.get("content_description") or row["filename"] or row["slug"],
+                "title": title,
                 "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
+                "card": {
+                    "kind": "asset", "kind_label": "File", "slug": None, "href": f"/object/{row['slug']}",
+                    "title": title,
+                    "dates": cards.date_range_label(timeline.resolve_item_date(row), None),
+                    "cover_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
+                    "type_line": spec.label if spec else media_type,
+                    "provenance": card_rules.file_provenance_label(row.get("provenance")) or "",
+                    "show_level": False, "stats": [], "facts": [], "codes": [],
+                },
             })
     # Owner name/initials for the combined gallery+upload pop-out's tab
     # (#17) — SOURCE_GROUPS[0] is the site's single-owner display label
@@ -933,6 +908,22 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
     # from all_projects, not the top-level-only `projects` local above that
     # #149 scoped to the grid.
     timeline_projects = [_to_timeline_project(p) for p in all_projects]
+    # V2 cards (8.2): every card once. Unfiltered, a family/collection member is
+    # represented by its family's card (members N) instead of repeating as a tile; a
+    # hobby- or reference-filtered view shows members individually. The featured card is
+    # the highlighted one, then the one with the most recent real end date.
+    cards_all = [_to_card_face(p) for p in projects]
+    if not hobby and not ref:
+        shown_ids = {c["card_id"] for c in cards_all}
+        cards_all = [c for c in cards_all if not (set(c["family_ids"]) & shown_ids)]
+    active_cards = [c for c in cards_all if c["activity"] == "active"]
+    inactive_cards = [c for c in cards_all if c["activity"] != "active"]
+    featured_card = None
+    if active_cards:
+        featured_card = max(active_cards, key=lambda c: (c["highlight"], c["effective_end"] or 0, bool(c["cover_url"])))
+        active_cards = [c for c in active_cards if c is not featured_card]
+    active_cards.sort(key=lambda c: c["effective_start"] or c["created_at"], reverse=True)
+    inactive_cards.sort(key=lambda c: c["effective_start"] or c["created_at"], reverse=True)
     return templates.TemplateResponse(
         request, "home.html",
         {
@@ -941,7 +932,10 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
             "selected_tag_slug": selected_hobby_slug,  # #370: selected hobby slug for pill highlighting
             "show_reference_pill": True,  # #370: always show Reference pill
             "show_reference_selected": bool(ref),  # #370: highlight if ?ref=1
-            "projects": [_to_project_card(p) for p in projects],
+            "featured_card": featured_card,
+            "active_cards": active_cards,
+            "inactive_cards": inactive_cards,
+            "has_cards": bool(cards_all),
             "reference_objects": reference_objects,  # #370 follow-up: loose reference objects
             "owner_name": _owner_label,
             "owner_initials": _owner_initials,
@@ -2384,6 +2378,15 @@ def _to_project_option(project):
     writeup_slug (#156) is also included so the backfill script can see
     which projects already have writeups."""
     return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"], "parent_id": project.get("parent_id"), "writeup_slug": project.get("writeup_slug"), "kind": project.get("kind") or "project", "activity": project.get("activity"), "stage": project.get("stage"), "stop_reason": project.get("stop_reason")}
+
+
+@app.get("/api/cards/{slug}")
+def api_card(slug: str):
+    """The card face for one card (V2 piece 7, 8.1): zone content as JSON, plus the cover URL."""
+    project = db.get_project(slug)
+    if project is None:
+        return JSONResponse({"error": {"code": "not_found", "message": f"No card '{slug}'."}}, status_code=404)
+    return JSONResponse(_to_card_face(project))
 
 
 @app.get("/api/projects")

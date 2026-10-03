@@ -1588,6 +1588,135 @@ def explain_card(card):
     return out
 
 
+# --- Card face (8.1) ---------------------------------------------------------------
+# Everything a card renderer needs, in one dict. Reuses card_level / resolve_home /
+# list_links / family_fields rather than recomputing; explain_card is the long form
+# for a single card, this is the light form for a whole page of them.
+
+FACE_FACT_LINES = 4
+FLAVOR_MAX = 90
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _month_year(ts):
+    t = time.gmtime(ts)
+    return f"{_MONTHS[t.tm_mon - 1]} {t.tm_year}"
+
+
+def date_range_label(start, end, active=False, now=None):
+    """`Nov 2025 - Jul 2026`; a single moment `Jul 2026`; an active card whose end is in
+    the past `Nov 2025 - now` (8.1). Month granularity, UTC."""
+    if start is None:
+        return ""
+    first = _month_year(start)
+    last = _month_year(end if end is not None else start)
+    if active:
+        now_label = _month_year(now if now is not None else time.time())
+        if last != now_label:
+            return f"{first} - now"
+    return first if first == last else f"{first} - {last}"
+
+
+def _flavor_line(description):
+    text = " ".join((description or "").split())
+    if not text:
+        return ""
+    end = re.search(r"[.!?](\s|$)", text)
+    sentence = text[:end.end()].strip() if end else text
+    if len(sentence) > FLAVOR_MAX:
+        sentence = sentence[:FLAVOR_MAX - 1].rstrip(" ,;:") + "..."
+    return sentence
+
+
+def card_face(card, items=None):
+    """The card face data for one project/card row (a `db.get_project` dict): zone content
+    for web/templates/_card.html. `cover_slug` is the resolved cover (the caller turns it
+    into a URL). Hobby and file cards are built by the page from their own rows."""
+    from . import card_level  # lazy, as in explain_card
+    row = get_card(card) if not isinstance(card, dict) else card
+    if items is None:
+        items = db.list_project_items(row["id"])
+    kind = row.get("kind") or "project"
+    start, end = timeline.resolve_project_span(row, items)
+    status = status_fields(row)
+    level = card_level.card_level(row, items)
+    home = resolve_home(row["id"])
+    fams = db.list_families_for_member(row["id"])
+    parent = db.get_project(row["parent_id"]) if row.get("parent_id") else None
+    hobbies = []
+    for hr in db.list_hobby_rows(row["id"]):
+        h = db.get_hobby(hr["hobby_tag_id"])
+        if h:
+            hobbies.append({"id": h["id"], "slug": h["slug"], "name": h["name"],
+                            "code": h.get("group_code") or "",
+                            "active": (h.get("hobby_status") or "active") == "active"})
+    links = list_links(row["id"])
+    wf = whereabouts_fields(row)
+
+    facts = []
+    if wf["whereabouts_applies"] and wf["whereabouts"]:
+        facts.append(wf["whereabouts_label"] + (f" - {wf['whereabouts_note']}" if wf["whereabouts_note"] else ""))
+    if parent:
+        facts.append(f"Part of {parent['title']}")
+    for f in fams:
+        facts.append(f"In family {f['title']}")
+    for lk in links:
+        facts.append(f"{lk['label']} {lk['title']}")
+    facts_more = max(0, len(facts) - FACE_FACT_LINES)
+    facts = facts[:FACE_FACT_LINES]
+
+    type_line = status["kind_label"]
+    if home.get("title"):
+        type_line += f" - {home['title']}"
+    elif kind in card_rules.GROUP_KINDS:
+        type_line += " - group"
+
+    files = [i for i in items if i["slug"] != row.get("writeup_slug")]
+    if kind in card_rules.GROUP_KINDS:
+        n_members = db.count_family_members(row["id"])
+        stats = [("members", n_members)]
+    else:
+        stats = [("files", len(files)), ("nested", len(db.list_child_projects(row["id"]))), ("links", len(links))]
+
+    order = None
+    if len(fams) == 1:
+        rows = db.list_family_rows(fams[0]["id"], as_member=False)
+        orders = [r["sort_order"] for r in rows]
+        if len(rows) > 1 and len(set(orders)) == len(orders):
+            ranked = sorted(rows, key=lambda r: r["sort_order"])
+            order = {"n": [r["member_id"] for r in ranked].index(row["id"]) + 1, "of": len(rows)}
+
+    provenance = wf["provenance_label"] or ""
+    if provenance and wf["provenance_credit"]:
+        provenance += f" - {wf['provenance_credit']}"
+
+    return {
+        "slug": row["slug"], "title": row["title"], "description": row.get("description") or "",
+        **status,
+        "highlight": wf["highlight"],
+        "effective_start": start, "effective_end": end, "created_at": row["created_at"],
+        "dates": date_range_label(start, end, active=row.get("activity") == "active"),
+        "level": level["score"], "level_checks": level["checks"],
+        "show_level": True,
+        "cover_slug": db.resolve_project_cover_slug(row),
+        "type_line": type_line,
+        "hobbies": hobbies,
+        "codes": [h["code"] for h in hobbies if h["code"]],
+        "facts": facts, "facts_more": facts_more,
+        "flavor": _flavor_line(row.get("description")),
+        "stats": [{"label": l, "n": n} for l, n in stats],
+        "provenance": provenance,
+        "order": order,
+        "family_ids": [f["id"] for f in fams],
+        "card_id": row["id"],
+    }
+
+
+def card_json(card):
+    """GET /api/cards/{slug}: the card face for one card."""
+    return card_face(card)
+
+
 # --- Bulk (6) ---------------------------------------------------------------------
 
 def _no_extra(args, allowed, op):

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_card.html" import card %}
 {% block title %}Constructicon{% endblock %}
 {% block body %}
 {% include "_header.html" %}
@@ -38,7 +39,7 @@
       <div class="home-col-header">
         <h2>Projects</h2>
         <div style="display:flex;gap:8px">
-          {% if projects %}
+          {% if has_cards %}
           <div class="sort-control">
             <label for="projects-sort" class="sort-label">Sort</label>
             <select class="filter-select" id="projects-sort">
@@ -70,159 +71,64 @@
 
       {% include "_category_tiles.html" %}
 
-      {% if projects or (show_reference_selected and reference_objects) %}
-      <div id="active-zone" style="display:none">
+      {% if has_cards or (show_reference_selected and reference_objects) %}
+      {# V2 cards (8.2): the zones keep v1's order and layout; tiles are cards now, rendered
+         server-side by _card.html (autoescaped). Each card sits in a .cx-slot that carries
+         its sort keys, so the Sort control below just reorders the slots in place. #}
+      {% if featured_card %}
+      <div id="active-zone">
         <h3 class="zone-heading">Active</h3>
-        <div class="projects-container">
-          <div class="featured-project" id="featured-project"></div>
-          <div class="project-grid" id="projects-grid"></div>
+        <div class="cx-active-row projects-container">
+          <div class="cx-slot" id="featured-project" data-sort-fixed="1">{{ card(featured_card, "full") }}</div>
+          <div class="cx-active-grid" id="projects-grid">
+            {% for c in active_cards %}
+            <div class="cx-slot" data-title="{{ c.title }}" data-start="{{ c.effective_start or c.created_at }}">{{ card(c, "small") }}</div>
+            {% endfor %}
+          </div>
         </div>
       </div>
-      <div id="done-zone" style="display:none">
+      {% endif %}
+      {% if inactive_cards %}
+      <div id="done-zone">
         <h3 class="zone-heading">Inactive</h3>
-        <div class="projects-done-scroll" id="projects-done-grid"></div>
+        <div class="cx-mini-row" id="projects-done-grid">
+          {% for c in inactive_cards %}
+          <div class="cx-slot" data-title="{{ c.title }}" data-start="{{ c.effective_start or c.created_at }}">{{ card(c, "mini") }}</div>
+          {% endfor %}
+        </div>
       </div>
+      {% endif %}
       {% if show_reference_selected %}
-      <div id="reference-zone" style="display:none">
+      <div id="reference-zone">
         <h3 class="zone-heading">Reference material</h3>
-        <div class="projects-done-scroll" id="reference-objects-grid"></div>
+        <div class="cx-mini-row" id="reference-objects-grid">
+          {% for obj in reference_objects %}
+          <div class="cx-slot">{{ card(obj.card, "mini") }}</div>
+          {% else %}
+          <div class="empty-state">No loose reference objects yet — classify some with provenance=reference</div>
+          {% endfor %}
+        </div>
       </div>
       {% endif %}
       <script>
       (function () {
-        function escapeHtml(str) {
-          return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-        }
-        // V2 cards: the status pill shows the stage ("In progress", "Stopped - failed"),
-        // plus a "needs your input" mark while a migration question is still open.
-        function statusPillHtml(p) {
-          const label = (p.stage_label || p.status || '') + (p.stage === 'stopped' && p.stop_reason_label ? ' - ' + p.stop_reason_label.toLowerCase() : '');
-          const dim = p.activity === 'inactive' ? ' archived' : '';
-          const needs = p.needs_input ? ' <span class="project-status-pill" title="A question about this card is waiting in the admin pane">needs your input</span>' : '';
-          return `<span class="project-status-pill${dim}">${escapeHtml(label)}</span>${needs}`;
-        }
-        function projectCardHtml(p, isFeatured = false) {
-          const cardClass = isFeatured ? 'project-card project-card-featured' : 'project-card';
-          return `
-            <a class="${cardClass}" href="/project/${p.slug}">
-              <div class="project-cover">
-                ${p.cover_url ? `<img src="${p.cover_url}" loading="lazy" alt="">` : `<div class="project-cover-placeholder"></div>`}
-              </div>
-              <div class="project-body">
-                <div class="project-title">${escapeHtml(p.title)}</div>
-                ${p.description ? `<div class="project-desc">${escapeHtml(p.description)}</div>` : ''}
-                ${p.writeup_excerpt ? `<div class="project-writeup-excerpt">${escapeHtml(p.writeup_excerpt)}</div>` : ''}
-                <div class="project-meta-row">
-                  ${statusPillHtml(p)}
-                </div>
-              </div>
-            </a>`;
-        }
-        function projectCompactCardHtml(p) {
-          return `
-            <a class="project-compact-card" href="/project/${p.slug}">
-              <div class="project-compact-cover">
-                ${p.cover_url ? `<img src="${p.cover_url}" loading="lazy" alt="">` : `<div class="project-cover-placeholder"></div>`}
-              </div>
-              <div class="project-compact-body">
-                <div class="project-compact-title">${escapeHtml(p.title)}</div>
-                ${statusPillHtml(p)}
-              </div>
-            </a>`;
-        }
-        function referenceObjectCardHtml(obj) {
-          return `
-            <a class="project-compact-card" href="/object/${obj.slug}">
-              <div class="project-compact-cover">
-                ${obj.thumb_url ? `<img src="${obj.thumb_url}" loading="lazy" alt="">` : `<div class="project-cover-placeholder"></div>`}
-              </div>
-              <div class="project-compact-body">
-                <div class="project-compact-title">${escapeHtml(obj.title)}</div>
-              </div>
-            </a>`;
-        }
-        const projects = {{ projects | tojson }};
-        const referenceObjects = {{ reference_objects | tojson }};
-        // V2 cards: partition on `activity` (active vs inactive), not the legacy status.
-        // A row with no activity (shouldn't exist after the migration) counts as inactive.
-        const activeProjects = projects.filter(p => p.activity === 'active');
-        const doneProjects = projects.filter(p => p.activity !== 'active');
-
-        const activeZone = document.getElementById('active-zone');
-        const doneZone = document.getElementById('done-zone');
-        const referenceZone = document.getElementById('reference-zone');
-        const grid = document.getElementById('projects-grid');
-        const doneGrid = document.getElementById('projects-done-grid');
-        const referenceGrid = document.getElementById('reference-objects-grid');
-        const featuredContainer = document.getElementById('featured-project');
+        // Client-side sort: reorder the already-rendered card slots; no re-render, no new endpoint.
+        // #413: Newest/Oldest use the card's effective timeline date (when the work happened),
+        // falling back to created_at, which the server already folded into data-start.
         const sortSelect = document.getElementById('projects-sort');
-        // #413: Newest/Oldest sort by the project's effective timeline date
-        // (when the work actually happened), falling back to created_at for a
-        // project whose items have no real dates yet.
+        if (!sortSelect) return;
+        const containers = [document.getElementById('projects-grid'), document.getElementById('projects-done-grid')].filter(Boolean);
         const SORTERS = {
-          newest: (a, b) => (b.effective_start || b.created_at) - (a.effective_start || a.created_at),
-          oldest: (a, b) => (a.effective_start || a.created_at) - (b.effective_start || b.created_at),
-          az: (a, b) => a.title.localeCompare(b.title),
+          newest: (a, b) => Number(b.dataset.start) - Number(a.dataset.start),
+          oldest: (a, b) => Number(a.dataset.start) - Number(b.dataset.start),
+          az: (a, b) => (a.dataset.title || '').localeCompare(b.dataset.title || ''),
         };
-
-        // Select a featured project from active set only
-        function selectFeaturedProject() {
-          if (activeProjects.length === 0) return null;
-
-          // Prefer projects with cover images
-          const withCover = activeProjects.filter(p => p.cover_url);
-          const candidates = withCover.length > 0 ? withCover : activeProjects;
-
-          // Random selection
-          return candidates[Math.floor(Math.random() * candidates.length)];
+        function applySort() {
+          containers.forEach((box) => {
+            Array.from(box.children).sort(SORTERS[sortSelect.value]).forEach((slot) => box.appendChild(slot));
+          });
         }
-
-        function render() {
-          const featured = selectFeaturedProject();
-          const sortedActive = activeProjects.slice().sort(SORTERS[sortSelect.value]);
-          const sortedDone = doneProjects.slice().sort(SORTERS[sortSelect.value]);
-
-          // Show/hide active zone
-          if (activeProjects.length > 0) {
-            activeZone.style.display = 'block';
-            // Render featured if available
-            if (featured) {
-              featuredContainer.innerHTML = projectCardHtml(featured, true);
-            } else {
-              featuredContainer.innerHTML = '';
-            }
-
-            // Render grid, excluding the featured project
-            const gridProjects = featured
-              ? sortedActive.filter(p => p.slug !== featured.slug)
-              : sortedActive;
-            grid.innerHTML = gridProjects.map(p => projectCardHtml(p, false)).join('');
-          } else {
-            activeZone.style.display = 'none';
-          }
-
-          // Show/hide done zone
-          if (doneProjects.length > 0) {
-            doneZone.style.display = 'block';
-            doneGrid.innerHTML = sortedDone.map(p => projectCompactCardHtml(p)).join('');
-          } else {
-            doneZone.style.display = 'none';
-          }
-
-          // Show/hide reference zone
-          if (referenceZone) {
-            if (referenceObjects.length > 0) {
-              referenceZone.style.display = 'block';
-              referenceGrid.innerHTML = referenceObjects.map(obj => referenceObjectCardHtml(obj)).join('');
-            } else {
-              referenceZone.style.display = 'block';
-              referenceGrid.innerHTML = '<div class="empty-state">No loose reference objects yet — classify some with provenance=reference</div>';
-            }
-          }
-        }
-        sortSelect.addEventListener('change', render);
-
-        render();
+        sortSelect.addEventListener('change', applySort);
       })();
       </script>
       {% else %}

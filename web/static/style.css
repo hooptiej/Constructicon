@@ -1095,6 +1095,19 @@ body.delete-mode-on .card-select-row { display: flex; }
   transition: all 0.15s ease;
 }
 .file-tab:hover { color: var(--text-2); border-color: var(--border-stronger); }
+/* #536: All / Unfiled / Filed segmented control in the Files header, same chip look as the tabs. */
+.filed-seg { display: inline-flex; }
+.filed-seg-btn {
+  font-size: 11px; font-weight: 500; letter-spacing: 0.3px;
+  color: var(--text-3); background: var(--surface); border: 1px solid var(--border);
+  padding: 5px 9px; cursor: pointer; margin-left: -1px; transition: all 0.15s ease;
+}
+.filed-seg-btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.filed-seg-btn:last-child { border-radius: 0 6px 6px 0; }
+.filed-seg-btn:hover { color: var(--text-2); border-color: var(--border-stronger); }
+.filed-seg-btn.active { color: var(--text); background: var(--card); border-color: var(--border-strong); font-weight: 600; position: relative; z-index: 1; }
+.filed-seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; position: relative; z-index: 2; }
+.filed-count { font-variant-numeric: tabular-nums; opacity: 0.8; }
 .file-tab.active { color: var(--text); background: var(--card); border-color: var(--border-strong); font-weight: 600; }
 /* #256: was a flat max-height: 300px (bounding the old standalone Files
    widget's own footprint) — flex:1/min-height:0 now fills whatever's left

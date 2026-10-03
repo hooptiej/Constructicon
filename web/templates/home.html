@@ -192,6 +192,11 @@
         {% if unfiled_slugs %}
         <a class="see-all" href="/unfiled">Bulk file &amp; tag →</a>
         {% endif %}
+        <div class="filed-seg" id="files-filed" role="group" aria-label="Filter files by project filing">
+          <button type="button" class="filed-seg-btn active" data-filed="all" aria-pressed="true">All <span class="filed-count" data-count="all"></span></button>
+          <button type="button" class="filed-seg-btn" data-filed="unfiled" aria-pressed="false">Unfiled <span class="filed-count" data-count="unfiled"></span></button>
+          <button type="button" class="filed-seg-btn" data-filed="filed" aria-pressed="false">Filed <span class="filed-count" data-count="filed"></span></button>
+        </div>
         <div class="sort-control">
           <label for="files-sort" class="sort-label">Sort</label>
           <select class="filter-select" id="files-sort">
@@ -226,6 +231,19 @@
       const mediaTypes = Object.keys(filesByType).sort();
       const tabs = ['all', ...mediaTypes];
       let activeTab = 'all';
+      // #536: All / Unfiled / Filed over the full list. "Unfiled" is exactly the amber lamp's
+      // definition (UNFILED_SLUGS, project-membership based). Remembered per viewer.
+      const filedBox = document.getElementById('files-filed');
+      const FILED_KEY = 'constructicon.filesFiled';
+      let activeFiled = 'all';
+      try {
+        const saved = localStorage.getItem(FILED_KEY);
+        if (saved === 'unfiled' || saved === 'filed') activeFiled = saved;
+      } catch (e) { /* no storage: default All */ }
+      function matchesFiled(item, mode) {
+        if (mode === 'all') return true;
+        return (mode === 'unfiled') === UNFILED_SLUGS.has(item.slug);
+      }
 
       // Render tabs as buttons
       function renderTabs() {
@@ -265,9 +283,27 @@
           // Show only this type's items
           items = filesByType[activeTab] || [];
         }
-        const sorted = items.slice().sort(FILES_SORTERS[filesSort.value]);
-        filesPager.set(sorted);
+        // Counts reflect the active type tab, so they match what the panel can show.
+        const counts = { all: items.length, unfiled: 0, filed: 0 };
+        for (const it of items) counts[UNFILED_SLUGS.has(it.slug) ? 'unfiled' : 'filed']++;
+        filedBox.querySelectorAll('.filed-seg-btn').forEach(btn => {
+          const mode = btn.dataset.filed;
+          const on = mode === activeFiled;
+          btn.classList.toggle('active', on);
+          btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+          btn.querySelector('.filed-count').textContent = '(' + counts[mode] + ')';
+        });
+        const sorted = items.filter(it => matchesFiled(it, activeFiled)).sort(FILES_SORTERS[filesSort.value]);
+        filesPager.set(sorted);  // set() without keep: pager resets to the first batch
       }
+
+      filedBox.addEventListener('click', (e) => {
+        const btn = e.target.closest('.filed-seg-btn');
+        if (!btn) return;
+        activeFiled = btn.dataset.filed;
+        try { localStorage.setItem(FILED_KEY, activeFiled); } catch (err) { /* ignore */ }
+        render();
+      });
 
       filesSort.addEventListener('change', render);
       renderTabs();

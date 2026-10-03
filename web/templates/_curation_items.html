@@ -1,0 +1,46 @@
+{#- The Curator queue's item row (#519), one macro shared by the group fragment
+     (_curation_group.html) and anything that renders queue items. Everything is autoescaped;
+     nothing is marked |safe. -#}
+{% macro item_row(i) -%}
+<li class="cq-item{% if i.deferred %} cq-item-deferred{% endif %}" data-cq-key="{{ i.key }}" data-cq-type="{{ i.type }}"{% if i.id %} data-cq-id="{{ i.id }}"{% endif %}
+    data-cq-multi="{{ 1 if i.multi else 0 }}" data-cq-param="{{ i.answer_param or 'choice' }}" data-cq-suggested='{{ (i.suggested.picks if i.suggested else []) | tojson }}'>
+  <div class="cq-item-main">
+    <span class="cq-tag cq-tag-{{ i.type }}">{{ 'Question' if i.type == 'question' else ('Nudge' if i.type == 'nudge' else 'Need') }}</span>
+    <div class="cq-item-text">
+      <div class="cq-label">{{ i.label }}</div>
+      {% if i.detail %}<div class="cq-detail">{{ i.detail }}</div>{% endif %}
+      {% if i.suggested and i.suggested.labels %}
+      <div class="cq-suggest">Suggested: {{ i.suggested.labels | join(', ') }}{% if i.suggested.reason %} ({{ i.suggested.reason }}){% endif %}{% if i.confidence %}, {{ i.confidence }} confidence{% endif %}.</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="cq-actions">
+    {% if i.deferred %}
+    <button type="button" class="dp-btn" data-cq-action="bring-back">Bring back</button>
+    {% else %}
+      {% if i.type == 'question' %}
+        {% if i.suggested and i.suggested.picks %}<button type="button" class="dp-btn dp-btn-primary" data-cq-action="accept">Accept</button>{% endif %}
+        <button type="button" class="dp-btn" data-cq-action="choose" aria-expanded="false">Choose&hellip;</button>
+      {% endif %}
+      {% if i.type != 'question' or i.kind in ('project_match', 'retype') %}
+        <a class="dp-btn" href="{{ i.href }}">{{ i.fix_label }}</a>
+      {% endif %}
+      <button type="button" class="dp-btn" data-cq-action="defer" title="Move to the Deferred list. No timer: it stays there until you bring it back.">Defer</button>
+      {% if i.dismissible %}<button type="button" class="dp-btn" data-cq-action="dismiss" title="Remove for good">Dismiss</button>{% endif %}
+    {% endif %}
+  </div>
+  {% if i.type == 'question' and not i.deferred %}
+  <form class="cq-chooser" hidden>
+    <fieldset>
+      <legend class="dp-sr-label">Answer</legend>
+      {% for o in i.options %}
+      <label class="cq-option"><input type="{{ 'checkbox' if i.multi else 'radio' }}" name="pick" value="{{ o.key }}"{% if o.suggested or (i.kind == 'retype' and i.current == o.key and not i.suggested.picks) %} checked{% endif %}> {{ o.label }}{% if o.reason %} <span class="cq-detail">({{ o.reason }})</span>{% endif %}</label>
+      {% endfor %}
+    </fieldset>
+    <button type="submit" class="dp-btn dp-btn-primary">{% if i.kind == 'project_match' %}Add to the ticked projects{% else %}Use this answer{% endif %}</button>
+    {% if i.kind == 'project_match' %}<span class="cq-detail">Tick none to add it to no project.</span>{% endif %}
+  </form>
+  {% endif %}
+  <p class="cq-error" role="alert" hidden></p>
+</li>
+{%- endmacro %}

@@ -7,13 +7,28 @@
   display: flex; flex-direction: column; gap: 10px; padding: 12px; margin-bottom: 14px;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px;
 }
-.cq-group-head { display: flex; gap: 14px; align-items: flex-start; }
+/* Group header (#524): a toggle button (name + item count) and an Open link. The items sit in
+   .cq-group-body, fetched when the group is first expanded. */
+.cq-group-head { display: flex; gap: 12px; align-items: center; margin: 0; font-size: 15px; font-weight: 600; }
+.cq-group-toggle {
+  flex: 1 1 auto; min-width: 0; display: flex; gap: 10px; align-items: baseline; text-align: left;
+  background: none; border: 0; padding: 4px 2px; color: var(--text); font: inherit; cursor: pointer;
+}
+.cq-group-toggle:hover .cq-group-name { color: var(--accent); }
+.cq-group-toggle:focus-visible, .cq-group-open:focus-visible { outline: 2px solid var(--card-pip-on, #E8B93A); outline-offset: 2px; }
+.cq-group-name { overflow-wrap: anywhere; }
+.cq-chev {
+  flex: 0 0 auto; width: 0; height: 0; align-self: center;
+  border-left: 6px solid var(--text-2); border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+  transition: transform .12s;
+}
+.cq-group-toggle[aria-expanded="true"] .cq-chev { transform: rotate(90deg); }
+.cq-group-open { flex: 0 0 auto; font-size: 12px; font-weight: 400; color: var(--text-2); text-decoration: none; border-bottom: 1px dotted var(--text-3); }
+.cq-group-open:hover { color: var(--accent); }
+.cq-group-body { display: flex; flex-direction: column; gap: 10px; }
+.cq-group-body[hidden] { display: none; }
 .cq-face { flex: 0 0 auto; }
-.cq-group-title { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.cq-group-title h3 { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
-.cq-group-title h3 a { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--text-3); }
-.cq-group-title h3 a:hover, .cq-group-title h3 a:focus-visible { color: var(--accent); }
-.cq-group-meta { font-size: 12px; color: var(--text-2); }
+.cq-group-meta { font-size: 12px; font-weight: 400; color: var(--text-2); }
 
 .cq-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .cq-group-head + .cq-items { margin-left: 0; }

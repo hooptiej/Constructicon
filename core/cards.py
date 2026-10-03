@@ -262,13 +262,15 @@ NEED_MISSING_WHEREABOUTS = "missing_whereabouts"
 CREDIT_PROVENANCE = ("found", "collected")
 
 
-def provenance_whereabouts_needs(kind=None, hobby_ids=None):
+def provenance_whereabouts_needs(kind=None, hobby_ids=None, only_id=None):
     """Computed needs (never stored): missing_provenance (every non-family card with
     no provenance; carries the majority-file suggestion when there is one),
     missing_provenance_credit (found / collected card with no credit) and
-    missing_whereabouts (a Thing with no whereabouts)."""
+    missing_whereabouts (a Thing with no whereabouts). `only_id` limits it to one card."""
     rows = []
     for c in db.list_projects():
+        if only_id is not None and c["id"] != only_id:
+            continue
         ck = c.get("kind") or "project"
         if (kind and ck != kind) or (hobby_ids is not None and c["id"] not in hobby_ids):
             continue
@@ -964,6 +966,7 @@ def hobby_needs():
     return rows
 
 
+@db.in_read_session
 def list_needs_decision(kind=None, need=None, hobby=None, limit=None, card=None):
     """Open card questions for the owner (spec 6): the STORED card_* decisions plus
     the computed needs from the pieces that exist so far (piece 2: the two hobby
@@ -977,8 +980,15 @@ def list_needs_decision(kind=None, need=None, hobby=None, limit=None, card=None)
     if hobby not in (None, ""):
         h = db.get_hobby(hobby)
         hobby_ids = {p["id"] for p in db.list_projects_for_hobby(h["id"])} if h else set()
+    # #524: one card asked for -> compute only that card's needs, not every card's then filter.
+    picked_card = db.get_project(card) if card not in (None, "") else None
+    if card not in (None, "") and picked_card is None:
+        return []
+    only_id = picked_card["id"] if picked_card else None
     rows = []
-    for d in db.list_all_pending_decisions(kind_prefix="card_"):
+    stored = (db.list_all_pending_decisions(kind_prefix="card_", post_slug=card_decision_slug(picked_card["slug"]))
+              if picked_card else db.list_all_pending_decisions(kind_prefix="card_"))
+    for d in stored:
         if d["resolved_at"] is not None or not is_card_decision_slug(d["post_slug"]):
             continue
         if need and d["kind"] != need:
@@ -1004,7 +1014,7 @@ def list_needs_decision(kind=None, need=None, hobby=None, limit=None, card=None)
         })
     # Computed hobby needs (3.3). They belong to a hobby, not a project card, so a
     # `kind` filter other than 'hobby' leaves them out; `hobby` narrows to one hobby.
-    if kind in (None, "", "hobby"):
+    if kind in (None, "", "hobby") and picked_card is None:
         picked = db.get_hobby(hobby) if hobby not in (None, "") else None
         for r in hobby_needs():
             if need and r["need"] != need:
@@ -1018,15 +1028,14 @@ def list_needs_decision(kind=None, need=None, hobby=None, limit=None, card=None)
     # Computed provenance / whereabouts needs (3.4, 3.5; piece 5).
     if kind != "hobby" and (not need or need in (NEED_MISSING_PROVENANCE, NEED_MISSING_PROVENANCE_CREDIT,
                                                   NEED_MISSING_WHEREABOUTS)):
-        rows += [r for r in provenance_whereabouts_needs(kind=kind or None, hobby_ids=hobby_ids)
+        rows += [r for r in provenance_whereabouts_needs(kind=kind or None, hobby_ids=hobby_ids, only_id=only_id)
                  if not need or r["need"] == need]
     # Computed status_conflict / blank_writeup_with_files (3.2 rule 6, 3.11; piece 6).
     if kind != "hobby" and (not need or need in (NEED_STATUS_CONFLICT, NEED_BLANK_WRITEUP_WITH_FILES)):
-        rows += [r for r in status_and_writeup_needs(kind=kind or None, hobby_ids=hobby_ids)
+        rows += [r for r in status_and_writeup_needs(kind=kind or None, hobby_ids=hobby_ids, only_id=only_id)
                  if not need or r["need"] == need]
-    if card not in (None, ""):
-        picked_card = db.get_project(card)
-        rows = [r for r in rows if picked_card is not None and r.get("card_slug") == picked_card["slug"]]
+    if picked_card is not None:
+        rows = [r for r in rows if r.get("card_slug") == picked_card["slug"]]
     rows.sort(key=lambda r: (r["title"].lower(), r["need"]))
     return rows[:limit] if limit else rows
 
@@ -1613,13 +1622,15 @@ def convert_project_to_hobby(card, *, actor=changes.ACTOR_MCP):
 
 # --- Computed needs added in piece 6 -------------------------------------------------
 
-def status_and_writeup_needs(kind=None, hobby_ids=None):
+def status_and_writeup_needs(kind=None, hobby_ids=None, only_id=None):
     """Computed needs (never stored): status_conflict (a 3.2 rule 6 warning that holds right
     now: active/inactive disagrees with the parent, or Done with nested work still in
     progress) and blank_writeup_with_files (the auto-made write-up is still empty although
-    the card has files)."""
+    the card has files). `only_id` limits it to one card."""
     rows = []
     for c in db.list_projects():
+        if only_id is not None and c["id"] != only_id:
+            continue
         ck = c.get("kind") or "project"
         if (kind and ck != kind) or (hobby_ids is not None and c["id"] not in hobby_ids):
             continue

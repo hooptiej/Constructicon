@@ -167,7 +167,7 @@ def project_nudges(project, dismissed=None):
     return nudges
 
 
-def _sort_key(nudge):
+def _sort_key(nudge, recency_cache=None):
     # Easy-first: lower effort floats to the top (quick wins first).
     effort = _EFFORT_RANK.get(nudge["kind"], _DEFAULT_EFFORT)
     # Within an effort tier, higher impact leads (priority DESC).
@@ -177,6 +177,8 @@ def _sort_key(nudge):
     # For global nudges, use current time (most recent)
     if nudge["target_type"] == "global":
         recency = -time.time()
+    elif recency_cache is not None and nudge["target_id"] in recency_cache:
+        recency = recency_cache[nudge["target_id"]]
     else:
         # Find the most recent project item date
         project = db.get_project(nudge["target_id"])
@@ -185,6 +187,8 @@ def _sort_key(nudge):
             recency = -max(timeline.resolve_item_date(item) for item in items)
         else:
             recency = -project["created_at"]
+        if recency_cache is not None:
+            recency_cache[nudge["target_id"]] = recency  # one project has up to ~6 nudges (#524)
 
     # Nudge key as final tiebreaker (lexicographic)
     return (effort, priority, recency, nudge["nudge_key"])
@@ -193,9 +197,11 @@ def _sort_key(nudge):
 def sort_nudges(nudges):
     """Rank nudges the way list_needs does: easy wins first, then impact, then recency (#519: the
     per-card slice on the project page uses this too, so it matches the queue)."""
-    return sorted(nudges, key=_sort_key)
+    cache = {}
+    return sorted(nudges, key=lambda n: _sort_key(n, cache))
 
 
+@db.in_read_session
 def list_needs():
     """Build the full set of currently-detected nudges, filter by dismissals,
     rank by priority, and return sorted list.
@@ -216,8 +222,8 @@ def list_needs():
     global_weight = 1  # Global nudges always use weight 1
 
     # Unfiled objects detector
-    unfiled = db.list_unfiled_items(limit=100000)
-    if len(unfiled) > 0:
+    unfiled_count = db.count_unfiled_items()  # (#524: a count, not 1,700 row dicts)
+    if unfiled_count > 0:
         kind = "unfiled_objects"
         nudge_key = _nudge_key_for_global(kind)
         if nudge_key not in dismissed:
@@ -230,7 +236,7 @@ def list_needs():
                 "target_id": None,
                 "target_slug": None,
                 "title": "Unfiled objects",
-                "summary": f"{len(unfiled)} objects not in any project",
+                "summary": f"{unfiled_count} objects not in any project",
                 "priority": priority,
                 "base_impact": base_impact,
                 "status_weight": global_weight,

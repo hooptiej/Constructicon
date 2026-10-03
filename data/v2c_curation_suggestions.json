@@ -1,0 +1,272 @@
+{
+  "header": {
+    "schema": 1,
+    "issue": "#503",
+    "date": "2026-10-03",
+    "method": "Claude curation pass over the constructicon-test copy of production (V2 migrations applied). For each open card:* decision: title, description, write-up body, hobbies and their active/inactive flag, first/last file dates and per-year counts, file counts by type, file provenance, a sample of file names with auto_captions and owner descriptions, tags, parent/children and links (via core.cards.explain_card plus direct SELECTs). Owner rulings from #428/#481 applied: one-object build = thing; project only for families, nested containers, design-only or system work; in_use = finished but still running or used; done = finished and resting; paused = set aside, likely back; collection = static collection or reference set. Recency alone is never treated as proof of use. Where evidence is thin, confidence is low and the least-claiming option is suggested.",
+    "keying": "suggestions[<card slug>][<decision kind>] = {suggested, confidence, evidence}. Keyed by slug + kind, never by decision id (ids differ between test and prod).",
+    "counts": {"card_status": 48, "card_kind": 68, "card_built_for": 5, "card_family_members": 1}
+  },
+  "suggestions": {
+    "tension-biped": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "Owner's own write-up: 'Complete, as a 3D-printing education'; he moved on to other printing projects; files 2015-2017."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One printed 8-DOF biped robot (the Pi Python lives in a separate repo); a learning build, but still one object."}
+    },
+    "the-corvus-series": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "KSP Builds; owner's account frames it as a finished 2014 series (first screenshots Jan 2014, last Mar 2014, ends with the space crows)."},
+      "card_kind": {"suggested": "project", "confidence": "medium", "evidence": "A series of several KSP craft (r.2, SeaCrow, VTOL, space crows) on one card, not one object; no member cards exist, so family/collection would be empty. Owner once cited Corvus as the 'series/set' example (#428), so collection is the alternative."}
+    },
+    "the-project-where-it-started": {
+      "card_kind": {"suggested": "project", "confidence": "high", "evidence": "Owner ruling names it: design-only ornithopter (SketchUp CAD, renders, research papers 2009-2010), never built."}
+    },
+    "compute-rc": {
+      "card_kind": {"suggested": "project", "confidence": "high", "evidence": "Owner ruling names it: system work (radio, ELRS link, USB bridge, vehicle; repo hooptiej/compute-rc). The heuristic's 'thing' missed it because the description has no trigger word."}
+    },
+    "6x6-leafeater-apc-wpl": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "R/C Adventures (active); build photos/STLs July 2022 only. The 2026-10-01 files are 9 same-name, same-size copies of the 2022 files (a re-import), not new use. Could still be driven: owner call."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One WPL 6x6 truck converted to an APC body (15 STLs, photos of the one truck)."}
+    },
+    "camera-rover": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "R/C Adventures; 6 files over two weeks (Aug-Sep 2018), nothing later. Thin evidence."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One RC rover with a printed camera turret (turretbase.stl; captions: small truck with a camera)."}
+    },
+    "ksp-walker-studies": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "KSP Builds; three study videos 11-13 Feb 2014 and nothing after; a finished in-game experiment."},
+      "card_kind": {"suggested": "project", "confidence": "medium", "evidence": "Three separate walker studies (eccentric-shaft walker, AT-KT, 'Moar Struts' 2.1): an exploration, not one object."}
+    },
+    "folgertech-ft-i3-mega": {
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One 3D-printer kit; only its two assembly-guide PDFs (Jul 2018), abandoned. No hobby attached."}
+    },
+    "1104x4x4-car-awd-aws-hub-motors": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "Write-up: CAD Nov 2019, one physical-build video 2023, 'no record whether it ever ran', 'currently archived'. Nothing says it's still run."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One scratch-designed 4WD/4WS hub-motor car (15 STLs + build video)."}
+    },
+    "konghead": {
+      "card_status": {"suggested": "paused", "confidence": "medium", "evidence": "Shelved RC build with work into 2024-25 (videos Feb-Mar 2024, photos to Jan 2025); one monster truck, not a static set."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "Captions show one green monster-truck build; no description or write-up to confirm."}
+    },
+    "custom-cobra-claw": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "GI Joe; CAD v24/v25 2021, then a 2023 shelf photo beside the Skyhawk: a finished display piece."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One custom GI Joe vehicle (CLAW CAD renders + photo); no write-up."}
+    },
+    "constructicon": {
+      "card_kind": {"suggested": "project", "confidence": "high", "evidence": "Owner ruling names it: system work (this app, catalogued inside itself)."}
+    },
+    "kerbal-star-destroyer": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "KSP Builds; 8 screenshots all dated 2014-05-12, nothing after."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One KSP craft. It's virtual: if virtual builds count as 'design-only', every KSP single craft flips to project."}
+    },
+    "drawings": {
+      "card_status": {"suggested": "collection", "confidence": "high", "evidence": "Description: 'Hand-drawn originals, scanned back in. The first shelf of the traditional-media archive'; a static set, not a paused build."},
+      "card_kind": {"suggested": "collection", "confidence": "high", "evidence": "A shelf of drawings (write-up: 'more traditional pieces to follow'); matches the status answer, which also sets kind collection."}
+    },
+    "clodapede-lua": {
+      "card_kind": {"suggested": "action", "confidence": "high", "evidence": "Spec 1 defines Action as 'code that runs on one truck': two EdgeTX scripts for the Clod-a-Pede, nested inside it."}
+    },
+    "hj-y3": {
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "The FPV Era; captions show one black/green quad and its boards (Mar-Apr 2017), abandoned."}
+    },
+    "hooptiej-com": {
+      "card_status": {"suggested": "collection", "confidence": "medium", "evidence": "Titled 'historic old hooptiej.com'; write-up calls it 'that site's estate' (brand assets + photo-roll zips, 2001-2017). An archive, not a paused build."},
+      "card_kind": {"suggested": "collection", "confidence": "medium", "evidence": "The card holds the old Wix site's kept assets, not the site's code; matches the collection status. 'project' (web work) is the alternative."}
+    },
+    "fleet-star-trek-online": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "Write-up: STO fleet WordPress site c.2012-2013, migrated from a local archive; files end 2013."},
+      "card_kind": {"suggested": "project", "confidence": "medium", "evidence": "A website (web work), not a physical object; the heuristic's 'thing' doesn't fit."}
+    },
+    "high-plains-rotorworx": {
+      "card_kind": {"suggested": "project", "confidence": "medium", "evidence": "An abandoned FPV-services venture's Wix site; only the logo survives (write-up). Web/venture work, not an object."}
+    },
+    "boba-fett-foam-helmet-pattern-1": {
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One foam helmet attempt (4 pattern PDFs + reference images, Nov 2019), abandoned; no build photos. No hobby attached."}
+    },
+    "hellbender": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "The FPV Era (inactive; owner 'definitely not FPV'ing anymore'); 3 photos from one day, Aug 2017."},
+      "card_kind": {"suggested": "thing", "confidence": "low", "evidence": "Only 3 uncaptioned photos; by hobby probably one FPV quad. Thin evidence."}
+    },
+    "desk-build": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Write-up: built as a birthday desk for his stepson ('He got a serious battlestation'). If it's the stepson's desk (whereabouts gifted), in_use isn't allowed; if it's the desk he works at, answer In use."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One desk (lumber + VCT top build, Jun 2016)."}
+    },
+    "apc-cabin-gi-joe": {
+      "card_built_for": {"suggested": "none", "confidence": "medium", "evidence": "Downloaded STL described as 'replacement Cab front for the original 1984 GI Joe APC'. No APC card exists; neither candidate (Cobra Claw, Skyhawk) is the target. Create an APC card to link it."},
+      "card_kind": {"suggested": "thing", "confidence": "low", "evidence": "Two found STLs for a replacement cab; no photo shows it printed. If it's really a repair of an APC he owns, action fits better."}
+    },
+    "snow-monster": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "Write-up: Slash-to-snowmobile conversion Mar-Apr 2019, work stopped after, 'marked archived'; files end 2019-04."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One converted RC truck (tracks + rear ski)."}
+    },
+    "timecrisis-2-arcade": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "Home Arcade (inactive); only operator manuals (Dec 2013). A 2016 pinball caption places the TimeCrisis II in his garage then."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One cabinet (2016 garage note), though the card has only manuals."}
+    },
+    "aero-speed-slash": {
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One Traxxas Slash with a printed aero body (17 STLs + photos, 2018-2019)."}
+    },
+    "teraburst-arcade": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Home Arcade (inactive); only a flyer and a manual (2013-2014), no photo of an owned machine. Thin evidence."},
+      "card_kind": {"suggested": "thing", "confidence": "low", "evidence": "Nothing shows he owned one. If it's reference material only, collection fits."}
+    },
+    "tempest-arcade": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "Home Arcade (inactive); manuals 2007, cabinet photos 2014, one 2018 photo; nothing later."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One Tempest cabinet (cabinet photos + its manuals)."}
+    },
+    "fpv-pod": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "The FPV Era + Fixed wing Flight, both inactive; 4 STLs + 1 photo, 31 Aug-1 Sep 2019."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One printed FPV pod (front/rear/mast/coupler STLs)."}
+    },
+    "alienwhoop-and-tinywhoop": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "The FPV Era (inactive; owner 'definitely not FPV'ing anymore'); files 2017-2020."},
+      "card_family_members": {"suggested": ["alienwhoop-f7-the-queen", "aw-canopy-project"], "confidence": "high", "evidence": "Owner: AlienWhoop is a family of related builds. The Queen (Oct 2017 videos) and the canopy STLs (Feb 2018) are separate builds now nested under it; nothing contradicts it."}
+    },
+    "turbografx-16-restomod": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Console Video Gaming (active); 4 photos from one day in 2012 and nothing after. It could still be played: owner call."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One restomodded console."}
+    },
+    "turbo-outrun-arcade": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "Home Arcade (inactive); 74 restoration photos May 2013-Mar 2014, nothing later."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One cabinet restoration."}
+    },
+    "the-locust": {
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "Fixed wing Flight; one plane build (25 photos Mar-Jun 2017), failed."}
+    },
+    "my-venza": {
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "His car (Venza Stuff hobby; Mar-May 2026 photos of one black Toyota, incl. a bow-on-the-car handover)."}
+    },
+    "steamdeck": {
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One handheld (Console Video Gaming; 3 photos 2023, 2025)."}
+    },
+    "dreamcast-restomod": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Console Video Gaming (active); 2 photos from 2012 only. Could still be played."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One restomodded console."}
+    },
+    "silkworm-arcade": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "Home Arcade (inactive); 'Cleaned and in Woot!' 2013; a 2016 note places it in the garage; nothing later (the 2021 PDF is a manual)."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One JAMMA cabinet/board restoration (photos + manual)."}
+    },
+    "m4s-interceptor": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "R/C Adventures (active); CAD Jul 2018, printed-body photos to May 2020, nothing later."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One printed M4S Interceptor RC body/car."}
+    },
+    "ksp-dolphin-submarine": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "KSP Builds; 4 screenshots all 2019-08-16."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One KSP craft (virtual; see the Star Destroyer note)."}
+    },
+    "microtech-lcc": {
+      "card_status": {"suggested": "in_use", "confidence": "high", "evidence": "Pocket Knives; owner caption 'todays carry' (Sep 2025), in-hand photos Aug 2025 and Mar 2026: a knife he carries."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One knife."}
+    },
+    "3d-printed-nova-class-starship": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "Printed USS Equinox model ('only about 2.5\" long'), photos Dec 2016 and Nov 2018: a finished shelf model. No hobby attached."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One printed starship model."}
+    },
+    "ksp-hustler": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "KSP Builds; 12 screenshots all 2016-02-24."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One KSP craft (virtual; see the Star Destroyer note)."}
+    },
+    "t2-buckeye-build": {
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "Fixed wing Flight; one RC T-2 Buckeye (Fusion 360 timelapses + 5 STLs, Sep-Oct 2019), abandoned."}
+    },
+    "gammaatom": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "The FPV Era (inactive; owner left FPV); all files Jul-Sep 2017."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One small quad (captions/photos of one drone, tuning videos)."}
+    },
+    "ft-spear": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "Fixed wing Flight + The FPV Era, both inactive; plans, build and maiden/first-FPV videos Jan-Mar 2017."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One Flite Test Versa wing build."}
+    },
+    "wallpaper-engine-theme": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Web & Coding; a Steam Workshop wallpaper (2021 video, workshop URL added 2026). Whether he still runs it isn't recorded."},
+      "card_kind": {"suggested": "project", "confidence": "medium", "evidence": "Digital design work published to Steam Workshop, not a physical object."}
+    },
+    "rlaarlo-787": {
+      "card_status": {"suggested": "paused", "confidence": "medium", "evidence": "One RC car bought Nov 2025 (eBay-listing screenshots; Printable787's note: 'the Rlaarlo 787 the owner bought'). Recent, a single car, not a static set."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One RC car. No hobby attached."}
+    },
+    "qubd-2up": {
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One 3D printer (3D Printers and printing; photos Jul 2015), abandoned."}
+    },
+    "arcade-warehouse-field-trip": {
+      "card_built_for": {"suggested": "is_event", "confidence": "high", "evidence": "Owner: it was an event. 3 photos of a warehouse of cabinets, one day (2014-03-12); nothing built."},
+      "card_kind": {"suggested": "event", "confidence": "high", "evidence": "A one-off field trip; matches the is_event answer, which also sets kind event."}
+    },
+    "the-scorpion": {
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "The FPV Era; one quad ('Rebuilding the scorpion', 2017 photos/videos), abandoned."}
+    },
+    "tinyshark": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "The FPV Era (inactive; owner left FPV); files Dec 2017-Jul 2018."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One micro quad (flight videos + photos)."}
+    },
+    "hj-mini-x": {
+      "card_kind": {"suggested": "project", "confidence": "low", "evidence": "Every caption is a 3D render ('hoopquad 2inch' frame) plus a PSD; no photo of a built quad. Design-only reads as project; if it was built, thing."}
+    },
+    "slashmaro": {
+      "card_status": {"suggested": "paused", "confidence": "medium", "evidence": "R/C Adventures; one Slash with a Camaro-style body, files Feb 2024 to Dec 2025: recent, one car, not a static set."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One RC car ('Slash-maro')."}
+    },
+    "aliens-collection": {
+      "card_status": {"suggested": "collection", "confidence": "high", "evidence": "Title plus captions: Alien/xenomorph figurines and boxed toys on shelves, 2017-2023. A static collection, not a paused build."},
+      "card_kind": {"suggested": "collection", "confidence": "high", "evidence": "A figure collection; matches the collection status. No hobby attached."}
+    },
+    "spyderco-microbug": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Pocket Knives (active), but only one photo (Jun 2017) and no later carry shots. Knives are the owner's in-use example, so answer In use if he still carries it."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One knife."}
+    },
+    "neo-geo-mvs": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "Home Arcade (inactive); manuals + 28 restoration photos Mar-May 2013, nothing later."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One MVS cabinet."}
+    },
+    "gate-of-doom": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Home Arcade (inactive); only promo art/screenshots (Dec 2013). A 2016 note mentions a 'Silkworm/Gate of doom Jamma HS1' in the garage."},
+      "card_kind": {"suggested": "thing", "confidence": "low", "evidence": "Probably a game board run in the same HS-1 cabinet as Silkworm (2016 note); the card has no photos of it."}
+    },
+    "falcon-180": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "FPV quad (FPV tags, 2017 flights); last photo Feb 2020 'in its final form as the purple twinkie'. Owner left FPV. The card has no hobby."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One 4-inch quad."}
+    },
+    "radiolink-at9": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Owner listed the AT9 among owned/bought things (#428), but The FPV Era is inactive, files stop May 2017, and newer RC scripting targets the MT12. Answer In use if it still drives something."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One radio."}
+    },
+    "resto-mod-gameboy": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Console Video Gaming (active); 2 photos 2017 only. Could still be played."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One restomodded Game Boy."}
+    },
+    "custom-gijoe-skyhawk": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "Owner: now in the GI Joe collection (a finished shelf piece); files Jun 2021, shelf photo 2023."},
+      "card_kind": {"suggested": "project", "confidence": "medium", "evidence": "Owner: found model + self-designed conversion parts, two components. The spec's worked example (7.4) ends with this card as a Project over a Thing (model) and nested parts. Until that split, thing is defensible."}
+    },
+    "williams-fire-pinball": {
+      "card_status": {"suggested": "done", "confidence": "medium", "evidence": "Home Arcade (inactive); restoration and 'Playing!' all Jun 2016, nothing later."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One pinball machine."}
+    },
+    "nes-restomod": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "Console Video Gaming (active); 2 photos from 2012 only. Could still be played."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One restomodded console."}
+    },
+    "aw-canopy-project": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "The FPV Era (inactive; owner left FPV); canopy STLs Feb 2018, one photo 2020."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "A printed canopy (5 STL variants of one part); its job is expressed by the built_for link."},
+      "card_built_for": {"suggested": "alienwhoop-f7-the-queen", "confidence": "high", "evidence": "Owner's view and the spec agree; the canopy STLs (Feb 2018) follow The Queen (Oct 2017), both AlienWhoop. Nothing contradicts it."}
+    },
+    "alienwhoop-f7-the-queen": {
+      "card_status": {"suggested": "done", "confidence": "high", "evidence": "The FPV Era (owner left FPV); LED/battery videos Oct 2017 only."},
+      "card_kind": {"suggested": "thing", "confidence": "high", "evidence": "One AlienWhoop V2 F7 quad."}
+    },
+    "fwd-touring-car-beta": {
+      "card_built_for": {"suggested": "none", "confidence": "low", "evidence": "Five downloaded touring-car STLs (Jan 2024). Nothing in the archive names a car they were for; the candidates only share a hobby."},
+      "card_kind": {"suggested": "thing", "confidence": "low", "evidence": "A downloaded printable FWD touring car; no photo shows it printed. Thin evidence."}
+    },
+    "printable787": {
+      "card_built_for": {"suggested": "none", "confidence": "medium", "evidence": "File note: 'a downloaded printable-787 model, acquired to compare against the Rlaarlo 787 the owner bought'. That's a comparison (a related link to rlaarlo-787), not built-for, and Rlaarlo isn't among the candidates."},
+      "card_kind": {"suggested": "collection", "confidence": "low", "evidence": "65 downloaded STLs + manual kept as reference for comparison (a reference set). If he printed it, thing."}
+    },
+    "cobra-hood-wpl-6x6-offroad-semi": {
+      "card_status": {"suggested": "done", "confidence": "low", "evidence": "R/C Adventures (active); 3 photos from one day (Sep 2022), nothing later."},
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "One WPL 6x6 semi build (photos of one truck)."}
+    },
+    "failcopter": {
+      "card_kind": {"suggested": "thing", "confidence": "medium", "evidence": "The FPV Era; one quad (photos/renders 2017), abandoned."}
+    }
+  }
+}

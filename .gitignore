@@ -33,3 +33,6 @@ hudu_clients.json
 # Claude Code agent worktree scratch space — created per background agent,
 # cleaned up after merge; never meant to be tracked
 .claude/worktrees/
+
+# Build version written by scripts/deploy.sh (#508)
+core/VERSION.json

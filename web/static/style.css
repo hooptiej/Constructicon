@@ -2222,3 +2222,6 @@ body.delete-mode-on .card-select-row { display: flex; }
 .proc-stage.failed .proc-stage-dot { background: var(--hazard-red); }
 @keyframes proc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .proc-empty { color: var(--icon-muted); font-size: 13px; text-align: center; padding: 28px 0; }
+
+/* #508: build version badge, bottom-left, deliberately quiet */
+.app-version { position: fixed; left: 8px; bottom: 6px; z-index: 1; font: 400 10px/1 "JetBrains Mono", monospace; color: var(--icon-muted, #888); opacity: 0.55; pointer-events: none; user-select: text; }

@@ -350,6 +350,33 @@ back to it: `tar czf - core web mcp_server scripts assets | ssh ... 'cd
 .../constructicon && tar xzf -'`, confirmed working 2026-09-03 deploying
 #103/#95/#88+#90/#92+#93 this way.
 
+**Versions and the release step (#508, CalVer, from 2026-10-03).** Versions are
+`YYYY.M.D` (no leading zeros; a second release the same day is `.1`, `.2`, ...).
+The box's deploy key is read-only and can't push tags, so the release is cut on
+the **dev machine** (gh/git authenticated) between merge and deploy. The
+merge-and-deploy pipeline is now:
+
+1. merge the PRs (to `main`);
+2. `python scripts/release.py` (dry-run: next version + the PRs since the last
+   tag + the CHANGELOG section; refuses on a dirty tree, a non-`main` or
+   behind-origin checkout, or nothing new), then `python scripts/release.py
+   --execute` (prepends `CHANGELOG.md`, commits `chore(release): <version>`,
+   creates the annotated tag, pushes commit and tag, `gh release create`);
+   `--version X` overrides the computed version in an emergency;
+3. `./scripts/deploy.sh` on the box.
+
+`deploy.sh` fetches tags and, after the reset, writes the gitignored
+`core/VERSION.json` (`{version, commit, deployed_at}` from `git describe --tags
+--always`; `-dev` appended when the instance has `CONSTRUCTICON_ENV=dev`).
+`core/version.py` reads it (fallback `dev`); it shows in the bottom-left page
+badge (`base.html`), `GET /api/version` (`{version, commit, deployed_at, env}`),
+the MCP `constructicon_version` tool and server info, and the static export
+footer ("Built with Constructicon <version>"). `deploy.sh --write-version-only`
+runs just that step. A tar-over-ssh deploy has no version file, so the app
+shows `dev` (this is expected on constructicon-test for branch work). The ZFS
+snapshot name includes the version being replaced. Check with
+`python scripts/test_release.py` (the next-version logic).
+
 **Pre-deploy backup = a ZFS snapshot, taken by `scripts/deploy.sh` itself
 (#442, 2026-09-30).** Prod's data (DB dir + storage) lives in its own dataset,
 `Storage Pool/Media/constructicon`. deploy.sh snapshots it as

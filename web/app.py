@@ -28,6 +28,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
 from core import automatch, backup, captions, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
+from core import version as version_info
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()
@@ -78,6 +79,10 @@ templates.env.filters["markdown"] = markdown_render.render
 # global so base.html can prefix the title without threading it through routes.
 _IS_DEV = os.getenv("CONSTRUCTICON_ENV", "prod").strip().lower() == "dev"
 templates.env.globals["is_dev"] = _IS_DEV
+
+# #508: build version, shown subtly on every page via base.html. A callable
+# global so each render re-reads core/VERSION.json (written by deploy.sh).
+templates.env.globals["app_version"] = version_info.get_version
 
 # #431: derive the file upload accept list from the object_types registry
 # rather than hardcoding it in templates. This ensures web/templates/_upload_drawer.html
@@ -822,6 +827,12 @@ async def startup():
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+@app.get("/api/version")
+def api_version():
+    """#508: {version, commit, deployed_at, env}."""
+    return version_info.get_version_info()
 
 
 # --- Pages ---

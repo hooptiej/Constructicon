@@ -413,7 +413,22 @@ def _to_public(row):
         # and the completeness scoring/export to read.
         "provenance": row.get("provenance"),
         "highlight": bool(row.get("highlight")),
+        # #514: the item card's date line is the item's own effective date (same
+        # resolver as the project detail page's file cards), in the same label format.
+        "card_date": cards._day_label(timeline.resolve_item_date(row)),
     }
+
+
+def _public_items(rows):
+    """_to_public for a whole grid, plus the hobby group codes carried by each item's tags
+    (item cards, #514). The tag -> code map is read once per grid, not once per row."""
+    code_map = db.hobby_codes_by_tag_name()
+    out = []
+    for r in rows:
+        it = _to_public(r)
+        it["codes"] = [code_map[t] for t in (it["tags"] or []) if t in code_map]
+        out.append(it)
+    return out
 
 
 
@@ -900,7 +915,7 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
     # means all of them — same unbounded-limit precedent db.list_unfiled_items
     # already set for the old Unfiled widget, not a new perf tradeoff.
     files_by_type = {
-        mt: [_to_public(r) for r in rows]
+        mt: _public_items(rows)
         for mt, rows in db.list_recent_items_by_type(limit_per_type=10000).items()
     }
     # Timeline feature: the gallery rail shows every project (including
@@ -1463,7 +1478,7 @@ def unfiled_page(request: Request):
     with bulk selection/filing tools the widget has no room for. Reuses the
     exact same db.list_unfiled_items()/_to_public() data shape the widget
     already uses, so the gallery-card markup is identical everywhere."""
-    unfiled_items = [_to_public(r) for r in db.list_unfiled_items()]
+    unfiled_items = _public_items(db.list_unfiled_items())
     return templates.TemplateResponse(
         request, "unfiled.html",
         {"unfiled_items": unfiled_items, "PROVENANCE_TYPES": PROVENANCE_TYPES},
@@ -1522,7 +1537,7 @@ def wallpaper_page(request: Request):
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str):
     rows = db.search(uploaded_by=uploader, limit=1000)
-    items = [_to_public(r) for r in rows]
+    items = _public_items(rows)
     return templates.TemplateResponse(
         request, "user_gallery.html",
         {"uploader": uploader, "uploader_display": uploader, "items": items},

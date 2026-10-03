@@ -3630,6 +3630,18 @@ def _normalize_hobby_status(status):
         raise ValueError(f"Invalid hobby_status: {status}. Must be one of {HOBBY_STATUSES}")
 
 
+def hobby_codes_by_tag_name():
+    """{tag name: group_code} for every hobby that has a code (V2 cards 3.9). Item cards use
+    it to show the codes of the hobby tags an item carries."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT name, group_code FROM blog_tags WHERE is_hobby = 1 AND group_code IS NOT NULL").fetchall()
+        return {r["name"]: r["group_code"] for r in rows}
+    finally:
+        conn.close()
+
+
 def all_group_codes(conn=None, exclude_tag_id=None):
     """Group codes already taken by any hobby."""
     own = conn is None

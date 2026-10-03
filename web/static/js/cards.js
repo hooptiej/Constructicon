@@ -1,0 +1,132 @@
+/* Item cards, client side (#514). One renderer for every grid of individual items (home
+   Files panel, Unfiled, user gallery). It emits exactly the markup the Jinja macro
+   templates/_card.html produces for an asset card at mini size, so static/css/cards.css
+   styles both identically; scripts/check_item_cards.py compares the two structurally.
+   There is no second card design: if the card face changes, change the macro and this file
+   together. Everything interpolated goes through esc().
+
+   ItemCards.html(item, opts) -> string
+     item  an item from _to_public() in web/app.py (slug, display_name, type_label,
+           card_date, thumb_url/has_thumbnail, redacted, codes, provenance, highlight, ...)
+     opts  href       link target (default /object/<slug>)
+           size       "mini" (default) | "small"
+           width      optional --cx-w override in px (the Unfiled grid/list toggle)
+           unfiledSlugs  Set of slugs not filed into a project (amber lamp)
+           selectable "row" shows the select checkbox row (Unfiled, user gallery)
+           selected   Set of selected slugs (re-checks boxes on re-render)
+   The card is one real link. Lamps, badges, tags and the select checkbox sit in a tools
+   strip directly under it (interactive controls can't live inside the link). */
+(function () {
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // Same asset glyph as the macro's kind_icon("asset").
+  var ICON = '<svg class="cx-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M6 3h8l4 4v14H6V3Z"/><path d="M14 3v4h4"/></svg>';
+
+  var OCR_LAMP_META = {
+    pending: { color: '#BA7517', title: 'OCR in progress…' },
+    done:    { color: '#7FA37C', title: null },
+    failed:  { color: '#E24B4A', title: 'OCR failed' },
+    none:    { color: '#E24B4A', title: 'OCR not run yet' }
+  };
+  var CAPTION_LAMP_META = {
+    pending: { color: '#BA7517', title: 'Captioning…' },
+    done:    { color: '#7FA37C', title: null },
+    failed:  { color: '#E24B4A', title: 'Captioning failed' },
+    none:    { color: '#6E6B57', title: 'No caption yet' }
+  };
+  var CLIENT_COLORS = {};
+  var PALETTE = ['#B98B5E', '#8B7355', '#C9A66B', '#7FA37C', '#9CAD5E'];
+  function colorFor(client) {
+    if (!client) return '#6E6B57';
+    if (!CLIENT_COLORS[client]) CLIENT_COLORS[client] = PALETTE[Object.keys(CLIENT_COLORS).length % PALETTE.length];
+    return CLIENT_COLORS[client];
+  }
+
+  function lamp(color, title) {
+    return '<span class="ocr-lamp" style="background:' + esc(color) + '" title="' + esc(title) + '"></span>';
+  }
+  function ocrLamp(item) {
+    if (item.ocr_status == null) return '';
+    var meta = OCR_LAMP_META[item.ocr_status || 'none'] || OCR_LAMP_META.none;
+    var title = item.ocr_status === 'done' ? (item.extracted_text || 'OCR found no text') : meta.title;
+    return lamp(meta.color, title);
+  }
+  function captionLamp(item) {
+    if (!item.caption_capable) return '';
+    var tm = item.type_metadata || {};
+    var status = tm.auto_caption_status || 'none';
+    var meta = CAPTION_LAMP_META[status] || CAPTION_LAMP_META.none;
+    var title = status === 'done' ? (tm.auto_caption || 'Caption came back empty') : meta.title;
+    return lamp(meta.color, title);
+  }
+
+  // The card itself: same classes, same nesting, same text slots as _card.html (asset kind).
+  function face(item, opts) {
+    var size = opts.size === 'small' ? 'small' : 'mini';
+    var href = opts.href || ('/object/' + item.slug);
+    var title = item.display_name || item.slug;
+    var typeLine = item.type_label || item.media_type || 'File';
+    var prov = item.provenance ? String(item.provenance).charAt(0).toUpperCase() + String(item.provenance).slice(1).toLowerCase() : '';
+    var codes = (item.codes || []).map(function (c) { return '<span class="cx-code">' + esc(c) + '</span>'; }).join('');
+    var hl = item.highlight ? '<span class="cx-hl on" role="img" aria-label="Highlighted"></span>' : '<span class="cx-hl" aria-hidden="true"></span>';
+    var art;
+    if (item.has_thumbnail && item.thumb_url && !item.redacted) {
+      var deg = item.type_metadata && item.type_metadata.rotation;
+      var rot = deg ? ' style="transform:rotate(' + esc(parseInt(deg, 10) || 0) + 'deg)"' : '';
+      art = '<img src="' + esc(item.thumb_url) + '" loading="lazy" alt="Cover image for ' + esc(title) + '"' + rot + '>';
+    } else {
+      art = '<span class="cx-art-empty">' + ICON + '<span>' + (item.redacted ? 'File removed' : 'No cover yet') + '</span></span>';
+    }
+    return '<a class="cx cx-' + size + ' cx-kind-asset" href="' + esc(href) + '" data-card-kind="asset" data-card-slug="' + esc(item.slug) + '">' +
+      '<span class="cx-namebar"><span class="cx-name">' + esc(title) + '</span>' +
+        '<span class="cx-kind" title="' + esc(typeLine) + '">' + ICON + '<span class="cx-sr">File: </span></span></span>' +
+      '<span class="cx-dates-row"><span class="cx-dates">' + esc(item.card_date || '') + '</span></span>' +
+      '<span class="cx-art">' + art + '</span>' +
+      '<span class="cx-typeline"><span class="cx-type">' + esc(typeLine) + '</span>' +
+        '<span class="cx-codes">' + codes + hl + '</span></span>' +
+      '<span class="cx-body"></span>' +
+      '<span class="cx-boxes"></span>' +
+      '<span class="cx-foot"><span class="cx-prov">' + esc(prov) + '</span></span>' +
+    '</a>';
+  }
+
+  // Everything the old gallery tiles carried that the card face has no slot for.
+  function tools(item, opts) {
+    var parts = [];
+    var lamps = '';
+    if (opts.unfiledSlugs && opts.unfiledSlugs.has(item.slug)) lamps += lamp('#BA7517', 'Not filed into a project yet');
+    lamps += ocrLamp(item) + captionLamp(item);
+    if (lamps) parts.push('<span class="cx-item-lamps">' + lamps + '</span>');
+    if (item.redacted) parts.push('<span class="cx-item-badge cx-item-redacted-badge" title="The file was removed; the info is kept">Redacted</span>');
+    if (item.type_icon) parts.push('<span class="cx-item-badge" title="' + esc(item.type_label || item.type_badge || '') + '">' + esc(item.type_icon) + '</span>');
+    parts.push('<span class="client-badge"><span class="client-dot" style="background:' + esc(colorFor(item.client)) + '"></span>' +
+      '<span class="client-name">' + esc(item.client || (opts.noClientLabel || 'No project yet')) + '</span></span>');
+    var by = item.uploaded_by_display;
+    if (by) parts.push('<span class="uploader-label" title="Uploaded by">' + esc(by) + '</span>');
+    var tags = item.tags || [];
+    if (tags.length) {
+      var shown = tags.slice(0, 3).map(function (t) { return '<span class="chip">' + esc(t) + '</span>'; }).join('');
+      var more = tags.length > 3 ? '<span class="chip" title="' + esc(tags.slice(3).join(', ')) + '">+' + (tags.length - 3) + '</span>' : '';
+      parts.push('<span class="cx-item-tags">' + shown + more + '</span>');
+    }
+    if (opts.selectable === 'row') {
+      parts.push('<label class="card-select-row"><span class="card-select-label">Select</span>' +
+        '<input type="checkbox" class="card-select" data-slug="' + esc(item.slug) + '" title="Select for bulk actions" onchange="toggleCardSelect(this)"' +
+        (opts.selected && opts.selected.has(item.slug) ? ' checked' : '') + '></label>');
+    }
+    return '<div class="cx-item-tools">' + parts.join('') + '</div>';
+  }
+
+  function html(item, opts) {
+    opts = opts || {};
+    var cls = 'cx-item' + (opts.size === 'small' ? ' cx-item-small' : '') + (item.redacted ? ' cx-item-redacted' : '');
+    var w = opts.width ? ' style="--cx-w:' + esc(parseInt(opts.width, 10)) + 'px"' : '';
+    return '<div class="' + cls + '" data-slug="' + esc(item.slug) + '"' + w + '>' + face(item, opts) + tools(item, opts) + '</div>';
+  }
+
+  window.ItemCards = { html: html, face: face, esc: esc };
+})();

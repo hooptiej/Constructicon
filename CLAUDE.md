@@ -227,6 +227,18 @@ To add a new object type (issue #448 contract v2):
   via `POST /api/pending-decisions/{id}/resolve`. Resolved rows are kept
   (resolution stored in `payload.resolution`). A future "ask, don't guess"
   case adds a new `kind` + payload shape, not a table.
+  **V2 card decisions** (`card_status`, `card_built_for`, `card_kind`; spec
+  `docs/design/v2-cards.md` 4.3) use `post_slug = "card:<project slug>"`, NOT a
+  `capture_events` slug — `decisions.list_open()` branches on that prefix
+  (validating against `projects`), because the file-row stale check would
+  otherwise resolve every card question on first page load.
+- **Card kind + status (V2, piece 1)** — `projects.kind` plus
+  `activity`/`stage`/`stop_reason` are the *live* status; legacy
+  `projects.status` is **frozen** (the static export still filters on it).
+  Rules live in `core/card_rules.py` (pure), operations in `core/cards.py`,
+  every core write is logged with row images in `audit_log` via
+  `core/changes.py`, and the v1 -> v2 mapping is `core/card_migration.py`
+  (run from `init_db()`, idempotent: only cards with `stage IS NULL`).
 
 ### Tag hierarchy gotcha — walk the tree, don't just keyword-search
 

@@ -5,7 +5,7 @@ across multiple dimensions. Stage 3 will reuse these rules for automated nudges;
 the scoring model is intentionally declarative and separated from policy.
 """
 
-from core import db, timeline
+from core import cards, db, timeline
 
 # Status mapping: legacy active/archived -> wip/complete
 _LEGACY_STATUS_MAP = {
@@ -161,7 +161,11 @@ def score_project(project_id_or_dict):
         return None
 
     # Normalize status
-    effective_status = _normalize_status(project.get("status", "wip"))
+    # V2 cards: the live status is `stage` (legacy projects.status is frozen), read
+    # through the card_rules adapter so scoring keeps its v1 vocabulary. While a
+    # card's status is still a provisional migration guess, it scores by what v1
+    # said, so migrating can't change a score before the owner answers.
+    effective_status = _normalize_status(cards.curator_status_for(project))
 
     # Determine if silent
     silent = effective_status in ("shelved", "abandoned", "failed", "reference-only", "idea")

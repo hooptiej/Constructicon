@@ -27,11 +27,23 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
+from core import automatch, backup, captions, card_rules, cards, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
 from core import version as version_info
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()
+
+
+@app.exception_handler(card_rules.CardError)
+async def _card_error_handler(request: Request, exc: card_rules.CardError):
+    """V2 cards (spec section 5): a rule violation from core/ becomes HTTP 422
+    (404 missing card, 409 conflicts/nesting) with the same {code, message} the
+    MCP tools return. `detail` repeats the message so existing UI error toasts
+    (which read data.detail) keep working."""
+    return JSONResponse(
+        {"ok": False, "error": exc.to_dict(), "detail": exc.message},
+        status_code=exc.http_status,
+    )
 _STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 # Brand assets (logo, wordmarks, favicons) live at the repo root in
@@ -662,6 +674,7 @@ def _to_project_card(project):
         "title": project["title"],
         "description": project["description"],
         "status": project["status"],
+        **cards.status_fields(project),
         "cover_url": _project_effective_cover_url(project),
         # #56: front-page sort control needs a date to sort "Newest"/"Oldest"
         # by — created_at was already stored on every project row, just never
@@ -869,9 +882,10 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
             hobby_project_ids = {p["id"] for p in hobby_projects}
             projects = [p for p in projects if p["id"] in hobby_project_ids]
     elif ref:
-        # Show only reference-status projects (v1: reference-only status;
-        # future: could also include loose reference objects via provenance)
-        projects = [p for p in projects if p.get("status") == "reference-only"]
+        # Show only reference projects: V2 collections (v1's reference-only cards
+        # migrated to kind=collection). Piece 5 adds the provenance='referenced'
+        # test once cards carry provenance.
+        projects = [p for p in projects if p.get("kind") == "collection"]
     # #370 follow-up: Compute loose reference objects (provenance='reference',
     # not in any project) for the Reference pill view. Shape for cards:
     # {slug, title, thumb_url}
@@ -1054,6 +1068,36 @@ def api_list_pending_decisions():
     as "stale" rather than shown as unanswerable."""
     items = []
     for item in decisions.list_open():
+        if cards.is_card_decision_slug(item["post_slug"]):
+            # V2 card question: "post" is the card, shaped like a file post so the
+            # admin queue can render it (title, link, thumbnail).
+            card_row = item["card"]
+            cover = _project_effective_cover_url(card_row)
+            items.append({
+                "id": item["id"],
+                "kind": item["kind"],
+                "created_at": item["created_at"],
+                "created_at_display": _friendly_datetime(item["created_at"]),
+                "post": {
+                    "slug": card_row["slug"],
+                    "title": card_row["title"],
+                    "link": f"/project/{card_row['slug']}",
+                    "thumb_url": cover,
+                    "type_icon": "",
+                },
+                "payload": item["payload"],
+                "question": item["question"],
+                "options": [
+                    {"key": o["key"], "label": o.get("label", o["key"]), "reason": o.get("reason"),
+                     "suggested": o["key"] == item["suggested"]}
+                    for o in item["options"]
+                ],
+                "suggested": item["suggested"],
+                "suggested_reason": item["suggested_reason"],
+                "confidence": item["confidence"],
+                "multi": item["kind"] in (cards.KIND_CARD_BUILT_FOR, cards.KIND_CARD_FAMILY_MEMBERS),
+            })
+            continue
         entry = {
             "id": item["id"],
             "kind": item["kind"],
@@ -1073,16 +1117,22 @@ def api_list_pending_decisions():
 
 
 @app.post("/api/pending-decisions/{decision_id}/resolve")
-def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form([]), choice: str = Form("")):
+def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form([]), choice: str = Form(""),
+                                 choices: list[str] = Form([])):
     """#240/#446/#448: resolve a pending decision with the owner's choice.
 
     For project_match, `project_ids` is whichever candidates were ticked — zero ("none of these"),
     one, or several, since an item can belong to multiple projects. Attaches via
     ingest.attach_to_project so the linked tag / cover behavior matches a drawer pick.
 
-    For retype, `choice` is the key of the chosen option from the decision's options list."""
+    For retype, `choice` is the key of the chosen option from the decision's options list.
+
+    For the V2 card_* kinds, `choice` (or several `choices`) is an option key; the
+    option's patch runs through core.cards, and a rule violation comes back as the
+    shared CardError response (422/409) with the decision left open."""
     try:
-        result = decisions.resolve(decision_id, choice=choice, project_ids=project_ids)
+        result = decisions.resolve(decision_id, choice=choice, project_ids=project_ids, choices=choices,
+                                   actor="owner-ui")
         return JSONResponse(result)
     except decisions.DecisionNotFound:
         raise HTTPException(status_code=404, detail="No such pending decision")
@@ -1321,6 +1371,10 @@ def project_detail_page(request: Request, slug: str):
             "title": child["title"],
             "description": child.get("description"),
             "status": child.get("status"),
+            "kind": child.get("kind") or "project",
+            "stage": child.get("stage"),
+            "stage_label": card_rules.stage_label(child.get("stage")),
+            "activity": child.get("activity"),
             "cover_url": _project_effective_cover_url(child),
             "item_count": len(child_items),
             "date_display": start_display if start_display == end_display else f"{start_display} – {end_display}",
@@ -1348,6 +1402,13 @@ def project_detail_page(request: Request, slug: str):
             "timeline_items": timeline_items,
             "timeline_children": timeline_children,
             "PROJECT_STATUSES": PROJECT_STATUSES,
+            # V2 cards: the kind / stage / stop-reason controls on the detail page.
+            "card_kinds": [{"key": k, "label": card_rules.KIND_LABELS[k]} for k in card_rules.KINDS],
+            "card_stages": [{"key": s, "label": card_rules.STAGE_LABELS[s], "activity": card_rules.ACTIVITY_OF[s]}
+                            for s in card_rules.STAGES],
+            "card_stop_reasons": [{"key": r, "label": card_rules.STOP_REASON_LABELS[r]} for r in card_rules.STOP_REASONS],
+            "card_status": cards.status_fields(project),
+            "card_open_decisions": [cards.decision_summary(d) for d in cards.open_card_decisions(project["slug"])],
             "project_score": project_score,
             "project_hobbies": [{"id": h["id"], "name": h["name"], "slug": h["slug"]} for h in project_hobbies],
             # #408: peer project links for the Related-projects widget.
@@ -1404,7 +1465,7 @@ def hobby_detail_page(request: Request, slug: str):
                         "id": p["id"],
                         "slug": p["slug"],
                         "title": p["title"],
-                        "status": p["status"],
+                        "status": card_rules.curator_status(p),
                     }
                     for p in projects
                 ],
@@ -2305,7 +2366,7 @@ def _to_project_option(project):
     dropdown itself from offering a choice guaranteed to be rejected).
     writeup_slug (#156) is also included so the backfill script can see
     which projects already have writeups."""
-    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"], "parent_id": project.get("parent_id"), "writeup_slug": project.get("writeup_slug")}
+    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"], "parent_id": project.get("parent_id"), "writeup_slug": project.get("writeup_slug"), "kind": project.get("kind") or "project", "activity": project.get("activity"), "stage": project.get("stage"), "stop_reason": project.get("stop_reason")}
 
 
 @app.get("/api/projects")
@@ -2324,7 +2385,8 @@ def api_projects(request: Request):
 
 
 @app.post("/api/projects")
-def api_create_project(request: Request, title: str = Form(...), parent_id: str = Form(None)):
+def api_create_project(request: Request, title: str = Form(...), parent_id: str = Form(None),
+                       kind: str = Form(None), stage: str = Form(None), stop_reason: str = Form(None)):
     """Creates a project from the upload drawer's "+ New project..." flow
     (#1) — distinct from scripts/seed_example_projects.py's one-off seeding,
     this is the first real UI-driven way to make a project.
@@ -2355,8 +2417,16 @@ def api_create_project(request: Request, title: str = Form(...), parent_id: str 
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid parent_id")
 
+    # V2 cards: validate kind/stage up front so a rejected request doesn't leave a
+    # stray root tag behind (create_project validates again; same rules).
+    kind = kind or None
+    stage = stage or None
+    stop_reason = stop_reason or None
+    card_rules.validate_status(card_rules.validate_kind(kind or card_rules.DEFAULT_KIND),
+                               stage or card_rules.DEFAULT_STAGE, stop_reason)
     tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"], parent_id=parent_id_int)
+    project = db.create_project(title, tag_id=tag["id"], parent_id=parent_id_int,
+                                kind=kind, stage=stage, stop_reason=stop_reason, actor="owner-ui")
     return JSONResponse(_to_project_option(project))
 
 
@@ -2411,6 +2481,10 @@ async def api_update_project(
     description: str = Form(None),
     cover_slug: str = Form(None),
     status: str = Form(None),
+    kind: str = Form(None),
+    stage: str = Form(None),
+    stop_reason: str = Form(None),
+    activity: str = Form(None),
     writeup_slug: str = Form(None),
     start_date: str = Form(None),
     reset_start_date: bool = Form(False),
@@ -2497,13 +2571,29 @@ async def api_update_project(
                 raise HTTPException(status_code=400, detail="Project is not a child of this project")
             cover_project_id_value = cover_project_int
 
+    # V2 cards: kind / stage / stop_reason / activity go through core.cards (the same
+    # validators the MCP uses; a violation is a CardError -> HTTP 422). The legacy
+    # `status` word is translated to a stage; the legacy column itself is frozen.
+    card_warnings = []
+    if status:
+        legacy = card_rules.legacy_to_status(status)
+        if legacy["kind"] and not kind:
+            kind = legacy["kind"]
+        if not stage:
+            stage, stop_reason = legacy["stage"], legacy["stop_reason"]
+        card_warnings.extend(legacy["warnings"])
+    if kind:
+        card_warnings.extend(cards.set_kind(project["id"], kind, actor="owner-ui").warnings)
+    if stage or activity or stop_reason:
+        card_warnings.extend(cards.set_status(project["id"], stage, stop_reason or None,
+                                              activity=activity or None, actor="owner-ui").warnings)
+
     try:
         updated = db.update_project(
             project_id,
             title=title,
             description=description,
             cover_slug=cover_slug,
-            status=status,
             parent_id=parent_id_value,
             writeup_slug=writeup_slug_value,
             cover_project_id=cover_project_id_value,
@@ -2523,7 +2613,11 @@ async def api_update_project(
         new_end = None if reset_end_date else (timeline.source_datetime_to_epoch(datetime.fromisoformat(end_date)) if end_date else ...)
         updated = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
 
-    return JSONResponse(updated or {})
+    # Re-read so kind/stage edits made above through core.cards show in the response.
+    updated = db.get_project(project["id"]) or updated or {}
+    if card_warnings:
+        updated = {**updated, "warnings": card_warnings}
+    return JSONResponse(updated)
 
 
 @app.post("/api/projects/{project_id}/orphan-child")
@@ -2748,7 +2842,7 @@ def api_get_hobby(request: Request, id_or_slug: str):
                 "id": p["id"],
                 "slug": p["slug"],
                 "title": p["title"],
-                "status": p["status"],
+                "status": card_rules.curator_status(p),
             }
             for p in projects
         ],
@@ -2795,7 +2889,7 @@ def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str 
             "id": p["id"],
             "slug": p["slug"],
             "title": p["title"],
-            "status": p["status"],
+            "status": card_rules.curator_status(p),
         }
         for p in projects
     ])
@@ -2823,7 +2917,7 @@ def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id:
             "id": p["id"],
             "slug": p["slug"],
             "title": p["title"],
-            "status": p["status"],
+            "status": card_rules.curator_status(p),
         }
         for p in projects
     ])
@@ -2832,7 +2926,7 @@ def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id:
 def _related_projects_public(slug):
     """Trim shape for the project-detail Related-projects widget (#408)."""
     return [
-        {"slug": p["slug"], "title": p["title"], "status": p.get("status")}
+        {"slug": p["slug"], "title": p["title"], "status": card_rules.curator_status(p)}
         for p in db.list_related_projects(slug)
     ]
 

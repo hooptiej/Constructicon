@@ -519,9 +519,34 @@ def init_db():
         for column, ddl_type in (("is_brand_asset", "INTEGER NOT NULL DEFAULT 0"), ("brand_role", "TEXT")):
             if column not in existing_columns:
                 conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+        # --- V2 cards, piece 1 (docs/design/v2-cards.md 3.1, 3.2, 3.13) ---
+        # kind: what sort of card this is (project/thing/action/family/collection/event).
+        # No CHECK -- core/card_rules.validate_kind is the gate (same stance as media_type).
+        # activity/stage/stop_reason: the live status. Legacy projects.status is now
+        # FROZEN (the static export still reads it); live code reads stage.
+        for column, ddl_type in (
+            ("kind", "TEXT NOT NULL DEFAULT 'project'"),
+            ("activity", "TEXT"),
+            ("stage", "TEXT"),
+            ("stop_reason", "TEXT"),
+        ):
+            if column not in existing_project_columns:
+                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+        # Change log: audit_log grows nullable columns so core operations can record
+        # row images (before/after) for audit + undo. Direct HTTP callers keep getting
+        # the old request-log row (these columns NULL there).
+        existing_audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_log)")}
+        for column, ddl_type in (("op", "TEXT"), ("actor", "TEXT"), ("batch_id", "TEXT"),
+                                 ("mutations", "TEXT"), ("undone_by", "INTEGER")):
+            if column not in existing_audit_columns:
+                conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {ddl_type}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_batch ON audit_log(batch_id)")
         conn.commit()
     finally:
         conn.close()
+    # Data migrations (separate connection: they read through the normal db helpers).
+    from . import card_migration
+    card_migration.run_v2c_1()
 
 
 def _row_to_dict(row):
@@ -1701,7 +1726,8 @@ def list_recent_posts(limit=10):
 # (title, description, optional cover image) and a hand-ordered set of
 # member posts, rather than being derived from tag membership.
 
-def create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None, with_writeup=True):
+def create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None, with_writeup=True,
+                   kind=None, stage=None, stop_reason=None, actor="owner-ui"):
     """Auto-generates a unique slug from title, same dedup-with-numeric-
     suffix pattern as get_or_create_tag.
 
@@ -1712,7 +1738,17 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
     not every project needs (or predates) a tag link.
 
     parent_id optionally links this project to a parent project (#133),
-    enabling a simple hierarchy of nested projects."""
+    enabling a simple hierarchy of nested projects.
+
+    kind/stage/stop_reason (V2 cards): default to a Project that is In progress
+    (matching v1's default status='active'); validated by core/card_rules and a
+    rule violation raises card_rules.CardError. The legacy `status` column keeps
+    its default and is otherwise frozen (the static export still reads it)."""
+    from . import card_rules, changes
+    kind = card_rules.validate_kind(kind or card_rules.DEFAULT_KIND)
+    status_triple = card_rules.validate_status(kind, stage or card_rules.DEFAULT_STAGE, stop_reason)
+    if parent_id is not None and kind in card_rules.GROUP_KINDS:
+        raise card_rules.CardError("nest_group_kind", f"A {kind} can't be nested under another card; use membership.")
     conn = get_conn()
     try:
         slug = _slugify(title)
@@ -1729,11 +1765,12 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
             n += 1
         now = time.time()
         cur = conn.execute(
-            "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at, tag_id, parent_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (slug, title, description, cover_slug, status, now, now, tag_id, parent_id),
+            "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at, tag_id, parent_id, "
+            "kind, activity, stage, stop_reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (slug, title, description, cover_slug, status, now, now, tag_id, parent_id,
+             kind, status_triple["activity"], status_triple["stage"], status_triple["stop_reason"]),
         )
-        conn.commit()
         project_id = cur.lastrowid
         project = {
             "id": project_id,
@@ -1747,7 +1784,16 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
             "tag_id": tag_id,
             "parent_id": parent_id,
             "writeup_slug": None,
+            "kind": kind,
+            **status_triple,
         }
+        insert_change_log(
+            conn, "create_card", actor,
+            [{"table": "projects", "key": {"id": project_id}, "before": None,
+              "after": {"slug": slug, "title": title, "kind": kind, **status_triple, "parent_id": parent_id}}],
+            batch_id=changes.new_batch_id(), affected_slugs=[slug],
+        )
+        conn.commit()
     finally:
         conn.close()
     # #156/#423: every project gets a blank write-up document, wired in here in
@@ -1843,15 +1889,19 @@ def get_project(id_or_slug):
         conn.close()
 
 
-def list_projects(status=None):
+def list_projects(status=None, kind=None, activity=None, stage=None):
+    """All projects, most-recently-updated first. `status` filters the FROZEN
+    legacy column (the static export relies on status="active"); kind/activity/
+    stage filter the live V2 columns."""
     conn = get_conn()
     try:
-        if status is not None:
-            rows = conn.execute(
-                "SELECT * FROM projects WHERE status = ? ORDER BY updated_at DESC", (status,)
-            ).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+        clauses, args = [], []
+        for col, val in (("status", status), ("kind", kind), ("activity", activity), ("stage", stage)):
+            if val is not None:
+                clauses.append(f"{col} = ?")
+                args.append(val)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = conn.execute(f"SELECT * FROM projects{where} ORDER BY updated_at DESC", args).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -2259,6 +2309,119 @@ def list_recent_audit_logs(limit=100):
         conn.close()
 
 
+# --- Change log (V2 cards 3.13) ---
+# Core card operations write row images into the audit_log's extra columns so a
+# later piece can undo them. All SQL stays here; core/changes.py is the API.
+
+def insert_change_log(conn, op, actor, mutations, batch_id=None, affected_slugs=None):
+    """Writes one change-log row on the caller's connection (the caller commits,
+    so the log row lands in the same transaction as the write it describes).
+    `mutations` is a list of {table, key, before, after} row images."""
+    cur = conn.execute(
+        "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, "
+        "op, actor, batch_id, mutations) VALUES (?, ?, '{}', ?, 200, NULL, ?, ?, ?, ?, ?)",
+        ("CORE", f"core:{op}", json.dumps(affected_slugs or []), time.time(), op, actor, batch_id,
+         json.dumps(mutations or [])),
+    )
+    return cur.lastrowid
+
+
+def list_change_log(card_slug=None, batch_id=None, limit=50):
+    """Change-log rows (those with an `op`), newest first, mutations parsed."""
+    conn = get_conn()
+    try:
+        sql = "SELECT * FROM audit_log WHERE op IS NOT NULL"
+        args = []
+        if batch_id:
+            sql += " AND batch_id = ?"
+            args.append(batch_id)
+        if card_slug:
+            sql += " AND affected_slugs LIKE ?"
+            args.append(f'%"{card_slug}"%')
+        rows = conn.execute(sql + " ORDER BY id DESC LIMIT ?", args + [limit]).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["mutations"] = json.loads(d["mutations"]) if d.get("mutations") else []
+            d["affected_slugs"] = json.loads(d["affected_slugs"]) if d.get("affected_slugs") else []
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
+def _table_exists(conn, name):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?", (name,)).fetchone() is not None
+
+
+def count_family_members(family_id):
+    """Members of a family/collection card. 0 before the family_members table
+    exists (it arrives with piece 3)."""
+    conn = get_conn()
+    try:
+        if not _table_exists(conn, "family_members"):
+            return 0
+        return conn.execute("SELECT COUNT(*) AS n FROM family_members WHERE family_id = ?", (family_id,)).fetchone()["n"]
+    finally:
+        conn.close()
+
+
+def clear_family_members(family_id):
+    """Drops a group card's membership rows (set_kind force=True). No-op before
+    the family_members table exists."""
+    conn = get_conn()
+    try:
+        if _table_exists(conn, "family_members"):
+            conn.execute("DELETE FROM family_members WHERE family_id = ?", (family_id,))
+            conn.commit()
+    finally:
+        conn.close()
+
+
+# Columns a card operation may write on `projects` (anything else is refused, so
+# a typo in core/cards.py can't write an arbitrary column).
+CARD_WRITABLE_COLUMNS = ("kind", "activity", "stage", "stop_reason")
+
+
+def update_card_columns(card_id, fields, op, actor, batch_id=None, bump_updated=True):
+    """Atomically writes `fields` (a dict limited to CARD_WRITABLE_COLUMNS) onto
+    one projects row and records a change-log row image in the same transaction.
+    Returns (before, after): dicts of just the columns passed. No-ops (nothing
+    changed) write nothing and log nothing."""
+    bad = set(fields) - set(CARD_WRITABLE_COLUMNS)
+    if bad:
+        raise ValueError(f"Not a writable card column: {sorted(bad)}")
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (card_id,)).fetchone()
+        if row is None:
+            conn.rollback()
+            return None, None
+        before = {c: row[c] for c in fields}
+        if before == dict(fields):
+            conn.rollback()
+            return before, dict(fields)
+        sets = ", ".join(f"{c} = ?" for c in fields)
+        args = list(fields.values())
+        if bump_updated:
+            sets += ", updated_at = ?"
+            args.append(time.time())
+        conn.execute(f"UPDATE projects SET {sets} WHERE id = ?", args + [card_id])
+        insert_change_log(
+            conn, op, actor,
+            [{"table": "projects", "key": {"id": card_id}, "before": before, "after": dict(fields)}],
+            batch_id=batch_id, affected_slugs=[row["slug"]],
+        )
+        conn.commit()
+        return before, dict(fields)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 # --- Pending decisions (#240) ---
 # A small generic "don't auto-decide, ask the owner" queue. One row per open
 # question about one capture_events row: `kind` names the trigger (today only
@@ -2303,6 +2466,53 @@ def add_pending_decision(kind, post_slug, payload):
             decision_id = cur.lastrowid
         conn.commit()
         return decision_id
+    finally:
+        conn.close()
+
+
+def queue_decision_once(kind, post_slug, payload, conn=None):
+    """Queues a decision UNLESS any row -- open OR resolved -- of this kind and
+    post_slug already exists (V2 cards 4.1). Unlike add_pending_decision (which
+    only dedupes unresolved rows), re-running a migration can therefore never
+    re-ask a question the owner already answered. Returns the new decision id,
+    or None when skipped. Pass `conn` to join a caller's transaction (the caller
+    commits); otherwise this opens and commits its own."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM pending_decisions WHERE kind = ? AND post_slug = ?", (kind, post_slug)
+        ).fetchone()
+        if existing:
+            return None
+        cur = conn.execute(
+            "INSERT INTO pending_decisions (kind, post_slug, payload, created_at) VALUES (?, ?, ?, ?)",
+            (kind, post_slug, json.dumps(payload or {}), time.time()),
+        )
+        if own:
+            conn.commit()
+        return cur.lastrowid
+    finally:
+        if own:
+            conn.close()
+
+
+def list_all_pending_decisions(kind_prefix=None, post_slug=None):
+    """Every decision row, open or resolved, optionally narrowed to kinds
+    starting with `kind_prefix` and/or one post_slug. Oldest first."""
+    conn = get_conn()
+    try:
+        sql = "SELECT * FROM pending_decisions WHERE 1=1"
+        args = []
+        if kind_prefix:
+            sql += " AND kind LIKE ?"
+            args.append(kind_prefix + "%")
+        if post_slug:
+            sql += " AND post_slug = ?"
+            args.append(post_slug)
+        rows = conn.execute(sql + " ORDER BY created_at ASC, id ASC", args).fetchall()
+        return [_pending_row(r) for r in rows]
     finally:
         conn.close()
 

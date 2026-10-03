@@ -8,7 +8,7 @@ This module centralizes the list/cleanup and resolve logic so both the web
 API and the MCP server use the same decision workflow.
 """
 
-from core import automatch, db, ingest, object_types
+from core import automatch, cards, changes, db, ingest, object_types
 
 
 class DecisionNotFound(Exception):
@@ -56,6 +56,31 @@ def list_open():
     """
     items = []
     for decision in db.list_pending_decisions():
+        if cards.is_card_decision_slug(decision["post_slug"]):
+            # V2 card decision (post_slug = "card:<project slug>"): validate against
+            # `projects`, NOT capture_events -- there is no file row, and treating
+            # that as "object deleted" would silently resolve every card question
+            # on first page load (spec 4.3).
+            card_row = cards._decision_card(decision)
+            if card_row is None:
+                db.resolve_pending_decision(decision["id"], {"stale": "card deleted"})
+                continue
+            payload = decision["payload"]
+            items.append({
+                "id": decision["id"],
+                "kind": decision["kind"],
+                "created_at": decision["created_at"],
+                "post_slug": decision["post_slug"],
+                "payload": payload,
+                "row": card_row,
+                "card": card_row,
+                "question": payload.get("question", ""),
+                "options": payload.get("options", []),
+                "suggested": payload.get("suggested"),
+                "suggested_reason": payload.get("suggested_reason"),
+                "confidence": payload.get("confidence"),
+            })
+            continue
         row = db.get_by_slug(decision["post_slug"])
         if row is None:
             # Object was deleted — mark stale
@@ -100,11 +125,14 @@ def list_open():
     return items
 
 
-def resolve(decision_id, choice="", project_ids=()):
+def resolve(decision_id, choice="", project_ids=(), choices=(), actor=changes.ACTOR_UI):
     """Resolve a pending decision with the owner's choice.
 
     For project_match: `project_ids` is a tuple/list of project IDs to attach to.
     For retype: `choice` is the media_type key to retype to.
+    For the V2 card_* kinds: `choice` is one option key (or `choices` several);
+    the option's patch runs through core.cards. May raise card_rules.CardError
+    (the decision then stays open); `actor` is 'owner-ui' or 'mcp'.
 
     Returns a dict:
         {"ok": True, "applied": [...], "remaining": count}
@@ -125,6 +153,9 @@ def resolve(decision_id, choice="", project_ids=()):
         raise DecisionAlreadyResolved(f"Decision {decision_id} already resolved")
 
     applied = []
+
+    if cards.is_card_decision_slug(decision["post_slug"]):
+        return cards.resolve_decision(decision_id, choice=choice or None, choices=list(choices or []), actor=actor)
 
     if decision["kind"] == automatch.KIND_PROJECT_MATCH:
         allowed = {int(pid) for pid in decision["payload"].get("candidate_project_ids", [])}

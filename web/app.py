@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, card_rules, cards, curation_queue, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
+from core import automatch, backup, captions, card_payload, card_rules, cards, curation_queue, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
 from core import version as version_info
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
@@ -429,6 +429,14 @@ def _public_items(rows):
         it["codes"] = [code_map[t] for t in (it["tags"] or []) if t in code_map]
         out.append(it)
     return out
+
+
+# #517: the item grids (home Files panel, /unfiled, user gallery, hobby loose objects) embed
+# their items as inline JSON. They get the slim card_payload projection, not the full
+# _to_public record (see core/card_payload.py for the whitelist).
+def _card_items(rows):
+    """_public_items(rows) slimmed for embedding in a page (#517)."""
+    return [card_payload.card_item_public(it) for it in _public_items(rows)]
 
 
 
@@ -915,7 +923,7 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
     # means all of them — same unbounded-limit precedent db.list_unfiled_items
     # already set for the old Unfiled widget, not a new perf tradeoff.
     files_by_type = {
-        mt: _public_items(rows)
+        mt: _card_items(rows)
         for mt, rows in db.list_recent_items_by_type(limit_per_type=10000).items()
     }
     # Timeline feature: the gallery rail shows every project (including
@@ -1493,7 +1501,7 @@ def unfiled_page(request: Request):
     with bulk selection/filing tools the widget has no room for. Reuses the
     exact same db.list_unfiled_items()/_to_public() data shape the widget
     already uses, so the gallery-card markup is identical everywhere."""
-    unfiled_items = _public_items(db.list_unfiled_items())
+    unfiled_items = _card_items(db.list_unfiled_items())
     return templates.TemplateResponse(
         request, "unfiled.html",
         {"unfiled_items": unfiled_items, "PROVENANCE_TYPES": PROVENANCE_TYPES},
@@ -1560,7 +1568,7 @@ def hobby_detail_page(request: Request, slug: str):
                                        needs_input=bool(queue["items"]))
     hobby_face["cover_url"] = _project_cover_url(hobby_face["cover_slug"]) if hobby_face["cover_slug"] else None
 
-    loose = _public_items(db.list_loose_hobby_objects(hobby["id"]))
+    loose = _card_items(db.list_loose_hobby_objects(hobby["id"]))
     start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
     return templates.TemplateResponse(
@@ -1596,7 +1604,7 @@ def wallpaper_page(request: Request):
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str):
     rows = db.search(uploaded_by=uploader, limit=1000)
-    items = _public_items(rows)
+    items = _card_items(rows)
     return templates.TemplateResponse(
         request, "user_gallery.html",
         {"uploader": uploader, "uploader_display": uploader, "items": items},

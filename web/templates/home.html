@@ -245,6 +245,8 @@
         });
       }
 
+      // #517: only the first batch of cards is in the DOM; more are added on scroll.
+      const filesPager = ItemCards.pager(filesGrid, cardHtml);
       const FILES_SORTERS = {
         newest: (a, b) => b.uploaded_at - a.uploaded_at,
         oldest: (a, b) => a.uploaded_at - b.uploaded_at,
@@ -264,7 +266,7 @@
           items = filesByType[activeTab] || [];
         }
         const sorted = items.slice().sort(FILES_SORTERS[filesSort.value]);
-        filesGrid.innerHTML = sorted.map(cardHtml).join('');
+        filesPager.set(sorted);
       }
 
       filesSort.addEventListener('change', render);

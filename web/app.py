@@ -966,6 +966,8 @@ def api_delete_all():
     conn = db.get_conn()
     conn.execute("DELETE FROM post_tags")
     conn.execute("DELETE FROM project_items")
+    for _t in ("project_relations", "family_members", "project_hobbies", "blog_entry_projects"):
+        conn.execute(f"DELETE FROM {_t}")
     conn.execute("DELETE FROM projects")
     conn.execute("DELETE FROM blog_tags")
     conn.commit()
@@ -2799,11 +2801,10 @@ def api_delete_project(project_id: str):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    result = db.delete_project(project["id"])
-    if result is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    return JSONResponse(result)
+    # Core does the work (#497): one transaction, change-log row images (undoable via
+    # constructicon_undo(batch_id)), no ghost write-up / links / family rows left behind.
+    result = cards.delete_card(project["id"], actor="owner-ui")
+    return JSONResponse({**result.to_dict(), **result.data})
 
 
 @app.get("/api/projects/{project_id}/export.zip")
@@ -3135,7 +3136,7 @@ def api_convert_project_to_hobby(request: Request, slug: str):
     children_count = len(db.list_child_projects(project["id"]))
     items_count = len(db.list_project_items(project["id"]))
 
-    hobby = db.convert_project_to_hobby(project["id"])
+    hobby = cards.convert_project_to_hobby(project["id"], actor="owner-ui")
 
     if hobby is None:
         raise HTTPException(status_code=500, detail="conversion failed")

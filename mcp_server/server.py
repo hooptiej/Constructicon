@@ -522,6 +522,8 @@ def constructicon_delete_all() -> dict:
     conn = db.get_conn()
     conn.execute("DELETE FROM post_tags")
     conn.execute("DELETE FROM project_items")
+    for _t in ("project_relations", "family_members", "project_hobbies", "blog_entry_projects"):
+        conn.execute(f"DELETE FROM {_t}")
     conn.execute("DELETE FROM projects")
     conn.execute("DELETE FROM blog_tags")
     conn.commit()
@@ -945,7 +947,7 @@ def constructicon_convert_project_to_hobby(project_slug: str) -> dict | None:
     children_count = len(db.list_child_projects(project["id"]))
     items_count = len(db.list_project_items(project["id"]))
 
-    hobby = db.convert_project_to_hobby(project["id"])
+    hobby = cards.convert_project_to_hobby(project["id"], actor="mcp")
 
     if hobby is None:
         return None
@@ -1724,6 +1726,22 @@ def constructicon_split_card(source: str | int, parts: list[dict], keep_in_sourc
     try:
         return cards.split_card(source, parts, keep_in_source=keep_in_source, dry_run=dry_run, actor="mcp",
                                 batch_id=batch_id).to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_delete_project(card: str | int, dry_run: bool = False, batch_id: str | None = None) -> dict:
+    """Delete a project/card cleanly (#497). Its own auto-made write-up goes with it only while
+    it is still blank; a write-up with text is kept as an ordinary unfiled document and named in
+    a warning. Links in either direction, family/hobby/file memberships and blog-entry attachments
+    are removed; open questions about the card are resolved as stale. Nested children are
+    orphaned (stand on their own), never deleted; files themselves are never deleted. Every row
+    is imaged: constructicon_undo(batch_id) restores the whole thing. dry_run=true previews.
+    Returns {ok, dry_run, changes, warnings, batch_id, deleted, children_orphaned, items_detached, writeup}."""
+    try:
+        res = cards.delete_card(card, dry_run=dry_run, actor="mcp", batch_id=batch_id)
+        return {**res.to_dict(), **res.data}
     except card_rules.CardError as e:
         return _card_error_result(e)
 

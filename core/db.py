@@ -3894,65 +3894,21 @@ def remove_project_from_hobby(project_id, tag_id):
 
 
 def delete_project(project_id):
-    """Delete a project without cascade: orphan child projects, detach objects,
-    remove hobbies, and delete the project row itself.
+    """Delete a project. Thin compatibility wrapper: the real work lives in
+    core.cards.delete_card (#497), which runs in one transaction with change-log row
+    images (so it's undoable) and leaves no ghost rows: blank auto write-up, links in
+    either direction, family/hobby/file membership and blog-entry attachments all go;
+    children are orphaned, never deleted.
 
-    Returns a dict with {children_orphaned, items_detached} summarizing the
-    deletion, or None if the project wasn't found.
-
-    DESTRUCTIVE. Steps, in one transaction:
-    1. Load the project; return None if not found.
-    2. Resolve everything that needs to change: child project ids,
-       item slugs, hobby tag ids (read-only, before the write transaction).
-    3. In one transaction (BEGIN IMMEDIATE):
-       - Set every child project's parent_id to NULL (orphan them, don't delete)
-       - Delete all project_items rows for this project
-       - Delete all project_hobbies rows for this project
-       - Delete the projects row itself
-    4. Return summary of what was orphaned/detached."""
-
-    # Resolve EVERYTHING before opening the write transaction. Each read function
-    # (list_child_projects, list_project_items, list_hobbies_for_project) opens
-    # its own connection; if any of them ran while we held BEGIN IMMEDIATE, they'd
-    # deadlock. Sequence for stability: reads first, then a tight write-only
-    # transaction on a single connection.
+    Returns {children_orphaned, items_detached, writeup, warnings, batch_id}, or None
+    if the project wasn't found."""
+    from . import cards  # lazy: cards imports db
     project = get_project(project_id)
     if project is None:
         return None
-
-    child_ids = [c["id"] for c in list_child_projects(project_id)]
-    item_slugs = [it["slug"] for it in list_project_items(project_id)]
-    hobby_ids = [h["id"] for h in list_hobbies_for_project(project_id)]
-
-    conn = get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-
-        # Orphan child projects (don't delete them).
-        for child_id in child_ids:
-            conn.execute("UPDATE projects SET parent_id = NULL WHERE id = ?", (child_id,))
-
-        # Detach objects from this project.
-        conn.execute("DELETE FROM project_items WHERE project_id = ?", (project_id,))
-
-        # Remove project from hobbies.
-        conn.execute("DELETE FROM project_hobbies WHERE project_id = ?", (project_id,))
-
-        # Drop family/collection membership rows on both sides: a deleted member
-        # leaves its families, a deleted family leaves its members intact (3.6).
-        conn.execute("DELETE FROM family_members WHERE family_id = ? OR member_id = ?", (project_id, project_id))
-
-        # Delete the project itself.
-        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-
-        conn.commit()
-
-        return {
-            "children_orphaned": len(child_ids),
-            "items_detached": len(item_slugs),
-        }
-    finally:
-        conn.close()
+    res = cards.delete_card(project["id"], actor="system")
+    return {"children_orphaned": res.data["children_orphaned"], "items_detached": res.data["items_detached"],
+            "writeup": res.data["writeup"], "warnings": res.warnings, "batch_id": res.batch_id}
 
 
 def convert_project_to_hobby(project_id):

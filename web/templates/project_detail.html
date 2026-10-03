@@ -34,6 +34,14 @@
     </div>
   </div>
 
+  {# Owner, 2026-10-03: the project timeline sits directly under the breadcrumb. #}
+  {% if timeline_children or timeline_items %}
+  <div class="project-video-timeline-panel-label">Project Timeline</div>
+  <div class="project-video-timeline-panel">
+    <div class="project-video-timeline" id="project-video-timeline"></div>
+  </div>
+  {% endif %}
+
   <div class="dp-hero">
     <div class="dp-hero-left">
       <div class="detail-header-card">{{ card(header_card, "full") }}</div>
@@ -328,13 +336,6 @@
       </div>
     </div>
   </div>
-
-  {% if timeline_children or timeline_items %}
-  <div class="project-video-timeline-panel-label">Project Timeline</div>
-  <div class="project-video-timeline-panel">
-    <div class="project-video-timeline" id="project-video-timeline"></div>
-  </div>
-  {% endif %}
 
   {% if writeup_body %}
   <div class="project-writeup-solo">

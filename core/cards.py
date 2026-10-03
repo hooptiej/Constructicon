@@ -15,11 +15,12 @@ Piece 3 adds families/collections (add_to_family, remove_from_family), "part of"
 nesting (nest, unnest) and the card_family_members decision resolution.
 """
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
 
-from . import card_rules, changes, db
+from . import card_rules, changes, db, timeline
 from .card_rules import CardError
 
 CARD_DECISION_PREFIX = "card:"
@@ -39,6 +40,8 @@ FAMILY_PATCH_OPS = ("unnest", "add_to_family")
 NEED_HOBBY_INACTIVE_WITH_ACTIVE_WORK = "hobby_inactive_with_active_work"
 NEED_HOBBY_ACTIVE_UNTOUCHED = "hobby_active_untouched"
 NEED_UNTYPED_LINK = "untyped_link"
+NEED_STATUS_CONFLICT = "status_conflict"
+NEED_BLANK_WRITEUP_WITH_FILES = "blank_writeup_with_files"
 
 
 @dataclass
@@ -48,6 +51,7 @@ class Result:
     warnings: list = field(default_factory=list)
     batch_id: str | None = None
     dry_run: bool = False
+    data: dict = field(default_factory=dict)  # extra keys an operation returns (e.g. split's new cards)
 
     def to_dict(self):
         return {
@@ -56,6 +60,7 @@ class Result:
             "changes": self.changes,
             "warnings": self.warnings,
             "batch_id": self.batch_id,
+            **self.data,
         }
 
 
@@ -791,7 +796,7 @@ def _apply_family_patches(family_row, patches_by_option, actor, batch_id):
         add_to_family(fam["id"], m["id"], actor=actor, batch_id=batch_id, _op="resolve_decision")
 
 
-def resolve_decision(decision_id, choice=None, choices=None, actor=changes.ACTOR_MCP):
+def resolve_decision(decision_id, choice=None, choices=None, actor=changes.ACTOR_MCP, batch_id=None):
     """Resolves one card_* decision. `choice` is an option key (single-choice
     questions); `choices` is a list of option keys (multi-choice questions, e.g.
     several candidate cards). The option's declarative `patch` ops run through the
@@ -826,7 +831,7 @@ def resolve_decision(decision_id, choice=None, choices=None, actor=changes.ACTOR
         db.resolve_pending_decision(decision_id, {"stale": "card deleted"})
         raise _decisions.DecisionNotFound(f"The card for decision {decision_id} no longer exists")
 
-    batch_id = changes.new_batch_id()
+    batch_id = batch_id or changes.new_batch_id()
     if decision["kind"] == KIND_CARD_FAMILY_MEMBERS:
         _apply_family_patches(card_row, [options[k].get("patch") or [] for k in picked], actor, batch_id)
     else:
@@ -844,7 +849,7 @@ def resolve_decision(decision_id, choice=None, choices=None, actor=changes.ACTOR
         "applied_batch": batch_id,
         "by": "owner" if actor == changes.ACTOR_UI else "claude",
         "at": time.time(),
-    })
+    }, log={"op": "resolve_decision", "actor": actor, "batch_id": batch_id})
     return {"ok": True, "applied": picked, "batch_id": batch_id, "remaining": db.count_pending_decisions()}
 
 
@@ -959,14 +964,14 @@ def hobby_needs():
     return rows
 
 
-def list_needs_decision(kind=None, need=None, hobby=None, limit=None):
+def list_needs_decision(kind=None, need=None, hobby=None, limit=None, card=None):
     """Open card questions for the owner (spec 6): the STORED card_* decisions plus
     the computed needs from the pieces that exist so far (piece 2: the two hobby
     flags; missing provenance, untyped links, ... join in with their pieces).
 
     Row: {need, card_slug, title, detail, suggested|None, decision_id|None, ...}.
     Filters: `kind` (the card's kind), `need` (the decision kind), `hobby`
-    (hobby slug or id), `limit`. Sorted by card title.
+    (hobby slug or id), `limit`, `card` (one card's slug or id). Sorted by card title.
     """
     hobby_ids = None
     if hobby not in (None, ""):
@@ -1015,5 +1020,912 @@ def list_needs_decision(kind=None, need=None, hobby=None, limit=None):
                                                   NEED_MISSING_WHEREABOUTS)):
         rows += [r for r in provenance_whereabouts_needs(kind=kind or None, hobby_ids=hobby_ids)
                  if not need or r["need"] == need]
+    # Computed status_conflict / blank_writeup_with_files (3.2 rule 6, 3.11; piece 6).
+    if kind != "hobby" and (not need or need in (NEED_STATUS_CONFLICT, NEED_BLANK_WRITEUP_WITH_FILES)):
+        rows += [r for r in status_and_writeup_needs(kind=kind or None, hobby_ids=hobby_ids)
+                 if not need or r["need"] == need]
+    if card not in (None, ""):
+        picked_card = db.get_project(card)
+        rows = [r for r in rows if picked_card is not None and r.get("card_slug") == picked_card["slug"]]
     rows.sort(key=lambda r: (r["title"].lower(), r["need"]))
     return rows[:limit] if limit else rows
+
+
+# =====================================================================================
+# Piece 6: reorganizing toolkit (spec sections 3.10, 3.13, 6). Composite operations run
+# inside db.transaction(): one atomic unit, every write imaged in the change log under
+# one batch_id, and `dry_run` is the same code path rolled back (so a preview can't
+# disagree with the real thing).
+# =====================================================================================
+
+def _slim(c):
+    return {"id": c["id"], "slug": c["slug"], "title": c["title"], "kind": c.get("kind") or "project",
+            "kind_label": card_rules.kind_label(c.get("kind") or "project"), "stage": c.get("stage"),
+            "activity": c.get("activity")}
+
+
+# --- Home (3.10) -----------------------------------------------------------------
+
+def _home_text(kind, ref):
+    if kind == "card":
+        return f"card:{_slug_of(ref) or ref}"
+    if kind == "hobby":
+        h = db.get_hobby(ref)
+        return f"hobby:{h['slug'] if h else ref}"
+    return None
+
+
+def _parse_home_target(target):
+    """-> (home_kind, row). `target`: a card id (int), a dict {type|kind, ref|id|slug},
+    or a string: 'card:<ref>', 'hobby:<ref>', or a bare card ref (a bare ref that is no
+    card is tried as a hobby)."""
+    if isinstance(target, dict):
+        kind = target.get("type") or target.get("kind")
+        ref = target.get("ref", target.get("id", target.get("slug")))
+        card_rules.validate_home_kind(kind)
+    elif isinstance(target, str) and ":" in target:
+        kind, _, ref = target.partition(":")
+        card_rules.validate_home_kind(kind)
+    else:
+        kind, ref = None, target
+    if kind in (None, "card"):
+        row = db.get_project(ref)
+        if row is not None:
+            return "card", row
+        if kind == "card":
+            raise CardError("not_found", f"No such card: {ref!r}")
+    hob = db.get_hobby(ref)
+    if hob is None:
+        raise CardError("not_found", f"No such card or hobby: {ref!r}")
+    return "hobby", hob
+
+
+def set_home(card, target=None, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Overrides a card's automatic home (3.10), or with target=None clears the override
+    so the home goes back to automatic (parent, then first family, then first hobby).
+    `target` is a card or a hobby (see _parse_home_target). A card can't be its own home."""
+    row = get_card(card)
+    if target in (None, ""):
+        fields = {"home_kind": None, "home_ref": None}
+    else:
+        kind, target_row = _parse_home_target(target)
+        if kind == "card" and target_row["id"] == row["id"]:
+            raise CardError("bad_home", "A card can't be its own home.")
+        fields = {"home_kind": kind, "home_ref": target_row["id"]}
+    before_text = _home_text(row.get("home_kind"), row.get("home_ref")) if row.get("home_kind") else None
+    after_text = _home_text(fields["home_kind"], fields["home_ref"]) if fields["home_kind"] else None
+    rows = []
+    if (row.get("home_kind"), row.get("home_ref")) != (fields["home_kind"], fields["home_ref"]):
+        rows = [{"card": row["slug"], "field": "home", "before": before_text, "after": after_text}]
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and rows:
+        db.update_card_columns(row["id"], fields, "set_home", actor, batch_id=batch_id)
+    return Result(True, rows, [], batch_id, dry_run)
+
+
+def _home_entry(kind, row, source, dangling=False):
+    return {"type": kind, "id": row["id"], "slug": row["slug"],
+            "title": row.get("title") or row.get("name"), "source": source, "dangling_override": dangling}
+
+
+def resolve_home(card):
+    """The card's home (3.10): {type: card|hobby|None, id, slug, title, source:
+    override|parent|family|hobby|none, dangling_override}. A valid manual override wins;
+    else the parent; else the earliest family membership; else the earliest hobby;
+    else none (the home page). A dangling override (its target was deleted) falls
+    through to the automatic default and is flagged, never raised."""
+    row = get_card(card)
+    dangling = False
+    kind, ref = row.get("home_kind"), row.get("home_ref")
+    if kind and ref is not None:
+        target = db.get_project(ref) if kind == "card" else (db.get_hobby(ref) if kind == "hobby" else None)
+        if target is not None and not (kind == "card" and target["id"] == row["id"]):
+            return _home_entry(kind, target, "override")
+        dangling = True
+    if row.get("parent_id"):
+        parent = db.get_project(row["parent_id"])
+        if parent is not None:
+            return _home_entry("card", parent, "parent", dangling)
+    fams = db.list_families_for_member(row["id"])
+    if fams:
+        return _home_entry("card", fams[0], "family", dangling)
+    for hobby_row in db.list_hobby_rows(row["id"]):
+        hob = db.get_hobby(hobby_row["hobby_tag_id"])
+        if hob is not None:
+            return _home_entry("hobby", hob, "hobby", dangling)
+    return {"type": None, "id": None, "slug": None, "title": None, "source": "none", "dangling_override": dangling}
+
+
+def home_chain(card, limit=12):
+    """The breadcrumb: the card's home, then that home's own home, and so on, nearest
+    first, ending at a hobby or the top. Cycle-safe."""
+    row = get_card(card)
+    chain, seen = [], {row["id"]}
+    current = row
+    while len(chain) < limit:
+        h = resolve_home(current["id"])
+        if h["type"] is None:
+            break
+        chain.append(h)
+        if h["type"] != "card" or h["id"] in seen:
+            break
+        seen.add(h["id"])
+        current = db.get_project(h["id"])
+        if current is None:
+            break
+    return chain
+
+
+# --- Hobby membership under the new names (3.9) ----------------------------------
+
+def add_to_hobby(card, hobby, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Adds a card to a hobby (many allowed; adding twice is a no-op)."""
+    row, hob = get_card(card), get_hobby(hobby)
+    exists = any(r["hobby_tag_id"] == hob["id"] for r in db.list_hobby_rows(row["id"]))
+    rows = [] if exists else [{"card": row["slug"], "field": "in_hobby", "before": None, "after": hob["slug"]}]
+    warnings = [f"'{row['title']}' is already in '{hob['name']}'."] if exists else []
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and not exists:
+        db.insert_card_hobby(row["id"], hob["id"], "add_to_hobby", actor, batch_id, [row["slug"], hob["slug"]])
+    return Result(True, rows, warnings, batch_id, dry_run)
+
+
+def remove_from_hobby(card, hobby, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Takes a card out of a hobby (no-op if it wasn't in it)."""
+    row, hob = get_card(card), get_hobby(hobby)
+    exists = any(r["hobby_tag_id"] == hob["id"] for r in db.list_hobby_rows(row["id"]))
+    rows = [{"card": row["slug"], "field": "in_hobby", "before": hob["slug"], "after": None}] if exists else []
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and exists:
+        db.delete_card_hobby(row["id"], hob["id"], "remove_from_hobby", actor, batch_id, [row["slug"], hob["slug"]])
+    return Result(True, rows, [], batch_id, dry_run)
+
+
+# --- Moving and copying files ----------------------------------------------------
+
+def _as_slug_list(slugs):
+    if isinstance(slugs, str):
+        slugs = [slugs]
+    out = []
+    for s in slugs or []:
+        s = (s or "").strip()
+        if s and s not in out:
+            out.append(s)
+    if not out:
+        raise CardError("bad_files", "Name at least one file (by slug).")
+    return out
+
+
+def _transfer_files(slugs, from_card, to_card, move, dry_run, actor, batch_id):
+    src, dst = get_card(from_card), get_card(to_card)
+    if src["id"] == dst["id"]:
+        raise CardError("bad_files", "The source and destination are the same card.")
+    slugs = _as_slug_list(slugs)
+    held = {r["post_slug"] for r in db.list_project_item_rows(src["id"])}
+    missing = [s for s in slugs if s not in held]
+    if missing:
+        raise CardError("bad_files", f"Not in '{src['title']}': {', '.join(missing[:8])}.", {"missing": missing})
+    for s in slugs:
+        if s == src.get("writeup_slug") or s == dst.get("writeup_slug"):
+            raise CardError("bad_files", "A card's write-up can't be moved or copied; it belongs to its card.",
+                            {"slug": s})
+    already = {r["post_slug"] for r in db.list_project_item_rows(dst["id"])}
+    rows, warnings = [], []
+    for s in slugs:
+        if s not in already:
+            rows.append({"card": dst["slug"], "field": "file", "before": None, "after": s})
+        else:
+            warnings.append(f"{s} is already in '{dst['title']}'.")
+        if move:
+            rows.append({"card": src["slug"], "field": "file", "before": s, "after": None})
+    if move and src.get("cover_slug") in slugs:
+        warnings.append(f"'{src['title']}' still has {src['cover_slug']} as its cover; pick another if you want.")
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run:
+        with db.transaction():
+            db.write_card_items(dst["id"], slugs, [], "move_files" if move else "copy_files", actor, batch_id,
+                                [src["slug"], dst["slug"]])
+            if move:
+                db.write_card_items(src["id"], [], slugs, "move_files", actor, batch_id, [src["slug"], dst["slug"]])
+    return Result(True, rows, warnings, batch_id, dry_run)
+
+
+def move_files(slugs, from_card, to_card, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Moves files (by slug) from one card to another: they leave `from_card` and join
+    `to_card`. A card's own write-up can't be moved."""
+    return _transfer_files(slugs, from_card, to_card, True, dry_run, actor, batch_id)
+
+
+def copy_files(slugs, from_card, to_card, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Adds files from one card to another WITHOUT removing them (files are many-to-many)."""
+    return _transfer_files(slugs, from_card, to_card, False, dry_run, actor, batch_id)
+
+
+# --- split_card (6) ----------------------------------------------------------------
+
+def _resolve_hobby_refs(spec, src):
+    """'inherit' -> the source's hobbies (attach order); a list -> those hobbies; else none."""
+    if spec == "inherit":
+        return [h for h in (db.get_hobby(r["hobby_tag_id"]) for r in db.list_hobby_rows(src["id"])) if h]
+    if spec in (None, "", []):
+        return []
+    return [get_hobby(h) for h in spec]
+
+
+def _resolve_family_refs(spec, src):
+    if spec == "inherit":
+        return [f for f in db.list_families_for_member(src["id"])]
+    if spec in (None, "", []):
+        return []
+    return [get_card(f) for f in spec]
+
+
+def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Carves files (and a description) out of `source` into new cards (spec 6).
+
+    Each part: {title, kind='project', relation='sibling'|'child', stage, stop_reason,
+    provenance, provenance_credit, whereabouts, whereabouts_note, description,
+    move_description, file_slugs, link_to_source: {type, note?}|None,
+    hobbies: 'inherit'|[hobby refs], families: 'inherit'|[family refs], highlight}.
+    A `child` is created nested under the source (nest rules apply). A `sibling` has no
+    parent and by default gets the source's hobbies and family memberships copied; a
+    child defaults to none. Files named in `file_slugs` are MOVED out of the source
+    (several parts may name the same file; it lands in each), unless keep_in_source=True
+    (then copied). Every part is a full card, blank write-up included. One transaction and
+    one batch_id: any rule violation writes nothing; `undo` removes the parts and restores
+    the source's files."""
+    src = get_card(source)
+    if not isinstance(parts, list) or not parts:
+        raise CardError("bad_split", "Give at least one part to split out.")
+    relations = [card_rules.validate_split_part(p, i) for i, p in enumerate(parts)]
+    held = {r["post_slug"] for r in db.list_project_item_rows(src["id"])}
+    moved_all = []
+    for i, p in enumerate(parts):
+        files = _as_slug_list(p["file_slugs"]) if p.get("file_slugs") else []
+        missing = [s for s in files if s not in held]
+        if missing:
+            raise CardError("bad_files", f"Part {i + 1} names file(s) not in '{src['title']}': {', '.join(missing[:8])}.",
+                            {"missing": missing})
+        if src.get("writeup_slug") in files:
+            raise CardError("bad_files", "A card's write-up can't be split out; it belongs to its card.")
+        moved_all += [s for s in files if s not in moved_all]
+    batch_id = batch_id or changes.new_batch_id()
+    rows, warnings, created = [], [], []
+    with db.transaction(dry_run=dry_run):
+        for i, p in enumerate(parts):
+            relation = relations[i]
+            kind = card_rules.validate_kind(p.get("kind") or card_rules.DEFAULT_KIND)
+            stage = p.get("stage") or card_rules.DEFAULT_STAGE
+            description = p.get("description") or ""
+            if p.get("move_description"):
+                description = src.get("description") or ""
+            new = db.create_project(p["title"].strip(), description=description, kind=kind, stage=stage,
+                                    stop_reason=p.get("stop_reason"),
+                                    parent_id=src["id"] if relation == "child" else None,
+                                    actor=actor, batch_id=batch_id)
+            if p.get("provenance") or p.get("provenance_credit"):
+                set_provenance(new["id"], p.get("provenance"), p.get("provenance_credit") or ...,
+                               actor=actor, batch_id=batch_id)
+            if p.get("whereabouts") or p.get("whereabouts_note"):
+                set_whereabouts(new["id"], p.get("whereabouts"), p.get("whereabouts_note") or ...,
+                                actor=actor, batch_id=batch_id)
+            if p.get("highlight"):
+                set_highlight(new["id"], True, actor=actor, batch_id=batch_id)
+            files = _as_slug_list(p["file_slugs"]) if p.get("file_slugs") else []
+            if files:
+                db.write_card_items(new["id"], files, [], "split_card", actor, batch_id, [new["slug"], src["slug"]])
+                if src.get("cover_slug") in files:
+                    db.write_card_row(new["id"], {"cover_slug": src["cover_slug"]}, "split_card", actor, batch_id)
+            hobby_spec = p.get("hobbies", "inherit" if relation == "sibling" else None)
+            for hob in _resolve_hobby_refs(hobby_spec, src):
+                add_to_hobby(new["id"], hob["id"], actor=actor, batch_id=batch_id)
+            family_spec = p.get("families", "inherit" if relation == "sibling" else None)
+            for fam in _resolve_family_refs(family_spec, src):
+                add_to_family(fam["id"], new["id"], actor=actor, batch_id=batch_id)
+            if p.get("link_to_source"):
+                spec = p["link_to_source"]
+                link(new["id"], src["id"], spec.get("type"), spec.get("note") or "", actor=actor, batch_id=batch_id)
+            fresh = db.get_project(new["id"])
+            created.append({**_slim(fresh), "relation": relation, "files": files})
+            rows.append({"card": fresh["slug"], "field": "created", "before": None,
+                         "after": f"{fresh['title']} ({card_rules.kind_label(kind)}, {relation})"})
+            for s in files:
+                rows.append({"card": fresh["slug"], "field": "file", "before": None, "after": s})
+        if any(p.get("move_description") for p in parts):
+            db.write_card_row(src["id"], {"description": ""}, "split_card", actor, batch_id)
+            rows.append({"card": src["slug"], "field": "description", "before": src.get("description"), "after": ""})
+        if moved_all and not keep_in_source:
+            db.write_card_items(src["id"], [], moved_all, "split_card", actor, batch_id, [src["slug"]])
+            for s in moved_all:
+                rows.append({"card": src["slug"], "field": "file", "before": s, "after": None})
+            if src.get("cover_slug") in moved_all:
+                warnings.append(f"'{src['title']}' still has {src['cover_slug']} as its cover; pick another if you want.")
+    return Result(True, rows, warnings, batch_id, dry_run, {"created": created})
+
+
+# --- merge_cards (6) ----------------------------------------------------------------
+
+def _merge_one(keep, a, actor, batch_id, rows, warnings):
+    """Folds card `a` into `keep` (runs inside the caller's transaction)."""
+    keep_group = (keep.get("kind") or "project") in card_rules.GROUP_KINDS
+    a_group = (a.get("kind") or "project") in card_rules.GROUP_KINDS
+    if keep_group != a_group:
+        raise CardError("bad_merge", f"Can't merge '{a['title']}' ({card_rules.kind_label(a.get('kind') or 'project')}) "
+                        f"into '{keep['title']}' ({card_rules.kind_label(keep.get('kind') or 'project')}): "
+                        "families and collections only merge with their own kind.")
+    slugs = [keep["slug"], a["slug"]]
+    op = "merge_cards"
+    descendants = db._descendant_project_ids(a["id"])
+    if keep["id"] in descendants and keep.get("parent_id") != a["id"]:
+        raise CardError("nest_cycle", f"'{keep['title']}' is nested inside '{a['title']}' (not directly), so "
+                        "merging would make a cycle. Unnest one of them first.")
+    if keep.get("parent_id") == a["id"]:
+        db.update_card_columns(keep["id"], {"parent_id": a.get("parent_id")}, op, actor, batch_id=batch_id)
+        rows.append({"card": keep["slug"], "field": "parent", "before": a["slug"], "after": _slug_of(a.get("parent_id"))})
+    # Children of the absorbed card now belong to keep.
+    for child in db.list_child_projects(a["id"]):
+        if child["id"] == keep["id"]:
+            continue
+        db.check_nest(child, keep["id"], replace=True)
+        db.update_card_columns(child["id"], {"parent_id": keep["id"]}, op, actor, batch_id=batch_id)
+        rows.append({"card": child["slug"], "field": "parent", "before": a["slug"], "after": keep["slug"]})
+    # Files: unioned into keep. A blank auto write-up is deleted with the card; a real one stays as a file.
+    item_rows = db.list_project_item_rows(a["id"])
+    file_slugs = [r["post_slug"] for r in item_rows]
+    blank_writeup = a.get("writeup_slug") if a.get("writeup_slug") and db.blank_document_body(a["writeup_slug"]) else None
+    moving = [s for s in file_slugs if s != blank_writeup]
+    added, _ = db.write_card_items(keep["id"], moving, [], op, actor, batch_id, slugs)
+    for s in added:
+        rows.append({"card": keep["slug"], "field": "file", "before": None, "after": s})
+    if a.get("writeup_slug") and not blank_writeup and a["writeup_slug"] in moving:
+        warnings.append(f"'{a['title']}' had a write-up with text; it's now an ordinary file in '{keep['title']}'.")
+    db.write_card_items(a["id"], [], file_slugs, op, actor, batch_id, slugs)
+    if blank_writeup:
+        def _drop_doc(log):
+            for r in db.list_post_tag_rows(blank_writeup):
+                log.delete("post_tags", {"post_slug": blank_writeup, "tag_id": r["tag_id"]})
+            log.delete("capture_events", {"slug": blank_writeup})
+        db.write_images(op, actor, batch_id, slugs, _drop_doc)
+    # Cover: keep's wins; adopt the absorbed one only if keep has none.
+    if not keep.get("cover_slug") and not keep.get("cover_project_id"):
+        adopt = {}
+        if a.get("cover_slug"):
+            adopt["cover_slug"] = a["cover_slug"]
+        elif a.get("cover_project_id") and a["cover_project_id"] != keep["id"]:
+            adopt["cover_project_id"] = a["cover_project_id"]
+        if adopt:
+            db.write_card_row(keep["id"], adopt, op, actor, batch_id)
+            rows.append({"card": keep["slug"], "field": "cover", "before": None, "after": list(adopt.values())[0]})
+    # Hobbies: unioned.
+    for r in db.list_hobby_rows(a["id"]):
+        if db.insert_card_hobby(keep["id"], r["hobby_tag_id"], op, actor, batch_id, slugs):
+            hob = db.get_hobby(r["hobby_tag_id"])
+            rows.append({"card": keep["slug"], "field": "in_hobby", "before": None, "after": hob["slug"] if hob else r["hobby_tag_id"]})
+        db.delete_card_hobby(a["id"], r["hobby_tag_id"], op, actor, batch_id, slugs)
+    # Family memberships (as a member), then members (as a family): unioned.
+    for r in db.list_family_rows(a["id"], as_member=True):
+        fam = db.get_project(r["family_id"])
+        if fam is not None and fam["id"] != keep["id"]:
+            res = add_to_family(fam["id"], keep["id"], actor=actor, batch_id=batch_id, _op=op)
+            rows += res.changes
+        db.remove_family_member(r["family_id"], a["id"], op, actor, batch_id=batch_id, affected_slugs=slugs)
+    for r in db.list_family_rows(a["id"], as_member=False):
+        mem = db.get_project(r["member_id"])
+        if mem is not None and mem["id"] != keep["id"]:
+            res = add_to_family(keep["id"], mem["id"], actor=actor, batch_id=batch_id, _op=op)
+            rows += res.changes
+        db.remove_family_member(a["id"], r["member_id"], op, actor, batch_id=batch_id, affected_slugs=slugs)
+    # Links: re-pointed; self-links and duplicates dropped; a typed link beats `related` on the same pair.
+    a_links = db.list_project_link_rows(slug=a["slug"])
+    if a_links:
+        existing = {(r["slug_a"], r["slug_b"], r["type"]) for r in db.list_project_link_rows(slug=keep["slug"])}
+        deletes = [(r["slug_a"], r["slug_b"], r["type"]) for r in a_links]
+        inserts, planned = [], set()
+        for r in a_links:
+            na = keep["slug"] if r["slug_a"] == a["slug"] else r["slug_a"]
+            nb = keep["slug"] if r["slug_b"] == a["slug"] else r["slug_b"]
+            key = (na, nb, r["type"])
+            if na == nb or key in existing or key in planned:
+                continue
+            planned.add(key)
+            inserts.append({"slug_a": na, "slug_b": nb, "type": r["type"], "note": r.get("note") or ""})
+            rows.append({"card": keep["slug"], "field": "link", "before": None, "after": f"{r['type']} {nb if na == keep['slug'] else na}"})
+        all_rows = existing | planned
+        typed_pairs = {frozenset((x, y)) for x, y, t in all_rows if t != "related"}
+        for (x, y, t) in sorted(all_rows):
+            if t == "related" and frozenset((x, y)) in typed_pairs:
+                if (x, y, t) in planned:
+                    inserts = [i for i in inserts if (i["slug_a"], i["slug_b"], i["type"]) != (x, y, t)]
+                else:
+                    deletes.append((x, y, t))
+                warnings.append(f"'{x}' and '{y}' ended up both related and typed after the merge; the typed link was kept.")
+        db.write_project_links(deletes, inserts, op, actor, batch_id=batch_id, affected_slugs=slugs)
+    # Blog entries that featured the absorbed card now feature keep.
+    def _repoint_entries(log):
+        have = {r["entry_id"] for r in db.list_entry_project_rows(keep["id"])}
+        for r in db.list_entry_project_rows(a["id"]):
+            log.delete("blog_entry_projects", {"entry_id": r["entry_id"], "project_id": a["id"]})
+            if r["entry_id"] not in have:
+                log.insert("blog_entry_projects", {"entry_id": r["entry_id"], "project_id": keep["id"]},
+                           {"sort_order": r["sort_order"], "note": r["note"]})
+    db.write_images(op, actor, batch_id, slugs, _repoint_entries)
+    # Open questions about the absorbed card are moot.
+    for d in open_card_decisions(a["slug"]):
+        db.resolve_pending_decision(d["id"], {"stale": f"merged into {keep['slug']}"},
+                                    log={"op": op, "actor": actor, "batch_id": batch_id})
+        rows.append({"card": a["slug"], "field": "decision", "before": d["kind"], "after": "resolved (stale)"})
+    # Other cards that borrowed the absorbed card's cover or named it as their home.
+    for other in db.list_projects_referencing(a["id"]):
+        if other["id"] == a["id"]:
+            continue
+        if other.get("cover_project_id") == a["id"]:
+            db.write_card_row(other["id"], {"cover_project_id": keep["id"] if other["id"] != keep["id"] else None},
+                              op, actor, batch_id)
+        if other.get("home_kind") == "card" and other.get("home_ref") == a["id"]:
+            new_home = (None, None) if other["id"] == keep["id"] else ("card", keep["id"])
+            db.update_card_columns(other["id"], {"home_kind": new_home[0], "home_ref": new_home[1]}, op, actor,
+                                   batch_id=batch_id)
+    db.write_card_row(keep["id"], {}, op, actor, batch_id)
+    db.write_images(op, actor, batch_id, slugs, lambda log: log.delete("projects", {"id": a["id"]}))
+    rows.append({"card": keep["slug"], "field": "merged", "before": a["slug"], "after": None})
+
+
+def merge_cards(keep, absorb, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Folds one or more cards into `keep` (spec 6): files unioned (deduped), hobbies and
+    family memberships unioned, children re-parented, links re-pointed (self-links and
+    duplicates dropped), blog-entry attachments re-pointed. keep's cover and write-up win; an
+    absorbed card's blank write-up goes with it, a real one stays as an ordinary file.
+    Open questions on absorbed cards are resolved as stale. The absorbed card rows are
+    deleted; their row images make `undo` restore them (same id, same files). Refuses
+    (writing nothing) when it would create a nest cycle or merge a group kind with a
+    non-group kind."""
+    keep_row = get_card(keep)
+    absorb = [absorb] if not isinstance(absorb, (list, tuple)) else list(absorb)
+    ids, absorbed = {keep_row["id"]}, []
+    for ref in absorb:
+        a = get_card(ref)
+        if a["id"] == keep_row["id"]:
+            raise CardError("bad_merge", "A card can't be merged into itself.")
+        if a["id"] in ids:
+            continue
+        ids.add(a["id"])
+        absorbed.append(a)
+    if not absorbed:
+        raise CardError("bad_merge", "Name at least one card to absorb.")
+    batch_id = batch_id or changes.new_batch_id()
+    rows, warnings = [], []
+    with db.transaction(dry_run=dry_run):
+        for a in absorbed:
+            _merge_one(db.get_project(keep_row["id"]), db.get_project(a["id"]), actor, batch_id, rows, warnings)
+    return Result(True, rows, warnings, batch_id, dry_run, {"keep": keep_row["slug"], "absorbed": [a["slug"] for a in absorbed]})
+
+
+# --- Computed needs added in piece 6 -------------------------------------------------
+
+def status_and_writeup_needs(kind=None, hobby_ids=None):
+    """Computed needs (never stored): status_conflict (a 3.2 rule 6 warning that holds right
+    now: active/inactive disagrees with the parent, or Done with nested work still in
+    progress) and blank_writeup_with_files (the auto-made write-up is still empty although
+    the card has files)."""
+    rows = []
+    for c in db.list_projects():
+        ck = c.get("kind") or "project"
+        if (kind and ck != kind) or (hobby_ids is not None and c["id"] not in hobby_ids):
+            continue
+        if c.get("stage"):
+            warns = _status_warnings(c, c.get("activity"), c.get("stage"))
+            if warns:
+                rows.append({"need": NEED_STATUS_CONFLICT, "card_slug": c["slug"], "title": c["title"],
+                             "detail": " ".join(warns), "suggested": None, "suggested_reason": None,
+                             "confidence": None, "decision_id": None, "options": []})
+        if ck not in card_rules.GROUP_KINDS and c.get("writeup_slug") and db.blank_document_body(c["writeup_slug"]):
+            n = len([r for r in db.list_project_item_rows(c["id"]) if r["post_slug"] != c["writeup_slug"]])
+            if n:
+                rows.append({"need": NEED_BLANK_WRITEUP_WITH_FILES, "card_slug": c["slug"], "title": c["title"],
+                             "detail": f"The write-up is still blank, but the card has {n} file(s).",
+                             "suggested": None, "suggested_reason": None, "confidence": None,
+                             "decision_id": None, "options": []})
+    return rows
+
+
+# --- explain_card (6) ---------------------------------------------------------------
+
+def _file_summary(card, items):
+    files = [i for i in items if i["slug"] != card.get("writeup_slug")]
+    by_type = {}
+    for f in files:
+        by_type[f.get("media_type") or "unknown"] = by_type.get(f.get("media_type") or "unknown", 0) + 1
+    dates = [timeline.resolve_item_date(f) for f in files]
+    return {"total": len(files), "by_type": by_type,
+            "earliest": min(dates) if dates else None, "latest": max(dates) if dates else None}
+
+
+def explain_card(card):
+    """Everything about a card in one call (spec 6) -- what to read before proposing a
+    change. Returns a dict: identity, status (kind/activity/stage/stop_reason, `provisional`),
+    whereabouts, provenance, highlight, hobbies, families, members, parent, children, links,
+    home (+ `home_chain`), files (counts per type, date span), level (pips + reasons),
+    open_decisions, needs (computed + stored for this card), warnings, suggestions,
+    recent_changes. Read-only."""
+    from . import card_level  # lazy: card_level imports db/timeline only, but keeps cards.py's import graph flat
+    row = get_card(card)
+    items = db.list_project_items(row["id"])
+    parent = db.get_project(row["parent_id"]) if row.get("parent_id") else None
+    home = resolve_home(row["id"])
+    needs = list_needs_decision(card=row["slug"])
+    warnings = _status_warnings(row, row.get("activity"), row.get("stage")) if row.get("stage") else []
+    if home.get("dangling_override"):
+        warnings.append("The manual home points at something that no longer exists; the automatic home is used.")
+    suggestions = {"provenance": suggest_provenance(row),
+                   "links": [n["link"] for n in needs if n["need"] == NEED_UNTYPED_LINK and n.get("link")]}
+    recent = []
+    for r in db.list_change_log(card_slug=row["slug"], limit=5):
+        recent.append({"id": r["id"], "op": r["op"], "actor": r["actor"], "batch_id": r["batch_id"],
+                       "timestamp": r["timestamp"], "undone": r.get("undone_by") is not None})
+    out = {
+        "id": row["id"], "slug": row["slug"], "title": row["title"], "description": row.get("description") or "",
+        **status_fields(row),
+        "provisional": provisional_legacy_status(row) is not None,
+        **whereabouts_fields(row),
+        "hobbies": [hobby_fields(get_hobby(r["hobby_tag_id"]), with_flags=False)
+                    for r in db.list_hobby_rows(row["id"]) if db.get_hobby(r["hobby_tag_id"])],
+        **family_fields(row),
+        "parent": _slim(parent) if parent else None,
+        "children": [_slim(c) for c in db.list_child_projects(row["id"])],
+        "links": list_links(row["id"]),
+        "home": home,
+        "home_chain": home_chain(row["id"]),
+        "home_override": ({"kind": row["home_kind"], "ref": row["home_ref"],
+                           "text": _home_text(row["home_kind"], row["home_ref"])} if row.get("home_kind") else None),
+        "files": _file_summary(row, items),
+        "level": card_level.card_level(row, items),
+        "open_decisions": [decision_summary(d) for d in open_card_decisions(row["slug"])],
+        "needs": [n for n in needs if n["decision_id"] is None],
+        "warnings": warnings,
+        "suggestions": suggestions,
+        "recent_changes": recent,
+    }
+    return out
+
+
+# --- Bulk (6) ---------------------------------------------------------------------
+
+def _no_extra(args, allowed, op):
+    extra = sorted(set(args) - set(allowed))
+    if extra:
+        raise CardError("bad_bulk_args", f"{op}: unknown argument(s) {', '.join(extra)}. Allowed: {', '.join(allowed)}.")
+
+
+def _need(args, key, op):
+    if args.get(key) in (None, ""):
+        raise CardError("bad_bulk_args", f"{op}: argument '{key}' is required.")
+    return args[key]
+
+
+def _bulk_adapters(actor, batch_id):
+    """op -> fn(card, args) -> Result. `card` is the item's card (the subject of the op)."""
+    common = {"actor": actor, "batch_id": batch_id}
+
+    def set_status_(card, a):
+        _no_extra(a, ("stage", "stop_reason", "activity"), "set_status")
+        return set_status(card, _need(a, "stage", "set_status"), a.get("stop_reason"), activity=a.get("activity"), **common)
+
+    def set_kind_(card, a):
+        _no_extra(a, ("kind", "force"), "set_kind")
+        return set_kind(card, _need(a, "kind", "set_kind"), force=bool(a.get("force")), **common)
+
+    def set_whereabouts_(card, a):
+        _no_extra(a, ("whereabouts", "value", "note"), "set_whereabouts")
+        return set_whereabouts(card, a.get("whereabouts", a.get("value")), a["note"] if "note" in a else ..., **common)
+
+    def set_prov_(card, a):
+        _no_extra(a, ("provenance", "value", "credit"), "set_card_provenance")
+        return set_provenance(card, a.get("provenance", a.get("value")), a["credit"] if "credit" in a else ..., **common)
+
+    def set_home_(card, a):
+        _no_extra(a, ("target",), "set_home")
+        return set_home(card, a.get("target"), **common)
+
+    def highlight_(card, a):
+        _no_extra(a, ("on",), "set_card_highlight")
+        return set_highlight(card, bool(a.get("on")), **common)
+
+    def add_hobby_(card, a):
+        _no_extra(a, ("hobby",), "add_to_hobby")
+        return add_to_hobby(card, _need(a, "hobby", "add_to_hobby"), **common)
+
+    def remove_hobby_(card, a):
+        _no_extra(a, ("hobby",), "remove_from_hobby")
+        return remove_from_hobby(card, _need(a, "hobby", "remove_from_hobby"), **common)
+
+    def add_family_(card, a):
+        _no_extra(a, ("family",), "add_to_family")
+        return add_to_family(_need(a, "family", "add_to_family"), card, **common)
+
+    def remove_family_(card, a):
+        _no_extra(a, ("family",), "remove_from_family")
+        return remove_from_family(_need(a, "family", "remove_from_family"), card, **common)
+
+    def nest_(card, a):
+        _no_extra(a, ("parent", "replace"), "nest")
+        return nest(card, _need(a, "parent", "nest"), replace=bool(a.get("replace")), **common)
+
+    def unnest_(card, a):
+        _no_extra(a, (), "unnest")
+        return unnest(card, **common)
+
+    def link_(card, a):
+        _no_extra(a, ("b", "type", "note"), "link")
+        return link(card, _need(a, "b", "link"), _need(a, "type", "link"), a.get("note") or "", **common)
+
+    def unlink_(card, a):
+        _no_extra(a, ("b", "type"), "unlink")
+        return unlink(card, _need(a, "b", "unlink"), a.get("type"), **common)
+
+    def retype_(card, a):
+        _no_extra(a, ("b", "from_type", "to_type", "note"), "retype_link")
+        return retype_link(card, _need(a, "b", "retype_link"), a.get("from_type") or "related",
+                           _need(a, "to_type", "retype_link"), note=a.get("note"), **common)
+
+    def hobby_activity_(card, a):
+        _no_extra(a, ("value", "status"), "set_hobby_activity")
+        return set_hobby_activity(card, a.get("value", a.get("status")), **common)
+
+    return {"set_status": set_status_, "set_kind": set_kind_, "set_whereabouts": set_whereabouts_,
+            "set_card_provenance": set_prov_, "set_home": set_home_, "set_card_highlight": highlight_,
+            "add_to_hobby": add_hobby_, "remove_from_hobby": remove_hobby_, "add_to_family": add_family_,
+            "remove_from_family": remove_family_, "nest": nest_, "unnest": unnest_, "link": link_,
+            "unlink": unlink_, "retype_link": retype_, "set_hobby_activity": hobby_activity_}
+
+
+class _BulkAbort(Exception):
+    pass
+
+
+def bulk(op, items, *, dry_run=True, partial_ok=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Runs one allow-listed setter (card_rules.BULK_OPS) over a list of items
+    [{card, args: {...}}] (spec 6). DRY-RUN BY DEFAULT. Items run in order inside one
+    transaction, so later items see earlier ones; every item is validated and reported
+    (before/after) whether or not it succeeds. All-or-nothing: if any item fails nothing is
+    written, unless partial_ok=True, which keeps the valid ones. Never raises for an item
+    error. For add/remove_to_family `card` is the member and args.family the family; for
+    set_hobby_activity `card` is the hobby.
+    Returns {ok, dry_run, op, changes, warnings, batch_id, applied, items: [{card, ok, applied,
+    changes, warnings, error?}]}."""
+    card_rules.validate_bulk_op(op)
+    if not isinstance(items, list) or not items:
+        raise CardError("bad_bulk_args", "Give a list of items: [{card, args}].")
+    batch_id = batch_id or changes.new_batch_id()
+    adapter = _bulk_adapters(actor, batch_id)[op]
+    results, all_changes, failed = [], [], 0
+    try:
+        with db.transaction(dry_run=dry_run) as tx:
+            for it in items:
+                entry = {"card": it.get("card") if isinstance(it, dict) else None}
+                try:
+                    if not isinstance(it, dict) or it.get("card") in (None, ""):
+                        raise CardError("bad_bulk_args", "Each item needs a 'card'.")
+                    with tx.savepoint():
+                        res = adapter(it["card"], dict(it.get("args") or {}))
+                    entry.update(ok=True, changes=res.changes, warnings=res.warnings)
+                    all_changes += res.changes
+                except CardError as e:
+                    failed += 1
+                    entry.update(ok=False, changes=[], warnings=[], error=e.to_dict())
+                results.append(entry)
+            if failed and not partial_ok:
+                raise _BulkAbort()
+    except _BulkAbort:
+        pass
+    wrote = not dry_run and (not failed or partial_ok)
+    for entry in results:
+        entry["applied"] = bool(wrote and entry["ok"])
+    ok = not failed or partial_ok
+    warnings = []
+    if failed:
+        warnings.append(f"{failed} of {len(results)} item(s) can't be applied; "
+                        + ("the valid ones were applied." if wrote else "nothing was written."))
+    return {"ok": bool(ok), "dry_run": dry_run, "op": op,
+            "changes": [c for e in results if e["ok"] for c in e["changes"]] if ok or dry_run else [],
+            "warnings": warnings, "batch_id": batch_id,
+            "applied": sum(1 for e in results if e["applied"]), "items": results}
+
+
+# --- Bulk decisions (6) -------------------------------------------------------------
+
+def _changes_from_log(rows):
+    """Flattens change-log rows into [{op, table, key, field, before, after, card}]."""
+    out = []
+    for r in rows:
+        card = r["affected_slugs"][0] if len(r.get("affected_slugs") or []) == 1 else None
+        for m in r["mutations"]:
+            b, a = m.get("before"), m.get("after")
+            if m["table"] == "pending_decisions":
+                # Summarize: the payload column is the whole question, far too big to echo.
+                def _state(img):
+                    if not img:
+                        return None
+                    if img.get("resolved_at") is None:
+                        return "open"
+                    try:
+                        res = (json.loads(img["payload"]).get("resolution") or {}) if img.get("payload") else {}
+                    except ValueError:
+                        res = {}
+                    return f"resolved ({res.get('choice') or res.get('stale') or '?'})"
+                slug = None
+                dec = db.get_pending_decision(m["key"]["id"])
+                if dec and is_card_decision_slug(dec["post_slug"]):
+                    slug = dec["post_slug"][len(CARD_DECISION_PREFIX):]
+                out.append({"op": r["op"], "card": slug or card, "table": m["table"], "key": m["key"],
+                            "field": "decision", "before": _state(b) if b and "resolved_at" in b else "open",
+                            "after": _state(a) if a and "resolved_at" in a else None})
+                continue
+            if b is None or a is None:
+                out.append({"op": r["op"], "card": card, "table": m["table"], "key": m["key"],
+                            "field": "(row)", "before": b, "after": a})
+                continue
+            for col in a:
+                if col == "updated_at" or b.get(col) == a[col]:
+                    continue
+                out.append({"op": r["op"], "card": card, "table": m["table"], "key": m["key"], "field": col,
+                            "before": b.get(col), "after": a[col]})
+    return out
+
+
+def resolve_decisions(items, *, accept_suggested=False, dry_run=True, partial_ok=False, actor=changes.ACTOR_MCP,
+                      batch_id=None):
+    """Clears many card decisions at once (spec 7.3). DRY-RUN BY DEFAULT.
+
+    `items`: [{decision_id, choice | choices}], or with accept_suggested=True a list of
+    decision ids (or {decision_id}); each is answered with its own suggested option. A
+    decision with no usable suggestion is SKIPPED (reported, not an error). Items run in one
+    transaction and one batch_id; a decision that can't be applied makes the whole call
+    write nothing unless partial_ok=True. Returns {ok, dry_run, batch_id, applied, skipped,
+    failed, changes, items: [{decision_id, card_slug, choice, status: applied|would_apply|
+    skipped|failed, changes?, reason?, error?}]}."""
+    from . import decisions as _decisions
+    if not isinstance(items, list) or not items:
+        raise CardError("bad_bulk_args", "Give a list of decisions to resolve.")
+    batch_id = batch_id or changes.new_batch_id()
+    results, failed, skipped = [], 0, 0
+    seen_log_ids = 0
+    all_changes = []
+    try:
+        with db.transaction(dry_run=dry_run) as tx:
+            for it in items:
+                if isinstance(it, int) or (isinstance(it, str) and it.isdigit()):
+                    it = {"decision_id": int(it)}
+                if not isinstance(it, dict) or it.get("decision_id") is None:
+                    raise CardError("bad_bulk_args", "Each item needs a decision_id.")
+                did = int(it["decision_id"])
+                entry = {"decision_id": did, "card_slug": None, "choice": None}
+                results.append(entry)
+                d = db.get_pending_decision(did)
+                if d is None:
+                    failed += 1
+                    entry.update(status="failed", error={"code": "not_found", "message": f"No such decision: {did}"})
+                    continue
+                entry["card_slug"] = d["post_slug"][len(CARD_DECISION_PREFIX):] if is_card_decision_slug(d["post_slug"]) else None
+                if d["resolved_at"] is not None:
+                    failed += 1
+                    entry.update(status="failed", error={"code": "already_resolved", "message": f"Decision {did} is already resolved."})
+                    continue
+                if d["kind"] not in CARD_DECISION_KINDS or not is_card_decision_slug(d["post_slug"]):
+                    failed += 1
+                    entry.update(status="failed", error={"code": "not_card_decision",
+                                                         "message": f"Decision {did} is a {d['kind']} question; resolve it one at a time."})
+                    continue
+                keys = {o["key"] for o in d["payload"].get("options", [])}
+                choice, choices = it.get("choice"), it.get("choices")
+                if accept_suggested:
+                    sug = d["payload"].get("suggested")
+                    if sug not in keys:
+                        skipped += 1
+                        entry.update(status="skipped", reason="no suggested answer for this question")
+                        continue
+                    choice, choices = sug, None
+                entry["choice"] = choice if choice else choices
+                try:
+                    with tx.savepoint():
+                        resolve_decision(did, choice=choice, choices=choices, actor=actor, batch_id=batch_id)
+                    new_rows = [r for r in db.get_change_rows(batch_id=batch_id) if r["id"] > seen_log_ids]
+                    seen_log_ids = max([seen_log_ids] + [r["id"] for r in new_rows])
+                    entry["changes"] = _changes_from_log(new_rows)
+                    entry["status"] = "would_apply" if dry_run else "applied"
+                    all_changes += entry["changes"]
+                except (CardError, _decisions.DecisionNotFound, _decisions.DecisionAlreadyResolved,
+                        _decisions.UnknownDecisionKind, _decisions.InvalidChoice) as e:
+                    failed += 1
+                    entry.update(status="failed",
+                                 error=e.to_dict() if isinstance(e, CardError) else {"code": type(e).__name__, "message": str(e)})
+            if failed and not partial_ok:
+                raise _BulkAbort()
+    except _BulkAbort:
+        pass
+    wrote = not dry_run and (not failed or partial_ok)
+    if failed and not partial_ok and not dry_run:
+        for e in results:
+            if e["status"] == "applied":
+                e["status"] = "rolled_back"
+    ok = not failed or partial_ok
+    return {"ok": bool(ok), "dry_run": dry_run, "batch_id": batch_id,
+            "applied": sum(1 for e in results if e["status"] == "applied"),
+            "would_apply": sum(1 for e in results if e["status"] == "would_apply"),
+            "skipped": skipped, "failed": failed, "changes": all_changes if (ok or dry_run) else [],
+            "warnings": ([f"{failed} decision(s) can't be applied; " + ("the others were applied." if wrote else "nothing was written.")]
+                         if failed else []),
+            "items": results}
+
+
+# --- Undo and the change log (3.13) -------------------------------------------------
+
+def _undo_rows(target):
+    """Resolves an audit row id (int / digit string shorter than a batch id) or a batch id."""
+    if isinstance(target, bool) or target in (None, ""):
+        raise CardError("bad_undo", "Give an audit id or a batch id.")
+    if isinstance(target, int) or (isinstance(target, str) and target.isdigit() and len(target) < 16):
+        rows = db.get_change_rows(audit_id=int(target))
+    else:
+        rows = db.get_change_rows(batch_id=str(target))
+    if not rows:
+        raise CardError("not_found", f"No change-log entry for {target!r}.")
+    return rows
+
+
+def undo(target, *, force=False, dry_run=False, actor=changes.ACTOR_MCP):
+    """Reverses a change-log entry or a whole batch (spec 3.13). Inverts every row image in
+    reverse order inside one transaction and logs its own row, so an undo is itself undoable.
+    REFUSES (writing nothing) when: a row was made by the migration (restore from the
+    pre-deploy snapshot instead); an entry is already undone; or any affected row no longer
+    equals what the log recorded (someone changed it since: undo_conflict, with the field
+    and values). force=True skips the staleness check and applies best-effort."""
+    rows = _undo_rows(target)
+    for r in rows:
+        if r.get("actor") == changes.ACTOR_MIGRATION:
+            raise CardError("undo_refused", "That change was made by the migration and can't be undone here; restore "
+                            "from the pre-deploy snapshot instead.", {"audit_id": r["id"]})
+        if r.get("undone_by") is not None:
+            raise CardError("undo_refused", f"Entry {r['id']} was already undone (by entry {r['undone_by']}).",
+                            {"audit_id": r["id"], "undone_by": r["undone_by"]})
+        if not r["mutations"]:
+            raise CardError("undo_refused", f"Entry {r['id']} ({r['op']}) recorded no row images, so it can't be undone.",
+                            {"audit_id": r["id"]})
+    batch_id = changes.new_batch_id()
+    applied, slugs = [], []
+    try:
+        with db.transaction(dry_run=dry_run):
+            conn = db.get_conn()
+            for r in sorted(rows, key=lambda x: x["id"], reverse=True):
+                slugs += r["affected_slugs"]
+                for m in reversed(r["mutations"]):
+                    applied.append(db.invert_image(conn, m, force=force))
+            undo_id = db.insert_change_log(conn, "undo", actor, applied, batch_id=batch_id,
+                                           affected_slugs=sorted(set(slugs)))
+            reversed_ids = [r["id"] for r in rows]
+            db.mark_change_rows_undone(reversed_ids, undo_id)
+            # Undoing an undo re-opens the entries that undo had reversed.
+            for r in rows:
+                if r["op"] == "undo":
+                    orig = [o["id"] for o in _rows_undone_by(r["id"])]
+                    db.mark_change_rows_undone(orig, None)
+    except db.UndoConflict as e:
+        raise CardError("undo_conflict", str(e), e.details)
+    flat = _changes_from_log([{"op": "undo", "affected_slugs": sorted(set(slugs)), "mutations": applied}])
+    return Result(True, flat, [], batch_id, dry_run,
+                  {"undone": [r["id"] for r in rows], "undone_ops": [r["op"] for r in rows]})
+
+
+def _rows_undone_by(undo_id):
+    return [r for r in db.list_change_log(limit=100000) if r.get("undone_by") == undo_id]
+
+
+def list_changes(card=None, batch_id=None, limit=50):
+    """Newest-first change-log rows (spec 7.3): {id, op, actor, batch_id, timestamp,
+    affected_slugs, undone_by, mutations}. `card` is a slug or id."""
+    slug = None
+    if card not in (None, ""):
+        c = db.get_project(card)
+        slug = c["slug"] if c else str(card)
+    return [{"id": r["id"], "op": r["op"], "actor": r["actor"], "batch_id": r["batch_id"],
+             "timestamp": r["timestamp"], "affected_slugs": r["affected_slugs"], "undone_by": r.get("undone_by"),
+             "mutations": r["mutations"]} for r in db.list_change_log(card_slug=slug, batch_id=batch_id, limit=limit)]

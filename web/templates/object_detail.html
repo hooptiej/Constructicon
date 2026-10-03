@@ -5,20 +5,44 @@
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
 {% include "_export_builder.html" %}
-<div class="app-main">
-  {# #137: breadcrumb navigation trail, replaced hardcoded back link #}
-  <nav class="breadcrumb-nav" aria-label="Breadcrumb">
-    {% for crumb in breadcrumbs %}
-      {% if crumb.href %}
-        <a href="{{ crumb.href }}" class="breadcrumb-link">{{ crumb.label }}</a>
-        <span class="breadcrumb-separator">›</span>
-      {% else %}
-        <span class="breadcrumb-current" id="object-breadcrumb-current">{{ crumb.label }}</span>
-      {% endif %}
-    {% endfor %}
-  </nav>
-  <div class="detail-layout">
-    <div class="detail-main">
+{% from "_details_group.html" import dp_group %}
+<div class="app-main dp-page">
+  <span class="dp-status-live" id="dp-status-live" role="status" aria-live="polite"></span>
+  {% set hotlink = full_url if item.is_file else full_object_url %}
+
+  {# #137 / #515: breadcrumb trail (through the item's home project when it has one) with Copy link and the
+     More menu (Remove file keep info, Delete entirely, type-specific actions). #}
+  <div class="dp-topbar">
+    <nav class="dp-crumbs" aria-label="Breadcrumb">
+      {% for crumb in breadcrumbs %}
+        {% if crumb.href %}
+          <a href="{{ crumb.href }}">{{ crumb.label }}</a>
+          <span aria-hidden="true">&rsaquo;</span>
+        {% else %}
+          <span class="dp-crumb-current" id="object-breadcrumb-current" aria-current="page">{{ crumb.label }}</span>
+        {% endif %}
+      {% endfor %}
+    </nav>
+    <div class="dp-topbar-actions">
+      <button type="button" class="dp-btn" id="copy-link-btn" data-url="{{ hotlink }}" title="{{ 'Copy the file link (for embedding)' if item.is_file else 'Copy this page link' }}">Copy link</button>
+      <div class="dp-more" data-dp-more>
+        <button type="button" class="dp-btn dp-more-btn" id="object-more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="object-more-menu">More <span aria-hidden="true">&#9662;</span></button>
+        <div class="dp-menu" id="object-more-menu" role="menu" aria-labelledby="object-more-btn" hidden>
+          {# #448: generic type-action buttons for per-type handlers #}
+          {% for a in item.actions %}
+          <button type="button" role="menuitem" class="type-action-btn" data-action="{{ a.key }}" data-confirm="{{ a.confirm }}">{{ a.label }}</button>
+          {% endfor %}
+          {% if item.is_file and not item.redacted %}
+          <button type="button" role="menuitem" class="dp-menu-warn" id="redact-btn">Remove file, keep info (sensitive content)</button>
+          {% endif %}
+          <button type="button" role="menuitem" class="dp-menu-danger" id="delete-btn">Delete entirely</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="dp-hero">
+    <div class="dp-hero-left dp-wide">
       <div class="detail-preview">
         {% if item.redacted %}
           <div class="redacted-placeholder">
@@ -32,11 +56,9 @@
         {% elif item.is_image_file %}
           <img id="preview-img" src="{{ item.url }}" alt="{{ item.filename }}" title="Click to view full size"{% if item.type_metadata.rotation %} style="transform:rotate({{ item.type_metadata.rotation }}deg)"{% endif %}>
         {% elif item.thumb_url %}
-          {# Generic CAPTURE-sourced preview — a PDF's rendered first page
-             today, a future stream/URL screenshot tomorrow (see
-             core/object_types.py/core/thumbnails.py). Anything with a
-             thumbnail concept that isn't the uploaded file itself and isn't
-             a YouTube embed lands here, with zero per-type branching. #}
+          {# Generic CAPTURE-sourced preview — a PDF's rendered first page today, a future stream/URL screenshot
+             tomorrow (see core/object_types.py/core/thumbnails.py). Anything with a thumbnail concept that isn't
+             the uploaded file itself and isn't a YouTube embed lands here, with zero per-type branching. #}
           <div class="capture-preview">
             <img id="preview-img" src="{{ item.thumb_url }}" alt="{{ item.display_name }}" title="Click to view full size"{% if item.type_metadata.rotation %} style="transform:rotate({{ item.type_metadata.rotation }}deg)"{% endif %}>
             {% if item.url %}
@@ -58,15 +80,18 @@
         {% endif %}
       </div>
 
-      {% if item.is_image_file or item.thumb_url %}
-      {# #266: display-only rotation (0/90/180/270), stored in
-         type_metadata.rotation -- never touches the stored file, just how
-         #preview-img (and gallery/project cards elsewhere, via
-         cardRotationStyle in each card-rendering template) renders it. #}
-      <div class="detail-meta" style="margin-top:6px">
-        <button type="button" class="ocr-retry-btn" id="rotate-btn" title="Rotate 90°">⟳ Rotate</button>
-        {% if item.thumb_url %}{# #385: only show if thumbnail is available to refresh #}
-        <button type="button" class="ocr-retry-btn" id="refresh-thumbnail-btn" title="Refresh thumbnail">↻ Refresh thumbnail</button>
+      {# #266: display-only rotation (0/90/180/270), stored in type_metadata.rotation -- never touches the stored file.
+         #385: Refresh thumbnail only when a thumbnail exists. Open full size opens the stored file. #}
+      {% if item.is_image_file or item.thumb_url or (item.url and not item.redacted) %}
+      <div class="dp-preview-tools">
+        {% if item.is_image_file or item.thumb_url %}
+        <button type="button" class="dp-btn" id="rotate-btn" title="Rotate 90°">&#10227; Rotate</button>
+        {% endif %}
+        {% if item.thumb_url %}
+        <button type="button" class="dp-btn" id="refresh-thumbnail-btn" title="Refresh thumbnail">&#8635; Refresh thumbnail</button>
+        {% endif %}
+        {% if item.url and not item.redacted %}
+        <a class="dp-btn" id="open-full-size" href="{{ item.url }}" target="_blank" rel="noopener" style="text-decoration:none">Open full size</a>
         {% endif %}
       </div>
       {% endif %}
@@ -85,8 +110,7 @@
       </div>
       {% endif %}
 
-      {# #135: Properties panel showing file size, original modification date,
-         and type-specific properties (dimensions, duration, etc.) #}
+      {# #135: Properties panel showing file size, original modification date, and type-specific properties #}
       {% if item.file_size_display or item.source_modified_at_display or item.properties %}
       <div class="content-meta-panel">
         <span class="related-panel-label">Properties</span>
@@ -97,15 +121,160 @@
         </div>
       </div>
       {% endif %}
+    </div>
 
-      {% if item.actions %}
-      <div class="detail-panel type-actions">
-        {% for a in item.actions %}
-        <button type="button" class="btn-secondary type-action-btn" data-action="{{ a.key }}" data-confirm="{{ a.confirm }}">{{ a.label }}</button>
-        {% endfor %}
+    <div class="dp-side">
+      <div>
+        {# #241: click the name (or the pencil) to set/clear the display_name override in place. item.display_name
+           is the already-resolved chain (override → filename → content_description → slug). #}
+        <div class="mono" style="font-size:18px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="title-edit" id="object-title-edit" style="min-width:0">
+            <span class="title-edit-text" id="object-title-text" title="Click to rename" style="overflow-wrap:anywhere">{{ item.display_name }}</span>
+            <button type="button" class="title-edit-btn" id="object-title-edit-btn" title="Rename" aria-label="Rename">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20H8L18.5 9.5C19.3284 8.67157 19.3284 7.32843 18.5 6.5L17.5 5.5C16.6716 4.67157 15.3284 4.67157 14.5 5.5L4 16V20Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 7L17 11" stroke="currentColor" stroke-width="1.8"/></svg>
+            </button>
+          </span>
+          {% if item.type_badge %}<span class="type-badge" title="{{ item.type_label }}">{{ item.type_icon }} {{ item.type_badge }}</span>{% endif %}
+        </div>
+        <p class="title-edit-error" id="object-title-error" style="display:none" role="alert"></p>
+        <div class="detail-meta" style="margin-top:8px">
+          <span>Source: {{ item.source_display }}</span>
+          <span>{{ item.uploaded_at_display }}</span>
+        </div>
       </div>
+      {% if item.redacted %}
+        <p class="error-text">This file was redacted — the link below no longer resolves to an image.</p>
       {% endif %}
 
+      {# ---- ABOUT: type, description, tags, per-type fields (#449). Saves description + tags + type_metadata in one POST. ---- #}
+      {% set about_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Type</dt><dd>{{ item.type_icon }} {{ item.type_label }}</dd></div>
+        <div class="dp-row"><dt>Description</dt><dd>{% if item.description %}<span class="dp-pre">{{ item.description }}</span>{% else %}<span class="dp-muted">None yet</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Tags</dt><dd>{% if item.tags %}<span class="dp-chips">{% for t in item.tags %}<span class="chip">{{ t }}</span>{% endfor %}</span>{% else %}<span class="dp-muted">None yet</span>{% endif %}</dd></div>
+        {% for f in item.edit_fields %}
+        <div class="dp-row"><dt>{{ f.label }}</dt><dd>{% if f.value %}<span class="dp-pre">{{ f.value | string | truncate(280) }}</span>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>
+        {% endfor %}
+        <div class="dp-row"><dt>Link</dt><dd>{{ hotlink }}</dd></div>
+      </dl>
+      {% endset %}
+      {% set about_edit %}
+      <div class="dp-field">
+        <label for="item-description">Description</label>
+        <textarea class="input" id="item-description" name="description" rows="3" placeholder="What does this show?">{{ item.description }}</textarea>
+      </div>
+      <div class="dp-field">
+        <label for="tag-add-input">Tags</label>
+        <div class="tag-input-box" id="tag-box">
+          <input class="tag-add-input" id="tag-add-input" placeholder="+ Add tag, press Enter" autocomplete="off">
+          <div class="tag-suggestions" id="tag-suggestions" style="display:none"></div>
+        </div>
+      </div>
+      {# #449: generic edit fields per type #}
+      {% for f in item.edit_fields %}
+      <div class="dp-field">
+        <label for="edit-field-{{ loop.index }}">{{ f.label }}</label>
+        {% if f.input in ('textarea', 'markdown') %}
+        <textarea class="input edit-field" id="edit-field-{{ loop.index }}" data-key="{{ f.key }}" rows="8" placeholder="{{ f.help_text }}">{{ f.value or '' }}</textarea>
+        {% else %}
+        <input class="input edit-field" id="edit-field-{{ loop.index }}" type="text" data-key="{{ f.key }}" placeholder="{{ f.help_text }}" value="{{ f.value or '' }}">
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% endset %}
+
+      {# ---- WHERE IT LIVES: projects + related. Every add / remove acts immediately (own endpoints). ---- #}
+      {% set where_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Projects</dt><dd>{% for p in item.projects %}<a href="/project/{{ p.slug }}">{{ p.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">Not in any project</span>{% endfor %}</dd></div>
+      </dl>
+      {% endset %}
+      {% set where_edit %}
+      {# #47: project membership can be multiple and editable after the fact: current memberships as removable chips
+         plus a dropdown to add another, including "+ New project…". #}
+      <div class="dp-field">
+        <span class="dp-label" id="project-chip-label">Projects</span>
+        <div class="tag-input-box" id="project-chip-box" role="group" aria-labelledby="project-chip-label"></div>
+        <label class="dp-sr-label" for="project-add-select">Add to project</label>
+        <select class="input" id="project-add-select">
+          <option value="">+ Add to project...</option>
+        </select>
+        <label class="dp-sr-label" for="detail-new-project-input">New project name</label>
+        <input class="input mono" id="detail-new-project-input" placeholder="New project name" style="display:none">
+      </div>
+      <div class="dp-field">
+        <span class="dp-label">Related</span>
+        <div class="dp-link-row">
+          <button type="button" class="dp-btn" id="add-related-btn">+ Add related</button>
+          <button type="button" class="dp-btn" id="related-to-project-btn" title="Create a new project from this item and everything related to it">Turn into project</button>
+        </div>
+      </div>
+      {% endset %}
+      {# #52: relations are type-agnostic on the backend — shown for every object type. Remove (x) buttons only show while editing. #}
+      {% set where_static %}
+      <div class="related-panel">
+        <span class="related-panel-label" id="related-label">Related</span>
+        <div class="related-grid" id="related-grid" role="group" aria-labelledby="related-label"></div>
+      </div>
+      {% endset %}
+
+      {# ---- DATES: effective date + the timeline date override ---- #}
+      {% set dates_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Effective date</dt><dd>{{ item.effective_date_display }} <span class="dp-muted">({{ 'set by hand' if item.display_date_override else 'from the file' }})</span></dd></div>
+      </dl>
+      {% endset %}
+      {% set dates_edit %}
+      <div class="dp-field">
+        <label for="timeline-date-input">Timeline date</label>
+        <div class="dp-link-row">
+          <input class="input" type="datetime-local" id="timeline-date-input" name="display_date" value="{{ item.display_date_override_input or '' }}" style="width:auto">
+          <button type="button" class="dp-btn" id="timeline-date-reset">Reset</button>
+        </div>
+        <p class="dp-note">{% if item.display_date_override %}Manually set.{% else %}Computed: {{ item.effective_date_display }}{% endif %}</p>
+      </div>
+      {% endset %}
+
+      {# ---- ORIGIN: provenance, highlight, brand asset + role. Saved together in one POST (#341, #350). ---- #}
+      {% set origin_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Provenance</dt><dd>{% if item.provenance %}{{ item.provenance }}{% else %}<span class="dp-muted">Not set</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Highlight</dt><dd>{{ 'Yes' if item.highlight else 'No' }}</dd></div>
+        <div class="dp-row"><dt>Brand asset</dt><dd>{{ 'Yes' if item.is_brand_asset else 'No' }}{% if item.is_brand_asset and item.brand_role %} <span class="dp-muted">&middot; {{ item.brand_role }}</span>{% endif %}</dd></div>
+      </dl>
+      {% endset %}
+      {% set origin_edit %}
+      {% set known_role = item.brand_role in BRAND_ROLES %}
+      <div class="dp-field">
+        <label for="provenance-select">Provenance <span class="optional">(optional)</span></label>
+        <select class="input" id="provenance-select">
+          <option value="">— unset —</option>
+          {% for prov in PROVENANCE_TYPES %}<option value="{{ prov }}"{% if item.provenance == prov %} selected{% endif %}>{{ prov }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="dp-field dp-field-inline">
+        <input type="checkbox" id="highlight-checkbox"{% if item.highlight %} checked{% endif %}>
+        <label for="highlight-checkbox">Highlight <span class="optional">(featured item)</span></label>
+      </div>
+      <div class="dp-field dp-field-inline">
+        <input type="checkbox" id="brand-asset-checkbox"{% if item.is_brand_asset %} checked{% endif %}>
+        <label for="brand-asset-checkbox">Brand asset <span class="optional">(reusable branding object)</span></label>
+      </div>
+      <div class="dp-field">
+        <label for="brand-role-select">Brand role <span class="optional">(logo, icon, etc.)</span></label>
+        <select class="input" id="brand-role-select">
+          <option value="">— unset —</option>
+          {% for role in BRAND_ROLES %}<option value="{{ role }}"{% if item.brand_role == role %} selected{% endif %}>{{ role }}</option>{% endfor %}
+          <option value="__custom__"{% if item.brand_role and not known_role %} selected{% endif %}>— custom —</option>
+        </select>
+        <label class="dp-sr-label" for="brand-role-custom">Custom brand role</label>
+        <input class="input mono" id="brand-role-custom" placeholder="Custom role (e.g. 'swag-design')" value="{{ item.brand_role if item.brand_role and not known_role else '' }}" style="{% if not (item.brand_role and not known_role) %}display:none{% endif %}">
+      </div>
+      {% endset %}
+
+      {# ---- READ FROM THE FILE: OCR (#90) and the suggested caption (#239). Nothing here is a form: the
+         buttons act on their own, and "Use as description" opens ABOUT with the text filled in. ---- #}
+      {% set read_view %}
       {% if item.ocr_capable %}
       <div class="ocr-panel" id="ocr-panel" style="display:none">
         <div class="ocr-panel-header">
@@ -115,18 +284,15 @@
         </div>
         <details class="ocr-disclosure" id="ocr-disclosure" style="display:none">
           <summary>
-            <svg class="disclosure-caret" width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg class="disclosure-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             OCR text
           </summary>
           <pre class="ocr-text mono" id="ocr-text-content"></pre>
         </details>
       </div>
       {% endif %}
-
-      {# #239: auto-caption *suggestion* from the local vision model
-         (core/captions.py) — lives in type_metadata.auto_caption, never
-         written into description on its own. "Use as description" copies
-         it into the form field for the owner to edit/save deliberately. #}
+      {# #239: auto-caption *suggestion* from the local vision model (core/captions.py) — lives in
+         type_metadata.auto_caption, never written into description on its own. #}
       {% if item.caption_capable %}
       <div class="ocr-panel" id="caption-panel">
         <div class="ocr-panel-header">
@@ -138,153 +304,29 @@
         <div class="caption-actions" id="caption-actions" style="display:none">
           <button type="button" class="ocr-retry-btn" id="caption-use-btn">Use as description</button>
         </div>
-        {# #251: provenance for whichever caption ended up in description —
-           set the moment "Use as description" is clicked, independent of
-           auto_caption_step (which the next Regenerate click overwrites). #}
+        {# #251: provenance for whichever caption ended up in description #}
         <p class="caption-used-note" id="caption-used-note" style="display:none;font-size:0.85em;color:#6E6B57;margin-top:4px"></p>
       </div>
       {% endif %}
+      {% endset %}
 
-      {# #52: relations are type-agnostic on the backend (core/db.py's
-         add_relation/remove_relation, #16) — this used to be gated on
-         item.is_file, which hid "Add related" for every content-only row
-         (youtube, document posts) with no functional reason to. Shown for
-         every object type now. #}
-      <div class="related-panel">
-        <div class="related-panel-header">
-          <span class="related-panel-label">Related</span>
-          <button type="button" class="ocr-retry-btn" id="add-related-btn">+ Add related</button>
-          <button type="button" class="ocr-retry-btn" id="related-to-project-btn" title="Create a new project from this item and everything related to it">Turn into project</button>
-        </div>
-        <div class="related-grid" id="related-grid"></div>
-      </div>
-      <div class="related-panel" id="similar-panel" style="display:none">
-        <div class="related-panel-header">
-          <span class="related-panel-label">Similar</span>
-        </div>
-        <div class="related-grid" id="similar-grid"></div>
-      </div>
-    </div>
-    <div class="detail-panel">
-      <div>
-        {# #241: click the name (or the pencil) to set/clear the display_name
-           override in place — see the title-edit script at the bottom.
-           item.display_name here is the already-resolved chain
-           (override → filename → content_description → slug), so an item
-           that's never been renamed still shows its filename as before. #}
-        <div class="mono" style="font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span class="title-edit" id="object-title-edit" style="min-width:0">
-            <span class="title-edit-text" id="object-title-text" title="Click to rename">{{ item.display_name }}</span>
-            <button type="button" class="title-edit-btn" id="object-title-edit-btn" title="Rename" aria-label="Rename">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M4 20H8L18.5 9.5C19.3284 8.67157 19.3284 7.32843 18.5 6.5L17.5 5.5C16.6716 4.67157 15.3284 4.67157 14.5 5.5L4 16V20Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 7L17 11" stroke="currentColor" stroke-width="1.8"/></svg>
-            </button>
-          </span>
-          {% if item.type_badge %}<span class="type-badge" title="{{ item.type_label }}">{{ item.type_icon }} {{ item.type_badge }}</span>{% endif %}
-        </div>
-        <p class="title-edit-error" id="object-title-error" style="display:none"></p>
-        <div class="detail-meta" style="margin-top:8px">
-          <span>Source: {{ item.source_display }}</span>
-          <span>{{ item.uploaded_at_display }}</span>
-        </div>
-      </div>
-      {% if item.redacted %}
-        <p class="error-text">This file was redacted — the link below no longer resolves to an image.</p>
-      {% endif %}
-      {% if item.is_file %}
-      <div class="link-row">
-        <input type="text" readonly value="{{ full_url }}" id="hotlink-input">
-        <button type="button" id="copy-link-btn">Copy link</button>
-      </div>
-      {% else %}
-      <div class="link-row">
-        <input type="text" readonly value="{{ full_object_url }}" id="hotlink-input">
-        <button type="button" id="copy-link-btn">Copy page link</button>
-      </div>
-      {% endif %}
-      <form id="detail-form">
-        <div class="field">
-          <label>DESCRIPTION</label>
-          <textarea class="input" name="description" rows="3" placeholder="What does this show?">{{ item.description }}</textarea>
-        </div>
-        <div class="field" style="margin-top:15px">
-          <label>TIMELINE DATE</label>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input class="input" type="datetime-local" id="timeline-date-input" name="display_date" value="{{ item.display_date_override_input or '' }}">
-            <button type="button" class="btn-secondary" id="timeline-date-reset">Reset</button>
-          </div>
-          <div style="font-size:12px;color:var(--placeholder);margin-top:4px">
-            {% if item.display_date_override %}Manually set.{% else %}Computed: {{ item.effective_date_display }}{% endif %}
-          </div>
-        </div>
-        {# #449: generic edit fields per type, replacing the document-only WRITE-UP block #}
-        {% for f in item.edit_fields %}
-        <div class="field" style="margin-top:15px">
-          <label>{{ f.label }}</label>
-          {% if f.input in ('textarea', 'markdown') %}
-          <textarea class="input edit-field" data-key="{{ f.key }}" rows="8" placeholder="{{ f.help_text }}">{{ f.value or '' }}</textarea>
-          {% else %}
-          <input class="input edit-field" type="text" data-key="{{ f.key }}" placeholder="{{ f.help_text }}" value="{{ f.value or '' }}">
-          {% endif %}
-        </div>
-        {% endfor %}
-        <div class="field" style="margin-top:15px">
-          <label>TAGS</label>
-          <div class="tag-input-box" id="tag-box">
-            <input class="tag-add-input" id="tag-add-input" placeholder="+ Add tag, press Enter" autocomplete="off">
-            <div class="tag-suggestions" id="tag-suggestions" style="display:none"></div>
-          </div>
-        </div>
-        <div class="field" style="margin-top:15px">
-          <label>PROJECTS <span class="optional">(optional)</span></label>
-          <div class="tag-input-box" id="project-chip-box"></div>
-          <select class="input" id="project-add-select" style="margin-top:6px">
-            <option value="">+ Add to project...</option>
-          </select>
-          <input class="input mono" id="detail-new-project-input" placeholder="New project name" style="display:none;margin-top:6px">
-        </div>
-        <div class="field" style="margin-top:15px">
-          <label>PROVENANCE <span class="optional">(optional)</span></label>
-          <select class="input" id="provenance-select">
-            <option value="">— unset —</option>
-            {% for prov in PROVENANCE_TYPES %}<option value="{{ prov }}">{{ prov }}</option>{% endfor %}
-          </select>
-          <p class="save-confirm" id="provenance-confirm" style="display:none;margin-top:8px;font-size:12px">Saved.</p>
-        </div>
-        <div class="field" style="margin-top:15px">
-          <label style="display:flex;align-items:center;gap:8px">
-            <input type="checkbox" id="highlight-checkbox">
-            <span>HIGHLIGHT <span class="optional">(featured item)</span></span>
-          </label>
-          <p class="save-confirm" id="highlight-confirm" style="display:none;margin-top:8px;font-size:12px">Saved.</p>
-        </div>
-        <div class="field" style="margin-top:15px">
-          <label style="display:flex;align-items:center;gap:8px">
-            <input type="checkbox" id="brand-asset-checkbox">
-            <span>BRAND ASSET <span class="optional">(reusable branding object)</span></span>
-          </label>
-          <p class="save-confirm" id="brand-asset-confirm" style="display:none;margin-top:8px;font-size:12px">Saved.</p>
-        </div>
-        <div class="field" style="margin-top:12px">
-          <label>BRAND ROLE <span class="optional">(logo, icon, etc.)</span></label>
-          <select class="input" id="brand-role-select">
-            <option value="">— unset —</option>
-            {% for role in BRAND_ROLES %}<option value="{{ role }}">{{ role }}</option>{% endfor %}
-            <option value="">— custom —</option>
-          </select>
-          <input class="input mono" id="brand-role-custom" placeholder="Custom role (e.g. 'swag-design')" style="display:none;margin-top:6px">
-          <p class="save-confirm" id="brand-role-confirm" style="display:none;margin-top:8px;font-size:12px">Saved.</p>
-        </div>
-        <p class="error-text" id="save-error" style="display:none;margin-top:15px"></p>
-        <p class="save-confirm" id="save-confirm" style="display:none;margin-top:15px">Saved.</p>
-        <button class="btn-primary" type="submit" style="margin-top:15px">Save changes</button>
-      </form>
-      <div class="danger-zone">
-        {% if item.is_file and not item.redacted %}
-        <button type="button" class="btn-warn" id="redact-btn">Remove file, keep info (sensitive content)</button>
+      <div class="dp-panel">
+        {{ dp_group("about", "ABOUT", about_view, about_edit, wide=true) }}
+        {{ dp_group("where", "WHERE IT LIVES", where_view, where_edit, where_static, done_only=true) }}
+        {{ dp_group("dates", "DATES", dates_view, dates_edit) }}
+        {{ dp_group("origin", "ORIGIN", origin_view, origin_edit) }}
+        {% if item.ocr_capable or item.caption_capable %}
+        {{ dp_group("read", "READ FROM THE FILE", read_view, editable=false) }}
         {% endif %}
-        <button type="button" class="btn-danger" id="delete-btn">Delete entirely</button>
       </div>
     </div>
+  </div>
+
+  <div class="related-panel" id="similar-panel" style="display:none">
+    <div class="related-panel-header">
+      <span class="related-panel-label" id="similar-label">Similar</span>
+    </div>
+    <div class="related-grid" id="similar-grid" role="group" aria-labelledby="similar-label"></div>
   </div>
 </div>
 
@@ -459,7 +501,9 @@ if (captionPanel) {
   document.getElementById('caption-use-btn').addEventListener('click', async () => {
     // Fill (or append to) the description field — the owner still has to
     // hit Save, so this never silently changes the stored description.
-    const ta = document.querySelector('#detail-form textarea[name="description"]');
+    // #515: the description field lives in the ABOUT group's form; open it first.
+    window.DetailsPanel.edit('about');
+    const ta = document.getElementById('item-description');
     if (!ta || !captionText) return;
     ta.value = ta.value.trim() ? `${ta.value.trim()}\n${captionText}` : captionText;
     ta.focus();
@@ -764,7 +808,7 @@ async function addToProject(projectId) {
   form.append('project_id', projectId);
   const res = await fetch('/api/image/{{ item.slug }}/project', { method: 'POST', body: form });
   if (res.ok) {
-    currentProjects = await res.json();
+    currentProjects = await res.json(); window.DetailsPanel.markDirty('where');
     renderProjectChips();
     loadProjectOptions();
   } else {
@@ -778,7 +822,7 @@ async function removeFromProject(projectId) {
   form.append('project_id', projectId);
   const res = await fetch('/api/image/{{ item.slug }}/project/remove', { method: 'POST', body: form });
   if (res.ok) {
-    currentProjects = await res.json();
+    currentProjects = await res.json(); window.DetailsPanel.markDirty('where');
     renderProjectChips();
     loadProjectOptions();
   }
@@ -836,21 +880,22 @@ tagAddInput.addEventListener('keydown', (e) => {
       addObjectTag(tagAddInput.value);
     }
   } else if (e.key === 'Escape') {
+    // Closing the suggestion list must not also cancel the whole ABOUT group (#515).
+    if (tagSuggestions.style.display === 'block') e.stopPropagation();
     hideObjectTagSuggestions();
   }
 });
 
 document.getElementById('copy-link-btn').addEventListener('click', async () => {
-  const input = document.getElementById('hotlink-input');
-  input.select();
+  const btn = document.getElementById('copy-link-btn');
+  const url = btn.dataset.url;
   try {
-    await navigator.clipboard.writeText(input.value);
-    const btn = document.getElementById('copy-link-btn');
+    await navigator.clipboard.writeText(url);
     const original = btn.textContent;
     btn.textContent = 'Copied';
     setTimeout(() => { btn.textContent = original; }, 1500);
   } catch (e) {
-    document.execCommand('copy');
+    window.prompt('Copy this link:', url);
   }
 });
 
@@ -891,193 +936,81 @@ document.getElementById('timeline-date-reset').addEventListener('click', async (
   }
 });
 
-document.getElementById('detail-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const saveError = document.getElementById('save-error');
-  const saveConfirm = document.getElementById('save-confirm');
-  saveError.style.display = 'none';
-  saveConfirm.style.display = 'none';
-  const form = new FormData();
-  form.append('description', e.target.description.value);
-  form.append('tags', JSON.stringify(tags));
-  const timelineDateInput = document.getElementById('timeline-date-input');
-  if (timelineDateInput && timelineDateInput.value) {
-    form.append('display_date', timelineDateInput.value);
-  }
-  // #47: Client is no longer editable here (replaced by the Projects
-  // editor above) — client/GET /api/clients/sync_clients.py are left
-  // alone per #1's decision, this just stops the detail page's save form
-  // from touching that field at all.
-  // #449: collect all edit-field inputs (per-type metadata fields) into type_metadata
-  const fields = {};
-  document.querySelectorAll('.edit-field').forEach((el) => {
-    fields[el.dataset.key] = el.value;
-  });
-  if (Object.keys(fields).length > 0) {
-    form.append('type_metadata', JSON.stringify(fields));
-  }
-  const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
-  if (res.ok) {
-    saveConfirm.style.display = 'block';
-  } else {
-    const body = await res.json().catch(() => ({ detail: 'Save failed' }));
-    saveError.textContent = body.detail || 'Save failed';
-    saveError.style.display = 'block';
-  }
-});
-
-// #341: Provenance selector — save immediately on change
-const provenanceSelect = document.getElementById('provenance-select');
-const provenanceConfirm = document.getElementById('provenance-confirm');
-if (provenanceSelect) {
-  provenanceSelect.value = {{ item.provenance | tojson }} || '';
-  provenanceSelect.addEventListener('change', async () => {
-    provenanceConfirm.style.display = 'none';
-    const form = new FormData();
-    form.append('provenance', provenanceSelect.value);
-    try {
-      const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
-      if (res.ok) {
-        provenanceConfirm.style.display = 'block';
-        setTimeout(() => { provenanceConfirm.style.display = 'none'; }, 2000);
-      } else {
-        alert('Failed to save provenance');
-      }
-    } catch (err) {
-      alert('Failed to save provenance');
-    }
-  });
-}
-
-// #341: Highlight toggle — save immediately on change
-const highlightCheckbox = document.getElementById('highlight-checkbox');
-const highlightConfirm = document.getElementById('highlight-confirm');
-if (highlightCheckbox) {
-  highlightCheckbox.checked = {{ item.highlight | tojson }};
-  highlightCheckbox.addEventListener('change', async () => {
-    highlightConfirm.style.display = 'none';
-    const form = new FormData();
-    // Always send the field so the backend (which acts on "highlight" being
-    // present) can CLEAR it when unchecked, not just set it when checked.
-    form.append('highlight', highlightCheckbox.checked ? 'true' : '');
-    try {
-      const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
-      if (res.ok) {
-        highlightConfirm.style.display = 'block';
-        setTimeout(() => { highlightConfirm.style.display = 'none'; }, 2000);
-      } else {
-        alert('Failed to save highlight');
-      }
-    } catch (err) {
-      alert('Failed to save highlight');
-    }
-  });
-}
-
-// #350: Brand asset controls — checkbox + role selector
+// #515: details-panel groups. Each group's Save calls the SAME endpoint the old controls called
+// (POST /api/image/{slug}, same field names); the generic edit / save / cancel mechanics are in
+// static/js/details.js. A refusal is thrown as an Error so the group shows it inline.
 (function () {
-  const brandAssetCheckbox = document.getElementById('brand-asset-checkbox');
-  const brandAssetConfirm = document.getElementById('brand-asset-confirm');
-  const brandRoleSelect = document.getElementById('brand-role-select');
-  const brandRoleCustom = document.getElementById('brand-role-custom');
-  const brandRoleConfirm = document.getElementById('brand-role-confirm');
-
-  if (!brandAssetCheckbox) return;
-
-  // Initialize checkbox from item state
-  brandAssetCheckbox.checked = {{ item.is_brand_asset | tojson }};
-  if (brandRoleSelect) {
-    const currentRole = {{ item.brand_role | tojson }};
-    const hasKnownRole = currentRole && {{ BRAND_ROLES | tojson }}.includes(currentRole);
-    if (hasKnownRole) {
-      brandRoleSelect.value = currentRole;
-    } else if (currentRole) {
-      brandRoleSelect.value = '';
-      brandRoleCustom.value = currentRole;
-      brandRoleCustom.style.display = 'block';
+  const DP = window.DetailsPanel;
+  async function post(form) {
+    const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error((body.error && body.error.message) || body.detail || 'Save failed');
     }
   }
 
-  // Brand asset checkbox save
-  brandAssetCheckbox.addEventListener('change', async () => {
-    brandAssetConfirm.style.display = 'none';
-    const form = new FormData();
-    form.append('is_brand_asset', brandAssetCheckbox.checked ? '1' : '');
-    try {
-      const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
-      if (res.ok) {
-        brandAssetConfirm.style.display = 'block';
-        setTimeout(() => { brandAssetConfirm.style.display = 'none'; }, 2000);
-      } else {
-        alert('Failed to save brand asset status');
-      }
-    } catch (err) {
-      alert('Failed to save brand asset status');
-    }
+  // ABOUT: description + tags + the per-type fields (type_metadata), exactly what "Save changes" sent.
+  const initialTags = tags.slice();
+  DP.register('about', {
+    cancel: () => { tags = initialTags.slice(); renderTags(); hideObjectTagSuggestions(); tagAddInput.value = ''; },
+    save: async () => {
+      const form = new FormData();
+      form.append('description', document.getElementById('item-description').value);
+      form.append('tags', JSON.stringify(tags));
+      const fields = {};
+      document.querySelectorAll('.edit-field').forEach((el) => { fields[el.dataset.key] = el.value; });
+      if (Object.keys(fields).length > 0) form.append('type_metadata', JSON.stringify(fields));
+      await post(form);
+    },
   });
 
-  // Brand role select — toggle custom input on change
-  if (brandRoleSelect) {
-    brandRoleSelect.addEventListener('change', async () => {
-      brandRoleConfirm.style.display = 'none';
-      const selectedRole = brandRoleSelect.value;
-      let roleValue = selectedRole;
+  // WHERE IT LIVES: projects and related act immediately (their own endpoints); Done closes.
+  DP.register('where', { doneOnly: true });
 
-      // If "— custom —" is selected, show custom input and use its value
-      if (selectedRole === '') {
-        const lastOption = brandRoleSelect.options[brandRoleSelect.options.length - 1];
-        if (lastOption.textContent.includes('custom')) {
-          brandRoleCustom.style.display = 'block';
-          if (brandRoleCustom.value) {
-            roleValue = brandRoleCustom.value;
-          } else {
-            return; // Don't save yet, user needs to type a custom role
-          }
-        } else {
-          // Regular unset
-          brandRoleCustom.style.display = 'none';
-          roleValue = '';
-        }
-      } else {
-        // Known role selected, hide custom input
-        brandRoleCustom.style.display = 'none';
-      }
-
-      const form = new FormData();
-      form.append('brand_role', roleValue);
-      try {
-        const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
-        if (res.ok) {
-          brandRoleConfirm.style.display = 'block';
-          setTimeout(() => { brandRoleConfirm.style.display = 'none'; }, 2000);
-        } else {
-          alert('Failed to save brand role');
-        }
-      } catch (err) {
-        alert('Failed to save brand role');
-      }
-    });
-
-    // Custom input blur/enter saves
-    if (brandRoleCustom) {
-      brandRoleCustom.addEventListener('change', async () => {
-        const roleValue = brandRoleCustom.value || '';
+  // DATES: the timeline date override (Reset acts immediately).
+  const dateInput = document.getElementById('timeline-date-input');
+  let savedDate = dateInput.value;
+  DP.register('dates', {
+    save: async () => {
+      if (dateInput.value && dateInput.value !== savedDate) {
         const form = new FormData();
-        form.append('brand_role', roleValue);
-        try {
-          const res = await fetch('/api/image/{{ item.slug }}', { method: 'POST', body: form });
-          if (res.ok) {
-            brandRoleConfirm.style.display = 'block';
-            setTimeout(() => { brandRoleConfirm.style.display = 'none'; }, 2000);
-          } else {
-            alert('Failed to save custom brand role');
-          }
-        } catch (err) {
-          alert('Failed to save custom brand role');
-        }
-      });
-    }
-  }
+        form.append('display_date', dateInput.value);
+        await post(form);
+        savedDate = dateInput.value;
+      }
+    },
+  });
+
+  // ORIGIN: provenance (#341), highlight (#341), brand asset + role (#350), sent together, changed fields only.
+  const provSel = document.getElementById('provenance-select');
+  const hlBox = document.getElementById('highlight-checkbox');
+  const brandBox = document.getElementById('brand-asset-checkbox');
+  const roleSel = document.getElementById('brand-role-select');
+  const roleCustom = document.getElementById('brand-role-custom');
+  function roleValue() { return roleSel.value === '__custom__' ? roleCustom.value.trim() : roleSel.value; }
+  function syncRole() { roleCustom.style.display = roleSel.value === '__custom__' ? 'block' : 'none'; }
+  roleSel.addEventListener('change', syncRole);
+  const snap = () => ({ p: provSel.value, h: hlBox.checked, b: brandBox.checked, r: roleValue() });
+  let savedOrigin = snap();
+  DP.register('origin', {
+    cancel: syncRole,
+    save: async () => {
+      const cur = snap();
+      if (cur.r && !cur.b) throw new Error('Tick "Brand asset" to save a brand role.');
+      const form = new FormData();
+      let any = false;
+      if (cur.p !== savedOrigin.p) { form.append('provenance', cur.p); any = true; }
+      // Always send highlight when it changed so the backend can CLEAR it, not just set it.
+      if (cur.h !== savedOrigin.h) { form.append('highlight', cur.h ? 'true' : ''); any = true; }
+      if (cur.b !== savedOrigin.b || cur.r !== savedOrigin.r) {
+        form.append('is_brand_asset', cur.b ? '1' : '');
+        if (cur.b && cur.r) form.append('brand_role', cur.r);
+        any = true;
+      }
+      if (any) await post(form);
+      savedOrigin = cur;
+    },
+  });
 })();
 
 document.addEventListener('constructicon:upload-complete', (e) => {
@@ -1198,7 +1131,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
         form.append('related_slug', btn.dataset.slug);
         const res = await fetch('/api/image/{{ item.slug }}/related/remove', { method: 'POST', body: form });
         if (res.ok) {
-          relatedItems = await res.json();
+          relatedItems = await res.json(); window.DetailsPanel.markDirty('where');
           renderRelated();
         }
       });
@@ -1267,7 +1200,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     form.append('related_slug', btn.dataset.slug);
     const res = await fetch('/api/image/{{ item.slug }}/related', { method: 'POST', body: form });
     if (res.ok) {
-      relatedItems = await res.json();
+      relatedItems = await res.json(); window.DetailsPanel.markDirty('where');
       renderRelated();
       relatedModalBackdrop.classList.remove('active');
     }
@@ -1304,7 +1237,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
         form.append('related_slug', btn.dataset.slug);
         const res = await fetch('/api/image/{{ item.slug }}/related', { method: 'POST', body: form });
         if (res.ok) {
-          relatedItems = await res.json();
+          relatedItems = await res.json(); window.DetailsPanel.markDirty('where');
           renderRelated();
           loadSimilar();
         }

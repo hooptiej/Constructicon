@@ -112,6 +112,13 @@ exist yet.
   to a running instance over HTTP (`--base-url`), the same discipline the
   app's own UI would use, rather than writing to the DB directly — see
   individual script docstrings for the reasoning and any exceptions.
+- **The details panel (#515)** — the project and item pages edit through one
+  grouped panel: `templates/_details_group.html` (the `dp_group` macro: a
+  fact-sheet view plus a per-group edit form), `static/js/details.js` (edit /
+  save / cancel mechanics, the More menu, the "Needs your input" strip) and
+  `static/css/details.css`. A group's Save calls the same `/api/...` endpoints
+  the old scattered controls called; new fields go into a group, not back onto
+  the page loose. Live pages only: nothing here touches the static export.
 
 ## Adding an object type
 

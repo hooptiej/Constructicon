@@ -124,18 +124,14 @@
     <p class="dp-error hp-error" id="hobby-error" role="alert"></p>
 
     {% if active_nodes or inactive_nodes %}
-    {% if active_nodes %}
-    <div id="hobby-active-zone">
-      <h3 class="zone-heading">Active</h3>
-      <div class="hp-row" id="hobby-active-row">{{ project_nodes(active_nodes, 'a') }}</div>
+    {# Owner, 2026-10-03: Active and Inactive share ONE flowing row (no dead space after a short
+       Active zone); a vertical divider marks where the inactive cards start. #}
+    <h3 class="zone-heading">{{ 'Active' if active_nodes else 'Inactive' }}</h3>
+    <div class="hp-row" id="hobby-projects-row">
+      {{ project_nodes(active_nodes, 'a') }}
+      {% if active_nodes and inactive_nodes %}<div class="hp-divider" role="separator" aria-label="Inactive projects follow"><span>Inactive</span></div>{% endif %}
+      {{ project_nodes(inactive_nodes, 'i') }}
     </div>
-    {% endif %}
-    {% if inactive_nodes %}
-    <div id="hobby-inactive-zone">
-      <h3 class="zone-heading">Inactive</h3>
-      <div class="hp-row" id="hobby-inactive-row">{{ project_nodes(inactive_nodes, 'i') }}</div>
-    </div>
-    {% endif %}
     {% else %}
     <p class="empty-state">No member projects yet.</p>
     {% endif %}
@@ -236,12 +232,24 @@
       oldest: (a, b) => Number(a.dataset.start) - Number(b.dataset.start),
       az: (a, b) => (a.dataset.title || '').localeCompare(b.dataset.title || ''),
     };
-    projSort.addEventListener('change', () => {
-      ['hobby-active-row', 'hobby-inactive-row'].forEach(id => {
-        const row = document.getElementById(id);
-        if (!row) return;
-        Array.from(row.children).filter(c => c.classList.contains('hp-block')).sort(SORT[projSort.value]).forEach(b => row.appendChild(b));
+    // One row: blocks before the divider are Active, after it Inactive. Sort each side on its own,
+    // so Active always stays ahead of the divider.
+    const projRow = document.getElementById('hobby-projects-row');
+    const divider = projRow ? projRow.querySelector('.hp-divider') : null;
+    if (projRow) {
+      let zone = 'a';
+      Array.from(projRow.children).forEach(c => {
+        if (c === divider) { zone = 'i'; return; }
+        if (c.classList.contains('hp-block')) c.dataset.zone = divider ? zone : 'a';
       });
+    }
+    projSort.addEventListener('change', () => {
+      if (!projRow) return;
+      const by = SORT[projSort.value];
+      const blocks = Array.from(projRow.children).filter(c => c.classList.contains('hp-block'));
+      blocks.filter(b => b.dataset.zone === 'a').sort(by).forEach(b => projRow.appendChild(b));
+      if (divider) projRow.appendChild(divider);
+      blocks.filter(b => b.dataset.zone !== 'a').sort(by).forEach(b => projRow.appendChild(b));
     });
   }
 

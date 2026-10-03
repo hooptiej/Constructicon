@@ -29,7 +29,8 @@ from starlette.datastructures import FormData
 
 from core import automatch, backup, captions, card_rules, cards, curation_queue, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
 from core import version as version_info
-from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
+from core import provenance_options
+from core.db import PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()
 
@@ -1454,7 +1455,8 @@ def project_detail_page(request: Request, slug: str):
             "suggest_credit": db.distinct_card_values("provenance_credit"),
             "suggest_whereabouts_note": db.distinct_card_values("whereabouts_note"),
             "card_whereabouts_options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
-            "card_provenance_options": [{"key": k, "label": card_rules.CARD_PROVENANCE_LABELS[k]} for k in card_rules.CARD_PROVENANCE],
+            # #529: the live editable list, plus this card's own value if it has since been retired.
+            "card_provenance_options": provenance_options.picker_options("card", project.get("provenance")),
             "card_queue": _card_queue_strip(project["slug"]),
             # #515: the "Part of" parent, for the Identity group's fact sheet.
             "parent_card": db.get_project(project["parent_id"]) if project.get("parent_id") else None,
@@ -1496,7 +1498,7 @@ def unfiled_page(request: Request):
     unfiled_items = _public_items(db.list_unfiled_items())
     return templates.TemplateResponse(
         request, "unfiled.html",
-        {"unfiled_items": unfiled_items, "PROVENANCE_TYPES": PROVENANCE_TYPES},
+        {"unfiled_items": unfiled_items, "file_provenance_options": provenance_options.picker_options("file")},
     )
 
 
@@ -1643,7 +1645,7 @@ def object_detail_page(request: Request, slug: str):
         breadcrumbs = trail
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "PROVENANCE_TYPES": PROVENANCE_TYPES, "BRAND_ROLES": BRAND_ROLES},
+        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES},
     )
 
 
@@ -2797,6 +2799,52 @@ def api_set_card_provenance(project_id: str, provenance: str = Form(""), credit:
     result = cards.set_provenance(project_id, provenance or None, credit if credit is not None else ...,
                                   actor="owner-ui")
     return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
+
+
+def _provenance_list_response(scope):
+    return JSONResponse({"scope": scope, "options": provenance_options.list_options(scope, include_retired=True)})
+
+
+@app.get("/api/provenance-options")
+def api_list_provenance_options(scope: str = "card", include_retired: int = 0):
+    """#529: one editable provenance list ('card' or 'file'), in picker order."""
+    return JSONResponse({"scope": scope,
+                         "options": provenance_options.list_options(scope, include_retired=bool(include_retired))})
+
+
+@app.post("/api/provenance-options/{scope}")
+def api_add_provenance_option(scope: str, key: str = Form(""), label: str = Form("")):
+    """#529: add an option (lowercase slug key, non-empty label). Errors are CardErrors
+    (422 bad_provenance_key / bad_provenance_label, 409 provenance_conflict)."""
+    provenance_options.add(scope, key, label)
+    return _provenance_list_response(scope)
+
+
+@app.post("/api/provenance-options/{scope}/{key}/rename")
+def api_rename_provenance_option(scope: str, key: str, label: str = Form("")):
+    """#529: change only the label; the key and every record using it are untouched."""
+    provenance_options.rename(scope, key, label)
+    return _provenance_list_response(scope)
+
+
+@app.post("/api/provenance-options/{scope}/{key}/retire")
+def api_retire_provenance_option(scope: str, key: str):
+    """#529: retire (kept on existing records, refused for new writes)."""
+    provenance_options.retire(scope, key)
+    return _provenance_list_response(scope)
+
+
+@app.post("/api/provenance-options/{scope}/{key}/unretire")
+def api_unretire_provenance_option(scope: str, key: str):
+    provenance_options.unretire(scope, key)
+    return _provenance_list_response(scope)
+
+
+@app.post("/api/provenance-options/{scope}/{key}/move")
+def api_move_provenance_option(scope: str, key: str, direction: str = Form("")):
+    """#529: move one place 'up' or 'down'."""
+    provenance_options.move(scope, key, direction)
+    return _provenance_list_response(scope)
 
 
 @app.post("/api/projects/{project_id}/highlight")

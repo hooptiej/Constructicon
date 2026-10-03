@@ -62,6 +62,9 @@ WHEREABOUTS_LABELS = {
 WHEREABOUTS_KINDS = ("thing", "project", "collection")
 
 # --- Card-level provenance (3.5) ---------------------------------------------
+# #529: these constants are the SEED for the editable lists (core/provenance_options.py,
+# table provenance_options, managed in /admin) and the fallback if that table is
+# unreadable. Validation, pickers and labels read the table, not these.
 CARD_PROVENANCE = ("created", "found", "collected", "referenced", "client_owned")
 CARD_PROVENANCE_LABELS = {
     "created": "Created",
@@ -88,6 +91,7 @@ FILE_PROVENANCE_TO_CARD = {
     "reference": "referenced",
     "result": "created",
     "design": "created",
+    "purchased": "purchased",
 }
 
 # --- Hobby activity (3.3) ------------------------------------------------------
@@ -156,29 +160,42 @@ def whereabouts_label(value):
     return WHEREABOUTS_LABELS.get(value, value or "")
 
 
+def _po():
+    from . import provenance_options  # lazy: it imports db, and this module stays pure at import time
+    return provenance_options
+
+
 def card_provenance_label(value):
-    return CARD_PROVENANCE_LABELS.get(value, value or "")
+    """Current label for a card provenance key, retired keys included (#529)."""
+    if not value:
+        return ""
+    try:
+        return _po().label("card", value, CARD_PROVENANCE_LABELS.get(value, value))
+    except Exception:  # no DB / table yet: the seed labels
+        return CARD_PROVENANCE_LABELS.get(value, value)
 
 
 def file_provenance_label(value, card_provenance=None):
     """Display label for a per-file provenance value on an asset card (3.5 table).
     A NULL file value inherits the owning card's provenance FOR DISPLAY ONLY (pass
-    `card_provenance`); returns None when neither is set. Unknown custom values
-    are shown as-is (the file vocabulary is loose)."""
+    `card_provenance`); returns None when neither is set. The six original file keys keep
+    their card-vocabulary reading (FILE_PROVENANCE_LABELS); a key added later reads its
+    label from the editable list, and unknown custom values are shown as-is."""
     if value in (None, ""):
-        return CARD_PROVENANCE_LABELS.get(card_provenance) if card_provenance else None
-    return FILE_PROVENANCE_LABELS.get(value, value)
+        return card_provenance_label(card_provenance) if card_provenance else None
+    if value in FILE_PROVENANCE_LABELS:
+        return FILE_PROVENANCE_LABELS[value]
+    try:
+        return _po().label("file", value)
+    except Exception:
+        return value
 
 
-def validate_provenance(value):
+def validate_provenance(value, current=None):
     """Returns the card provenance unchanged (None / '' clear it) or raises
-    CardError('bad_provenance')."""
-    if value in (None, ""):
-        return None
-    if value not in CARD_PROVENANCE:
-        raise CardError("bad_provenance",
-                        f"Unknown provenance {value!r}. Choose one of: {', '.join(CARD_PROVENANCE)}.")
-    return value
+    CardError('bad_provenance'). #529: accepts an ACTIVE key of the editable card list,
+    or `current` (the value the card already holds, even if since retired)."""
+    return _po().validate("card", value, current=current)
 
 
 def validate_whereabouts(kind, value, stage=None):

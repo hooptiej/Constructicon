@@ -238,7 +238,7 @@
       {# ---- ORIGIN: provenance, highlight, brand asset + role. Saved together in one POST (#341, #350). ---- #}
       {% set origin_view %}
       <dl class="dp-rows">
-        <div class="dp-row"><dt>Provenance</dt><dd>{% if item.provenance %}{{ item.provenance }}{% else %}<span class="dp-muted">Not set</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Provenance</dt><dd>{% if item.provenance %}{{ file_provenance_label }}{% else %}<span class="dp-muted">Not set</span>{% endif %}</dd></div>
         <div class="dp-row"><dt>Highlight</dt><dd>{{ 'Yes' if item.highlight else 'No' }}</dd></div>
         <div class="dp-row"><dt>Brand asset</dt><dd>{{ 'Yes' if item.is_brand_asset else 'No' }}{% if item.is_brand_asset and item.brand_role %} <span class="dp-muted">&middot; {{ item.brand_role }}</span>{% endif %}</dd></div>
       </dl>
@@ -249,7 +249,7 @@
         <label for="provenance-select">Provenance <span class="optional">(optional)</span></label>
         <select class="input" id="provenance-select">
           <option value="">— unset —</option>
-          {% for prov in PROVENANCE_TYPES %}<option value="{{ prov }}"{% if item.provenance == prov %} selected{% endif %}>{{ prov }}</option>{% endfor %}
+          {% for o in file_provenance_options %}<option value="{{ o.key }}"{% if item.provenance == o.key %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
         </select>
       </div>
       <div class="dp-field dp-field-inline">

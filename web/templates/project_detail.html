@@ -128,12 +128,12 @@
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <select id="link-type-select" class="input" style="max-width:170px;font-size:12px" aria-label="Link type">
           {% for t in link_types %}
-          <option value="{{ t.key }}|out">{{ t.forward }}{% if t.key == 'related' %} (peer){% endif %}…</option>
-          {% if t.key != 'related' %}<option value="{{ t.key }}|in">{{ t.reverse }}…</option>{% endif %}
+          <option value="{{ t.key }}|out">{{ t.forward }}{% if t.key == 'related' %} (peer){% endif %}â€¦</option>
+          {% if t.key != 'related' %}<option value="{{ t.key }}|in">{{ t.reverse }}â€¦</option>{% endif %}
           {% endfor %}
         </select>
         <select id="link-target-select" class="input" style="max-width:220px;font-size:12px" aria-label="Link to">
-          <option value="">+ Link to a card…</option>
+          <option value="">+ Link to a cardâ€¦</option>
         </select>
       </div>
       <span id="links-error" class="error-text" style="display:none;font-size:12px"></span>
@@ -201,7 +201,7 @@
             const retype = document.createElement('select');
             retype.className = 'input'; retype.title = 'Change this link type'; retype.setAttribute('aria-label', 'Change link type');
             retype.style.cssText = 'font-size:11px;padding:0 2px;max-width:92px';
-            retype.innerHTML = '<option value="">type…</option>' + LINK_TYPES.filter(t => t.key !== l.type)
+            retype.innerHTML = '<option value="">typeâ€¦</option>' + LINK_TYPES.filter(t => t.key !== l.type)
               .map(t => '<option value="' + t.key + '">' + esc(t.forward) + '</option>').join('');
             retype.onchange = async () => {
               if (!retype.value) return;

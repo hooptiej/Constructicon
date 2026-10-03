@@ -394,6 +394,87 @@ def run_v2c_3():
     return {"queued": 1 if did is not None else 0}
 
 
+# --- v2c_4: the canopy's built_for question (4.5, deferred from piece 3) --------------------
+
+# The card the spec names ("AW canopy*"), and the quad it was almost certainly built
+# for. Matched by TITLE, never by id; the Queen is only ever a suggested candidate.
+CANOPY_TITLE_PREFIX = "aw canopy"
+CANOPY_LIKELY_TARGET_TITLES = ("the queen",)  # substring of the target's title
+
+
+def plan_canopy_built_for(all_cards=None):
+    """Read-only. Returns None, or (canopy_card, payload) for the one
+    card_built_for decision the 'AW canopy' card should have. The payload has the
+    same shape as the piece-1 means-to-an-end decisions (4.3), with candidates
+    ranked by the usual heuristic plus the card the spec names, then `none`."""
+    all_cards = all_cards if all_cards is not None else db.list_projects()
+    canopy = next((c for c in all_cards if (c["title"] or "").strip().lower().startswith(CANOPY_TITLE_PREFIX)), None)
+    if canopy is None:
+        return None
+    children_by_parent = {}
+    for c in all_cards:
+        c["legacy_status_for_plan"] = c.get("status")
+        if c.get("parent_id") is not None:
+            children_by_parent.setdefault(c["parent_id"], []).append(c)
+    hobby_ids_by_card = {c["id"]: {h["id"] for h in db.list_hobbies_for_project(c["id"])} for c in all_cards}
+    import time as _time
+    facts = _gather(canopy, all_cards, hobby_ids_by_card, children_by_parent, _time.time())
+    cands, seen = [], {canopy["slug"]}
+    for c in all_cards:  # the quad the spec names goes first
+        t = (c["title"] or "").lower()
+        if c["slug"] not in seen and any(w in t for w in CANOPY_LIKELY_TARGET_TITLES) and "alienwhoop" in t:
+            seen.add(c["slug"])
+            cands.append({"slug": c["slug"], "title": c["title"],
+                          "reason": "named in the V2 spec as what the canopy was built for"})
+    for c in rank_built_for_candidates(canopy, facts, all_cards):
+        if c["slug"] not in seen:
+            seen.add(c["slug"])
+            cands.append(c)
+    cands = cands[:8]
+    options = [{"key": c["slug"], "label": c["title"], "reason": c["reason"],
+                "patch": [{"op": "link", "a": canopy["slug"], "b": c["slug"], "type": "built_for"}]} for c in cands]
+    options.append({"key": "none", "label": "None of these", "patch": []})
+    if cands:
+        sug, why = cands[0]["slug"], f"Top candidate: {cands[0]['reason']}"
+    else:
+        sug, why = "none", "No candidate cards found"
+    payload = _envelope(
+        canopy, "built_for", "Which card was this canopy built for? (Pick every quad it fits.)",
+        canopy.get("status"), None, sug, why, "medium" if cands and "spec" in cands[0]["reason"] else "low", options)
+    return canopy, payload
+
+
+def run_v2c_4():
+    """Queues the one 'AW canopy' card_built_for decision (spec 4.5, deferred from
+    piece 3). Never links anything: the owner answers, and resolving creates the
+    built_for link through core.cards. No-op while no such card exists. Idempotent:
+    queue_decision_once skips if ANY row of that kind + card exists (open or
+    resolved), so an answered question is never re-asked, and the four piece-1
+    means-to-an-end decisions are left alone. Returns {"queued": n}."""
+    from . import cards as _cards
+    plan = plan_canopy_built_for()
+    if plan is None:
+        return {"queued": 0}
+    canopy, payload = plan
+    conn = db.get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        did = db.queue_decision_once(_cards.KIND_CARD_BUILT_FOR, f"card:{canopy['slug']}", payload, conn=conn)
+        if did is not None:
+            db.insert_change_log(
+                conn, "migration_v2c_4_canopy", changes.ACTOR_MIGRATION,
+                [changes.row_image("pending_decisions", {"id": did}, None,
+                                   {"kind": _cards.KIND_CARD_BUILT_FOR, "post_slug": f"card:{canopy['slug']}"})],
+                batch_id=changes.new_batch_id(), affected_slugs=[canopy["slug"]])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"queued": 1 if did is not None else 0}
+
+
 # --- Applying -----------------------------------------------------------------------
 
 def run_v2c_1():

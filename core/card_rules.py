@@ -312,6 +312,76 @@ def validate_nest(child, parent, descendants_of_child, replace=False):
     return True
 
 
+# --- Typed links (3.8) -------------------------------------------------------------
+# A row (a, b, type) reads "a <type> b". Directed types are stored as ONE row;
+# `related` is symmetric and stored as TWO rows ((a,b) and (b,a)), exactly as v1.
+LINK_TYPES = ("built_for", "applies_to", "used_in", "inspired_by", "related")
+DIRECTED_LINK_TYPES = ("built_for", "applies_to", "used_in", "inspired_by")
+# Types whose SOURCE must not be a group kind (a family/collection isn't built for
+# or applied to anything; it holds things that are).
+GROUP_SOURCE_BLOCKED_LINK_TYPES = ("built_for", "applies_to", "used_in")
+# (forward label, reverse label): shown from the source's side / the target's side.
+LINK_LABELS = {
+    "built_for": ("Built for", "Made for this"),
+    "applies_to": ("Applies to", "Applied here"),
+    "used_in": ("Used in", "Uses"),
+    "inspired_by": ("Inspired by", "Inspired"),
+    "related": ("Related", "Related"),
+}
+
+
+def link_label(link_type, direction="out"):
+    """Display label for a link type from one side. direction: 'out' (this card is
+    the source), 'in' (this card is the target), 'both' (symmetric)."""
+    fwd, rev = LINK_LABELS.get(link_type, (link_type, link_type))
+    return rev if direction == "in" else fwd
+
+
+def validate_link_type(link_type):
+    """Returns the type unchanged or raises CardError('bad_link')."""
+    if link_type not in LINK_TYPES:
+        raise CardError("bad_link", f"Unknown link type {link_type!r}. Choose one of: {', '.join(LINK_TYPES)}.")
+    return link_type
+
+
+def validate_link(a, b, link_type, existing):
+    """Validates adding the link "a <link_type> b" (3.8). `a` / `b` are project
+    dicts (slug, title, kind); `existing` is the list of link rows already on
+    this pair in EITHER direction ({slug_a, slug_b, type}), after removing any
+    rows the caller is about to replace (retype).
+
+    Raises CardError: bad_link (unknown type, self-link, a family/collection as the
+    source of built_for/applies_to/used_in) or link_conflict (the link already
+    exists; `related` over a typed pair; details['reason'] says which).
+    Returns {"drop_related": bool}: True when a typed link is being added over a
+    `related` pair, which upgrades it (the related rows are removed)."""
+    validate_link_type(link_type)
+    if a["slug"] == b["slug"]:
+        raise CardError("bad_link", "A card can't be linked to itself.")
+    akind = a.get("kind") or DEFAULT_KIND
+    if akind in GROUP_KINDS and link_type in GROUP_SOURCE_BLOCKED_LINK_TYPES:
+        raise CardError("bad_link",
+                        f"'{a['title']}' is a {kind_label(akind)}, which can't be the source of a "
+                        f"'{link_type}' link; link its members instead.")
+    pair = {a["slug"], b["slug"]}
+    rows = [r for r in existing if {r["slug_a"], r["slug_b"]} == pair]
+    if link_type == "related":
+        if any(r["type"] == "related" for r in rows):
+            raise CardError("link_conflict", f"'{a['title']}' and '{b['title']}' are already related.",
+                            {"reason": "duplicate"})
+        typed = sorted({r["type"] for r in rows if r["type"] != "related"})
+        if typed:
+            raise CardError("link_conflict",
+                            f"'{a['title']}' and '{b['title']}' already have a typed link ({', '.join(typed)}); "
+                            "a pair can't be both typed and related. Unlink or retype that first.",
+                            {"reason": "related_over_typed", "existing_types": typed})
+        return {"drop_related": False}
+    if any(r["type"] == link_type and r["slug_a"] == a["slug"] and r["slug_b"] == b["slug"] for r in rows):
+        raise CardError("link_conflict", f"'{a['title']}' already {link_type.replace('_', ' ')} '{b['title']}'.",
+                        {"reason": "duplicate"})
+    return {"drop_related": any(r["type"] == "related" for r in rows)}
+
+
 def validate_hobby_activity(value, allow_aliases=True):
     """Returns (activity, warnings) for a hobby activity word, or raises
     CardError('bad_hobby_activity'). With allow_aliases the v1 words 'dormant' and

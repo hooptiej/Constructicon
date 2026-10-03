@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 
 # timeline is pure (no DB access — see its module docstring), so this
@@ -107,8 +108,10 @@ CREATE INDEX IF NOT EXISTS idx_project_items_slug ON project_items(post_slug);
 CREATE TABLE IF NOT EXISTS project_relations (
     slug_a TEXT NOT NULL,
     slug_b TEXT NOT NULL,
+    type   TEXT NOT NULL DEFAULT 'related',
+    note   TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL,
-    PRIMARY KEY (slug_a, slug_b)
+    PRIMARY KEY (slug_a, slug_b, type)
 );
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
@@ -559,6 +562,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_family_members_member ON family_members(member_id);
         """)
         conn.commit()
+        _rebuild_project_relations_typed(conn)
     finally:
         conn.close()
     # Data migrations (separate connection: they read through the normal db helpers).
@@ -566,6 +570,50 @@ def init_db():
     card_migration.run_v2c_1()
     card_migration.run_v2c_2()
     card_migration.run_v2c_3()
+    card_migration.run_v2c_4()
+
+
+def _rebuild_project_relations_typed(conn):
+    """V2 cards 3.8: project_relations gets a `type` (and `note`) and its PK becomes
+    (slug_a, slug_b, type). SQLite can't change a PK in place, so the table is
+    rebuilt in one transaction (DDL is transactional in SQLite, so a failure
+    leaves the old table untouched). Idempotent: skipped once the table has a
+    `type` column. Every existing row becomes 'related'; v1 stored related links
+    in both directions and still does, so the row count and
+    list_related_projects are unchanged. Logged as an actor='migration' row."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(project_relations)")}
+    if "type" in cols:
+        return False
+    conn.commit()  # nothing open here, but BEGIN IMMEDIATE must not nest
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        before = conn.execute("SELECT COUNT(*) AS n FROM project_relations").fetchone()["n"]
+        conn.execute("DROP TABLE IF EXISTS project_relations_new")
+        conn.execute("""
+            CREATE TABLE project_relations_new (
+                slug_a TEXT NOT NULL, slug_b TEXT NOT NULL,
+                type   TEXT NOT NULL DEFAULT 'related',
+                note   TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                PRIMARY KEY (slug_a, slug_b, type)
+            )""")
+        conn.execute("INSERT INTO project_relations_new (slug_a, slug_b, type, created_at) "
+                     "SELECT slug_a, slug_b, 'related', created_at FROM project_relations")
+        after = conn.execute("SELECT COUNT(*) AS n FROM project_relations_new").fetchone()["n"]
+        if after != before:
+            raise RuntimeError(f"project_relations rebuild lost rows: {before} -> {after}")
+        conn.execute("DROP TABLE project_relations")
+        conn.execute("ALTER TABLE project_relations_new RENAME TO project_relations")
+        insert_change_log(
+            conn, "migration_v2c_4_links", "migration",
+            [{"table": "project_relations", "key": {}, "before": {"rows": before, "typed": False},
+              "after": {"rows": after, "type": "related"}}],
+            batch_id=uuid.uuid4().hex[:16], affected_slugs=[])
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _row_to_dict(row):
@@ -1471,36 +1519,103 @@ def list_related(slug):
 # a single lookup. Unlike object relations there's no categorization sync —
 # projects aren't tag/membership carriers the way objects are; a related link
 # is just a link.
-def add_project_relation(slug_a, slug_b):
-    if slug_a == slug_b:
-        return
+#
+# V2 cards 3.8: links are typed. A row (a, b, type) reads "a <type> b"; directed
+# types are one row, `related` is two (a,b)+(b,a). Writes go through
+# write_project_links (called only from core/cards.py, which validates and logs);
+# the old add_project_relation / remove_project_relation helpers are gone so
+# nothing can write a link around the rules.
+def write_project_links(deletes, inserts, op, actor, batch_id=None, affected_slugs=None):
+    """Applies link deletions then insertions in ONE transaction and logs their
+    row images as one change-log row. `deletes`: [(slug_a, slug_b, type)];
+    `inserts`: [{slug_a, slug_b, type, note?}]. Returns the change-log row id
+    (None when there was nothing to do). Validation is the caller's."""
+    if not deletes and not inserts:
+        return None
     conn = get_conn()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        muts = []
+        for a, b, t in deletes:
+            row = conn.execute("SELECT note, created_at FROM project_relations WHERE slug_a = ? AND slug_b = ? AND type = ?",
+                               (a, b, t)).fetchone()
+            if row is None:
+                continue
+            conn.execute("DELETE FROM project_relations WHERE slug_a = ? AND slug_b = ? AND type = ?", (a, b, t))
+            muts.append({"table": "project_relations", "key": {"slug_a": a, "slug_b": b, "type": t},
+                         "before": {"note": row["note"], "created_at": row["created_at"]}, "after": None})
         now = time.time()
-        conn.execute("INSERT OR IGNORE INTO project_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)", (slug_a, slug_b, now))
-        conn.execute("INSERT OR IGNORE INTO project_relations (slug_a, slug_b, created_at) VALUES (?, ?, ?)", (slug_b, slug_a, now))
+        for ins in inserts:
+            a, b, t = ins["slug_a"], ins["slug_b"], ins["type"]
+            note = ins.get("note") or ""
+            conn.execute("INSERT INTO project_relations (slug_a, slug_b, type, note, created_at) VALUES (?, ?, ?, ?, ?)",
+                         (a, b, t, note, now))
+            muts.append({"table": "project_relations", "key": {"slug_a": a, "slug_b": b, "type": t},
+                         "before": None, "after": {"note": note, "created_at": now}})
+        row_id = insert_change_log(conn, op, actor, muts, batch_id=batch_id, affected_slugs=affected_slugs)
         conn.commit()
+        return row_id
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
-def remove_project_relation(slug_a, slug_b):
+def list_project_link_rows(slug=None, pair=None):
+    """Raw project_relations rows ({slug_a, slug_b, type, note, created_at}).
+    `slug`: every row touching that card (either end). `pair`: (x, y), every row
+    between those two cards in either direction. No filter: all rows."""
     conn = get_conn()
     try:
-        conn.execute("DELETE FROM project_relations WHERE slug_a = ? AND slug_b = ?", (slug_a, slug_b))
-        conn.execute("DELETE FROM project_relations WHERE slug_a = ? AND slug_b = ?", (slug_b, slug_a))
-        conn.commit()
+        if pair:
+            x, y = pair
+            rows = conn.execute("SELECT * FROM project_relations WHERE (slug_a = ? AND slug_b = ?) OR (slug_a = ? AND slug_b = ?) "
+                                "ORDER BY created_at, type", (x, y, y, x)).fetchall()
+        elif slug:
+            rows = conn.execute("SELECT * FROM project_relations WHERE slug_a = ? OR slug_b = ? ORDER BY created_at, type",
+                                (slug, slug)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM project_relations ORDER BY slug_a, slug_b, type").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_project_links_by_type():
+    """{type: row_count}: the before/after snapshot used to verify the rebuild."""
+    conn = get_conn()
+    try:
+        return {r["type"]: r["n"] for r in conn.execute(
+            "SELECT type, COUNT(*) AS n FROM project_relations GROUP BY type")}
+    finally:
+        conn.close()
+
+
+def list_linked_projects(slug):
+    """Every project linked to `slug` by ANY link type, either direction (typed
+    links included), newest-updated first. For 'is this card connected at all'."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT p.* FROM projects p WHERE p.slug IN ("
+            "SELECT slug_b FROM project_relations WHERE slug_a = ? UNION "
+            "SELECT slug_a FROM project_relations WHERE slug_b = ?) ORDER BY p.updated_at DESC",
+            (slug, slug),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
 def list_related_projects(slug):
-    """Projects peer-linked to the given project slug (both directions)."""
+    """Projects peer-linked ('related', symmetric) to the given project slug. Typed
+    links are NOT included (use core.cards.list_links for those)."""
     conn = get_conn()
     try:
         rows = conn.execute(
             "SELECT p.* FROM project_relations r JOIN projects p ON p.slug = r.slug_b "
-            "WHERE r.slug_a = ? ORDER BY p.updated_at DESC",
+            "WHERE r.slug_a = ? AND r.type = 'related' ORDER BY p.updated_at DESC",
             (slug,),
         ).fetchall()
         return [dict(r) for r in rows]

@@ -1416,8 +1416,10 @@ def project_detail_page(request: Request, slug: str):
             "family_info": cards.family_fields(project),
             "project_score": project_score,
             "project_hobbies": [{"id": h["id"], "name": h["name"], "slug": h["slug"]} for h in project_hobbies],
-            # #408: peer project links for the Related-projects widget.
-            "related_projects": _related_projects_public(slug),
+            # #408 / V2 3.8: every link (typed + related, both directions) for the Links row.
+            "links": cards.list_links(slug),
+            "link_types": [{"key": t, "forward": card_rules.LINK_LABELS[t][0], "reverse": card_rules.LINK_LABELS[t][1]}
+                           for t in card_rules.LINK_TYPES],
             # #414: blog entries that feature this project, for the "Featured
             # in" row (reverse of the blog-side entry->projects link).
             "featured_entries": [
@@ -2966,22 +2968,58 @@ def _related_projects_public(slug):
 
 @app.post("/api/project/{slug}/related")
 def api_add_project_related(request: Request, slug: str, related_slug: str = Form(...)):
-    """#408: link two projects as peers (bidirectional). Mirrors the object
-    related route; resolves weak_connections' related-projects half."""
+    """#408: link two projects as peers (bidirectional). Kept for existing callers;
+    since V2 3.8 it creates a `related` link through core.cards.link. Adding a pair
+    that is already related is a no-op; a pair that already has a typed link is
+    refused (409 link_conflict), as is a self-link (422 bad_link)."""
     if db.get_project(slug) is None:
         raise HTTPException(status_code=404, detail="project not found")
-    if related_slug == slug:
-        raise HTTPException(status_code=400, detail="a project can't be related to itself")
     if db.get_project(related_slug) is None:
         raise HTTPException(status_code=404, detail="related project not found")
-    db.add_project_relation(slug, related_slug)
+    try:
+        cards.link(slug, related_slug, "related", actor="owner-ui")
+    except card_rules.CardError as e:
+        if not (e.code == "link_conflict" and e.details.get("reason") == "duplicate"):
+            raise
     return JSONResponse(_related_projects_public(slug))
 
 
 @app.post("/api/project/{slug}/related/remove")
 def api_remove_project_related(request: Request, slug: str, related_slug: str = Form(...)):
-    db.remove_project_relation(slug, related_slug)
+    if db.get_project(slug) is not None and db.get_project(related_slug) is not None:
+        cards.unlink(slug, related_slug, "related", actor="owner-ui")
     return JSONResponse(_related_projects_public(slug))
+
+
+# --- Typed links (V2 cards 3.8). Rule violations are CardErrors: 422 bad_link,
+# 409 link_conflict, 404 not_found -- the same codes the MCP tools return. ---
+
+@app.get("/api/project/{slug}/links")
+def api_project_links(slug: str):
+    """Every link on a card, both directions, with direction + label."""
+    return JSONResponse(cards.list_links(slug))
+
+
+@app.post("/api/links")
+def api_link(a: str = Form(...), b: str = Form(...), type: str = Form(...), note: str = Form("")):
+    """"a <type> b". Directed types store one row, `related` two. A typed link over a
+    related pair upgrades it; related over a typed pair is refused (link_conflict)."""
+    result = cards.link(a, b, type, note, actor="owner-ui")
+    return JSONResponse({**result.to_dict(), "links": cards.list_links(a)})
+
+
+@app.post("/api/links/remove")
+def api_unlink(a: str = Form(...), b: str = Form(...), type: str = Form("")):
+    """Removes the `type` link between a and b (all links on the pair when `type` is blank)."""
+    result = cards.unlink(a, b, type or None, actor="owner-ui")
+    return JSONResponse({**result.to_dict(), "links": cards.list_links(a)})
+
+
+@app.post("/api/links/retype")
+def api_retype_link(a: str = Form(...), b: str = Form(...), from_type: str = Form(...), to_type: str = Form(...)):
+    """Replaces the `from_type` link on the pair with "a <to_type> b" in one transaction."""
+    result = cards.retype_link(a, b, from_type, to_type, actor="owner-ui")
+    return JSONResponse({**result.to_dict(), "links": cards.list_links(a)})
 
 
 @app.post("/api/project/{slug}/convert-to-hobby")

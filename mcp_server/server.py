@@ -811,6 +811,7 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
     - open_decisions: any still-open questions about this card (with the suggested answer)
     - families: the families/collections this card is in; members: the members of this
       card when it is a family or collection; children: cards nested under it ("part of")
+    - links: typed links in both directions (see constructicon_list_links)
     - items: list of objects in the project (with their tags)
     - cover: the cover object if cover_slug is set, else None
     - writeup: the writeup document object if writeup_slug is set, else None
@@ -854,6 +855,8 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
         # V2 cards 3.6/3.7: families this card is in, members (if it is a family or
         # collection), and the cards nested under it ("part of").
         **cards.family_fields(project),
+        # V2 cards 3.8: typed links, both directions, with labels.
+        "links": cards.list_links(project["slug"]),
         "children": [{"id": c["id"], "slug": c["slug"], "title": c["title"]}
                      for c in db.list_child_projects(project["id"])],
     }
@@ -1508,6 +1511,85 @@ def constructicon_remove_from_family(family: str | int, member: str | int, dry_r
         return _card_error_result(e)
 
 
+# --- Typed links (V2 cards 3.8) ---
+
+@mcp.tool()
+def constructicon_link(a: str | int, b: str | int, type: str, note: str = "", dry_run: bool = False) -> dict:
+    """Link two cards: "a <type> b". V2 cards 3.8.
+
+    type: built_for (a was built for b) | applies_to (a is applied to b) | used_in
+    (a is used in b) | inspired_by (a was inspired by b) | related (symmetric, stored
+    both ways). Directed types are stored once and read in reverse from b's side
+    (constructicon_list_links shows both). A pair can't be both typed and related:
+    a typed link over a related pair UPGRADES it (the related rows are removed),
+    while related over a typed pair is refused.
+
+    Errors come back as {"ok": false, "error": {code, message}}, same codes as HTTP:
+    bad_link (unknown type, self-link, a family/collection as the source of
+    built_for/applies_to/used_in), link_conflict (already linked, or related over a
+    typed pair), not_found (no such card). dry_run=true previews.
+    Returns {ok, dry_run, changes, warnings, batch_id}.
+    """
+    try:
+        return cards.link(a, b, type, note, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_unlink(a: str | int, b: str | int, type: str | None = None, dry_run: bool = False) -> dict:
+    """Remove link(s) between two cards. With `type`, only that type ("a <type> b"
+    exactly for a directed type; related removes both rows); without it, every link
+    between the pair in either direction. A no-op (with a warning) when nothing matches.
+    Returns {ok, dry_run, changes, warnings, batch_id} or {"ok": false, "error": ...}."""
+    try:
+        return cards.unlink(a, b, type, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_retype_link(a: str | int, b: str | int, from_type: str, to_type: str,
+                              note: str | None = None, dry_run: bool = False) -> dict:
+    """Change a link's type in one step (the upgrade/downgrade path): replaces the
+    `from_type` link between the pair (found in either direction) with
+    "a <to_type> b". The note carries over unless `note` is given. Errors: not_found
+    (no such link), bad_link (same type / unknown type / group-kind source),
+    link_conflict (the new link already exists, or related while another typed link
+    is on the pair). dry_run=true previews."""
+    try:
+        return cards.retype_link(a, b, from_type, to_type, note=note, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_retype_links(mapping: list[dict], dry_run: bool = True, partial_ok: bool = False) -> dict:
+    """Bulk-retype v1 `related` links to typed ones. DRY-RUN BY DEFAULT: pass
+    dry_run=false to write.
+
+    mapping: [{a, b, to_type, from_type?='related'}] where each item reads
+    "a <to_type> b" (card ids or slugs). Every item is validated first; the whole
+    batch is applied in one transaction (all-or-nothing) unless partial_ok=true,
+    which applies the valid items and reports the rest. Find candidates with
+    constructicon_list_needs_decision(need='untyped_link').
+    Returns {ok, dry_run, applied, changes: [{card, field, before, after}], warnings,
+    batch_id, items: [{a, b, to_type, ok, changes, error?}]}."""
+    return cards.retype_links(mapping, dry_run=dry_run, partial_ok=partial_ok, actor="mcp")
+
+
+@mcp.tool()
+def constructicon_list_links(card: str | int) -> list[dict] | dict:
+    """Every link on a card, both directions: [{slug, title, kind, stage, type,
+    direction, label, note}]. direction is out (this card is the source: "this
+    <type> that"), in (this card is the target: labelled in reverse, e.g. "Made
+    for this") or both (related, symmetric)."""
+    try:
+        return cards.list_links(card)
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
 @mcp.tool()
 def constructicon_list_needs_decision(kind: str | None = None, need: str | None = None,
                                       hobby: str | None = None, limit: int | None = None) -> list[dict]:
@@ -1523,6 +1605,8 @@ def constructicon_list_needs_decision(kind: str | None = None, need: str | None 
     is set, since they belong to a hobby): need = hobby_inactive_with_active_work
     (an Inactive hobby that has an active project) and hobby_active_untouched (an
     Active hobby untouched for ~2 years). Fix those with constructicon_set_hobby_status.
+    Also computed: need = untyped_link (a v1 'related' pair where a typed reading is
+    plausible; `link` = {a, b, type} is the suggestion, apply with constructicon_retype_links).
     More computed needs (missing provenance, ...) join in with later pieces.
 
     Filters: kind (the card's kind, or 'hobby' for hobby needs only; any other kind

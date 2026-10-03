@@ -2110,11 +2110,21 @@ def resolve_decisions(items, *, accept_suggested=False, dry_run=True, partial_ok
                 choice, choices = it.get("choice"), it.get("choices")
                 if accept_suggested:
                     sug = d["payload"].get("suggested")
-                    if sug not in keys:
+                    if isinstance(sug, (list, tuple)):
+                        # Multi-select question (card_family_members): the suggestion is a
+                        # list of option keys, answered as `choices` like the single path.
+                        picked = [k for k in sug if isinstance(k, str) and k in keys]
+                        if not picked or len(picked) != len(sug):
+                            skipped += 1
+                            entry.update(status="skipped", reason="no suggested answer for this question")
+                            continue
+                        choice, choices = None, picked
+                    elif not isinstance(sug, str) or sug not in keys:
                         skipped += 1
                         entry.update(status="skipped", reason="no suggested answer for this question")
                         continue
-                    choice, choices = sug, None
+                    else:
+                        choice, choices = sug, None
                 entry["choice"] = choice if choice else choices
                 try:
                     with tx.savepoint():

@@ -1386,6 +1386,20 @@ def project_detail_page(request: Request, slug: str):
     # Fetch hobbies this project is in (#365)
     project_hobbies = db.list_hobbies_for_project(project["id"])
 
+    # V2 cards 8.3: the header card, per-type piles, and nested / member cards beside them.
+    header_card = _to_card_face(project)
+    header_card["href"] = "#stacks"
+    stacks = cards.file_stacks(project, raw_items, thumb_fn=lambda r: (
+        f"/f/{r['slug']}/thumb" if _should_advertise_thumb(r) else None))
+    family_info = cards.family_fields(project)
+    beside_cards = [_to_card_face(c) for c in child_projects]
+    beside_cards += [_to_card_face(db.get_project(m["id"])) for m in family_info["members"]]
+    home_crumbs = []
+    for h in reversed(cards.home_chain(project["id"])):
+        if h.get("title"):
+            home_crumbs.append({"title": h["title"],
+                                "href": f"/hobby/{h['slug']}" if h["type"] == "hobby" else f"/project/{h['slug']}"})
+
     return templates.TemplateResponse(
         request, "project_detail.html",
         {
@@ -1420,7 +1434,11 @@ def project_detail_page(request: Request, slug: str):
                                   if c["id"] != project["id"]],
             "home_hobby_options": [{"value": f"hobby:{h['id']}", "label": h["name"]} for h in db.list_hobbies()],
             # V2 cards 3.6: families this card is in / members of this family or collection.
-            "family_info": cards.family_fields(project),
+            "family_info": family_info,
+            "header_card": header_card,
+            "stacks": stacks,
+            "beside_cards": beside_cards,
+            "home_crumbs": home_crumbs,
             "project_score": project_score,
             "project_hobbies": [{"id": h["id"], "name": h["name"], "slug": h["slug"]} for h in project_hobbies],
             # #408 / V2 3.8: every link (typed + related, both directions) for the Links row.

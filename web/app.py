@@ -654,11 +654,11 @@ def _project_effective_cover_url(project):
     return _project_cover_url(effective_slug) if effective_slug else None
 
 
-def _to_card_face(project):
+def _to_card_face(project, items=None):
     """One home-page card (docs/design/v2-cards.md 8.1): core.cards.card_face (which reuses
     card_level / resolve_home / list_links) plus the cover URL, which needs the web layer's
     thumb-route knowledge. The home page reads the live kind / activity / stage only."""
-    face = cards.card_face(project)
+    face = cards.card_face(project, items)
     face["cover_url"] = _project_effective_cover_url(project)
     return face
 
@@ -1307,12 +1307,12 @@ def gallery_page_redirect(request: Request):
     return RedirectResponse("/", status_code=308)
 
 
-def _card_queue_strip(slug):
+def _card_queue_strip(slug=None, hobby=None):
     """#515/#519: this card's slice of the Curator queue, for the project page's "Needs your
     input" strip. The same items the Curator drawer shows for the card (questions, nudges,
     needs), open ones first and then the deferred ones, each carrying the suggested key(s)
     for the Accept button (no suggestion = no Accept, only Choose)."""
-    q = curation_queue.build_queue(card=slug)
+    q = curation_queue.build_queue(card=slug, hobby=hobby)
     items = [i for g in q["groups"] for i in g["items"]] + [i for g in q["deferred"] for i in g["items"]]
     return {"items": items, "counts": q["counts"]}
 
@@ -1505,30 +1505,74 @@ def hobbies_page(request: Request):
 
 @app.get("/hobby/{slug}", response_class=HTMLResponse)
 def hobby_detail_page(request: Request, slug: str):
-    """Hobby detail page (#360) showing metadata, member projects, and attached objects."""
+    """Hobby page (#360, rebuilt #525 on the same patterns as the project page and home):
+    the hobby's own card + a details panel (STATUS / IDENTITY / DATES), the Curator strip for
+    this hobby, each member project as a small card with a pile of its files, and the loose
+    objects (tagged with the hobby, in none of its member projects)."""
     hobby = db.get_hobby(slug)
     if hobby is None:
         raise HTTPException(status_code=404, detail="hobby not found")
 
+    fields = cards.hobby_fields(hobby)
     projects = db.list_projects_for_hobby(hobby["id"])
-    items = db.list_posts_for_tag(hobby["id"], include_descendants=False)
+    items_by_project = {p["id"]: db.list_project_items(p["id"]) for p in projects}
+    queue = _card_queue_strip(hobby=hobby["slug"])
+
+    def thumb_fn(r):
+        return f"/f/{r['slug']}/thumb" if _should_advertise_thumb(r) else None
+
+    # One node per member project: its small card + a pile of its files. A nested child
+    # shows under its parent when both are members; every project appears exactly once.
+    nodes = {}
+    for p in projects:
+        face = _to_card_face(p, items_by_project[p["id"]])
+        nodes[p["id"]] = {
+            "id": p["id"], "slug": p["slug"], "title": p["title"], "face": face,
+            "pile": cards.project_pile(p, items_by_project[p["id"]], thumb_fn=thumb_fn),
+            "children": [], "parent_id": p.get("parent_id"),
+        }
+
+    def _newest(n):
+        return -(n["face"]["effective_start"] or n["face"]["created_at"] or 0)
+
+    roots = []
+    for n in nodes.values():
+        parent = nodes.get(n["parent_id"]) if n["parent_id"] != n["id"] else None
+        # Walk up the member chain to catch a (corrupt) cycle: a looping chain is treated as a root.
+        seen, cur = {n["id"]}, parent
+        while cur is not None and cur["id"] not in seen:
+            seen.add(cur["id"])
+            cur = nodes.get(cur["parent_id"])
+        if parent is not None and cur is None:
+            parent["children"].append(n)
+        else:
+            roots.append(n)
+    for n in nodes.values():
+        n["children"].sort(key=_newest)
+    roots.sort(key=_newest)
+    active_roots = [n for n in roots if n["face"]["activity"] == "active"]
+    inactive_roots = [n for n in roots if n["face"]["activity"] != "active"]
+
+    hobby_face = cards.hobby_card_face(hobby, projects, items_by_project, fields["flags"],
+                                       needs_input=bool(queue["items"]))
+    hobby_face["cover_url"] = _project_cover_url(hobby_face["cover_slug"]) if hobby_face["cover_slug"] else None
+
+    loose = _public_items(db.list_loose_hobby_objects(hobby["id"]))
+    start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
     return templates.TemplateResponse(
         request, "hobby.html",
         {
-            "hobby": {
-                **cards.hobby_fields(hobby),
-                "projects": [
-                    {
-                        "id": p["id"],
-                        "slug": p["slug"],
-                        "title": p["title"],
-                        "status": card_rules.curator_status(p),
-                    }
-                    for p in projects
-                ],
-                "items": [_to_object_detail(item) for item in items],
-            },
+            "hobby": fields,
+            "hobby_card": hobby_face,
+            "hobby_queue": queue,
+            "active_nodes": active_roots,
+            "inactive_nodes": inactive_roots,
+            "project_count": len(projects),
+            "loose_items": loose,
+            "dates_label": hobby_face["dates"],
+            "dates_start": _friendly_date(start) if start else None,
+            "dates_end": _friendly_date(end) if end else None,
         },
     )
 

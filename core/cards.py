@@ -1832,6 +1832,81 @@ def _day_label(ts):
     return f"{_MONTHS[d.month - 1]} {d.day}, {d.year}"
 
 
+def _asset_card(r, ts, spec, project_slug, thumb_fn):
+    """One file's asset-card dict (8.1) for a pile or a fan."""
+    prov = (r.get("provenance") or "").strip()
+    return {
+        "slug": r["slug"], "kind": "asset",
+        "title": r.get("content_description") or r.get("description") or r.get("filename") or r["slug"],
+        "dates": _day_label(ts),
+        "type_line": spec.label,
+        "provenance": prov.capitalize(),
+        "cover_url": thumb_fn(r) if thumb_fn else None,
+        "href": f"/object/{r['slug']}?from=project:{project_slug}",
+        "show_level": False, "codes": [], "facts": [], "stats": [],
+    }
+
+
+def project_pile(card, items=None, thumb_fn=None):
+    """One mixed-type pile of a card's files (the hobby page, #525): the same asset cards and
+    the same flat-top / tilted-under / count-badge shape as a detail-page pile, but across
+    every file type. Earliest first, like file_stacks. Returns None for a card with no files.
+    `count` is every file in the card's grid (write-up included), matching file_stacks."""
+    from . import object_types  # lazy, same reason as the other lazy imports in this module
+    row = get_card(card) if not isinstance(card, dict) else card
+    if items is None:
+        items = db.list_project_items(row["id"])
+    if not items:
+        return None
+    dated = sorted(((timeline.resolve_item_date(r), r) for r in items), key=lambda p: p[0])
+    shown = dated[:STACK_FAN_MAX]
+    cards = [_asset_card(r, ts, object_types.get_object_type(r.get("media_type") or "unknown"), row["slug"], thumb_fn)
+             for ts, r in shown]
+    return {"count": len(items), "span": date_range_label(dated[0][0], dated[-1][0]),
+            "cards": cards, "more": max(0, len(items) - len(cards))}
+
+
+def hobby_card_face(hobby_row, projects, items_by_project, flags=None, needs_input=False):
+    """The card face for a hobby (#525), in the same dict shape `card_face` returns so
+    web/templates/_card.html draws it (kind 'hobby': the green frame). Built from the hobby
+    row and its member projects: the date line is the computed span of the member projects'
+    real dates, the stats are its project / file counts, the cover is the first member
+    project's resolved cover (the caller turns `cover_slug` into a URL).
+    `items_by_project` maps project id -> db.list_project_items rows."""
+    status = hobby_row.get("hobby_status") or "active"
+    spans = [timeline.resolve_project_span(p, items_by_project.get(p["id"], [])) for p in projects]
+    starts = [s for s, _ in spans if s is not None]
+    ends = [e for _, e in spans if e is not None]
+    start = min(starts) if starts else None
+    end = max(ends) if ends else None
+    code = hobby_row.get("group_code") or ""
+    n_files = len({i["slug"] for its in items_by_project.values() for i in its})
+    cover_slug = None
+    for p in sorted(projects, key=lambda p: (p.get("activity") != "active", -(p.get("updated_at") or 0))):
+        cover_slug = db.resolve_project_cover_slug(p)
+        if cover_slug:
+            break
+    return {
+        "slug": hobby_row["slug"], "kind": "hobby", "kind_label": "Hobby",
+        "href": "#stacks",
+        "title": hobby_row["name"], "description": "",
+        "activity": status, "stage": None,
+        "stage_label": card_rules.HOBBY_ACTIVITY_LABELS.get(status, status),
+        "stop_reason_label": None,
+        "needs_input": bool(needs_input),
+        "highlight": False,
+        "effective_start": start, "effective_end": end, "created_at": hobby_row.get("created_at") or 0,
+        "dates": date_range_label(start, end, active=status == "active"),
+        "level": 0, "show_level": False,
+        "cover_slug": cover_slug,
+        "type_line": "Hobby",
+        "codes": [code] if code else [],
+        "facts": [f["label"] for f in (flags or [])], "facts_more": 0, "flavor": "",
+        "stats": [{"label": "projects", "n": len(projects)}, {"label": "files", "n": n_files}],
+        "provenance": "", "order": None,
+    }
+
+
 def file_stacks(card, items=None, thumb_fn=None):
     """Piles for the detail page (8.3): one per `media_type` of the card's files, biggest
     first. Each pile: `media_type`, `label` (registry label), `count`, `span` (the
@@ -1852,19 +1927,7 @@ def file_stacks(card, items=None, thumb_fn=None):
         spec = object_types.get_object_type(mt)
         dated = sorted(((timeline.resolve_item_date(r), r) for r in rows), key=lambda p: p[0])
         shown = dated[:STACK_FAN_MAX]
-        cards = []
-        for ts, r in shown:
-            prov = (r.get("provenance") or "").strip()
-            cards.append({
-                "slug": r["slug"], "kind": "asset",
-                "title": r.get("content_description") or r.get("description") or r.get("filename") or r["slug"],
-                "dates": _day_label(ts),
-                "type_line": spec.label,
-                "provenance": prov.capitalize(),
-                "cover_url": thumb_fn(r) if thumb_fn else None,
-                "href": f"/object/{r['slug']}?from=project:{row['slug']}",
-                "show_level": False, "codes": [], "facts": [], "stats": [],
-            })
+        cards = [_asset_card(r, ts, spec, row["slug"], thumb_fn) for ts, r in shown]
         piles.append({
             "media_type": mt, "label": spec.label, "count": len(rows),
             "span": date_range_label(dated[0][0], dated[-1][0]),

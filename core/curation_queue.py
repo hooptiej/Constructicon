@@ -174,7 +174,9 @@ def _need_item(r):
     if slug:
         href = fix_href(slug, group)
     else:
-        href = f"/hobby/{quote(r.get('hobby_slug') or '', safe='')}"
+        # A hobby need: the hobby page opens its STATUS group (the Active/Inactive switch).
+        group = "status"
+        href = f"/hobby/{quote(r.get('hobby_slug') or '', safe='')}?edit=status"
     suggestion = None
     if r.get("suggested"):
         opts = {o["key"]: o.get("label", o["key"]) for o in r.get("options", [])}
@@ -246,9 +248,10 @@ def _arrange(items_by_group, groups):
     return out
 
 
-def build_queue(card=None):
+def build_queue(card=None, hobby=None):
     """The unified queue. `card` (slug) limits it to that one card's slice (the project
-    page's strip). Returns {"groups": [...open...], "deferred": [...same shape...],
+    page's strip); `hobby` (slug) limits it to that hobby's own needs (the hobby page's
+    strip: the two computed hobby flags). Returns {"groups": [...open...], "deferred": [...same shape...],
     "counts": {"open", "deferred", "questions", "nudges", "needs"}}. `counts.open` is what the
     Curator tab's badge shows: open, non-deferred items."""
     states = db.list_curator_states()
@@ -266,9 +269,14 @@ def build_queue(card=None):
     card_row = db.get_project(card) if card else None
     if card and card_row is None:
         return {"groups": [], "deferred": [], "counts": _counts([], [])}
+    hobby_row = db.get_hobby(hobby) if hobby else None
+    if hobby and hobby_row is None:
+        return {"groups": [], "deferred": [], "counts": _counts([], [])}
 
     # questions
-    if card_row:
+    if hobby_row:
+        pass  # card questions belong to cards, not to the hobby's own slice
+    elif card_row:
         for d in cards.open_card_decisions(card_row["slug"]):
             put(f"card:{card_row['slug']}", _card_group(card_row),
                 _card_question(d["id"], d["kind"], d["payload"], card_row["slug"]))
@@ -281,7 +289,9 @@ def build_queue(card=None):
                 put("uploads", _plain_group("uploads", "uploads", "Uploads waiting for you", "/"), _file_question(e))
 
     # nudges
-    if card_row:
+    if hobby_row:
+        nudges = []
+    elif card_row:
         nudges = curator_needs.sort_nudges(curator_needs.project_nudges(card_row, db.list_active_curator_dismissals()))
         nudges = [dict(n, deferred=n["nudge_key"] in deferred_keys) for n in nudges]
     else:
@@ -298,7 +308,12 @@ def build_queue(card=None):
             put("collection", _plain_group("collection", "collection", "Whole collection", "/"), _nudge_item(n))
 
     # needs (computed; stored questions are excluded, they are already above)
-    for r in cards.list_needs_decision(card=card_row["slug"] if card_row else None):
+    if hobby_row:
+        need_rows = [r for r in cards.list_needs_decision(kind="hobby", hobby=hobby_row["slug"])
+                     if r.get("hobby_slug") == hobby_row["slug"]]
+    else:
+        need_rows = cards.list_needs_decision(card=card_row["slug"] if card_row else None)
+    for r in need_rows:
         if r.get("decision_id") is not None:
             continue
         item = _need_item(r)
@@ -309,7 +324,7 @@ def build_queue(card=None):
             if c is None:
                 continue
             put(f"card:{c['slug']}", _card_group(c), item)
-        elif not card_row:
+        elif hobby_row or not card_row:
             hs = r.get("hobby_slug")
             put(f"hobby:{hs}", _hobby_group(hs), item)
 

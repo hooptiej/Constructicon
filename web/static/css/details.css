@@ -128,3 +128,12 @@
   .dp-row { grid-template-columns: 92px minmax(0, 1fr); }
   .dp-menu { right: 0; left: auto; max-width: calc(100vw - 32px); }
 }
+
+/* Owner, 2026-10-03: detail-page content ran under the fixed side tabs (the right-hand
+   Upload/Blog/Export/... rail and the left Processing tab). Triple the side gutter on
+   these pages (app-main's flat 32px -> 96px) so content clears both rails; phones keep
+   a smaller gutter but still clear the right rail. */
+.app-main.dp-page { padding-left: 96px; padding-right: 96px; }
+@media (max-width: 760px) {
+  .app-main.dp-page { padding-left: 20px; padding-right: 60px; }
+}

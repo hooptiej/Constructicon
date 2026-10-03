@@ -1,264 +1,274 @@
 {% extends "base.html" %}
 {% block title %}{{ hobby.name }} — Hobby — Constructicon{% endblock %}
 {% block body %}
+{% from "_card.html" import card %}
+{% from "_details_group.html" import dp_group %}
+{% from "_hobby_nodes.html" import project_nodes %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
 {% include "_export_builder.html" %}
-<div class="app-main">
-  <a class="back-link" href="/">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    Back to hobbies
-  </a>
+{#- Hobby page (#525): the same patterns as the project page (#515/#518) and home: .dp-page
+    gutters, breadcrumb + More menu, the hobby's own card beside a details panel (dp_group),
+    the Curator strip, then the member projects (small card + pile of its files) and the loose
+    objects as item cards. Behaviour: static/js/details.js, stacks.js, cards.js. -#}
+<div class="app-main dp-page">
+  <span class="dp-status-live" id="dp-status-live" role="status" aria-live="polite"></span>
 
-  <div class="project-detail-header">
-    <div>
-      <h1 class="page-title">{{ hobby.name }}</h1>
-      <div style="margin-top:12px;display:flex;align-items:center;gap:12px;font-size:13px">
-        <label for="hobby-status-select">Activity:</label>
-        <select id="hobby-status-select" class="project-status-pill" style="width:fit-content;border:none;cursor:pointer">
+  <div class="dp-topbar">
+    <nav class="dp-crumbs" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <span aria-hidden="true">&rsaquo;</span>
+      <a href="/hobbies">Hobbies</a>
+      <span aria-hidden="true">&rsaquo;</span>
+      <span class="dp-crumb-current" aria-current="page">{{ hobby.name }}</span>
+    </nav>
+    <div class="dp-topbar-actions">
+      <div class="dp-more" data-dp-more>
+        <button type="button" class="dp-btn dp-more-btn" id="hobby-more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="hobby-more-menu">More <span aria-hidden="true">&#9662;</span></button>
+        <div class="dp-menu" id="hobby-more-menu" role="menu" aria-labelledby="hobby-more-btn" hidden>
+          <a role="menuitem" href="/curator">Open the Curator queue</a>
+          <a role="menuitem" href="/hobbies">All hobbies</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="dp-hero">
+    <div class="dp-hero-left">
+      <div class="detail-header-card">{{ card(hobby_card, "full") }}</div>
+    </div>
+
+    <div class="dp-side">
+      <div>
+        <h1 class="dp-title">{{ hobby.name }}</h1>
+        <p class="dp-subtitle">{{ project_count }} project{{ '' if project_count == 1 else 's' }}{% if loose_items %} &middot; {{ loose_items | length }} loose object{{ '' if loose_items | length == 1 else 's' }}{% endif %}</p>
+      </div>
+
+      {% set card_queue = hobby_queue %}
+      {% include "_needs_strip.html" %}
+
+      {# ---- STATUS: the manual Active/Inactive switch, with the computed mismatch flags inline ---- #}
+      {% set status_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Activity</dt><dd>{{ hobby.status_label }}</dd></div>
+      </dl>
+      {% for f in hobby.flags %}
+      <div class="hobby-flag" role="note"><strong>{{ f.label }}.</strong> {{ f.detail }}</div>
+      {% endfor %}
+      {% endset %}
+      {% set status_edit %}
+      <div class="dp-field">
+        <label for="hobby-status-select">Activity</label>
+        <select id="hobby-status-select" class="input">
           <option value="active" {% if hobby.status == 'active' %}selected{% endif %}>Active</option>
           <option value="inactive" {% if hobby.status == 'inactive' %}selected{% endif %}>Inactive</option>
         </select>
-        <label for="hobby-code-input" style="margin-left:8px">Code:</label>
-        <input id="hobby-code-input" class="input" style="width:64px;text-transform:uppercase" maxlength="4" value="{{ hobby.group_code or '' }}" title="2-4 letters or digits, shown on cards">
-        <p class="status-confirm" id="status-confirm" style="display:none;font-size:12px;color:#6E6B57;margin:0">Saved.</p>
-        <p id="hobby-error" role="alert" style="display:none;font-size:12px;color:#B5483A;margin:0"></p>
       </div>
-      <div id="hobby-flags" style="margin-top:12px"></div>
+      {% endset %}
+
+      {# ---- IDENTITY: name (read-only: a hobby is renamed on its tag) and the group code ---- #}
+      {% set identity_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Name</dt><dd>{{ hobby.name }}</dd></div>
+        <div class="dp-row"><dt>Group code</dt><dd>{% if hobby.group_code %}{{ hobby.group_code }}{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>
+      </dl>
+      {% endset %}
+      {% set identity_edit %}
+      <div class="dp-field">
+        <label for="hobby-code-input">Group code</label>
+        <input id="hobby-code-input" class="input" style="width:96px;text-transform:uppercase" maxlength="4" value="{{ hobby.group_code or '' }}" title="2-4 letters or digits, shown on cards">
+      </div>
+      {% endset %}
+
+      {# ---- DATES: computed from the member projects, nothing to edit ---- #}
+      {% set dates_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Span</dt><dd>{% if dates_label %}{{ dates_label }}{% else %}<span class="dp-muted">No dated projects yet</span>{% endif %}</dd></div>
+        {% if dates_start %}<div class="dp-row"><dt>First</dt><dd>{{ dates_start }}</dd></div>{% endif %}
+        {% if dates_end %}<div class="dp-row"><dt>Latest</dt><dd>{{ dates_end }}</dd></div>{% endif %}
+        <div class="dp-row"><dt>Computed from</dt><dd>its {{ project_count }} project{{ '' if project_count == 1 else 's' }}</dd></div>
+      </dl>
+      {% endset %}
+
+      <div class="dp-panel">
+        {{ dp_group("status", "STATUS", status_view, status_edit) }}
+        {{ dp_group("identity", "IDENTITY", identity_view, identity_edit) }}
+        {{ dp_group("dates", "DATES", dates_view, editable=false) }}
+      </div>
     </div>
   </div>
 
-  <!-- Member Projects Section -->
-  <div style="margin-top:24px">
-    <h2 style="font-size:16px;font-weight:600;margin-bottom:12px">Member Projects</h2>
-    <div id="hobby-projects-box"></div>
-    <div style="margin-top:12px">
-      <select id="hobby-add-project-select" class="input">
-        <option value="">+ Add project to hobby…</option>
-      </select>
+  {# ---- Projects: each member as a small card with a pile of its files beneath ---- #}
+  <section class="stacks-section hp-section" id="stacks" aria-labelledby="hp-projects-heading">
+    <div class="home-col-header">
+      <h2 id="hp-projects-heading">Projects</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        {% if project_count > 1 %}
+        <div class="sort-control">
+          <label for="hobby-projects-sort" class="sort-label">Sort</label>
+          <select class="filter-select" id="hobby-projects-sort">
+            <option value="newest">Newest</option>
+            <option value="oldest">Oldest</option>
+            <option value="az">A–Z</option>
+          </select>
+        </div>
+        {% endif %}
+        <label class="dp-sr-label" for="hobby-add-project-select">Add a project to this hobby</label>
+        <select id="hobby-add-project-select" class="input">
+          <option value="">+ Add project to hobby…</option>
+        </select>
+      </div>
     </div>
-  </div>
+    <div class="hazard-stripe" style="width:64px"></div>
+    <p class="dp-error hp-error" id="hobby-error" role="alert"></p>
 
-  <!-- Attached Objects Section -->
-  <div style="margin-top:24px">
-    <h2 style="font-size:16px;font-weight:600;margin-bottom:12px">Attached Objects</h2>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">Objects are tagged with this hobby from their detail page.</p>
-    <div id="hobby-items-box" class="gallery-grid"></div>
-    <p id="hobby-items-empty" class="empty-state" style="display:none">No objects yet.</p>
-  </div>
+    {% if active_nodes or inactive_nodes %}
+    {# Owner, 2026-10-03: Active and Inactive share ONE flowing row (no dead space after a short
+       Active zone); a vertical divider marks where the inactive cards start. #}
+    <h3 class="zone-heading">{{ 'Active' if active_nodes else 'Inactive' }}</h3>
+    <div class="hp-row" id="hobby-projects-row">
+      {{ project_nodes(active_nodes, 'a') }}
+      {% if active_nodes and inactive_nodes %}<div class="hp-divider" role="separator" aria-label="Inactive projects follow"><span>Inactive</span></div>{% endif %}
+      {{ project_nodes(inactive_nodes, 'i') }}
+    </div>
+    {% else %}
+    <p class="empty-state">No member projects yet.</p>
+    {% endif %}
+  </section>
+
+  {# ---- Loose objects: tagged with this hobby, in none of its member projects ---- #}
+  <section class="hp-section" id="loose-objects" aria-labelledby="hp-loose-heading">
+    <div class="home-col-header">
+      <h2 id="hp-loose-heading">Loose objects</h2>
+      {% if loose_items | length > 1 %}
+      <div class="sort-control">
+        <label for="hobby-loose-sort" class="sort-label">Sort</label>
+        <select class="filter-select" id="hobby-loose-sort">
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="az">A–Z</option>
+        </select>
+      </div>
+      {% endif %}
+    </div>
+    <p class="dp-subtitle">Tagged with this hobby, but not in any of its projects.</p>
+    {% if loose_items %}
+    <div class="cx-item-grid cx-item-grid-roomy" id="hobby-loose-grid"></div>
+    {% else %}
+    <p class="empty-state" id="hobby-loose-empty">No loose objects.</p>
+    {% endif %}
+  </section>
 </div>
 
+<script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
 <script>
-const hobbyId = {{ hobby.id | tojson }};
-const hobbySlug = {{ hobby.slug | tojson }};
-let currentStatus = {{ hobby.status | tojson }};
-let currentProjects = {{ hobby.projects | tojson }};
-let currentItems = {{ hobby['items'] | tojson }};
+(function () {
+  const DP = window.DetailsPanel;
+  const HOBBY_ID = {{ hobby.id | tojson }};
 
-let currentFlags = {{ hobby.flags | tojson }};
-let currentCode = {{ (hobby.group_code or '') | tojson }};
-const hobbyError = document.getElementById('hobby-error');
+  function errText(body, res) {
+    return (body && body.error && body.error.message) || (body && body.detail) || `Couldn't save (${res.status})`;
+  }
+  async function post(path, fields) {
+    const res = await fetch(`/api/hobby/${HOBBY_ID}/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields).toString(),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(errText(body, res));
+    return body;
+  }
 
-// Mismatch flags (V2 cards 3.3): computed server-side on every read, never stored.
-// They only SURFACE a disagreement between the switch and the work inside the hobby.
-function renderFlags() {
-  const box = document.getElementById('hobby-flags');
-  box.innerHTML = '';
-  currentFlags.forEach(f => {
-    const note = document.createElement('div');
-    note.className = 'hobby-flag';
-    note.setAttribute('role', 'note');
-    note.style.cssText = 'padding:8px 12px;margin-bottom:8px;border-left:3px solid #C9A227;background:rgba(201,162,39,0.12);font-size:13px';
-    const strong = document.createElement('strong');
-    strong.textContent = f.label + '. ';
-    note.appendChild(strong);
-    note.appendChild(document.createTextNode(f.detail));
-    box.appendChild(note);
+  // STATUS / IDENTITY: Save calls the same endpoints the old inline controls called; details.js reloads on success.
+  const statusSel = document.getElementById('hobby-status-select');
+  const codeInput = document.getElementById('hobby-code-input');
+  const savedStatus = {{ hobby.status | tojson }};
+  const savedCode = {{ (hobby.group_code or '') | tojson }};
+  DP.register('status', {
+    save: async () => { if (statusSel.value !== savedStatus) await post('status', { status: statusSel.value }); },
   });
-}
+  DP.register('identity', {
+    save: async () => { if (codeInput.value.trim() !== savedCode) await post('group-code', { group_code: codeInput.value.trim() }); },
+  });
 
-async function postHobby(path, field, value) {
-  hobbyError.style.display = 'none';
-  const form = new FormData();
-  form.append(field, value);
-  const response = await fetch(`/api/hobby/${hobbyId}/${path}`, { method: 'POST', body: form });
-  let data = null;
-  try { data = await response.json(); } catch (e) { /* non-JSON error body */ }
-  if (!response.ok) {
-    hobbyError.textContent = (data && (data.detail || (data.error && data.error.message))) || 'Could not save.';
-    hobbyError.style.display = 'block';
-    return null;
-  }
-  statusConfirm.style.display = 'block';
-  setTimeout(() => { statusConfirm.style.display = 'none'; }, 2000);
-  return data;
-}
+  // Add / remove a project: the page is server-rendered, so a change reloads it.
+  const errEl = document.getElementById('hobby-error');
+  function showErr(msg) { errEl.textContent = msg || ''; }
+  const addSel = document.getElementById('hobby-add-project-select');
+  const memberIds = new Set(Array.from(document.querySelectorAll('.hp-block')).map(b => b.dataset.projectId));
+  fetch('/api/projects').then(r => r.ok ? r.json() : []).then(projects => {
+    projects.filter(p => !memberIds.has(String(p.id))).forEach(p => {
+      const o = document.createElement('option');
+      o.value = p.id; o.textContent = p.title;   // textContent: a hostile title stays text
+      addSel.appendChild(o);
+    });
+  }).catch(() => {});
+  addSel.addEventListener('change', async () => {
+    if (!addSel.value) return;
+    showErr('');
+    try {
+      await post('add-project', { project_id: addSel.value });
+      location.reload();
+    } catch (e) { showErr(e.message); addSel.value = ''; }
+  });
+  document.querySelectorAll('.hp-remove').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      showErr('');
+      btn.disabled = true;
+      try {
+        await post('remove-project', { project_id: btn.dataset.projectId });
+        location.reload();
+      } catch (e) { showErr(e.message); btn.disabled = false; }
+    });
+  });
 
-// Activity switch: active / inactive (manual; never computed)
-const statusSelect = document.getElementById('hobby-status-select');
-const statusConfirm = document.getElementById('status-confirm');
-
-statusSelect.addEventListener('change', async function() {
-  const data = await postHobby('status', 'status', this.value);
-  if (data) {
-    currentStatus = data.status;
-    currentFlags = data.flags || [];
-    renderFlags();
-  } else {
-    statusSelect.value = currentStatus;
-  }
-});
-
-const codeInput = document.getElementById('hobby-code-input');
-codeInput.addEventListener('change', async function() {
-  const data = await postHobby('group-code', 'group_code', this.value);
-  if (data) { currentCode = data.group_code || ''; this.value = currentCode; }
-  else { this.value = currentCode; }
-});
-renderFlags();
-
-// Render projects as chips with remove buttons
-function renderProjectChips() {
-  const box = document.getElementById('hobby-projects-box');
-  box.innerHTML = '';
-  if (!currentProjects.length) {
-    const note = document.createElement('span');
-    note.className = 'optional';
-    note.textContent = 'No member projects yet.';
-    box.appendChild(note);
-  } else {
-    currentProjects.forEach(p => {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      const link = document.createElement('a');
-      link.href = `/project/${p.slug}`;
-      link.textContent = p.title;
-      link.style.textDecoration = 'none';
-      link.style.color = 'inherit';
-      chip.appendChild(link);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = '×';
-      btn.style.marginLeft = '4px';
-      btn.addEventListener('click', () => removeProjectFromHobby(p.id));
-      chip.appendChild(btn);
-      box.appendChild(chip);
+  // Project sort: reorder the already-rendered blocks in place (as home does); nested children stay under their parent.
+  const projSort = document.getElementById('hobby-projects-sort');
+  if (projSort) {
+    const SORT = {
+      newest: (a, b) => Number(b.dataset.start) - Number(a.dataset.start),
+      oldest: (a, b) => Number(a.dataset.start) - Number(b.dataset.start),
+      az: (a, b) => (a.dataset.title || '').localeCompare(b.dataset.title || ''),
+    };
+    // One row: blocks before the divider are Active, after it Inactive. Sort each side on its own,
+    // so Active always stays ahead of the divider.
+    const projRow = document.getElementById('hobby-projects-row');
+    const divider = projRow ? projRow.querySelector('.hp-divider') : null;
+    if (projRow) {
+      let zone = 'a';
+      Array.from(projRow.children).forEach(c => {
+        if (c === divider) { zone = 'i'; return; }
+        if (c.classList.contains('hp-block')) c.dataset.zone = divider ? zone : 'a';
+      });
+    }
+    projSort.addEventListener('change', () => {
+      if (!projRow) return;
+      const by = SORT[projSort.value];
+      const blocks = Array.from(projRow.children).filter(c => c.classList.contains('hp-block'));
+      blocks.filter(b => b.dataset.zone === 'a').sort(by).forEach(b => projRow.appendChild(b));
+      if (divider) projRow.appendChild(divider);
+      blocks.filter(b => b.dataset.zone !== 'a').sort(by).forEach(b => projRow.appendChild(b));
     });
   }
-}
 
-// Render items as a gallery grid
-function renderItemsGrid() {
-  const box = document.getElementById('hobby-items-box');
-  const empty = document.getElementById('hobby-items-empty');
-
-  box.innerHTML = '';
-  if (!currentItems.length) {
-    empty.style.display = 'block';
-  } else {
-    empty.style.display = 'none';
-    currentItems.forEach(item => {
-      const card = document.createElement('div');
-      card.className = 'project-item-card-wrapper';
-      card.dataset.slug = item.slug;
-
-      const link = document.createElement('a');
-      link.href = `/object/${item.slug}`;
-      link.className = 'project-item-card';
-
-      const thumb = document.createElement('div');
-      thumb.className = 'project-item-thumb';
-      if (item.thumb_url) {
-        const img = document.createElement('img');
-        img.src = item.thumb_url;
-        img.loading = 'lazy';
-        img.alt = item.display_name || item.filename || '';
-        thumb.appendChild(img);
-      } else if (item.media_type) {
-        const pill = document.createElement('span');
-        pill.className = 'media-type-pill';
-        pill.textContent = item.media_type;
-        thumb.appendChild(pill);
-      }
-      link.appendChild(thumb);
-
-      const body = document.createElement('div');
-      body.className = 'project-item-body';
-
-      const title = document.createElement('div');
-      title.className = 'project-item-title';
-      title.textContent = item.display_name || item.filename || item.slug;
-      body.appendChild(title);
-
-      const meta = document.createElement('div');
-      meta.className = 'project-item-meta';
-      meta.textContent = (item.media_type || 'unknown') + ' · ' + (item.uploaded_at_display || '');
-      body.appendChild(meta);
-
-      link.appendChild(body);
-      card.appendChild(link);
-      box.appendChild(card);
-    });
+  // Loose objects: the shared item card renderer (static/js/cards.js), same as home's Files panel.
+  const loose = {{ loose_items | tojson }};
+  const grid = document.getElementById('hobby-loose-grid');
+  const looseSort = document.getElementById('hobby-loose-sort');
+  const LOOSE_SORT = {
+    newest: (a, b) => b.uploaded_at - a.uploaded_at,
+    oldest: (a, b) => a.uploaded_at - b.uploaded_at,
+    az: (a, b) => String(a.display_name || '').localeCompare(String(b.display_name || '')),
+  };
+  function renderLoose() {
+    if (!grid) return;
+    const sorted = loose.slice().sort(LOOSE_SORT[looseSort ? looseSort.value : 'newest']);
+    grid.innerHTML = sorted.map(it => ItemCards.html(it, {})).join('');
   }
-}
-
-// Load available projects for adding
-async function loadProjectOptions() {
-  const res = await fetch('/api/projects');
-  const projects = await res.json();
-  const select = document.getElementById('hobby-add-project-select');
-  select.querySelectorAll('option[data-project]').forEach(o => o.remove());
-
-  const currentIds = new Set(currentProjects.map(p => String(p.id)));
-  const html = projects
-    .filter(p => !currentIds.has(String(p.id)))
-    .map(p => `<option value="${p.id}" data-project>${p.title}</option>`)
-    .join('');
-  select.insertAdjacentHTML('beforeend', html);
-}
-
-// Add project to hobby
-async function addProjectToHobby(projectId) {
-  const form = new FormData();
-  form.append('project_id', projectId);
-  const res = await fetch(`/api/hobby/${hobbyId}/add-project`, { method: 'POST', body: form });
-  if (res.ok) {
-    currentProjects = await res.json();
-    renderProjectChips();
-    loadProjectOptions();
-  } else {
-    const body = await res.json().catch(() => ({ detail: 'Failed to add project' }));
-    alert(body.detail || 'Failed to add project');
-  }
-}
-
-// Remove project from hobby
-async function removeProjectFromHobby(projectId) {
-  const form = new FormData();
-  form.append('project_id', projectId);
-  const res = await fetch(`/api/hobby/${hobbyId}/remove-project`, { method: 'POST', body: form });
-  if (res.ok) {
-    currentProjects = await res.json();
-    renderProjectChips();
-    loadProjectOptions();
-  } else {
-    alert('Failed to remove project');
-  }
-}
-
-// Add project select handler
-document.getElementById('hobby-add-project-select').addEventListener('change', function() {
-  const val = this.value;
-  if (!val) return;
-  addProjectToHobby(val);
-  this.value = '';
-});
-
-// Initial render
-renderProjectChips();
-renderItemsGrid();
-loadProjectOptions();
+  if (looseSort) looseSort.addEventListener('change', renderLoose);
+  renderLoose();
+})();
 </script>
-
 {% endblock %}

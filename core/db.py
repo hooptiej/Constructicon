@@ -3887,6 +3887,21 @@ def list_projects_for_hobby(tag_id):
         conn.close()
 
 
+def list_loose_hobby_objects(tag_id):
+    """Objects tagged with a hobby that sit in none of its member projects (#525): the
+    hobby page's "loose objects". Every tagged object, not capped like list_posts_for_tag's
+    default. Newest first, as list_posts_for_tag returns them."""
+    tagged = list_posts_for_tag(tag_id, include_descendants=False, limit=1_000_000)
+    conn = get_conn()
+    try:
+        in_members = {r[0] for r in conn.execute(
+            "SELECT pi.post_slug FROM project_items pi JOIN project_hobbies ph ON ph.project_id = pi.project_id "
+            "WHERE ph.hobby_tag_id = ?", (tag_id,)).fetchall()}
+    finally:
+        conn.close()
+    return [r for r in tagged if r["slug"] not in in_members]
+
+
 def list_hobbies_for_project(project_id):
     """Get all hobbies attached to a project via project_hobbies.
 

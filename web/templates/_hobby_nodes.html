@@ -1,0 +1,47 @@
+{#- The hobby page's project blocks (#525): each member project is its small card with a pile
+     of its files beneath (the same stack-pile markup the project page uses, so the same
+     static/js/stacks.js fans it and the same cards.css styles it). A nested child renders
+     inside its parent's block. Every value is autoescaped by Jinja; nothing is marked |safe.
+
+     {% from "_hobby_nodes.html" import project_nodes %}
+     {{ project_nodes(nodes, 'a') }}     nodes: the web layer's list (face, pile, children) -#}
+{% from "_card.html" import card %}
+
+{% macro project_nodes(nodes, zone, nested=false) -%}
+{% for n in nodes %}
+<div class="hp-block{% if nested %} hp-nested{% endif %}" data-project-id="{{ n.id }}" data-project-slug="{{ n.slug }}"
+     data-title="{{ n.title }}" data-start="{{ n.face.effective_start or n.face.created_at }}">
+  <div class="hp-card">{{ card(n.face, "small") }}</div>
+  {% if n.pile %}
+  <div class="stack-pile hp-pile" data-media-type="project-{{ n.id }}" data-count="{{ n.pile.count }}">
+    <div class="stack-face">
+      {# decorative copy of the top cards; inert so the links inside never take focus or clicks #}
+      <span class="stack-cards" aria-hidden="true" inert>
+        {% for c in n.pile.cards[:4] %}<span class="stack-slot stack-slot-{{ loop.index0 }}">{{ card(c, "mini") }}</span>{% endfor %}
+      </span>
+      <button type="button" class="stack-pile-btn" aria-expanded="false" aria-controls="fan-{{ zone }}-{{ n.id }}"
+              aria-label="{{ n.title }}: {{ n.pile.count }} file{{ '' if n.pile.count == 1 else 's' }}{% if n.pile.span %}, {{ n.pile.span }}{% endif %}. Fan out"></button>
+      <span class="stack-badge" aria-hidden="true">{{ n.pile.count }}</span>
+    </div>
+    <div class="stack-label"><strong>{{ n.pile.count }} file{{ '' if n.pile.count == 1 else 's' }}</strong>{% if n.pile.span %} &middot; {{ n.pile.span }}{% endif %}</div>
+    <div class="stack-fan" id="fan-{{ zone }}-{{ n.id }}" hidden>
+      <div class="stack-fan-arc" style="--n: {{ n.pile.cards|length }}">
+        {% for c in n.pile.cards %}<span class="stack-fan-card" style="--i: {{ loop.index0 }}">{{ card(c, "mini") }}</span>{% endfor %}
+        {% if n.pile.more %}<span class="stack-more">+{{ n.pile.more }}</span>{% endif %}
+      </div>
+      <a class="stack-showall hp-open-project" href="/project/{{ n.slug }}">Open {{ n.title }}{% if n.pile.more %} (all {{ n.pile.count }}){% endif %}</a>
+    </div>
+  </div>
+  {% else %}
+  <p class="hp-nofiles">No files yet.</p>
+  {% endif %}
+  <button type="button" class="dp-btn hp-remove" data-project-id="{{ n.id }}" data-project-title="{{ n.title }}" aria-label="Remove {{ n.title }} from this hobby">Remove from hobby</button>
+  {% if n.children %}
+  <div class="hp-children" role="group" aria-label="Nested in {{ n.title }}">
+    <div class="hp-children-label">Nested in {{ n.title }}</div>
+    <div class="hp-row">{{ project_nodes(n.children, zone, true) }}</div>
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+{%- endmacro %}

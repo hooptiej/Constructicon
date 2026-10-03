@@ -295,3 +295,24 @@
   .stack-slot-1 { transform: translate(7px, 7px); } .stack-slot-2 { transform: translate(14px, 12px); } .stack-slot-3 { transform: translate(21px, 17px); }
   .stack-pile.is-open .stack-fan-card { animation: none; }
 }
+
+/* ---- Hobby page (#525): each member project is a small card with a pile of its files beneath.
+   The pile itself is the project page's .stack-pile; only the layout around it lives here. ---- */
+.hp-section { margin: 28px 0 16px; }
+.hp-error { margin: 8px 0; }
+.hp-row { display: flex; flex-wrap: wrap; gap: 28px 34px; align-items: flex-start; margin: 14px 0 22px; }
+.hp-block { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; flex: 0 0 auto; max-width: 100%; }
+.hp-block:has(.stack-pile.is-open) { flex: 1 1 100%; }
+.hp-nofiles { margin: 0; font-family: var(--card-font-mono); font-size: 12px; color: var(--text-muted); }
+.hp-remove { align-self: flex-start; }
+/* The Active/Inactive divider inside the one projects row: a label over a vertical rule. */
+.hp-divider { align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 8px; min-height: 220px; padding: 0 6px; flex: 0 0 auto; }
+.hp-divider span { font-family: var(--card-font-mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+.hp-divider::after { content: ""; flex: 1 1 auto; width: 2px; border-radius: 1px; background: var(--border-strong); }
+.hp-open-project { display: inline-block; text-decoration: none; }
+.hp-children { margin-top: 6px; padding-left: 18px; border-left: 2px solid var(--border-strong); width: 100%; }
+.hp-children-label { font-family: var(--card-font-mono); font-size: 12px; color: var(--text-muted); }
+.hobby-flag { margin: 8px 0 0; padding: 8px 12px; border-left: 3px solid var(--card-pip-on); background: rgba(201, 162, 39, .12); font-size: 13px; overflow-wrap: anywhere; }
+.dp-menu a { display: block; font-size: 13px; text-decoration: none; border-radius: 6px; padding: 8px 10px; color: var(--text); }
+.dp-menu a:hover, .dp-menu a:focus-visible { background: var(--chip); }
+@media (max-width: 640px) { .hp-row { gap: 24px 20px; } }

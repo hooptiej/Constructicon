@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
+from core import version as version_info
 from core import backup, curator_needs, db, decisions, ingest, object_types, ocr, storage, timeline
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
@@ -34,7 +35,7 @@ IMPORT_DIR = Path(os.getenv("CONSTRUCTICON_IMPORT_DIR", "/app/import"))
 # a 500 MB file would be ~670 MB of JSON
 DOWNLOAD_INLINE_MAX_BYTES = 25 * 1024 * 1024
 
-mcp = MCPServer(name="constructicon-mcp")
+mcp = MCPServer(name="constructicon-mcp", version=version_info.get_version())  # #508: version in server info (read at start; restart picks up a deploy)
 
 
 def _resolve_import_path(rel):
@@ -181,6 +182,14 @@ def _to_public_blog_entry(entry):
         "projects": [{**_to_public_project(p), "note": p.get("note", ""), "sort_order": p.get("sort_order")} for p in projects],
         "items": [{**_to_public(i), "note": i.get("note", ""), "sort_order": i.get("sort_order")} for i in items],
     }
+
+
+@mcp.tool()
+def constructicon_version() -> dict:
+    """Report which Constructicon build is running (#508): {version, commit,
+    deployed_at, env}. Version is CalVer (YYYY.M.D, .N for repeats the same day),
+    suffixed -dev on the test instance; "dev" means no deploy.sh version file."""
+    return version_info.get_version_info()
 
 
 @mcp.tool()

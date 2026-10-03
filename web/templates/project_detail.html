@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ project.title }} — Constructicon{% endblock %}
 {% block body %}
+{% from "_card.html" import card %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
@@ -11,16 +12,14 @@
     Back to projects
   </a>
 
-  {% if ancestors %}
-  <div style="margin-bottom:16px;font-size:12px;color:var(--text-muted)">
-    <span>Breadcrumb:</span>
-    {% for ancestor in ancestors %}
-    <a href="/project/{{ ancestor.slug }}" style="color:inherit;text-decoration:none;border-bottom:1px dotted">{{ ancestor.title }}</a>
-    <span> / </span>
+  {# V2 cards 8.3: the breadcrumb is the card's home chain (resolve_home walked upward), top first. #}
+  <nav class="detail-crumbs" aria-label="Breadcrumb">
+    {% for crumb in home_crumbs %}
+    <a href="{{ crumb.href }}">{{ crumb.title }}</a>
+    <span aria-hidden="true">&rsaquo;</span>
     {% endfor %}
-    <span style="font-weight:500" id="project-breadcrumb-current">{{ project.title }}</span>
-  </div>
-  {% endif %}
+    <span class="detail-crumb-current" id="project-breadcrumb-current">{{ project.title }}</span>
+  </nav>
 
   <div class="project-detail-header">
     <div>
@@ -273,11 +272,7 @@
     })();
     </script>
     <div class="hazard-stripe" style="width:64px"></div>
-    {% if cover_url %}
-    <div class="project-cover" style="height:200px;border-radius:12px;border:1px solid var(--border)">
-      <img src="{{ cover_url }}" alt="">
-    </div>
-    {% endif %}
+    <div class="detail-header-card">{{ card(header_card, "full") }}</div>
     {% if timeline_children or timeline_items %}
     <div class="project-video-timeline-panel-label">Project Timeline</div>
     <div class="project-video-timeline-panel">
@@ -309,17 +304,8 @@
     </div>
   </div>
 
-  {# #300: ONE grid holds the featured write-up, this project's own items,
-     and its sub-projects. The write-up is the first grid item and spans
-     2x2 cells (same idea as home.html's #featured-project); everything
-     else auto-places around it in chronological order (grid_entries is
-     already sorted by the route — items by resolved effective date,
-     sub-projects by their effective_start). Sub-project cards get the
-     purple project treatment + a "Child project" label so they never
-     read as a regular content item. #}
-  {% if grid_entries or writeup_body %}
-  <div class="project-item-grid">
-    {% if writeup_body %}
+  {% if writeup_body %}
+  <div class="project-writeup-solo">
     <div class="project-writeup-featured" id="project-writeup-featured">
       <div class="hazard-stripe"></div>
       <div class="project-writeup-featured-head">
@@ -330,7 +316,51 @@
       </div>
       <div class="project-writeup-featured-body markdown-body">{{ writeup_body | markdown }}</div>
     </div>
+  </div>
+  {% endif %}
+
+  {# V2 cards 8.3: stacks and fans. One pile per file type (a real <button>); the full grid
+     below it is the same markup v1 had (every file action lives there), inside a <details>
+     so it is reachable with JS off. static/js/stacks.js wires fan / "Show all N" / Esc. #}
+  <section class="stacks-section" id="stacks" aria-labelledby="stacks-heading">
+    <h2 class="stacks-heading" id="stacks-heading">Stacks</h2>
+    {% if stacks or beside_cards %}
+    <div class="stacks-row">
+      {% for pile in stacks %}
+      <div class="stack-pile" data-media-type="{{ pile.media_type }}" data-count="{{ pile.count }}">
+        <div class="stack-face">
+          {# decorative copy of the top cards; inert so the links inside never take focus or clicks #}
+          <span class="stack-cards" aria-hidden="true" inert>
+            {% for c in pile.cards[:4] %}<span class="stack-slot stack-slot-{{ loop.index0 }}">{{ card(c, "mini") }}</span>{% endfor %}
+          </span>
+          <button type="button" class="stack-pile-btn" aria-expanded="false" aria-controls="fan-{{ loop.index }}"
+                  aria-label="{{ pile.label }}: {{ pile.count }} file{{ '' if pile.count == 1 else 's' }}{% if pile.span %}, {{ pile.span }}{% endif %}. Fan out"></button>
+          <span class="stack-badge" aria-hidden="true">{{ pile.count }}</span>
+        </div>
+        <div class="stack-label"><strong>{{ pile.label }}</strong> &middot; {{ pile.count }}{% if pile.span %} &middot; {{ pile.span }}{% endif %}</div>
+        <div class="stack-fan" id="fan-{{ loop.index }}" hidden>
+          <div class="stack-fan-arc" style="--n: {{ pile.cards|length }}">
+            {% for c in pile.cards %}<span class="stack-fan-card" style="--i: {{ loop.index0 }}">{{ card(c, "mini") }}</span>{% endfor %}
+            {% if pile.more %}<span class="stack-more">+{{ pile.more }}</span>{% endif %}
+          </div>
+          <button type="button" class="stack-showall" data-media-type="{{ pile.media_type }}">Show all {{ pile.count }}</button>
+        </div>
+      </div>
+      {% endfor %}
+      {% for c in beside_cards %}
+      <div class="stack-beside">{{ card(c, "small") }}</div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-state">This project has no items yet.</p>
     {% endif %}
+  </section>
+
+  {% if grid_entries %}
+  <details class="all-files" id="all-files">
+    <summary id="all-files-summary">All files <span class="all-files-count">({{ grid_entries | rejectattr('kind', 'equalto', 'project') | list | length }} files, {{ grid_entries | selectattr('kind', 'equalto', 'project') | list | length }} nested)</span></summary>
+    <div class="all-files-filter" id="all-files-filter" hidden>Showing one type. <button type="button" id="all-files-clear">Show everything</button></div>
+  <div class="project-item-grid">
     {% for entry in grid_entries %}
     {% if entry.kind == 'project' %}
     <div class="project-item-card-wrapper project-subproject-wrapper" data-project-slug="{{ entry.slug }}" data-project-id="{{ entry.id }}">
@@ -355,7 +385,7 @@
       </div>
     </div>
     {% else %}
-    <div class="project-item-card-wrapper" data-slug="{{ entry.slug }}" style="position:relative">
+    <div class="project-item-card-wrapper" data-slug="{{ entry.slug }}" data-media-type="{{ entry.media_type }}" style="position:relative">
       <a class="project-item-card" href="{{ entry.link }}">
         <div class="project-item-thumb">
           {% if entry.thumb_url %}
@@ -380,9 +410,9 @@
     {% endif %}
     {% endfor %}
   </div>
-  {% else %}
-  <p class="empty-state">This project has no items yet.</p>
+  </details>
   {% endif %}
+  <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
 
   {% if timeline_children or timeline_items %}
   <script src="/static/js/project-video-timeline.js?v={{ static_version('js/project-video-timeline.js') }}"></script>

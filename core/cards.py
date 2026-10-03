@@ -1712,6 +1712,57 @@ def card_face(card, items=None):
     }
 
 
+STACK_UNDER = 3     # tilted cards under the flat top card in a pile
+STACK_FAN_MAX = 7   # cards shown when a pile is fanned out (then "+N")
+
+
+def _day_label(ts):
+    d = timeline.epoch_to_local(ts)
+    return f"{_MONTHS[d.month - 1]} {d.day}, {d.year}"
+
+
+def file_stacks(card, items=None, thumb_fn=None):
+    """Piles for the detail page (8.3): one per `media_type` of the card's files, biggest
+    first. Each pile: `media_type`, `label` (registry label), `count`, `span` (the
+    `Mon YYYY - Mon YYYY` date span of the files' resolved dates), `cards` (up to
+    STACK_FAN_MAX asset-card dicts, earliest first: title, own real date, type line,
+    cover_url, href, provenance), and `more` (files beyond the fan). `thumb_fn(row)` gives
+    a row's thumbnail URL or None (the page decides, since thumbnails depend on storage).
+    Counts here are every file in the card's grid, write-up included."""
+    from . import object_types  # lazy, same reason as the other lazy imports in this module
+    row = get_card(card) if not isinstance(card, dict) else card
+    if items is None:
+        items = db.list_project_items(row["id"])
+    by_type = {}
+    for it in items:
+        by_type.setdefault(it.get("media_type") or "unknown", []).append(it)
+    piles = []
+    for mt, rows in by_type.items():
+        spec = object_types.get_object_type(mt)
+        dated = sorted(((timeline.resolve_item_date(r), r) for r in rows), key=lambda p: p[0])
+        shown = dated[:STACK_FAN_MAX]
+        cards = []
+        for ts, r in shown:
+            prov = (r.get("provenance") or "").strip()
+            cards.append({
+                "slug": r["slug"], "kind": "asset",
+                "title": r.get("content_description") or r.get("description") or r.get("filename") or r["slug"],
+                "dates": _day_label(ts),
+                "type_line": spec.label,
+                "provenance": prov.capitalize(),
+                "cover_url": thumb_fn(r) if thumb_fn else None,
+                "href": f"/object/{r['slug']}?from=project:{row['slug']}",
+                "show_level": False, "codes": [], "facts": [], "stats": [],
+            })
+        piles.append({
+            "media_type": mt, "label": spec.label, "count": len(rows),
+            "span": date_range_label(dated[0][0], dated[-1][0]),
+            "cards": cards, "more": max(0, len(rows) - len(cards)),
+        })
+    piles.sort(key=lambda p: (-p["count"], p["label"]))
+    return piles
+
+
 def card_json(card):
     """GET /api/cards/{slug}: the card face for one card."""
     return card_face(card)

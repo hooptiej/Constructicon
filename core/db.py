@@ -540,6 +540,18 @@ def init_db():
         ):
             if column not in existing_project_columns:
                 conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+        # V2 cards piece 5 (3.4, 3.5, 3.12): whereabouts (+ note), card-level provenance
+        # (+ credit) and the card highlight flag. All empty/0 after migration; nothing is
+        # guessed. Validation lives in core/card_rules (no CHECK constraints).
+        for column, ddl_type in (
+            ("whereabouts", "TEXT"),
+            ("whereabouts_note", "TEXT"),
+            ("provenance", "TEXT"),
+            ("provenance_credit", "TEXT"),
+            ("highlight", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in existing_project_columns:
+                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
         # Change log: audit_log grows nullable columns so core operations can record
         # row images (before/after) for audit + undo. Direct HTTP callers keep getting
         # the old request-log row (these columns NULL there).
@@ -571,6 +583,7 @@ def init_db():
     card_migration.run_v2c_2()
     card_migration.run_v2c_3()
     card_migration.run_v2c_4()
+    card_migration.run_v2c_5()
 
 
 def _rebuild_project_relations_typed(conn):
@@ -2639,7 +2652,8 @@ def remove_family_member(family_id, member_id, op, actor, batch_id=None, affecte
 
 # Columns a card operation may write on `projects` (anything else is refused, so
 # a typo in core/cards.py can't write an arbitrary column).
-CARD_WRITABLE_COLUMNS = ("kind", "activity", "stage", "stop_reason", "parent_id")
+CARD_WRITABLE_COLUMNS = ("kind", "activity", "stage", "stop_reason", "parent_id",
+                         "whereabouts", "whereabouts_note", "provenance", "provenance_credit", "highlight")
 
 
 def update_card_columns(card_id, fields, op, actor, batch_id=None, bump_updated=True):

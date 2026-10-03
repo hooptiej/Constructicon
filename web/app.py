@@ -883,9 +883,11 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
             projects = [p for p in projects if p["id"] in hobby_project_ids]
     elif ref:
         # Show only reference projects: V2 collections (v1's reference-only cards
-        # migrated to kind=collection). Piece 5 adds the provenance='referenced'
-        # test once cards carry provenance.
-        projects = [p for p in projects if p.get("kind") == "collection"]
+        # migrated to kind=collection, stamped provenance='referenced' by piece 5),
+        # plus any card the owner marks provenance='referenced'.
+        projects = [p for p in projects
+                    if p.get("provenance") == "referenced"
+                    or (p.get("kind") == "collection" and not p.get("provenance"))]
     # #370 follow-up: Compute loose reference objects (provenance='reference',
     # not in any project) for the Reference pill view. Shape for cards:
     # {slug, title, thumb_url}
@@ -1411,6 +1413,10 @@ def project_detail_page(request: Request, slug: str):
                             for s in card_rules.STAGES],
             "card_stop_reasons": [{"key": r, "label": card_rules.STOP_REASON_LABELS[r]} for r in card_rules.STOP_REASONS],
             "card_status": cards.status_fields(project),
+            # V2 cards 3.4 / 3.5 / 3.12: whereabouts, card provenance + credit, highlight.
+            "card_extra": cards.whereabouts_fields(project),
+            "card_whereabouts_options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
+            "card_provenance_options": [{"key": k, "label": card_rules.CARD_PROVENANCE_LABELS[k]} for k in card_rules.CARD_PROVENANCE],
             "card_open_decisions": [cards.decision_summary(d) for d in cards.open_card_decisions(project["slug"])],
             # V2 cards 3.6: families this card is in / members of this family or collection.
             "family_info": cards.family_fields(project),
@@ -2655,6 +2661,33 @@ def api_orphan_child(project_id: str, child_id: str = Form(...)):
 
     cards.unnest(child["id"], actor="owner-ui")
     return JSONResponse(db.get_project(child["id"]) or {})
+
+
+@app.post("/api/projects/{project_id}/whereabouts")
+def api_set_whereabouts(project_id: str, whereabouts: str = Form(""), note: str | None = Form(None)):
+    """V2 cards 3.4: set (blank clears) where the physical thing is now, plus an
+    optional note (omit `note` to leave it alone). Rule violations are CardErrors:
+    422 bad_whereabouts (wrong kind, unknown value, in_use / never_built cross-rules)."""
+    result = cards.set_whereabouts(project_id, whereabouts or None, note if note is not None else ...,
+                                   actor="owner-ui")
+    return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
+
+
+@app.post("/api/projects/{project_id}/provenance")
+def api_set_card_provenance(project_id: str, provenance: str = Form(""), credit: str | None = Form(None)):
+    """V2 cards 3.5: set (blank clears) the CARD's provenance and optionally its credit
+    (omit `credit` to leave it alone). 422 bad_provenance on an unknown value.
+    Per-file provenance (/api/image/{slug}) is a separate field and untouched."""
+    result = cards.set_provenance(project_id, provenance or None, credit if credit is not None else ...,
+                                  actor="owner-ui")
+    return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
+
+
+@app.post("/api/projects/{project_id}/highlight")
+def api_set_card_highlight(project_id: str, on: str = Form("0")):
+    """V2 cards 3.12: the card's own highlight flag (independent of file highlights)."""
+    result = cards.set_highlight(project_id, on.strip().lower() in ("1", "true", "on", "yes"), actor="owner-ui")
+    return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
 
 
 @app.post("/api/families/{family_id}/members/add")

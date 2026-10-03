@@ -145,6 +145,9 @@ def set_kind(card, kind, *, force=False, dry_run=False, actor=changes.ACTOR_MCP,
     if row.get("stage"):
         # The stage must stay legal under the new kind (event restriction).
         card_rules.validate_status(kind, row["stage"], row.get("stop_reason"), whereabouts=row.get("whereabouts"))
+    if row.get("whereabouts"):
+        # Whereabouts doesn't apply to an action / event / family (3.4).
+        card_rules.validate_whereabouts(kind, row["whereabouts"], row.get("stage"))
     fields = {"kind": kind}
     rows = _change_rows(row["slug"], {"kind": old_kind}, fields)
     warnings = []
@@ -157,6 +160,142 @@ def set_kind(card, kind, *, force=False, dry_run=False, actor=changes.ACTOR_MCP,
                                     affected_slugs=[row["slug"]])
         db.update_card_columns(row["id"], fields, "set_kind", actor, batch_id=batch_id)
     return Result(True, rows, warnings, batch_id, dry_run)
+
+
+# --- Whereabouts, card provenance, highlight (3.4, 3.5, 3.12) ---------------------
+
+def set_whereabouts(card, whereabouts=None, note=..., *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Sets (or, with whereabouts=None, clears) where the physical thing is now, plus
+    an optional free-text note (note=... leaves the note alone; '' / None clears it).
+    Validated by card_rules.validate_whereabouts (bad_whereabouts): applicable kinds
+    only, and the in_use / never_built cross-rules against the card's current stage."""
+    row = get_card(card)
+    value = card_rules.validate_whereabouts(row.get("kind") or "project", whereabouts, row.get("stage")) \
+        if whereabouts not in (None, "") else None
+    fields = {"whereabouts": value}
+    if note is not ...:
+        fields["whereabouts_note"] = (note or "").strip() or None
+    rows = _change_rows(row["slug"], {c: row.get(c) for c in fields}, fields)
+    warnings = []
+    if value is None and row.get("whereabouts_note") and note is ...:
+        warnings.append("Whereabouts cleared; the note was kept.")
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and rows:
+        db.update_card_columns(row["id"], fields, "set_whereabouts", actor, batch_id=batch_id)
+    return Result(True, rows, warnings, batch_id, dry_run)
+
+
+def set_provenance(card, provenance=None, credit=..., *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Sets (or clears, with None) the CARD's provenance and optionally its credit
+    (who designed it / where it came from; credit=... leaves it alone). Distinct from
+    the per-file provenance (db.set_provenance / constructicon_set_provenance), which
+    is untouched. One value per card: mixed origins are separate cards (3.5)."""
+    row = get_card(card)
+    value = card_rules.validate_provenance(provenance)
+    fields = {"provenance": value}
+    if credit is not ...:
+        fields["provenance_credit"] = (credit or "").strip() or None
+    rows = _change_rows(row["slug"], {c: row.get(c) for c in fields}, fields)
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and rows:
+        db.update_card_columns(row["id"], fields, "set_provenance", actor, batch_id=batch_id)
+    return Result(True, rows, [], batch_id, dry_run)
+
+
+def set_highlight(card, on, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """The card's own 0/1 "this one is special" flag (3.12). Independent of the
+    per-file highlight (capture_events.highlight), which is untouched."""
+    row = get_card(card)
+    fields = {"highlight": 1 if on else 0}
+    rows = _change_rows(row["slug"], {"highlight": row.get("highlight") or 0}, fields)
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and rows:
+        db.update_card_columns(row["id"], fields, "set_highlight", actor, batch_id=batch_id)
+    return Result(True, rows, [], batch_id, dry_run)
+
+
+def suggest_provenance(card):
+    """Majority file provenance mapped through the 3.5 table, or None. A suggestion
+    needs >50% of the card's non-write-up files to map to one card value (so
+    `documented` / unset files dilute it). Returns {value, share, files, counted}
+    or None. Never applied."""
+    items = [i for i in db.list_project_items(card["id"]) if i["slug"] != card.get("writeup_slug")]
+    if not items:
+        return None
+    votes = {}
+    for i in items:
+        mapped = card_rules.FILE_PROVENANCE_TO_CARD.get(i.get("provenance"))
+        if mapped:
+            votes[mapped] = votes.get(mapped, 0) + 1
+    if not votes:
+        return None
+    value, n = max(votes.items(), key=lambda kv: kv[1])
+    if n * 2 <= len(items):
+        return None
+    return {"value": value, "files": n, "counted": len(items), "share": round(n / len(items), 3)}
+
+
+def whereabouts_fields(card):
+    """Whereabouts + provenance + highlight as pages and tools return them."""
+    w, p = card.get("whereabouts"), card.get("provenance")
+    return {
+        "whereabouts": w,
+        "whereabouts_label": card_rules.whereabouts_label(w) if w else None,
+        "whereabouts_note": card.get("whereabouts_note"),
+        "whereabouts_applies": (card.get("kind") or "project") in card_rules.WHEREABOUTS_KINDS,
+        "provenance": p,
+        "provenance_label": card_rules.card_provenance_label(p) if p else None,
+        "provenance_credit": card.get("provenance_credit"),
+        "highlight": bool(card.get("highlight")),
+    }
+
+
+NEED_MISSING_PROVENANCE = "missing_provenance"
+NEED_MISSING_PROVENANCE_CREDIT = "missing_provenance_credit"
+NEED_MISSING_WHEREABOUTS = "missing_whereabouts"
+# Provenances where "who made it / where it came from" is worth a credit.
+CREDIT_PROVENANCE = ("found", "collected")
+
+
+def provenance_whereabouts_needs(kind=None, hobby_ids=None):
+    """Computed needs (never stored): missing_provenance (every non-family card with
+    no provenance; carries the majority-file suggestion when there is one),
+    missing_provenance_credit (found / collected card with no credit) and
+    missing_whereabouts (a Thing with no whereabouts)."""
+    rows = []
+    for c in db.list_projects():
+        ck = c.get("kind") or "project"
+        if (kind and ck != kind) or (hobby_ids is not None and c["id"] not in hobby_ids):
+            continue
+        prov = c.get("provenance")
+        if not prov and ck != "family":
+            sug = suggest_provenance(c)
+            rows.append({
+                "need": NEED_MISSING_PROVENANCE, "card_slug": c["slug"], "title": c["title"],
+                "detail": "No provenance recorded (created, found, collected, referenced or client-owned).",
+                "suggested": sug["value"] if sug else None,
+                "suggested_reason": (f"{sug['files']} of {sug['counted']} files map to "
+                                     f"{card_rules.card_provenance_label(sug['value'])}.") if sug else None,
+                "confidence": ("medium" if sug and sug["share"] >= 0.8 else "low") if sug else None,
+                "decision_id": None,
+                "options": [{"key": k, "label": card_rules.CARD_PROVENANCE_LABELS[k]} for k in card_rules.CARD_PROVENANCE],
+            })
+        elif prov in CREDIT_PROVENANCE and not (c.get("provenance_credit") or "").strip():
+            rows.append({
+                "need": NEED_MISSING_PROVENANCE_CREDIT, "card_slug": c["slug"], "title": c["title"],
+                "detail": f"{card_rules.card_provenance_label(prov)} card with no credit (who designed it / where it came from).",
+                "suggested": None, "suggested_reason": None, "confidence": None,
+                "decision_id": None, "options": [],
+            })
+        if ck == "thing" and not c.get("whereabouts"):
+            rows.append({
+                "need": NEED_MISSING_WHEREABOUTS, "card_slug": c["slug"], "title": c["title"],
+                "detail": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, never built).",
+                "suggested": None, "suggested_reason": None, "confidence": None,
+                "decision_id": None,
+                "options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
+            })
+    return rows
 
 
 # --- Nesting ("part of") and families (3.6, 3.7) ----------------------------------
@@ -871,5 +1010,10 @@ def list_needs_decision(kind=None, need=None, hobby=None, limit=None):
     # Computed untyped_link (3.8): v1 'related' pairs with a plausible typed reading.
     if not need or need == NEED_UNTYPED_LINK:
         rows += untyped_link_needs(kind=kind if kind not in (None, "", "hobby") else None, hobby_ids=hobby_ids)             if kind != "hobby" else []
+    # Computed provenance / whereabouts needs (3.4, 3.5; piece 5).
+    if kind != "hobby" and (not need or need in (NEED_MISSING_PROVENANCE, NEED_MISSING_PROVENANCE_CREDIT,
+                                                  NEED_MISSING_WHEREABOUTS)):
+        rows += [r for r in provenance_whereabouts_needs(kind=kind or None, hobby_ids=hobby_ids)
+                 if not need or r["need"] == need]
     rows.sort(key=lambda r: (r["title"].lower(), r["need"]))
     return rows[:limit] if limit else rows

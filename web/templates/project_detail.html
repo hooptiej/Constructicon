@@ -95,6 +95,31 @@
         <option value="">+ Add to hobby…</option>
       </select>
     </div>
+    {# V2 cards 3.4 / 3.5 / 3.12: whereabouts (+ note), card provenance (+ credit),
+       highlight. Whereabouts only applies to a thing / project / collection. Each
+       control saves on change; the server validates (same rules as the MCP tools). #}
+    <div id="card-extra-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:12px">
+      <span id="whereabouts-group" style="display:{% if card_extra.whereabouts_applies %}inline-flex{% else %}none{% endif %};align-items:center;gap:6px">
+        <label for="whereabouts-select" style="color:var(--text-muted)">Whereabouts:</label>
+        <select id="whereabouts-select" class="input" style="font-size:12px">
+          <option value="">— not recorded —</option>
+          {% for o in card_whereabouts_options %}<option value="{{ o.key }}" {% if card_extra.whereabouts == o.key %}selected{% endif %}>{{ o.label }}</option>{% endfor %}
+        </select>
+        <input type="text" id="whereabouts-note" class="input" placeholder="note (e.g. 'on the shelf in the garage')" value="{{ card_extra.whereabouts_note or '' }}" maxlength="200" style="font-size:12px;width:220px">
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:6px">
+        <label for="provenance-select" style="color:var(--text-muted)">Provenance:</label>
+        <select id="provenance-select" class="input" style="font-size:12px">
+          <option value="">— not recorded —</option>
+          {% for o in card_provenance_options %}<option value="{{ o.key }}" {% if card_extra.provenance == o.key %}selected{% endif %}>{{ o.label }}</option>{% endfor %}
+        </select>
+        <input type="text" id="provenance-credit" class="input" placeholder="credit (who designed it / where from)" value="{{ card_extra.provenance_credit or '' }}" maxlength="200" style="font-size:12px;width:240px">
+      </span>
+      <label style="display:inline-flex;align-items:center;gap:4px;color:var(--text-muted)">
+        <input type="checkbox" id="card-highlight" {% if card_extra.highlight %}checked{% endif %}> Highlight
+      </label>
+      <span id="card-extra-msg" style="font-size:12px;color:#6E6B57"></span>
+    </div>
     {# V2 cards 3.6: family / collection membership. A family or collection card
        lists its MEMBERS (and can take more); any other card shows the families it
        is IN (a card can be in several). Membership is not nesting: no file moves. #}
@@ -844,6 +869,65 @@ stageSelect.addEventListener('change', () => {
 stopReasonSelect.addEventListener('change', () => {
   saveCardFields({ stage: 'stopped', stop_reason: stopReasonSelect.value });
 });
+
+// V2 cards 3.4 / 3.5 / 3.12: whereabouts, provenance, highlight controls.
+(function () {
+  const wSel = document.getElementById('whereabouts-select');
+  const wNote = document.getElementById('whereabouts-note');
+  const pSel = document.getElementById('provenance-select');
+  const pCredit = document.getElementById('provenance-credit');
+  const hl = document.getElementById('card-highlight');
+  const msg = document.getElementById('card-extra-msg');
+  if (!wSel || !pSel) return;
+  let saved = {
+    whereabouts: wSel.value, whereabouts_note: wNote.value,
+    provenance: pSel.value, provenance_credit: pCredit.value, highlight: hl.checked,
+  };
+  function say(text, bad) {
+    msg.textContent = text;
+    msg.style.color = bad ? '#C0392B' : '#6E6B57';
+    if (!bad) setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, 2000);
+  }
+  async function post(path, fields) {
+    const res = await fetch(`/api/projects/${projectId}/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields).toString(),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body.error && body.error.message) || body.detail || `Couldn't save (${res.status})`);
+    return body;
+  }
+  function revert() {
+    wSel.value = saved.whereabouts; wNote.value = saved.whereabouts_note;
+    pSel.value = saved.provenance; pCredit.value = saved.provenance_credit; hl.checked = saved.highlight;
+  }
+  async function saveWhereabouts() {
+    try {
+      await post('whereabouts', { whereabouts: wSel.value, note: wNote.value });
+      saved.whereabouts = wSel.value; saved.whereabouts_note = wNote.value; say('Saved.');
+    } catch (e) { revert(); say(e.message, true); }
+  }
+  async function saveProvenance() {
+    try {
+      await post('provenance', { provenance: pSel.value, credit: pCredit.value });
+      saved.provenance = pSel.value; saved.provenance_credit = pCredit.value; say('Saved.');
+    } catch (e) { revert(); say(e.message, true); }
+  }
+  wSel.addEventListener('change', saveWhereabouts);
+  wNote.addEventListener('change', saveWhereabouts);
+  pSel.addEventListener('change', saveProvenance);
+  pCredit.addEventListener('change', saveProvenance);
+  hl.addEventListener('change', async () => {
+    try { await post('highlight', { on: hl.checked ? '1' : '0' }); saved.highlight = hl.checked; say('Saved.'); }
+    catch (e) { revert(); say(e.message, true); }
+  });
+  // Changing kind to one where whereabouts doesn't apply hides the control.
+  kindSelect.addEventListener('change', () => {
+    const applies = ['thing', 'project', 'collection'].includes(kindSelect.value);
+    document.getElementById('whereabouts-group').style.display = applies ? 'inline-flex' : 'none';
+  });
+})();
 
 // Parent project selector (#133)
 const parentSelect = document.getElementById('parent-project-select');

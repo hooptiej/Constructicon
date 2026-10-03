@@ -3150,6 +3150,31 @@ CARD_WRITABLE_COLUMNS = ("kind", "activity", "stage", "stop_reason", "parent_id"
                          "home_kind", "home_ref")
 
 
+# Free-text card columns that offer autocomplete suggestions (#523). Allow-list:
+# the column name is interpolated into SQL, so it must come from here, never from input.
+SUGGESTABLE_CARD_FIELDS = ("provenance_credit", "whereabouts_note")
+
+
+def distinct_card_values(field, limit=50):
+    """Distinct non-empty values of a free-text card column, most-used first
+    (ties alphabetical), capped at `limit`. Raises ValueError for any field not
+    in SUGGESTABLE_CARD_FIELDS."""
+    if field not in SUGGESTABLE_CARD_FIELDS:
+        raise ValueError(f"field not suggestable: {field!r}")
+    limit = max(1, min(int(limit), 200))
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT TRIM({field}) AS v, COUNT(*) AS n FROM projects "
+            f"WHERE {field} IS NOT NULL AND TRIM({field}) != '' "
+            f"GROUP BY TRIM({field}) ORDER BY n DESC, v COLLATE NOCASE ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
 def update_card_columns(card_id, fields, op, actor, batch_id=None, bump_updated=True):
     """Atomically writes `fields` (a dict limited to CARD_WRITABLE_COLUMNS) onto
     one projects row and records a change-log row image in the same transaction.

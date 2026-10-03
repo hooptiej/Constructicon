@@ -173,7 +173,8 @@
           {% for o in card_whereabouts_options %}<option value="{{ o.key }}" {% if card_extra.whereabouts == o.key %}selected{% endif %}>{{ o.label }}</option>{% endfor %}
         </select>
         <label class="dp-sr-label" for="whereabouts-note">Whereabouts note</label>
-        <input type="text" id="whereabouts-note" class="input" placeholder="note (e.g. 'on the shelf in the garage')" value="{{ card_extra.whereabouts_note or '' }}" maxlength="200">
+        <input type="text" id="whereabouts-note" class="input" list="whereabouts-note-suggest" autocomplete="off" placeholder="note (e.g. 'on the shelf in the garage')" value="{{ card_extra.whereabouts_note or '' }}" maxlength="200">
+        <datalist id="whereabouts-note-suggest">{% for v in suggest_whereabouts_note %}<option value="{{ v }}">{% endfor %}</datalist>
       </div>
       {% endif %}
       <div class="dp-field dp-field-inline">
@@ -200,7 +201,8 @@
       </div>
       <div class="dp-field">
         <label for="provenance-credit">Credit</label>
-        <input type="text" id="provenance-credit" class="input" placeholder="credit (who designed it / where from)" value="{{ card_extra.provenance_credit or '' }}" maxlength="200">
+        <input type="text" id="provenance-credit" class="input" list="provenance-credit-suggest" autocomplete="off" placeholder="credit (who designed it / where from)" value="{{ card_extra.provenance_credit or '' }}" maxlength="200">
+        <datalist id="provenance-credit-suggest">{% for v in suggest_credit %}<option value="{{ v }}">{% endfor %}</datalist>
       </div>
       {% endset %}
 

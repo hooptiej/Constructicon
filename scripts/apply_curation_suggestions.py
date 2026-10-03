@@ -2,7 +2,7 @@
 
 The V2 card migration (#486) queues owner decisions (card_status, card_kind,
 card_built_for, card_family_members) with weak, deterministic suggestions. The
-curation pass in data/v2c_curation_suggestions.json replaces those with reviewed
+curation pass in scripts/data/v2c_curation_suggestions.json replaces those with reviewed
 suggestions, each with a confidence and a one-line evidence note. This script
 copies them onto the queue.
 
@@ -42,11 +42,14 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-DEFAULT_FILE = os.path.join(ROOT, "data", "v2c_curation_suggestions.json")
+# scripts/ is bind-mounted in the containers; the repo-root data/ is NOT (inside a
+# container /app/data is the SQLite DB mount), so the default lives beside the script (#510).
+DEFAULT_FILE = str(Path(__file__).resolve().parent / "data" / "v2c_curation_suggestions.json")
 OP = "curation_503_suggestions"
 CONFIDENCES = ("high", "medium", "low")
 
@@ -148,7 +151,7 @@ def apply(db, changes_mod, changes):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--execute", action="store_true", help="apply the changes (default: dry run)")
-    ap.add_argument("--file", default=DEFAULT_FILE, help="suggestions JSON (default: data/v2c_curation_suggestions.json)")
+    ap.add_argument("--file", default=DEFAULT_FILE, help="suggestions JSON (default: scripts/data/v2c_curation_suggestions.json, beside this script)")
     ap.add_argument("--db", help="database path (default: $CONSTRUCTICON_DB_PATH or core.db's default)")
     args = ap.parse_args(argv)
     if args.db:
@@ -157,7 +160,21 @@ def main(argv=None):
     if args.db:
         db.DB_PATH = args.db
 
-    header, suggestions = load_suggestions(args.file)
+    # Never read from the database directory (inside a container /app/data is the DB mount, #510).
+    file_path = Path(args.file).resolve()
+    db_dir = Path(db.DB_PATH).resolve().parent
+    if file_path == db_dir or db_dir in file_path.parents:
+        print(f"ERROR: --file {args.file} is inside the database directory ({db_dir}); "
+              f"refusing. Put the suggestions file elsewhere (e.g. scripts/data/ or /tmp) and pass --file.",
+              file=sys.stderr)
+        return 2
+    if not file_path.is_file():
+        print(f"ERROR: suggestions file not found: {file_path}\n"
+              f"Pass --file <path> (default is scripts/data/v2c_curation_suggestions.json beside the script).",
+              file=sys.stderr)
+        return 2
+
+    header, suggestions = load_suggestions(str(file_path))
     print(f"Suggestions file: {args.file} (dated {header.get('date')}, "
           f"{sum(len(v) for v in suggestions.values())} entries)")
     print(f"Database: {db.DB_PATH}")

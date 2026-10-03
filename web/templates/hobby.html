@@ -15,14 +15,17 @@
     <div>
       <h1 class="page-title">{{ hobby.name }}</h1>
       <div style="margin-top:12px;display:flex;align-items:center;gap:12px;font-size:13px">
-        <label>Status:</label>
+        <label for="hobby-status-select">Activity:</label>
         <select id="hobby-status-select" class="project-status-pill" style="width:fit-content;border:none;cursor:pointer">
-          <option value="active" {% if hobby.status == 'active' %}selected{% endif %}>active</option>
-          <option value="dormant" {% if hobby.status == 'dormant' %}selected{% endif %}>dormant</option>
-          <option value="abandoned" {% if hobby.status == 'abandoned' %}selected{% endif %}>abandoned</option>
+          <option value="active" {% if hobby.status == 'active' %}selected{% endif %}>Active</option>
+          <option value="inactive" {% if hobby.status == 'inactive' %}selected{% endif %}>Inactive</option>
         </select>
+        <label for="hobby-code-input" style="margin-left:8px">Code:</label>
+        <input id="hobby-code-input" class="input" style="width:64px;text-transform:uppercase" maxlength="4" value="{{ hobby.group_code or '' }}" title="2-4 letters or digits, shown on cards">
         <p class="status-confirm" id="status-confirm" style="display:none;font-size:12px;color:#6E6B57;margin:0">Saved.</p>
+        <p id="hobby-error" role="alert" style="display:none;font-size:12px;color:#B5483A;margin:0"></p>
       </div>
+      <div id="hobby-flags" style="margin-top:12px"></div>
     </div>
   </div>
 
@@ -53,33 +56,67 @@ let currentStatus = {{ hobby.status | tojson }};
 let currentProjects = {{ hobby.projects | tojson }};
 let currentItems = {{ hobby['items'] | tojson }};
 
-// Status selector: active/dormant/abandoned
+let currentFlags = {{ hobby.flags | tojson }};
+let currentCode = {{ (hobby.group_code or '') | tojson }};
+const hobbyError = document.getElementById('hobby-error');
+
+// Mismatch flags (V2 cards 3.3): computed server-side on every read, never stored.
+// They only SURFACE a disagreement between the switch and the work inside the hobby.
+function renderFlags() {
+  const box = document.getElementById('hobby-flags');
+  box.innerHTML = '';
+  currentFlags.forEach(f => {
+    const note = document.createElement('div');
+    note.className = 'hobby-flag';
+    note.setAttribute('role', 'note');
+    note.style.cssText = 'padding:8px 12px;margin-bottom:8px;border-left:3px solid #C9A227;background:rgba(201,162,39,0.12);font-size:13px';
+    const strong = document.createElement('strong');
+    strong.textContent = f.label + '. ';
+    note.appendChild(strong);
+    note.appendChild(document.createTextNode(f.detail));
+    box.appendChild(note);
+  });
+}
+
+async function postHobby(path, field, value) {
+  hobbyError.style.display = 'none';
+  const form = new FormData();
+  form.append(field, value);
+  const response = await fetch(`/api/hobby/${hobbyId}/${path}`, { method: 'POST', body: form });
+  let data = null;
+  try { data = await response.json(); } catch (e) { /* non-JSON error body */ }
+  if (!response.ok) {
+    hobbyError.textContent = (data && (data.detail || (data.error && data.error.message))) || 'Could not save.';
+    hobbyError.style.display = 'block';
+    return null;
+  }
+  statusConfirm.style.display = 'block';
+  setTimeout(() => { statusConfirm.style.display = 'none'; }, 2000);
+  return data;
+}
+
+// Activity switch: active / inactive (manual; never computed)
 const statusSelect = document.getElementById('hobby-status-select');
 const statusConfirm = document.getElementById('status-confirm');
 
 statusSelect.addEventListener('change', async function() {
-  const value = this.value;
-  statusConfirm.style.display = 'none';
-  try {
-    const form = new FormData();
-    form.append('status', value);
-    const response = await fetch(`/api/hobby/${hobbyId}/status`, {
-      method: 'POST',
-      body: form
-    });
-    if (response.ok) {
-      currentStatus = value;
-      statusConfirm.style.display = 'block';
-      setTimeout(() => { statusConfirm.style.display = 'none'; }, 2000);
-    } else {
-      console.error('Failed to update status:', response.status);
-      statusSelect.value = currentStatus;
-    }
-  } catch (error) {
-    console.error('Error updating status:', error);
+  const data = await postHobby('status', 'status', this.value);
+  if (data) {
+    currentStatus = data.status;
+    currentFlags = data.flags || [];
+    renderFlags();
+  } else {
     statusSelect.value = currentStatus;
   }
 });
+
+const codeInput = document.getElementById('hobby-code-input');
+codeInput.addEventListener('change', async function() {
+  const data = await postHobby('group-code', 'group_code', this.value);
+  if (data) { currentCode = data.group_code || ''; this.value = currentCode; }
+  else { this.value = currentCode; }
+});
+renderFlags();
 
 // Render projects as chips with remove buttons
 function renderProjectChips() {

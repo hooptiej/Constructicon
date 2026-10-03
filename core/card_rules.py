@@ -8,6 +8,8 @@ Whereabouts / provenance / membership / link validators arrive with the pieces
 that add those fields (spec section 9).
 """
 
+import re
+
 # --- Kinds (3.1) -------------------------------------------------------------
 KINDS = ("project", "thing", "action", "family", "collection", "event")
 GROUP_KINDS = ("family", "collection")
@@ -47,6 +49,22 @@ EVENT_STAGES = ("idea", "in_progress", "done", "stopped")
 # Whereabouts values (3.4). Defined now because validate_status's cross-field
 # rule (3.2 rule 5) refers to them; the column and its setter arrive in piece 5.
 WHEREABOUTS = ("have_it", "partial", "parted_out", "sold", "gifted", "lost", "never_built")
+
+# --- Hobby activity (3.3) ------------------------------------------------------
+# A hobby's two-value manual switch (blog_tags.hobby_status). Never computed; the
+# mismatch flags in core/db.hobby_flags only SURFACE disagreement with the cards.
+HOBBY_ACTIVITIES = ("active", "inactive")
+HOBBY_ACTIVITY_LABELS = {"active": "Active", "inactive": "Inactive"}
+# The v1 words, accepted for one release and mapped to 'inactive' with a warning.
+HOBBY_DEPRECATED_ALIASES = {"dormant": "inactive", "abandoned": "inactive"}
+# Computed flag codes (3.3) and the staleness threshold for active_untouched.
+HOBBY_STALE_DAYS = 730
+HOBBY_FLAG_INACTIVE_WITH_ACTIVE_WORK = "inactive_with_active_work"
+HOBBY_FLAG_ACTIVE_UNTOUCHED = "active_untouched"
+HOBBY_FLAG_LABELS = {
+    HOBBY_FLAG_INACTIVE_WITH_ACTIVE_WORK: "Inactive, but has active work",
+    HOBBY_FLAG_ACTIVE_UNTOUCHED: "Active, but untouched for about 2 years",
+}
 
 # New-card defaults (3.2): matches v1's default status='active'.
 DEFAULT_KIND = "project"
@@ -243,3 +261,61 @@ def curator_status(card, provisional_legacy=None):
     if stage == "stopped":
         return "failed" if card.get("stop_reason") == "failed" else "abandoned"
     return "wip"
+
+
+def validate_hobby_activity(value, allow_aliases=True):
+    """Returns (activity, warnings) for a hobby activity word, or raises
+    CardError('bad_hobby_activity'). With allow_aliases the v1 words 'dormant' and
+    'abandoned' map to 'inactive' and the warnings say so (3.3, one release)."""
+    v = value.strip().lower() if isinstance(value, str) else value
+    if v in HOBBY_ACTIVITIES:
+        return v, []
+    if allow_aliases and v in HOBBY_DEPRECATED_ALIASES:
+        return HOBBY_DEPRECATED_ALIASES[v], [
+            f"'{v}' is deprecated; hobbies are now just active or inactive. Stored as 'inactive'."]
+    raise CardError("bad_hobby_activity",
+                    f"Unknown hobby status {value!r}. Choose one of: {', '.join(HOBBY_ACTIVITIES)}.")
+
+
+def _alnum(text):
+    return "".join(ch for ch in text if ch.isalnum())
+
+
+def derive_group_code(name, taken=()):
+    """The default 2-4 char hobby code (3.9), unique against `taken` (compared
+    case-insensitively). Multi-word names take initials, where a short (<=2 char)
+    word contributes all its characters ("R/C Adventures" -> RCA, "3D Printing" ->
+    3DP), max 4; a single word takes its first 3 letters (Collecting -> COL).
+    Collisions try the next letters of the first word, then a digit."""
+    taken_up = {t.upper() for t in taken if t}
+    words = [w for w in re.split(r"[^A-Za-z0-9]+", name or "") if w]
+    if not words:
+        words = ["X"]
+    if len(words) > 1:
+        base = "".join(w if len(w) <= 2 else w[0] for w in words).upper()[:4]
+    else:
+        base = words[0][:3].upper()
+    if len(base) < 2:
+        base = (base + _alnum(words[0]).upper() + "XX")[:2]
+    candidates = [base]
+    first = _alnum(words[0]).upper()
+    for i in range(1, len(first)):
+        cand = (base[:-1] + first[i])[:4] if len(base) > 1 else base + first[i]
+        candidates.append(cand)
+    for cand in candidates:
+        if cand not in taken_up:
+            return cand
+    stem = base[:3]
+    for n in range(2, 100):
+        cand = f"{stem}{n}"[:4]
+        if cand not in taken_up:
+            return cand
+    raise CardError("bad_group_code", f"No free group code left for {name!r}.")
+
+
+def validate_group_code(value):
+    """Normalized 2-4 char alphanumeric uppercase code, or CardError('bad_group_code')."""
+    v = (value or "").strip().upper()
+    if not (2 <= len(v) <= 4) or not v.isalnum():
+        raise CardError("bad_group_code", "A group code is 2-4 letters or digits.")
+    return v

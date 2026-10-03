@@ -9,7 +9,7 @@ from pathlib import Path
 
 # timeline is pure (no DB access — see its module docstring), so this
 # direction of import can't cycle; it's here for list_project_items' sort.
-from . import timeline
+from . import card_rules, timeline
 
 # #453: overridable so the DB can live in its own bind-mounted DIRECTORY.
 # WAL mode keeps -wal/-shm next to the DB file; with only the file
@@ -188,8 +188,10 @@ BRAND_ROLES = ["logo", "logotype", "icon", "color", "typography", "swag", "templ
 PROJECT_STATUSES = ["wip", "complete", "shelved", "means-to-an-end", "abandoned", "failed", "idea", "published", "reference-only"]
 
 # --- Hobby statuses (blog_tags.hobby_status) — #360 ---
-# Controlled vocab for hobby tier status. Only meaningful when is_hobby=1.
-HOBBY_STATUSES = ["active", "dormant", "abandoned"]
+# Controlled vocab for hobby activity. Only meaningful when is_hobby=1.
+# V2 cards 3.3: a two-value MANUAL switch. 'dormant'/'abandoned' are deprecated
+# aliases of 'inactive' (card_rules.HOBBY_DEPRECATED_ALIASES), accepted for one release.
+HOBBY_STATUSES = list(card_rules.HOBBY_ACTIVITIES)
 
 # --- Source (capture_events.tech) ---
 # `tech` used to record which technician uploaded a screenshot in imagerepo
@@ -479,6 +481,9 @@ def init_db():
             conn.execute("ALTER TABLE blog_tags ADD COLUMN is_hobby INTEGER NOT NULL DEFAULT 0")
         if "hobby_status" not in existing_blog_tags_columns:
             conn.execute("ALTER TABLE blog_tags ADD COLUMN hobby_status TEXT")
+        # group_code (V2 cards 3.9): the 2-4 char hobby code shown on a card (COL, 3DP, RCA).
+        if "group_code" not in existing_blog_tags_columns:
+            conn.execute("ALTER TABLE blog_tags ADD COLUMN group_code TEXT")
         # project_hobbies (#360): many-to-many join between projects and hobbies (tags).
         # A project can be associated with multiple hobbies via project_hobbies.
         conn.executescript("""
@@ -547,6 +552,7 @@ def init_db():
     # Data migrations (separate connection: they read through the normal db helpers).
     from . import card_migration
     card_migration.run_v2c_1()
+    card_migration.run_v2c_2()
 
 
 def _row_to_dict(row):
@@ -2849,17 +2855,48 @@ def set_entry_items(entry_id, items):
 # Projects attach to hobbies many-to-many via project_hobbies.
 
 
+def _normalize_hobby_status(status):
+    """Maps the v1 aliases to 'inactive' and rejects anything else (ValueError, the
+    contract the older callers expect). The warning-carrying path is
+    card_rules.validate_hobby_activity / core.cards.set_hobby_activity."""
+    try:
+        return card_rules.validate_hobby_activity(status)[0]
+    except card_rules.CardError:
+        raise ValueError(f"Invalid hobby_status: {status}. Must be one of {HOBBY_STATUSES}")
+
+
+def all_group_codes(conn=None, exclude_tag_id=None):
+    """Group codes already taken by any hobby."""
+    own = conn is None
+    conn = conn or get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, group_code FROM blog_tags WHERE is_hobby = 1 AND group_code IS NOT NULL").fetchall()
+        return [r["group_code"] for r in rows if r["id"] != exclude_tag_id]
+    finally:
+        if own:
+            conn.close()
+
+
 def mark_tag_as_hobby(tag_id, status="active"):
     """Mark a blog_tags row as a hobby with an optional status.
 
-    status: one of HOBBY_STATUSES ('active', 'dormant', 'abandoned'), defaults to 'active'.
+    status: 'active' or 'inactive' (the v1 words 'dormant'/'abandoned' are still accepted
+    and stored as 'inactive'), defaults to 'active'. Fills group_code (3.9) when unset.
     If status is invalid, raises ValueError."""
-    if status not in HOBBY_STATUSES:
-        raise ValueError(f"Invalid hobby_status: {status}. Must be one of {HOBBY_STATUSES}")
+    status = _normalize_hobby_status(status)
     conn = get_conn()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT name, group_code FROM blog_tags WHERE id = ?", (tag_id,)).fetchone()
         conn.execute("UPDATE blog_tags SET is_hobby = 1, hobby_status = ? WHERE id = ?", (status, tag_id))
+        if row is not None and not row["group_code"]:
+            code = card_rules.derive_group_code(row["name"], all_group_codes(conn))
+            conn.execute("UPDATE blog_tags SET group_code = ? WHERE id = ?", (code, tag_id))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -2867,27 +2904,132 @@ def mark_tag_as_hobby(tag_id, status="active"):
 def unmark_hobby(tag_id):
     """Remove the hobby designation from a blog_tags row.
 
-    Sets is_hobby=0 and clears hobby_status."""
+    Sets is_hobby=0 and clears hobby_status and group_code."""
     conn = get_conn()
     try:
-        conn.execute("UPDATE blog_tags SET is_hobby = 0, hobby_status = NULL WHERE id = ?", (tag_id,))
+        conn.execute("UPDATE blog_tags SET is_hobby = 0, hobby_status = NULL, group_code = NULL WHERE id = ?",
+                     (tag_id,))
         conn.commit()
     finally:
         conn.close()
 
 
 def set_hobby_status(tag_id, status):
-    """Update a hobby's status (active/dormant/abandoned).
+    """Update a hobby's activity (active/inactive; dormant/abandoned map to inactive).
 
+    Raw setter with no change log -- the V2 path is core.cards.set_hobby_activity.
     Raises ValueError if status is invalid."""
-    if status not in HOBBY_STATUSES:
-        raise ValueError(f"Invalid hobby_status: {status}. Must be one of {HOBBY_STATUSES}")
+    status = _normalize_hobby_status(status)
     conn = get_conn()
     try:
         conn.execute("UPDATE blog_tags SET hobby_status = ? WHERE id = ? AND is_hobby = 1", (status, tag_id))
         conn.commit()
     finally:
         conn.close()
+
+
+# Columns a card operation may write on a hobby's blog_tags row.
+HOBBY_WRITABLE_COLUMNS = ("hobby_status", "group_code")
+
+
+def update_hobby_columns(tag_id, fields, op, actor, batch_id=None):
+    """Atomically writes `fields` (limited to HOBBY_WRITABLE_COLUMNS) onto one hobby's
+    blog_tags row and records a change-log row image in the same transaction.
+    Returns (before, after) of just the columns passed, or (None, None) when the hobby
+    doesn't exist. A no-op writes and logs nothing."""
+    bad = set(fields) - set(HOBBY_WRITABLE_COLUMNS)
+    if bad:
+        raise ValueError(f"Not a writable hobby column: {sorted(bad)}")
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM blog_tags WHERE id = ? AND is_hobby = 1", (tag_id,)).fetchone()
+        if row is None:
+            conn.rollback()
+            return None, None
+        before = {c: row[c] for c in fields}
+        if before == dict(fields):
+            conn.rollback()
+            return before, dict(fields)
+        sets = ", ".join(f"{c} = ?" for c in fields)
+        conn.execute(f"UPDATE blog_tags SET {sets} WHERE id = ?", list(fields.values()) + [tag_id])
+        insert_change_log(
+            conn, op, actor,
+            [{"table": "blog_tags", "key": {"id": tag_id}, "before": before, "after": dict(fields)}],
+            batch_id=batch_id, affected_slugs=[row["slug"]],
+        )
+        conn.commit()
+        return before, dict(fields)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def hobby_flags(tag_id, now=None):
+    """Computed, never stored (V2 cards 3.3): mismatches between a hobby's manual
+    Active/Inactive switch and the work inside it. Returns a list of
+    {code, label, detail, ...}:
+
+    - inactive_with_active_work: the hobby is inactive and a member project has
+      activity='active' (`projects` lists up to 5; `detail` names them).
+    - active_untouched: the hobby is active and its last-touched date is older than
+      card_rules.HOBBY_STALE_DAYS (730). Last touched = the latest real-world end of any
+      member project (timeline.resolve_project_span, so edits that bump updated_at can't
+      mask staleness; a project with no dated files and no end override is skipped) or
+      the effective date of any file tagged with the hobby. A hobby with nothing dated
+      is not flagged."""
+    hobby = get_tag(tag_id)
+    if hobby is None or not hobby.get("is_hobby"):
+        return []
+    now = now if now is not None else time.time()
+    status = hobby.get("hobby_status") or "active"
+    projects = list_projects_for_hobby(tag_id)
+    flags = []
+    if status == "inactive":
+        active = [p for p in projects if p.get("activity") == "active"]
+        if active:
+            titles = [p["title"] for p in active]
+            more = len(titles) - 5
+            flags.append({
+                "code": card_rules.HOBBY_FLAG_INACTIVE_WITH_ACTIVE_WORK,
+                "label": card_rules.HOBBY_FLAG_LABELS[card_rules.HOBBY_FLAG_INACTIVE_WITH_ACTIVE_WORK],
+                "detail": "Active: " + ", ".join(titles[:5]) + (f" (+{more} more)" if more > 0 else ""),
+                "projects": [{"slug": p["slug"], "title": p["title"]} for p in active[:5]],
+                "count": len(active),
+            })
+    elif status == "active":
+        last = None
+        for p in projects:
+            items = list_project_items(p["id"])
+            dated = [i for i in items if i["slug"] != p.get("writeup_slug")]
+            if not dated and p.get("end_date_override") is None:
+                continue
+            end = timeline.resolve_project_span(p, items)[1]
+            last = end if last is None else max(last, end)
+        conn = get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT ce.* FROM capture_events ce JOIN post_tags pt ON pt.post_slug = ce.slug "
+                "WHERE pt.tag_id = ? AND ce.redacted = 0", (tag_id,)).fetchall()
+        finally:
+            conn.close()
+        for r in rows:
+            d = timeline.resolve_item_date(_row_to_dict(r))
+            last = d if last is None else max(last, d)
+        if last is not None:
+            days = int((now - last) // 86400)
+            if days > card_rules.HOBBY_STALE_DAYS:
+                when = timeline.epoch_to_local(last).strftime("%b %Y")
+                flags.append({
+                    "code": card_rules.HOBBY_FLAG_ACTIVE_UNTOUCHED,
+                    "label": card_rules.HOBBY_FLAG_LABELS[card_rules.HOBBY_FLAG_ACTIVE_UNTOUCHED],
+                    "detail": f"Last touched {when} ({days} days ago).",
+                    "last_touched": last,
+                    "days_since": days,
+                })
+    return flags
 
 
 def list_hobbies():
@@ -3088,6 +3230,10 @@ def convert_project_to_hobby(project_id):
             "UPDATE blog_tags SET is_hobby = 1, hobby_status = ? WHERE id = ?",
             ("active", tag_id),
         )
+        tag_row = conn.execute("SELECT name, group_code FROM blog_tags WHERE id = ?", (tag_id,)).fetchone()
+        if tag_row is not None and not tag_row["group_code"]:
+            conn.execute("UPDATE blog_tags SET group_code = ? WHERE id = ?",
+                         (card_rules.derive_group_code(tag_row["name"], all_group_codes(conn)), tag_id))
         # Re-hang child projects onto the hobby; clear their parent_id.
         for cid in child_ids:
             conn.execute(

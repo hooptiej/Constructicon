@@ -30,6 +30,10 @@ CARD_DECISION_KINDS = (KIND_CARD_STATUS, KIND_CARD_BUILT_FOR, KIND_CARD_KIND, KI
 # decision remains open) until then.
 SUPPORTED_PATCH_OPS = ("set_status", "set_kind")
 
+# Computed needs (never stored, always current) that list_needs_decision merges in.
+NEED_HOBBY_INACTIVE_WITH_ACTIVE_WORK = "hobby_inactive_with_active_work"
+NEED_HOBBY_ACTIVE_UNTOUCHED = "hobby_active_untouched"
+
 
 @dataclass
 class Result:
@@ -289,10 +293,101 @@ def decision_summary(decision):
     }
 
 
+# --- Hobbies (3.3, 3.9) ----------------------------------------------------------
+
+def get_hobby(hobby):
+    """Resolves a hobby id or slug to its blog_tags row, or raises CardError('not_found')."""
+    row = db.get_hobby(hobby)
+    if row is None:
+        raise CardError("not_found", f"No such hobby: {hobby!r}")
+    return row
+
+
+def hobby_flags(hobby):
+    """The computed mismatch flags for one hobby (never stored). See db.hobby_flags."""
+    return db.hobby_flags(get_hobby(hobby)["id"])
+
+
+def hobby_fields(hobby_row, with_flags=True):
+    """A hobby in the shape every API/page returns: activity (as `status`, the key the
+    v1 callers already read), label, group_code, and the computed flags."""
+    status = hobby_row.get("hobby_status") or "active"
+    out = {
+        "id": hobby_row["id"],
+        "name": hobby_row["name"],
+        "slug": hobby_row["slug"],
+        "status": status,
+        "status_label": card_rules.HOBBY_ACTIVITY_LABELS.get(status, status),
+        "group_code": hobby_row.get("group_code"),
+    }
+    if "project_count" in hobby_row:
+        out["project_count"] = hobby_row["project_count"]
+    if with_flags:
+        out["flags"] = db.hobby_flags(hobby_row["id"])
+    return out
+
+
+def set_hobby_activity(hobby, value, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Sets a hobby's manual Active/Inactive switch (3.3) and logs it. `dormant` and
+    `abandoned` are deprecated aliases for `inactive` (the result carries a warning).
+    Setting it never writes a flag: flags are computed on read."""
+    row = get_hobby(hobby)
+    activity, warnings = card_rules.validate_hobby_activity(value)
+    rows = _change_rows(row["slug"], {"hobby_status": row.get("hobby_status")}, {"hobby_status": activity})
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and rows:
+        db.update_hobby_columns(row["id"], {"hobby_status": activity}, "set_hobby_activity", actor, batch_id=batch_id)
+    return Result(True, rows, warnings, batch_id, dry_run)
+
+
+def set_group_code(hobby, code, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Owner-editable hobby code (3.9): 2-4 letters/digits, unique across hobbies."""
+    row = get_hobby(hobby)
+    code = card_rules.validate_group_code(code)
+    if code in {c.upper() for c in db.all_group_codes(exclude_tag_id=row["id"])}:
+        raise CardError("group_code_conflict", f"The code {code} is already used by another hobby.")
+    rows = _change_rows(row["slug"], {"group_code": row.get("group_code")}, {"group_code": code})
+    batch_id = batch_id or changes.new_batch_id()
+    if not dry_run and rows:
+        db.update_hobby_columns(row["id"], {"group_code": code}, "set_group_code", actor, batch_id=batch_id)
+    return Result(True, rows, [], batch_id, dry_run)
+
+
+def hobby_needs():
+    """Computed hobby needs for list_needs_decision (never stored, always current):
+    hobby_inactive_with_active_work and hobby_active_untouched."""
+    need_of = {
+        card_rules.HOBBY_FLAG_INACTIVE_WITH_ACTIVE_WORK: NEED_HOBBY_INACTIVE_WITH_ACTIVE_WORK,
+        card_rules.HOBBY_FLAG_ACTIVE_UNTOUCHED: NEED_HOBBY_ACTIVE_UNTOUCHED,
+    }
+    rows = []
+    for h in db.list_hobbies():
+        for flag in db.hobby_flags(h["id"]):
+            if flag["code"] == card_rules.HOBBY_FLAG_INACTIVE_WITH_ACTIVE_WORK:
+                suggested = "active"
+                reason = "It has active work in it; the switch probably should be Active."
+            else:
+                suggested = "inactive"
+                reason = "Nothing in it has been touched for about 2 years."
+            rows.append({
+                "need": need_of[flag["code"]],
+                "card_slug": None,
+                "hobby_slug": h["slug"],
+                "title": h["name"],
+                "detail": f"{flag['label']}. {flag['detail']}",
+                "suggested": suggested,
+                "suggested_reason": reason,
+                "confidence": "low",
+                "decision_id": None,
+                "options": [{"key": "active", "label": "Active"}, {"key": "inactive", "label": "Inactive"}],
+            })
+    return rows
+
+
 def list_needs_decision(kind=None, need=None, hobby=None, limit=None):
-    """Open card questions for the owner (spec 6). Piece 1 returns the STORED
-    card_* decisions only; the computed needs (missing provenance, hobby flags,
-    ...) join in with the pieces that add those fields.
+    """Open card questions for the owner (spec 6): the STORED card_* decisions plus
+    the computed needs from the pieces that exist so far (piece 2: the two hobby
+    flags; missing provenance, untyped links, ... join in with their pieces).
 
     Row: {need, card_slug, title, detail, suggested|None, decision_id|None, ...}.
     Filters: `kind` (the card's kind), `need` (the decision kind), `hobby`
@@ -327,5 +422,15 @@ def list_needs_decision(kind=None, need=None, hobby=None, limit=None):
             "decision_id": s["decision_id"],
             "options": s["options"],
         })
+    # Computed hobby needs (3.3). They belong to a hobby, not a project card, so a
+    # `kind` filter other than 'hobby' leaves them out; `hobby` narrows to one hobby.
+    if kind in (None, "", "hobby"):
+        picked = db.get_hobby(hobby) if hobby not in (None, "") else None
+        for r in hobby_needs():
+            if need and r["need"] != need:
+                continue
+            if hobby not in (None, "") and (picked is None or r["hobby_slug"] != picked["slug"]):
+                continue
+            rows.append(r)
     rows.sort(key=lambda r: (r["title"].lower(), r["need"]))
     return rows[:limit] if limit else rows

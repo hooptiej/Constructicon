@@ -849,18 +849,26 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
 def constructicon_list_hobbies() -> list[dict]:
     """List all hobbies (tags marked is_hobby=1) with their metadata and project counts.
 
-    Returns a list of hobby tag dicts, ordered by name."""
-    hobbies = db.list_hobbies()
-    return [
-        {
-            "id": h["id"],
-            "name": h["name"],
-            "slug": h["slug"],
-            "status": h.get("hobby_status"),
+    Each hobby: {id, name, slug, status, group_code, project_count, flags}.
+    status is the manual Active/Inactive switch ('active' | 'inactive'); group_code is the
+    2-4 char code shown on cards. flags are COMPUTED on every call (never stored), a list of
+    {code, label, detail}: inactive_with_active_work (an inactive hobby that has an active
+    project) and active_untouched (an active hobby nothing in has been touched for ~2 years).
+    A flag only points at a mismatch; the owner flips the switch by hand.
+    Ordered by name."""
+    out = []
+    for h in db.list_hobbies():
+        f = cards.hobby_fields(h)
+        out.append({
+            "id": f["id"],
+            "name": f["name"],
+            "slug": f["slug"],
+            "status": f["status"],
+            "group_code": f["group_code"],
             "project_count": h.get("project_count", 0),
-        }
-        for h in hobbies
-    ]
+            "flags": f["flags"],
+        })
+    return out
 
 
 @mcp.tool()
@@ -870,22 +878,25 @@ def constructicon_create_hobby(name: str, status: str = "active") -> dict:
     Mirrors POST /api/hobbies: creates (or reuses, via get_or_create_tag) a
     top-level blog_tags row with the given name and marks it as a hobby. The
     HTTP route always uses status='active'; this tool also accepts an explicit
-    status so a hobby can be stood up dormant/abandoned in one call.
+    status so a hobby can be stood up inactive in one call.
 
-    status: one of 'active', 'dormant', 'abandoned' (default 'active').
+    status: 'active' or 'inactive' (default 'active'); the deprecated v1 words
+    'dormant'/'abandoned' are accepted and stored as 'inactive'.
     Raises ValueError if the name is blank or the status is invalid.
-    Returns the new hobby dict {id, name, slug, status}."""
+    Returns the new hobby dict {id, name, slug, status, group_code}."""
     name = name.strip()
     if not name:
         raise ValueError("Hobby name can't be empty")
 
     tag = db.get_or_create_tag(name, parent_id=None)
     db.mark_tag_as_hobby(tag["id"], status=status)
+    made = db.get_hobby(tag["id"])
     return {
         "id": tag["id"],
         "name": tag["name"],
         "slug": tag["slug"],
-        "status": status,
+        "status": made["hobby_status"],
+        "group_code": made["group_code"],
     }
 
 
@@ -957,26 +968,55 @@ def constructicon_add_project_to_hobby(project_slug: str, hobby_slug: str) -> di
 
 @mcp.tool()
 def constructicon_set_hobby_status(hobby_slug: str, status: str) -> dict | None:
-    """Update a hobby's status (active/dormant/abandoned).
+    """Set a hobby's manual Active/Inactive switch (V2 cards 3.3).
 
-    Returns the updated hobby dict, or None if not found.
-    Raises ValueError if the status is invalid."""
+    status: 'active' | 'inactive'. The v1 words 'dormant' and 'abandoned' are deprecated
+    aliases: they are stored as 'inactive' and the result carries a `warnings` entry.
+    The change is recorded in the change log. Mismatch flags (an inactive hobby with
+    active work, an active hobby untouched ~2 years) are computed, never stored: the
+    result's `flags` shows them as of now.
+
+    Returns {id, name, slug, status, group_code, flags, warnings, changes, batch_id}, None
+    if the hobby isn't found, or {"ok": false, "error": {code: "bad_hobby_activity",
+    message}} for an unknown value."""
     hobby = db.get_hobby(hobby_slug)
     if hobby is None:
         return None
-
     try:
-        db.set_hobby_status(hobby["id"], status)
-    except ValueError as e:
-        raise ValueError(str(e))
-
-    updated = db.get_hobby(hobby["id"])
+        result = cards.set_hobby_activity(hobby["id"], status, actor="mcp")
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+    updated = cards.hobby_fields(db.get_hobby(hobby["id"]))
     return {
         "id": updated["id"],
         "name": updated["name"],
         "slug": updated["slug"],
-        "status": updated.get("hobby_status"),
+        "status": updated["status"],
+        "group_code": updated["group_code"],
+        "flags": updated["flags"],
+        "warnings": result.warnings,
+        "changes": result.changes,
+        "batch_id": result.batch_id,
     }
+
+
+@mcp.tool()
+def constructicon_set_hobby_code(hobby_slug: str, group_code: str) -> dict | None:
+    """Set a hobby's 2-4 char group code (the code shown on cards, e.g. COL, 3DP, RCA).
+
+    Letters/digits only, unique across hobbies; stored uppercase. Returns
+    {id, name, slug, group_code, changes, batch_id}, None if the hobby isn't found, or
+    {"ok": false, "error": {code: "bad_group_code" | "group_code_conflict", message}}."""
+    hobby = db.get_hobby(hobby_slug)
+    if hobby is None:
+        return None
+    try:
+        result = cards.set_group_code(hobby["id"], group_code, actor="mcp")
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+    updated = db.get_hobby(hobby["id"])
+    return {"id": updated["id"], "name": updated["name"], "slug": updated["slug"],
+            "group_code": updated["group_code"], "changes": result.changes, "batch_id": result.batch_id}
 
 
 @mcp.tool()
@@ -1399,14 +1439,19 @@ def constructicon_list_needs_decision(kind: str | None = None, need: str | None 
                                       hobby: str | None = None, limit: int | None = None) -> list[dict]:
     """List cards waiting on an owner decision, with a suggested answer for each.
 
-    Today this returns the STORED questions queued by the v1 -> v2 migration:
+    Two sources. STORED questions queued by the v1 -> v2 migration:
     need = card_status (done vs in use / paused vs collection), card_built_for
     (a means-to-an-end card: which card was it built for), card_kind (Thing or
-    Project?). Computed needs (missing provenance, hobby flags, ...) join in
-    with later pieces. Answer one with constructicon_resolve_pending_decision
-    (decision_id, choice = an option key).
+    Project?); answer one with constructicon_resolve_pending_decision
+    (decision_id, choice = an option key). COMPUTED needs, recomputed on every
+    call and never stored (decision_id is null; card_slug is null and hobby_slug
+    is set, since they belong to a hobby): need = hobby_inactive_with_active_work
+    (an Inactive hobby that has an active project) and hobby_active_untouched (an
+    Active hobby untouched for ~2 years). Fix those with constructicon_set_hobby_status.
+    More computed needs (missing provenance, ...) join in with later pieces.
 
-    Filters: kind (the card's kind), need, hobby (slug), limit.
+    Filters: kind (the card's kind, or 'hobby' for hobby needs only; any other kind
+    leaves hobby needs out), need, hobby (slug), limit.
     Each row: {need, card_slug, title, detail, suggested, suggested_reason,
     confidence, decision_id, options: [{key, label}]}. `suggested` is only a
     suggestion; nothing is applied until the decision is resolved.

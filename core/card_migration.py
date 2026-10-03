@@ -247,6 +247,61 @@ def build_plan(now=None):
     return plan
 
 
+# --- v2c_2: hobbies (4.6) ------------------------------------------------------------
+
+def run_v2c_2():
+    """Hobby activity + group codes (spec 3.3, 3.9, 4.6). Automatic, no decisions.
+
+    * hobby_status 'dormant' / 'abandoned' (or any other non-two-value word) ->
+      'inactive'; NULL / blank -> 'active'. A hobby already on active/inactive is
+      untouched, which is the idempotency guard.
+    * group_code derived for every is_hobby=1 row where it is NULL, unique across
+      hobbies (card_rules.derive_group_code), in id order so re-runs are stable.
+
+    The v1 value is kept in the actor='migration' change-log row (not a column), so
+    the log shows exactly what changed. Nothing is flipped on the owner's behalf
+    beyond the vocabulary mapping: 'definitely not FPV'ing anymore' is a manual
+    switch, and the computed flags (db.hobby_flags) point at the obvious mismatches.
+    Returns {"hobbies_changed": n, "batch_id": ...}.
+    """
+    conn = db.get_conn()
+    changed = 0
+    batch_id = changes.new_batch_id()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT id, slug, name, hobby_status, group_code FROM blog_tags WHERE is_hobby = 1 ORDER BY id"
+        ).fetchall()
+        taken = [r["group_code"] for r in rows if r["group_code"]]
+        for r in rows:
+            old_status, old_code = r["hobby_status"], r["group_code"]
+            new_status = old_status
+            if old_status not in card_rules.HOBBY_ACTIVITIES:
+                new_status = "active" if old_status in (None, "") else "inactive"
+            new_code = old_code
+            if not old_code:
+                new_code = card_rules.derive_group_code(r["name"], taken)
+                taken.append(new_code)
+            if (new_status, new_code) == (old_status, old_code):
+                continue
+            conn.execute("UPDATE blog_tags SET hobby_status = ?, group_code = ? WHERE id = ?",
+                         (new_status, new_code, r["id"]))
+            db.insert_change_log(
+                conn, "migration_v2c_2", changes.ACTOR_MIGRATION,
+                [changes.row_image("blog_tags", {"id": r["id"]},
+                                   {"hobby_status": old_status, "group_code": old_code},
+                                   {"hobby_status": new_status, "group_code": new_code})],
+                batch_id=batch_id, affected_slugs=[r["slug"]])
+            changed += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"hobbies_changed": changed, "batch_id": batch_id}
+
+
 # --- Applying -----------------------------------------------------------------------
 
 def run_v2c_1():

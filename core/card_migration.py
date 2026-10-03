@@ -302,6 +302,98 @@ def run_v2c_2():
     return {"hobbies_changed": changed, "batch_id": batch_id}
 
 
+# --- v2c_3_alienwhoop: the fake family (4.5) ---------------------------------------------
+
+# The family's own card. The spec says a card titled exactly "AlienWhoop"; the real
+# archive calls it "AlienWhoop and TinyWhoop" (the owner: "that's really a family"),
+# so both titles qualify. Matched by title, never by id.
+FAMILY_CARD_TITLES = ("alienwhoop", "alienwhoop and tinywhoop")
+# Named in #428 as candidates the owner should confirm; only offered if they exist.
+FAMILY_SIBLING_TITLES = ("tinywhoop", "alienwhoop v2 f4", "alienwhoop zer0")
+
+
+def plan_alienwhoop_family(all_cards=None):
+    """Read-only. Returns None, or (family_card, payload) for the one
+    card_family_members decision that should exist for the AlienWhoop family."""
+    all_cards = all_cards if all_cards is not None else db.list_projects()
+    fam = None
+    for want in FAMILY_CARD_TITLES:  # prefer the exact "AlienWhoop" title
+        fam = next((c for c in all_cards if (c["title"] or "").strip().lower() == want), None)
+        if fam:
+            break
+    if fam is None:
+        return None
+    member_ids = {m["id"] for m in db.list_family_members(fam["id"])}
+    seen = set()
+    candidates = []
+
+    def eligible(c):
+        return (c["id"] != fam["id"] and c["id"] not in member_ids and c["id"] not in seen
+                and (c.get("kind") or "project") not in card_rules.GROUP_KINDS)
+
+    for c in sorted(db.list_child_projects(fam["id"]), key=lambda c: (c["title"] or "").lower()):
+        if eligible(c):
+            seen.add(c["id"])
+            candidates.append((c, "currently nested under it", "medium", True))
+    for c in all_cards:
+        if (c["title"] or "").strip().lower() in FAMILY_SIBLING_TITLES and eligible(c):
+            seen.add(c["id"])
+            candidates.append((c, "named like a sibling; the archive suggests separate builds", "low", True))
+    if not candidates:
+        return None
+    options = []
+    for c, reason, conf, yes in candidates:
+        patch = []
+        if c.get("parent_id") == fam["id"]:
+            patch.append({"op": "unnest", "card": c["slug"]})
+        patch.append({"op": "add_to_family", "family": fam["slug"], "member": c["slug"]})
+        options.append({"key": c["slug"], "label": c["title"], "reason": reason, "confidence": conf,
+                        "suggested": yes, "patch": patch})
+    options.append({"key": "none", "label": "None of these (leave it as it is)", "patch": []})
+    nested = [c for c, _r, _cf, _y in candidates if c.get("parent_id") == fam["id"]]
+    payload = _envelope(
+        fam, "family_members",
+        f"'{fam['title']}' holds separate builds by nesting them. Is it really a family, and which of these "
+        "belong in it? (Members stay their own cards; the ones nested under it are taken out of the nesting.)",
+        fam.get("status"), None,
+        [c["slug"] for c, _r, _cf, yes in candidates if yes],
+        "Currently nested children, plus any card named like a sibling"
+        if len(candidates) > len(nested) else "Currently nested children",
+        "medium" if len(candidates) == len(nested) else "low", options)
+    return fam, payload
+
+
+def run_v2c_3():
+    """Queues the one AlienWhoop card_family_members decision (spec 4.5, piece 3).
+    Never moves anything: the owner answers, resolving then does the work through
+    core.cards. No-op while no AlienWhoop family card exists. Idempotent: the
+    decision is queued with queue_decision_once, which skips if ANY row of that
+    kind + card exists (open or resolved), so an answered question is never re-asked.
+    Returns {"queued": n}."""
+    from . import cards as _cards
+    plan = plan_alienwhoop_family()
+    if plan is None:
+        return {"queued": 0}
+    fam, payload = plan
+    conn = db.get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        did = db.queue_decision_once(_cards.KIND_CARD_FAMILY_MEMBERS, f"card:{fam['slug']}", payload, conn=conn)
+        if did is not None:
+            db.insert_change_log(
+                conn, "migration_v2c_3_alienwhoop", changes.ACTOR_MIGRATION,
+                [changes.row_image("pending_decisions", {"id": did}, None,
+                                   {"kind": _cards.KIND_CARD_FAMILY_MEMBERS, "post_slug": f"card:{fam['slug']}"})],
+                batch_id=changes.new_batch_id(), affected_slugs=[fam["slug"]])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"queued": 1 if did is not None else 0}
+
+
 # --- Applying -----------------------------------------------------------------------
 
 def run_v2c_1():

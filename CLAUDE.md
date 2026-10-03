@@ -239,6 +239,16 @@ To add a new object type (issue #448 contract v2):
   every core write is logged with row images in `audit_log` via
   `core/changes.py`, and the v1 -> v2 mapping is `core/card_migration.py`
   (run from `init_db()`, idempotent: only cards with `stage IS NULL`).
+- **Families + nesting (V2, piece 3)** — `family_members(family_id, member_id)`
+  is many-to-many membership for `kind=family|collection` cards (not nesting;
+  no files move). `projects.parent_id` now means "part of" only:
+  `card_rules.validate_nest` (no self/cycle/second parent, neither end a group
+  kind) guards `db.create_project`, `db.update_project` and `cards.nest`;
+  `card_rules.validate_membership` guards `cards.add_to_family`. Violations are
+  `CardError` codes (`nest_*` -> 409, `bad_membership` -> 422), same over HTTP
+  and MCP. The AlienWhoop `card_family_members` decision is queued by
+  `card_migration.run_v2c_3` (never moves anything); resolving it runs
+  unnest -> set_kind family -> add_to_family in one change-log batch.
 
 ### Tag hierarchy gotcha — walk the tree, don't just keyword-search
 

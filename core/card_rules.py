@@ -263,6 +263,55 @@ def curator_status(card, provisional_legacy=None):
     return "wip"
 
 
+# --- Families, collections and nesting (3.6, 3.7) ---------------------------------
+
+def validate_membership(family, member):
+    """Family / collection membership (3.6). `family` and `member` are project
+    dicts (needs id, kind, title). The family must be a group kind; the member
+    must differ from it and must not be a group kind itself (flat, one level).
+    Raises CardError('bad_membership')."""
+    fkind = family.get("kind") or DEFAULT_KIND
+    if fkind not in GROUP_KINDS:
+        raise CardError("bad_membership",
+                        f"'{family['title']}' is a {kind_label(fkind)}, not a family or collection, so it can't have members.")
+    if family["id"] == member["id"]:
+        raise CardError("bad_membership", "A family can't be a member of itself.")
+    mkind = member.get("kind") or DEFAULT_KIND
+    if mkind in GROUP_KINDS:
+        raise CardError("bad_membership",
+                        f"'{member['title']}' is a {kind_label(mkind)}; families and collections can't contain each other.")
+    return True
+
+
+def validate_nest(child, parent, descendants_of_child, replace=False):
+    """Nesting means "part of" only (3.7). `child` and `parent` are project dicts
+    (`child` may be a not-yet-created card: {"id": None, "kind": ..., "parent_id": None});
+    `descendants_of_child` is the set of ids at or below the child.
+
+    Raises CardError: nest_self, nest_group_kind (a family/collection can't be
+    nested or be a nesting parent; use membership), nest_cycle, nest_second_parent
+    (a card already part of something else; pass replace=True to move it).
+    """
+    if child.get("id") is not None and child["id"] == parent["id"]:
+        raise CardError("nest_self", "A card can't be part of itself.")
+    for role, card in (("child", child), ("parent", parent)):
+        k = card.get("kind") or DEFAULT_KIND
+        if k in GROUP_KINDS:
+            who = f"'{card['title']}' is a {kind_label(k)}"
+            if role == "child":
+                raise CardError("nest_group_kind", f"{who}, and a {k} can't be part of another card; use membership instead.")
+            raise CardError("nest_group_kind", f"{who}, and a {k} can't be a nesting parent; use membership instead.")
+    if parent["id"] in set(descendants_of_child or ()):
+        raise CardError("nest_cycle", f"'{parent['title']}' is already nested under '{child['title']}'; that would be a loop.")
+    current = child.get("parent_id")
+    if current is not None and current != parent["id"] and not replace:
+        raise CardError("nest_second_parent",
+                        f"'{child['title']}' is already part of another card; a card has one parent. "
+                        "Unnest it first, or pass replace=true to move it.",
+                        {"current_parent_id": current})
+    return True
+
+
 def validate_hobby_activity(value, allow_aliases=True):
     """Returns (activity, warnings) for a hobby activity word, or raises
     CardError('bad_hobby_activity'). With allow_aliases the v1 words 'dormant' and

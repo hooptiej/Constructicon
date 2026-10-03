@@ -546,6 +546,18 @@ def init_db():
             if column not in existing_audit_columns:
                 conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {ddl_type}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_batch ON audit_log(batch_id)")
+        # family_members (V2 cards 3.6): many-to-many membership for kind=family and
+        # kind=collection cards. Not nesting: membership never moves or copies files.
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS family_members (
+            family_id  INTEGER NOT NULL REFERENCES projects(id),
+            member_id  INTEGER NOT NULL REFERENCES projects(id),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at REAL    NOT NULL,
+            PRIMARY KEY (family_id, member_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_family_members_member ON family_members(member_id);
+        """)
         conn.commit()
     finally:
         conn.close()
@@ -553,6 +565,7 @@ def init_db():
     from . import card_migration
     card_migration.run_v2c_1()
     card_migration.run_v2c_2()
+    card_migration.run_v2c_3()
 
 
 def _row_to_dict(row):
@@ -1753,8 +1766,14 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
     from . import card_rules, changes
     kind = card_rules.validate_kind(kind or card_rules.DEFAULT_KIND)
     status_triple = card_rules.validate_status(kind, stage or card_rules.DEFAULT_STAGE, stop_reason)
-    if parent_id is not None and kind in card_rules.GROUP_KINDS:
-        raise card_rules.CardError("nest_group_kind", f"A {kind} can't be nested under another card; use membership.")
+    if parent_id is not None:
+        # Nest rules (3.7) guard creation too: the parent must exist and be nestable
+        # under, and a new group-kind card can't start life nested.
+        parent_row = get_project(parent_id)
+        if parent_row is None:
+            raise card_rules.CardError("not_found", f"No such parent card: {parent_id!r}")
+        card_rules.validate_nest({"id": None, "kind": kind, "title": title, "parent_id": None}, parent_row, ())
+        parent_id = parent_row["id"]
     conn = get_conn()
     try:
         slug = _slugify(title)
@@ -1913,12 +1932,26 @@ def list_projects(status=None, kind=None, activity=None, stage=None):
         conn.close()
 
 
-def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None, parent_id=..., writeup_slug=..., cover_project_id=...):
+def check_nest(child, parent_id, replace=False):
+    """Runs the "part of" rules (card_rules.validate_nest, V2 cards 3.7) for
+    nesting `child` (a project dict) under `parent_id`. Returns the parent row;
+    raises card_rules.CardError (not_found / nest_*). No writes."""
+    from . import card_rules
+    parent_row = get_project(parent_id)
+    if parent_row is None:
+        raise card_rules.CardError("not_found", f"No such parent card: {parent_id!r}")
+    card_rules.validate_nest(child, parent_row, _descendant_project_ids(child["id"]), replace=replace)
+    return parent_row
+
+
+def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None, parent_id=..., writeup_slug=..., cover_project_id=..., replace_parent=False):
     """Partial update — only overwrites fields that were passed, same
     pattern as update_tags() for capture_events. Bumps updated_at.
 
-    parent_id can be updated; a cycle check prevents setting a project
-    as its own ancestor. Use parent_id=None to clear a parent.
+    parent_id can be updated under the V2 "part of" rules (check_nest): no self
+    or cycle, neither end a family/collection, and a card that already has a
+    different parent is refused unless replace_parent=True (card_rules.CardError,
+    codes nest_*). Use parent_id=None to clear a parent.
 
     cover_slug (#325) and cover_project_id (#356) are mutually exclusive:
     a project's cover is either an object (cover_slug) or a child project proxy
@@ -1930,13 +1963,10 @@ def update_project(id_or_slug, title=None, description=None, cover_slug=None, st
     if existing is None:
         return None
 
-    # Cycle detection: if setting a new parent, verify it's not a descendant
+    # Nest rules (V2 cards 3.7): cycle, self, group kinds, second parent.
     new_parent_id = parent_id if parent_id is not ... else existing.get("parent_id")
-    if parent_id is not ... and new_parent_id is not None:
-        # Check if the proposed parent is actually a descendant of this project
-        descendant_ids = _descendant_project_ids(existing["id"])
-        if new_parent_id in descendant_ids:
-            raise ValueError(f"Cannot set project {new_parent_id} as parent: it is already a descendant of this project")
+    if parent_id is not ... and new_parent_id is not None and new_parent_id != existing.get("parent_id"):
+        new_parent_id = check_nest(existing, new_parent_id, replace=replace_parent)["id"]
 
     # Mutual exclusion: cover_slug and cover_project_id cannot both be set
     new_cover_slug = cover_slug if cover_slug is not None else existing.get("cover_slug")
@@ -2372,21 +2402,129 @@ def count_family_members(family_id):
         conn.close()
 
 
-def clear_family_members(family_id):
-    """Drops a group card's membership rows (set_kind force=True). No-op before
-    the family_members table exists."""
+def clear_family_members(family_id, op="set_kind", actor="mcp", batch_id=None, affected_slugs=None):
+    """Drops a group card's membership rows (set_kind force=True), logging one
+    row image per dropped membership so the drop is undoable. No-op before the
+    family_members table exists."""
     conn = get_conn()
     try:
         if _table_exists(conn, "family_members"):
-            conn.execute("DELETE FROM family_members WHERE family_id = ?", (family_id,))
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("SELECT member_id, sort_order, created_at FROM family_members WHERE family_id = ?",
+                                (family_id,)).fetchall()
+            if rows:
+                conn.execute("DELETE FROM family_members WHERE family_id = ?", (family_id,))
+                insert_change_log(
+                    conn, op, actor,
+                    [{"table": "family_members", "key": {"family_id": family_id, "member_id": r["member_id"]},
+                      "before": {"sort_order": r["sort_order"], "created_at": r["created_at"]}, "after": None}
+                     for r in rows],
+                    batch_id=batch_id, affected_slugs=affected_slugs)
             conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_family_members(family_id):
+    """Members of a family/collection card, in sort_order then insertion order.
+    Returns project dicts, each with the membership's sort_order."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT p.*, fm.sort_order AS member_sort_order FROM family_members fm "
+            "JOIN projects p ON p.id = fm.member_id WHERE fm.family_id = ? "
+            "ORDER BY fm.sort_order, fm.created_at, fm.rowid",
+            (family_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_families_for_member(member_id):
+    """Families/collections a card belongs to (earliest membership first)."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT p.* FROM family_members fm JOIN projects p ON p.id = fm.family_id "
+            "WHERE fm.member_id = ? ORDER BY fm.created_at, fm.rowid",
+            (member_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def is_family_member(family_id, member_id):
+    conn = get_conn()
+    try:
+        return conn.execute("SELECT 1 FROM family_members WHERE family_id = ? AND member_id = ?",
+                            (family_id, member_id)).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def add_family_member(family_id, member_id, op, actor, batch_id=None, affected_slugs=None):
+    """Idempotently adds a membership row and logs its row image in the same
+    transaction. Returns True when a row was inserted, False when it already
+    existed (nothing logged). Validation is the caller's (core/cards.py)."""
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM family_members WHERE family_id = ? AND member_id = ?",
+                        (family_id, member_id)).fetchone():
+            conn.rollback()
+            return False
+        order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM family_members WHERE family_id = ?",
+                             (family_id,)).fetchone()["n"]
+        now = time.time()
+        conn.execute("INSERT INTO family_members (family_id, member_id, sort_order, created_at) VALUES (?, ?, ?, ?)",
+                     (family_id, member_id, order, now))
+        insert_change_log(
+            conn, op, actor,
+            [{"table": "family_members", "key": {"family_id": family_id, "member_id": member_id},
+              "before": None, "after": {"sort_order": order, "created_at": now}}],
+            batch_id=batch_id, affected_slugs=affected_slugs)
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def remove_family_member(family_id, member_id, op, actor, batch_id=None, affected_slugs=None):
+    """Removes a membership row (logging its image). True if a row was removed."""
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT sort_order, created_at FROM family_members WHERE family_id = ? AND member_id = ?",
+                           (family_id, member_id)).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        conn.execute("DELETE FROM family_members WHERE family_id = ? AND member_id = ?", (family_id, member_id))
+        insert_change_log(
+            conn, op, actor,
+            [{"table": "family_members", "key": {"family_id": family_id, "member_id": member_id},
+              "before": {"sort_order": row["sort_order"], "created_at": row["created_at"]}, "after": None}],
+            batch_id=batch_id, affected_slugs=affected_slugs)
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 # Columns a card operation may write on `projects` (anything else is refused, so
 # a typo in core/cards.py can't write an arbitrary column).
-CARD_WRITABLE_COLUMNS = ("kind", "activity", "stage", "stop_reason")
+CARD_WRITABLE_COLUMNS = ("kind", "activity", "stage", "stop_reason", "parent_id")
 
 
 def update_card_columns(card_id, fields, op, actor, batch_id=None, bump_updated=True):
@@ -3172,6 +3310,10 @@ def delete_project(project_id):
 
         # Remove project from hobbies.
         conn.execute("DELETE FROM project_hobbies WHERE project_id = ?", (project_id,))
+
+        # Drop family/collection membership rows on both sides: a deleted member
+        # leaves its families, a deleted family leaves its members intact (3.6).
+        conn.execute("DELETE FROM family_members WHERE family_id = ? OR member_id = ?", (project_id, project_id))
 
         # Delete the project itself.
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))

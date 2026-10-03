@@ -18,7 +18,8 @@
     <div class="project-title">{{ p.title }}</div>
     {% if p.description %}<div class="project-desc">{{ p.description }}</div>{% endif %}
     <div class="project-meta-row">
-      <span class="project-status-pill{% if p.status == 'archived' %} archived{% endif %}">{{ p.status }}</span>
+      <span class="project-status-pill{% if p.activity == 'inactive' %} archived{% endif %}">{{ p.stage_label }}{% if p.stage == 'stopped' and p.stop_reason_label %} - {{ p.stop_reason_label | lower }}{% endif %}</span>
+      {% if p.needs_input %}<span class="project-status-pill" title="A question about this card is waiting in the admin pane">needs your input</span>{% endif %}
     </div>
   </div>
 </a>

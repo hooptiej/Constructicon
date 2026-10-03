@@ -553,6 +553,21 @@
           <label class="pending-decision-candidate">
             <input type="checkbox" name="project_ids" value="${c.id}"> ${escapeHtml(c.title)}
           </label>`).join('');
+      } else if (item.kind.startsWith('card_')) {
+        // V2 card question (spec 4.3): the suggestion is pre-selected but never
+        // applied until the owner presses Apply. "multi" questions (which card was
+        // this built for?) use checkboxes; the rest are one-of-N radios.
+        showNoneButton = false;
+        const options = item.options || [];
+        const inputType = item.multi ? 'checkbox' : 'radio';
+        candidatesHtml = `<div>${escapeHtml(item.question || '')}</div>`;
+        if (item.suggested_reason) {
+          candidatesHtml += `<div class="backup-status">Suggested: ${escapeHtml(item.suggested_reason)}${item.confidence ? ' (' + escapeHtml(item.confidence) + ' confidence)' : ''}</div>`;
+        }
+        candidatesHtml += options.map((o) => `
+            <label class="pending-decision-candidate">
+              <input type="${inputType}" name="choice-${item.id}" value="${escapeHtml(o.key)}" ${o.suggested ? 'checked' : ''}> ${escapeHtml(o.label)}${o.reason ? ' <span class="backup-status">(' + escapeHtml(o.reason) + ')</span>' : ''}
+            </label>`).join('');
       } else if (item.kind === 'retype') {
         showNoneButton = false;
         const question = item.question || 'Choose a type:';
@@ -611,6 +626,13 @@
           const choice = el.querySelector(`input[name="choice-${item.id}"]:checked`);
           const formData = new FormData();
           if (choice) formData.append('choice', choice.value);
+          resolve(formData);
+        } else if (item.kind.startsWith('card_')) {
+          const picked = Array.from(el.querySelectorAll(`input[name="choice-${item.id}"]:checked`));
+          const formData = new FormData();
+          // One answer is a plain `choice`; several go as `choices`.
+          if (picked.length === 1) formData.append('choice', picked[0].value);
+          else picked.forEach((i) => formData.append('choices', i.value));
           resolve(formData);
         }
       });

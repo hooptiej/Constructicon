@@ -79,7 +79,7 @@
         </div>
       </div>
       <div id="done-zone" style="display:none">
-        <h3 class="zone-heading">Finished / Archived</h3>
+        <h3 class="zone-heading">Inactive</h3>
         <div class="projects-done-scroll" id="projects-done-grid"></div>
       </div>
       {% if show_reference_selected %}
@@ -93,6 +93,14 @@
         function escapeHtml(str) {
           return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         }
+        // V2 cards: the status pill shows the stage ("In progress", "Stopped - failed"),
+        // plus a "needs your input" mark while a migration question is still open.
+        function statusPillHtml(p) {
+          const label = (p.stage_label || p.status || '') + (p.stage === 'stopped' && p.stop_reason_label ? ' - ' + p.stop_reason_label.toLowerCase() : '');
+          const dim = p.activity === 'inactive' ? ' archived' : '';
+          const needs = p.needs_input ? ' <span class="project-status-pill" title="A question about this card is waiting in the admin pane">needs your input</span>' : '';
+          return `<span class="project-status-pill${dim}">${escapeHtml(label)}</span>${needs}`;
+        }
         function projectCardHtml(p, isFeatured = false) {
           const cardClass = isFeatured ? 'project-card project-card-featured' : 'project-card';
           return `
@@ -105,7 +113,7 @@
                 ${p.description ? `<div class="project-desc">${escapeHtml(p.description)}</div>` : ''}
                 ${p.writeup_excerpt ? `<div class="project-writeup-excerpt">${escapeHtml(p.writeup_excerpt)}</div>` : ''}
                 <div class="project-meta-row">
-                  <span class="project-status-pill${p.status === 'archived' ? ' archived' : ''}">${escapeHtml(p.status)}</span>
+                  ${statusPillHtml(p)}
                 </div>
               </div>
             </a>`;
@@ -118,7 +126,7 @@
               </div>
               <div class="project-compact-body">
                 <div class="project-compact-title">${escapeHtml(p.title)}</div>
-                <span class="project-status-pill${p.status === 'archived' ? ' archived' : ''}">${escapeHtml(p.status)}</span>
+                ${statusPillHtml(p)}
               </div>
             </a>`;
         }
@@ -135,8 +143,10 @@
         }
         const projects = {{ projects | tojson }};
         const referenceObjects = {{ reference_objects | tojson }};
-        const activeProjects = projects.filter(p => p.status === 'wip' || p.status === 'active');
-        const doneProjects = projects.filter(p => p.status !== 'wip' && p.status !== 'active');
+        // V2 cards: partition on `activity` (active vs inactive), not the legacy status.
+        // A row with no activity (shouldn't exist after the migration) counts as inactive.
+        const activeProjects = projects.filter(p => p.activity === 'active');
+        const doneProjects = projects.filter(p => p.activity !== 'active');
 
         const activeZone = document.getElementById('active-zone');
         const doneZone = document.getElementById('done-zone');

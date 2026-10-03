@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
+from core import backup, card_rules, cards, curator_needs, db, decisions, ingest, object_types, ocr, storage, timeline
 from core import version as version_info
-from core import backup, curator_needs, db, decisions, ingest, object_types, ocr, storage, timeline
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
@@ -150,7 +150,10 @@ def _to_public_project(project):
         "slug": project["slug"],
         "title": project["title"],
         "description": project["description"],
+        # Legacy v1 status: frozen (the static export still reads it). The live
+        # status is kind / activity / stage / stop_reason below.
         "status": project["status"],
+        **cards.status_fields(project),
         "cover_slug": project.get("cover_slug"),
         "writeup_slug": project.get("writeup_slug"),
         "parent_id": project.get("parent_id"),
@@ -603,26 +606,50 @@ def constructicon_get_related(slug: str) -> list[dict]:
 
 
 @mcp.tool()
-def constructicon_list_projects() -> list[dict]:
-    """List all projects, most-recently-updated first."""
-    return [_to_public_project(p) for p in db.list_projects()]
+def constructicon_list_projects(kind: str | None = None, activity: str | None = None,
+                                stage: str | None = None) -> list[dict]:
+    """List all projects (cards), most-recently-updated first.
+
+    Optional filters on the live V2 status: kind (project|thing|action|family|
+    collection|event), activity (active|inactive), stage (in_progress|in_use|idea|
+    paused|done|stopped). Each card carries kind, activity, stage, stop_reason,
+    their labels, and needs_input (true while a question about it is still open).
+    """
+    return [_to_public_project(p) for p in db.list_projects(kind=kind, activity=activity, stage=stage)]
+
+
+def _card_error_result(e):
+    """The shared error shape (spec section 5): same code as the HTTP routes."""
+    return {"ok": False, "error": e.to_dict()}
 
 
 @mcp.tool()
-def constructicon_create_project(title: str, description: str = "", cover_slug: str | None = None, parent_id: int | None = None) -> dict:
-    """Create a new project.
+def constructicon_create_project(title: str, description: str = "", cover_slug: str | None = None, parent_id: int | None = None,
+                                 kind: str | None = None, stage: str | None = None, stop_reason: str | None = None) -> dict:
+    """Create a new project (card).
 
     Also creates a root-level tag with the same name and links it, so tagged
     objects surface through both project and tag browsing.
 
     parent_id optionally links this project to a parent project (#133),
     enabling a simple hierarchy of nested projects.
+
+    kind: project (default) | thing | action | family | collection | event.
+    stage: in_progress (default) | in_use | idea | paused | done | stopped
+    (stopped needs stop_reason failed|abandoned). Invalid combinations return
+    {"ok": false, "error": {"code": "bad_status", ...}}.
     """
     title = title.strip()
     if not title:
         raise ValueError("Project name can't be empty")
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, description=description, cover_slug=cover_slug, tag_id=tag["id"], parent_id=parent_id)
+    try:
+        card_rules.validate_status(card_rules.validate_kind(kind or card_rules.DEFAULT_KIND),
+                                   stage or card_rules.DEFAULT_STAGE, stop_reason)
+        tag = db.get_or_create_tag(title, parent_id=None)
+        project = db.create_project(title, description=description, cover_slug=cover_slug, tag_id=tag["id"],
+                                    parent_id=parent_id, kind=kind, stage=stage, stop_reason=stop_reason, actor="mcp")
+    except card_rules.CardError as e:
+        return _card_error_result(e)
     return _to_public_project(project)
 
 
@@ -631,8 +658,14 @@ def constructicon_update_project(project_id: str | int, title: str | None = None
                                  description: str | None = None, cover_slug: str | None = None,
                                  status: str | None = None, start_date: float | None = None,
                                  reset_start_date: bool = False, end_date: float | None = None,
-                                 reset_end_date: bool = False) -> dict | None:
+                                 reset_end_date: bool = False, kind: str | None = None,
+                                 stage: str | None = None, stop_reason: str | None = None) -> dict | None:
     """Update a project's metadata, including its timeline span.
+
+    kind / stage / stop_reason set the live V2 status through the same rules as
+    constructicon_set_kind / constructicon_set_status (a violation returns
+    {"ok": false, "error": {code, message}}). `status` is the DEPRECATED v1 word
+    (wip, complete, shelved, ...): it is translated to a stage (a warning says so).
 
     start_date/end_date set manual overrides for this project's position on the Constructicon
     timeline (unix timestamps). reset_start_date/reset_end_date each clear that one override,
@@ -642,15 +675,36 @@ def constructicon_update_project(project_id: str | int, title: str | None = None
 
     Returns the updated project, or None if not found.
     """
+    card_warnings = []
+    if db.get_project(project_id) is None:
+        return None
+    try:
+        if status:
+            legacy = card_rules.legacy_to_status(status)
+            kind = kind or legacy["kind"]
+            if not stage:
+                stage, stop_reason = legacy["stage"], legacy["stop_reason"]
+            card_warnings.extend(legacy["warnings"])
+        if kind:
+            card_warnings.extend(cards.set_kind(project_id, kind, actor="mcp").warnings)
+        if stage or stop_reason:
+            card_warnings.extend(cards.set_status(project_id, stage, stop_reason, actor="mcp").warnings)
+    except card_rules.CardError as e:
+        return _card_error_result(e)
     project = db.update_project(project_id, title=title, description=description,
-                                cover_slug=cover_slug, status=status)
+                                cover_slug=cover_slug)
     if project is None:
         return None
     if reset_start_date or reset_end_date or start_date is not None or end_date is not None:
         new_start = None if reset_start_date else (start_date if start_date is not None else ...)
         new_end = None if reset_end_date else (end_date if end_date is not None else ...)
         project = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
-    return _to_public_project(project) if project else None
+    if not project:
+        return None
+    result = _to_public_project(db.get_project(project["id"]) or project)
+    if card_warnings:
+        result["warnings"] = card_warnings
+    return result
 
 
 @mcp.tool()
@@ -742,7 +796,10 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
     """Get a project with full details: metadata, items, tags, cover, and write-up body.
 
     Returns a comprehensive dict with:
-    - id, slug, title, description, status, cover_slug, writeup_slug, parent_id
+    - id, slug, title, description, cover_slug, writeup_slug, parent_id
+    - kind, activity, stage, stop_reason (+ labels) and needs_input: the live V2 status;
+      `status` is the frozen legacy v1 word
+    - open_decisions: any still-open questions about this card (with the suggested answer)
     - items: list of objects in the project (with their tags)
     - cover: the cover object if cover_slug is set, else None
     - writeup: the writeup document object if writeup_slug is set, else None
@@ -782,6 +839,7 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
         "items": items_public,
         "cover": cover,
         "writeup": writeup,
+        "open_decisions": [cards.decision_summary(d) for d in cards.open_card_decisions(project["slug"])],
     }
 
 
@@ -1271,25 +1329,89 @@ def constructicon_list_brand_assets() -> list[dict]:
 
 @mcp.tool()
 def constructicon_set_project_status(id_or_slug: str, status: str) -> dict | None:
-    """Set a project's lifecycle status (#341).
+    """DEPRECATED alias of constructicon_set_status that still accepts the v1 words.
 
-    Status conditions scoring and nudging in the Curator system: "wip" (work
-    in progress, scored leniently), "complete" (finished, strict scoring),
-    "shelved" (paused), "means-to-an-end" (an intermediate step for something
-    else), "abandoned" (discontinued), "failed" (tried, never succeeded), "idea"
-    (pre-start thinking), "published" (live site version), "reference-only"
-    (external link, not authored here). Existing "active" rows are equivalent to "wip".
-
-    The set is loose and extensible — trim in use as patterns emerge.
-
-    id_or_slug: project ID or slug.
-    status: the new status value.
-    Returns the updated project dict, or None if not found.
+    Legacy words are translated to a stage and the result carries `warnings`
+    saying so: wip/active -> in_progress; complete/archived/published/
+    means-to-an-end -> done (ambiguous: use set_status with in_use if it is still
+    in use); shelved -> paused; abandoned -> stopped (abandoned); failed -> stopped
+    (failed); idea -> idea; reference-only -> kind collection + in_use. A v2 stage
+    name is accepted too. Returns the updated project dict (with `warnings`), None
+    if not found, or {"ok": false, "error": {code, message}} for an invalid status.
     """
-    project = db.update_project(id_or_slug, status=status)
-    if project is None:
+    if db.get_project(id_or_slug) is None:
         return None
-    return _to_public_project(project)
+    try:
+        legacy = card_rules.legacy_to_status(status)
+        warnings = list(legacy["warnings"])
+        if legacy["kind"]:
+            warnings.extend(cards.set_kind(id_or_slug, legacy["kind"], actor="mcp").warnings)
+        warnings.extend(cards.set_status(id_or_slug, legacy["stage"], legacy["stop_reason"], actor="mcp").warnings)
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+    return {**_to_public_project(db.get_project(id_or_slug)), "warnings": warnings}
+
+
+@mcp.tool()
+def constructicon_set_status(card: str | int, stage: str, stop_reason: str | None = None,
+                             activity: str | None = None, dry_run: bool = False) -> dict:
+    """Set a card's status: stage (+ stop_reason when stopped). V2 cards 3.2.
+
+    stage: in_progress | in_use (both active) or idea | paused | done | stopped
+    (all inactive). Activity is derived from the stage; passing `activity` that
+    disagrees with it is an error. stopped REQUIRES stop_reason failed|abandoned,
+    and a stop_reason on any other stage is an error. An idea can never be active.
+    An event only allows idea / in_progress / done / stopped. Any stage can follow
+    any other (no state machine). Rule violations return
+    {"ok": false, "error": {"code": "bad_status", "message": ...}}; nothing is written.
+
+    card: project id or slug. dry_run=true previews without writing.
+    Returns {ok, dry_run, changes: [{card, field, before, after}], warnings, batch_id}.
+    """
+    try:
+        return cards.set_status(card, stage, stop_reason, activity=activity, dry_run=dry_run,
+                                actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_set_kind(card: str | int, kind: str, force: bool = False, dry_run: bool = False) -> dict:
+    """Set a card's kind: project | thing | action | family | collection | event.
+
+    A thing is one physical object (a one-object build is a Thing, not a Project).
+    family and collection are group kinds: they can't be nested under another
+    card or have nested children. Leaving a group kind that has members is refused
+    unless force=true (drops the memberships). The card's current stage must stay
+    valid for the new kind (an event can't be in use or paused).
+
+    Returns {ok, dry_run, changes, warnings, batch_id} or
+    {"ok": false, "error": {code, message}}.
+    """
+    try:
+        return cards.set_kind(card, kind, force=force, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_list_needs_decision(kind: str | None = None, need: str | None = None,
+                                      hobby: str | None = None, limit: int | None = None) -> list[dict]:
+    """List cards waiting on an owner decision, with a suggested answer for each.
+
+    Today this returns the STORED questions queued by the v1 -> v2 migration:
+    need = card_status (done vs in use / paused vs collection), card_built_for
+    (a means-to-an-end card: which card was it built for), card_kind (Thing or
+    Project?). Computed needs (missing provenance, hobby flags, ...) join in
+    with later pieces. Answer one with constructicon_resolve_pending_decision
+    (decision_id, choice = an option key).
+
+    Filters: kind (the card's kind), need, hobby (slug), limit.
+    Each row: {need, card_slug, title, detail, suggested, suggested_reason,
+    confidence, decision_id, options: [{key, label}]}. `suggested` is only a
+    suggestion; nothing is applied until the decision is resolved.
+    """
+    return cards.list_needs_decision(kind=kind, need=need, hobby=hobby, limit=limit)
 
 
 # --- Curator Stage 3a: Nudges ---
@@ -1375,6 +1497,27 @@ def constructicon_list_pending_decisions() -> list[dict]:
     """
     result = []
     for item in decisions.list_open():
+        if cards.is_card_decision_slug(item["post_slug"]):
+            # V2 card question: slug is "card:<project slug>"; carries the suggested answer.
+            summary = cards.decision_summary({"id": item["id"], "kind": item["kind"],
+                                              "post_slug": item["post_slug"], "payload": item["payload"]})
+            result.append({
+                "id": item["id"],
+                "kind": item["kind"],
+                "slug": item["post_slug"],
+                "card_slug": summary["card_slug"],
+                "title": summary["title"],
+                "media_type": None,
+                "created_at": item["created_at"],
+                "question": summary["question"],
+                "legacy_status": summary["legacy_status"],
+                "provisional": summary["provisional"],
+                "suggested": summary["suggested"],
+                "suggested_reason": summary["suggested_reason"],
+                "confidence": summary["confidence"],
+                "options": summary["options"],
+            })
+            continue
         row = item["row"]
         # Use the same title logic as the web endpoint
         title = row.get("display_name") or row.get("filename") or row.get("content_description") or row["slug"]
@@ -1400,7 +1543,8 @@ def constructicon_list_pending_decisions() -> list[dict]:
 
 
 @mcp.tool()
-def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", project_ids: list[int] | None = None) -> dict:
+def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", project_ids: list[int] | None = None,
+                                           choices: list[str] | None = None) -> dict:
     """#240/#446/#448: Resolve a pending decision with the owner's choice.
 
     For project_match decisions:
@@ -1410,6 +1554,16 @@ def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", p
     For retype decisions:
         choice: the media_type key to retype to (or empty to skip)
         project_ids: unused
+
+    For V2 card decisions (kind card_status / card_built_for / card_kind, slug
+    "card:<project slug>"):
+        choice: one option key from constructicon_list_pending_decisions (e.g. "in_use")
+        choices: several option keys for multi-answer questions (card_built_for)
+        The option's change runs through the same validators as a manual edit; if it
+        is invalid today the decision stays open and {"ok": false, "error": {code,
+        message}} comes back. card_built_for answers that create a link (a candidate
+        card) aren't available until typed links land (piece 4); "is_event" and
+        "none" work now.
 
     Returns:
         {"ok": true, "applied": [...], "remaining": count}
@@ -1425,8 +1579,11 @@ def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", p
         project_ids = []
 
     try:
-        result = decisions.resolve(decision_id, choice=choice, project_ids=project_ids)
+        result = decisions.resolve(decision_id, choice=choice, project_ids=project_ids, choices=choices or (),
+                                   actor="mcp")
         return result
+    except card_rules.CardError as e:
+        return _card_error_result(e)
     except decisions.DecisionNotFound as e:
         return {"error": str(e)}
     except decisions.DecisionAlreadyResolved as e:

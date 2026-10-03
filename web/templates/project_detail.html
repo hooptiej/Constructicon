@@ -43,11 +43,27 @@
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:8px">
-      <select id="project-status-select" class="project-status-pill" style="width:fit-content;border:none;cursor:pointer">
-        {% for status in PROJECT_STATUSES %}<option value="{{ status }}" {% if project.status == status %}selected{% endif %}>{{ status }}</option>{% endfor %}
-        {% if project.status not in PROJECT_STATUSES %}<option value="{{ project.status }}" selected>{{ project.status }} (legacy)</option>{% endif %}
+      {# V2 cards: kind + stage (+ stop reason) replace the single legacy status select.
+         Activity is derived from the stage (grouped below), never chosen on its own;
+         the server validates every combination (same rules as the MCP tools). #}
+      <select id="project-kind-select" class="project-status-pill" aria-label="Kind" title="Kind" style="width:fit-content;border:none;cursor:pointer">
+        {% for k in card_kinds %}<option value="{{ k.key }}" {% if card_status.kind == k.key %}selected{% endif %}>{{ k.label }}</option>{% endfor %}
+      </select>
+      <select id="project-stage-select" class="project-status-pill" aria-label="Stage" title="Stage" style="width:fit-content;border:none;cursor:pointer">
+        {% for grp in ['active', 'inactive'] %}
+        <optgroup label="{{ grp | capitalize }}">
+          {% for s in card_stages if s.activity == grp %}<option value="{{ s.key }}" {% if card_status.stage == s.key %}selected{% endif %}>{{ s.label }}</option>{% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      <select id="project-stop-reason-select" class="project-status-pill" aria-label="Stop reason" title="Why it stopped" style="width:fit-content;border:none;cursor:pointer;{% if card_status.stage != 'stopped' %}display:none{% endif %}">
+        {% for r in card_stop_reasons %}<option value="{{ r.key }}" {% if card_status.stop_reason == r.key %}selected{% endif %}>{{ r.label }}</option>{% endfor %}
       </select>
       <p class="status-confirm" id="status-confirm" style="display:none;font-size:12px;color:#6E6B57;margin:0">Saved.</p>
+      <p class="status-error" id="status-error" style="display:none;font-size:12px;color:#C0392B;margin:0" role="alert"></p>
+      {% if card_open_decisions %}
+      <a href="/admin" class="project-status-pill" style="text-decoration:none" title="{{ card_open_decisions | map(attribute='question') | join(' / ') }}">needs your input</a>
+      {% endif %}
       <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
         <button type="button" class="btn-secondary" id="convert-to-hobby-btn" title="Convert this project to a hobby" style="white-space:nowrap">Convert to hobby</button>
         <button type="button" class="btn-danger" id="delete-project-btn" title="Delete this project (orphan children, detach objects)" style="white-space:nowrap">Delete project</button>
@@ -656,30 +672,61 @@ wireTimelineDateField('end-date-input', 'end-date-reset', 'end_date', 'reset_end
 
 // Status selector (#160-followup): active/archived, same immediate-effect
 // pattern as the cover/writeup selectors above.
-const statusSelect = document.getElementById('project-status-select');
+// V2 cards: kind / stage / stop-reason controls. The server validates every
+// combination and answers 422 {error:{code,message}, detail} on a violation;
+// the control snaps back and the message is shown.
+const kindSelect = document.getElementById('project-kind-select');
+const stageSelect = document.getElementById('project-stage-select');
+const stopReasonSelect = document.getElementById('project-stop-reason-select');
 const statusConfirm = document.getElementById('status-confirm');
-let currentStatus = {{ project.status | tojson }};
-statusSelect.addEventListener('change', async function() {
-  const value = this.value;
+const statusError = document.getElementById('status-error');
+let currentCard = {
+  kind: {{ card_status.kind | tojson }},
+  stage: {{ card_status.stage | tojson }},
+  stop_reason: {{ (card_status.stop_reason or 'abandoned') | tojson }},
+};
+function syncStopReasonVisibility() {
+  stopReasonSelect.style.display = stageSelect.value === 'stopped' ? '' : 'none';
+}
+async function saveCardFields(fields) {
   statusConfirm.style.display = 'none';
+  statusError.style.display = 'none';
   try {
     const response = await fetch(`/api/projects/${projectId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `status=${encodeURIComponent(value)}`
+      body: new URLSearchParams(fields).toString()
     });
     if (response.ok) {
-      currentStatus = value;
+      currentCard = { kind: kindSelect.value, stage: stageSelect.value, stop_reason: stopReasonSelect.value };
       statusConfirm.style.display = 'block';
       setTimeout(() => { statusConfirm.style.display = 'none'; }, 2000);
     } else {
-      console.error('Failed to update status:', response.status);
-      statusSelect.value = currentStatus;
+      const body = await response.json().catch(() => ({}));
+      statusError.textContent = body.detail || `Couldn't save (${response.status})`;
+      statusError.style.display = 'block';
+      kindSelect.value = currentCard.kind;
+      stageSelect.value = currentCard.stage;
+      stopReasonSelect.value = currentCard.stop_reason;
+      syncStopReasonVisibility();
     }
   } catch (error) {
-    console.error('Error updating status:', error);
-    statusSelect.value = currentStatus;
+    console.error('Error updating card:', error);
+    kindSelect.value = currentCard.kind;
+    stageSelect.value = currentCard.stage;
+    stopReasonSelect.value = currentCard.stop_reason;
+    syncStopReasonVisibility();
   }
+}
+kindSelect.addEventListener('change', () => saveCardFields({ kind: kindSelect.value }));
+stageSelect.addEventListener('change', () => {
+  syncStopReasonVisibility();
+  const fields = { stage: stageSelect.value };
+  if (stageSelect.value === 'stopped') fields.stop_reason = stopReasonSelect.value;
+  saveCardFields(fields);
+});
+stopReasonSelect.addEventListener('change', () => {
+  saveCardFields({ stage: 'stopped', stop_reason: stopReasonSelect.value });
 });
 
 // Parent project selector (#133)

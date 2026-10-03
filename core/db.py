@@ -1791,6 +1791,33 @@ def count_project_links_by_type():
         conn.close()
 
 
+def connected_project_ids():
+    """(#534) Ids of every card with at least one real connection: a hobby membership, a
+    family/collection membership (as member or as the family), nesting (a parent or at least
+    one child via parent_id) or any project_relations link of any type. One query for the
+    whole set, memoised for the life of a read_session(), so scoring N cards costs one lookup
+    rather than N."""
+    memo = getattr(_ambient, "memo", None)
+    if memo is not None and "connected_ids" in memo:
+        return set(memo["connected_ids"])
+    conn = get_conn()
+    try:
+        parts = [
+            "SELECT project_id AS id FROM project_hobbies",
+            "SELECT id FROM projects WHERE parent_id IS NOT NULL",
+            "SELECT parent_id AS id FROM projects WHERE parent_id IS NOT NULL",
+            "SELECT p.id FROM projects p JOIN project_relations r ON r.slug_a = p.slug OR r.slug_b = p.slug",
+        ]
+        if _table_exists(conn, "family_members"):
+            parts += ["SELECT family_id AS id FROM family_members", "SELECT member_id AS id FROM family_members"]
+        ids = {r[0] for r in conn.execute(" UNION ".join(parts))}
+    finally:
+        conn.close()
+    if memo is not None:
+        memo["connected_ids"] = set(ids)
+    return ids
+
+
 def list_linked_projects(slug):
     """Every project linked to `slug` by ANY link type, either direction (typed
     links included), newest-updated first. For 'is this card connected at all'."""

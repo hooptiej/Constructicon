@@ -42,7 +42,7 @@ SCORING_RULES = {
     "connections": {
         "weight": 15,
         "items": [
-            {"name": "related_projects", "description": "≥1 related-project link"},
+            {"name": "related_projects", "description": "connected to a hobby, family, parent, child or another card"},
             {"name": "tags", "description": "has ≥1 tag (project or item level)"},
         ],
     },
@@ -369,8 +369,8 @@ def score_project(project_id_or_dict):
     weight_per_item = dim_rules["weight"] / len(dim_rules["items"])
 
     # Check 1: related_projects
-    related_projects = _get_related_projects(project)
-    related_passed = len(related_projects) >= 1
+    # Any real connection counts (#534): hobby, family/collection, nesting, or a typed link.
+    related_passed = project["id"] in db.connected_project_ids()
     excused = not dim_applicable[0]
     if not excused:
         applicable += weight_per_item
@@ -458,14 +458,11 @@ def score_project(project_id_or_dict):
 
 def _score_means_to_an_end(project):
     """Special scoring for means-to-an-end status.
-    Only checks if project is linked to a parent or has related projects.
+    Only checks that the project is connected (hobby, family, nesting or a link).
     """
-    # Check: parent_id non-null OR ≥1 related-project link
-    has_parent = project.get("parent_id") is not None
-    related = _get_related_projects(project)
-    has_related = len(related) >= 1
-
-    linked = has_parent or has_related
+    # Check: any real connection (#534, owner: "relax means-to-an-end"): a hobby, a
+    # family/collection, nesting, or a link, the same set as the connections check.
+    linked = project["id"] in db.connected_project_ids()
 
     checklist = [
         {

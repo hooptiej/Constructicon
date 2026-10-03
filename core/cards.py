@@ -1500,6 +1500,117 @@ def merge_cards(keep, absorb, *, dry_run=False, actor=changes.ACTOR_MCP, batch_i
     return Result(True, rows, warnings, batch_id, dry_run, {"keep": keep_row["slug"], "absorbed": [a["slug"] for a in absorbed]})
 
 
+# --- delete_card (#497) -------------------------------------------------------------
+
+def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolving=False):
+    """Removes everything that hangs off a card so no ghost rows survive it (runs inside the
+    caller's transaction, every row imaged). `dissolving` = the card row itself is handled by
+    the caller (convert-to-hobby): children, files and the card row are left alone, except
+    that a blank auto write-up is still dropped. Returns {children, files, writeup}."""
+    slug, cid = card["slug"], card["id"]
+    slugs = [slug]
+    out = {"children": 0, "files": 0, "writeup": None}
+    # Open questions about this card are moot: resolve them with a note (never leave them dangling).
+    for d in open_card_decisions(slug):
+        db.resolve_pending_decision(d["id"], {"stale": f"card '{slug}' was deleted"},
+                                    log={"op": op, "actor": actor, "batch_id": batch_id})
+        rows.append({"card": slug, "field": "decision", "before": d["kind"], "after": "resolved (stale)"})
+    # Children are orphaned (parent_id cleared), never deleted.
+    if not dissolving:
+        for child in db.list_child_projects(cid):
+            db.update_card_columns(child["id"], {"parent_id": None}, op, actor, batch_id=batch_id)
+            rows.append({"card": child["slug"], "field": "parent", "before": slug, "after": None})
+            out["children"] += 1
+        if out["children"]:
+            warnings.append(f"{out['children']} nested card(s) now stand on their own.")
+    # The auto write-up goes only while it's still blank; one with text stays as an ordinary unfiled file.
+    ws = card.get("writeup_slug")
+    blank_ws = ws if ws and db.blank_document_body(ws) else None
+    file_slugs = [r["post_slug"] for r in db.list_project_item_rows(cid)]
+    if blank_ws:
+        for d in db.list_all_pending_decisions(post_slug=blank_ws):
+            if d["resolved_at"] is None:
+                db.resolve_pending_decision(d["id"], {"stale": f"write-up of deleted card '{slug}'"},
+                                            log={"op": op, "actor": actor, "batch_id": batch_id})
+
+        def _drop_doc(log):
+            if blank_ws in file_slugs:
+                log.delete("project_items", {"project_id": cid, "post_slug": blank_ws})
+            for r in db.list_post_tag_rows(blank_ws):
+                log.delete("post_tags", {"post_slug": blank_ws, "tag_id": r["tag_id"]})
+            log.delete("capture_events", {"slug": blank_ws})
+        db.write_images(op, actor, batch_id, slugs, _drop_doc)
+        out["writeup"] = "deleted"
+        rows.append({"card": slug, "field": "writeup", "before": blank_ws, "after": None})
+    elif ws and ws in file_slugs and db.get_by_slug(ws) is not None:
+        out["writeup"] = "kept"
+        warnings.append(f"The write-up '{ws}' has text, so it was kept as an ordinary unfiled document.")
+    if not dissolving:
+        keep_files = [s for s in file_slugs if s != blank_ws]
+        db.write_card_items(cid, [], keep_files, op, actor, batch_id, slugs)
+        out["files"] = len(keep_files)
+    for r in db.list_hobby_rows(cid):
+        db.delete_card_hobby(cid, r["hobby_tag_id"], op, actor, batch_id, slugs)
+    for r in db.list_family_rows(cid, as_member=True):
+        db.remove_family_member(r["family_id"], cid, op, actor, batch_id=batch_id, affected_slugs=slugs)
+    for r in db.list_family_rows(cid, as_member=False):
+        db.remove_family_member(cid, r["member_id"], op, actor, batch_id=batch_id, affected_slugs=slugs)
+    links = db.list_project_link_rows(slug=slug)
+    if links:
+        db.write_project_links([(r["slug_a"], r["slug_b"], r["type"]) for r in links], [], op, actor,
+                               batch_id=batch_id, affected_slugs=slugs)
+        for r in links:
+            rows.append({"card": slug, "field": "link", "before": f"{r['slug_a']} {r['type']} {r['slug_b']}", "after": None})
+    def _drop_entry_rows(log):
+        for r in db.list_entry_project_rows(cid):
+            log.delete("blog_entry_projects", {"entry_id": r["entry_id"], "project_id": cid})
+    db.write_images(op, actor, batch_id, slugs, _drop_entry_rows)
+    # Other cards that borrowed this card's cover or named it as their home.
+    for other in db.list_projects_referencing(cid):
+        if other["id"] == cid:
+            continue
+        if other.get("cover_project_id") == cid:
+            db.write_card_row(other["id"], {"cover_project_id": None}, op, actor, batch_id)
+        if other.get("home_kind") == "card" and other.get("home_ref") == cid:
+            db.update_card_columns(other["id"], {"home_kind": None, "home_ref": None}, op, actor, batch_id=batch_id)
+    return out
+
+
+def delete_card(card, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+    """Deletes a card cleanly (#497), in one transaction with row images, so `undo(batch_id)`
+    brings everything back. Removes its blank auto write-up (a write-up with text is kept as an
+    ordinary unfiled document, with a warning), its files membership, hobby and family rows
+    (as member and as family), typed links in either direction, blog-entry attachments, and
+    resolves its open decisions. Nested children are orphaned, not deleted; other cards that
+    used it as a cover or home lose that pointer. Files themselves are never deleted.
+    Returns Result with data {deleted, children_orphaned, items_detached, writeup}."""
+    row = get_card(card)
+    batch_id = batch_id or changes.new_batch_id()
+    rows, warnings = [], []
+    with db.transaction(dry_run=dry_run):
+        fresh = db.get_project(row["id"])
+        out = _clear_card_dependents(fresh, "delete_card", actor, batch_id, rows, warnings)
+        db.write_images("delete_card", actor, batch_id, [row["slug"]], lambda log: log.delete("projects", {"id": row["id"]}))
+        rows.append({"card": row["slug"], "field": "deleted", "before": row["title"], "after": None})
+    return Result(True, rows, warnings, batch_id, dry_run,
+                  {"deleted": row["slug"], "children_orphaned": out["children"], "items_detached": out["files"],
+                   "writeup": out["writeup"]})
+
+
+def convert_project_to_hobby(card, *, actor=changes.ACTOR_MCP):
+    """Convert-to-hobby through the same clean-up (#497): links, family rows, hobby rows,
+    blog-entry attachments and a blank write-up no longer survive the converted card, and
+    the whole conversion is one transaction. (The tag side of the conversion is not
+    row-imaged, so this is not undoable.) Returns the hobby tag dict, or None if not found."""
+    row = db.get_project(card)
+    if row is None:
+        return None
+    with db.transaction():
+        fresh = db.get_project(row["id"])
+        _clear_card_dependents(fresh, "convert_project_to_hobby", actor, changes.new_batch_id(), [], [], dissolving=True)
+        return db.convert_project_to_hobby(row["id"])
+
+
 # --- Computed needs added in piece 6 -------------------------------------------------
 
 def status_and_writeup_needs(kind=None, hobby_ids=None):

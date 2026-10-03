@@ -6,6 +6,7 @@ the scoring model is intentionally declarative and separated from policy.
 """
 
 from core import cards, db, timeline
+from core.object_types import get_object_type
 
 # Status mapping: legacy active/archived -> wip/complete
 _LEGACY_STATUS_MAP = {
@@ -26,7 +27,7 @@ SCORING_RULES = {
         "weight": 25,
         "items": [
             {"name": "cover_image", "description": "cover image set (cover_slug non-null)"},
-            {"name": "captions", "description": "≥60% of objects have a non-empty caption"},
+            {"name": "captions", "description": "≥60% of caption-capable objects (images, video) have a description"},
         ],
     },
     "timeline": {
@@ -269,17 +270,24 @@ def score_project(project_id_or_dict):
         "weight": weight_per_item,
     })
 
-    # Check 2: captions — the content's OWN description (content_description).
-    # NOT display_name: that's an optional filename/title override that's
-    # frequently auto-populated, so counting it would make nearly every object
-    # look "captioned" and render this check meaningless.
+    # Check 2: captions (#532). Only caption-capable items (images, video: the
+    # object-type registry's caption_capable) are in the check; a project with
+    # none is excused. An item counts if it has a real `description` OR a
+    # `content_description` (trimmed, non-empty). A raw auto_caption suggestion
+    # (type_metadata) does NOT count until accepted via "Use as description",
+    # which writes `description`. display_name never counts: it's often an
+    # auto-populated filename.
     caption_threshold = 0.6
-    if content:
-        captions_present = sum(1 for item in content if (item.get("content_description") or "").strip())
-        captions_passed = captions_present / len(content) >= caption_threshold
+    cap_items = [i for i in content if get_object_type(i.get("media_type")).caption_capable]
+    if cap_items:
+        captions_present = sum(
+            1 for item in cap_items
+            if (item.get("description") or "").strip() or (item.get("content_description") or "").strip()
+        )
+        captions_passed = captions_present / len(cap_items) >= caption_threshold
     else:
         captions_passed = False
-    excused = not dim_applicable[1]
+    excused = not dim_applicable[1] or not cap_items
     if not excused:
         applicable += weight_per_item
         if captions_passed:

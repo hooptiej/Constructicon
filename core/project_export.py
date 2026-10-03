@@ -12,7 +12,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from core import db, object_types, storage
+from core import card_rules, db, object_types, storage
 
 
 def export_project(project_id_or_slug):
@@ -50,7 +50,7 @@ def export_project(project_id_or_slug):
             "slug": project["slug"],
             "title": project["title"],
             "description": project.get("description"),
-            "status": project.get("status"),
+            "status": card_rules.export_status(project),
             "writeup_body": writeup_body,
         },
         "items": [],

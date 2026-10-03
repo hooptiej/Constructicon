@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from core import db, markdown_render, storage, object_types
+from core import card_rules, db, markdown_render, storage, object_types
 from core import version as version_info
 
 
@@ -100,7 +100,9 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     # Gather projects
     if project_slugs is None:
         # Include all active projects
-        all_projects = db.list_projects(status="active")
+        # #512: select by the live stage (via the legacy-equivalent helper), not
+        # the frozen projects.status column.
+        all_projects = [p for p in db.list_projects() if card_rules.export_included_by_default(p)]
         projects = {p["id"]: p for p in all_projects}
     else:
         projects = {}

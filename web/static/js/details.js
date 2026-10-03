@@ -149,12 +149,12 @@
   }
 
   // ---- "Needs your input" strip: Accept / Choose... ----
-  // Both resolve through POST /api/pending-decisions/{id}/resolve (the same route the admin queue
+  // Both resolve through POST /api/pending-decisions/{id}/resolve (the same route the Curator queue
   // uses). Accept sends the decision's suggested answer; Choose... offers the options inline for a
-  // single-pick question, or links to the admin queue for a multi-pick one. A refusal (a CardError,
+  // single-pick question, or links to the Curator queue for a multi-pick one. A refusal (a CardError,
   // 409/422) is shown in the strip and the decision stays open.
   function initNeeds() {
-    document.querySelectorAll('.dp-needs[data-decision-id]').forEach(function (strip) {
+    document.querySelectorAll('.dp-needs').forEach(function (strip) {
       var id = strip.getAttribute('data-decision-id');
       var multi = strip.getAttribute('data-multi') === '1';
       var suggested = [];
@@ -188,6 +188,36 @@
         }
       }
       if (accept) accept.addEventListener('click', function () { resolve(suggested); });
+      // Defer / Dismiss / Bring back (#519): the same queue actions as the Curator drawer. Defer has
+      // no timer; the page reloads so the strip shows the item's new place.
+      function act(url, param) {
+        return async function () {
+          fail('');
+          var body = new URLSearchParams();
+          body.append(param, strip.getAttribute('data-cq-key'));
+          var buttons = strip.querySelectorAll('button');
+          buttons.forEach(function (b) { b.disabled = true; });
+          try {
+            var res = await fetch(url, { method: 'POST', body: body });
+            var data = await res.json().catch(function () { return {}; });
+            if (!res.ok) {
+              fail((data.error && data.error.message) || data.detail || ('Could not do that (' + res.status + ').'));
+              buttons.forEach(function (b) { b.disabled = false; });
+              return;
+            }
+            location.reload();
+          } catch (e) {
+            fail('Network error.');
+            buttons.forEach(function (b) { b.disabled = false; });
+          }
+        };
+      }
+      var defer = strip.querySelector('.dp-needs-defer');
+      var dismiss = strip.querySelector('.dp-needs-dismiss');
+      var back = strip.querySelector('.dp-needs-bring-back');
+      if (defer) defer.addEventListener('click', act('/api/curator/queue/defer', 'key'));
+      if (dismiss) dismiss.addEventListener('click', act('/api/curator/needs/dismiss', 'nudge_key'));
+      if (back) back.addEventListener('click', act('/api/curator/queue/bring-back', 'key'));
       if (choose && chooser) {
         choose.addEventListener('click', function () {
           var on = chooser.hidden;
@@ -208,7 +238,19 @@
     error: showError,
     say: say
   };
-  function boot() { init(); initMenus(); initNeeds(); }
+  // #519: /project/<slug>?edit=<group> (the Curator queue's Fix link) opens that group in edit mode.
+  // An unknown group name, or a group with no Edit button, is ignored.
+  function openFromQuery() {
+    var name = null;
+    try { name = new URLSearchParams(window.location.search).get('edit'); } catch (e) { name = null; }
+    if (!name || !/^[a-z]+$/.test(name)) return;
+    var g = groupEl(name);
+    if (!g || !g.querySelector('.dp-edit-btn')) return;
+    open(name);
+    if (g.scrollIntoView) g.scrollIntoView({ block: 'center' });
+    say('Editing ' + name + '.');
+  }
+  function boot() { init(); initMenus(); initNeeds(); openFromQuery(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();

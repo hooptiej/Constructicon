@@ -131,17 +131,17 @@
     });
   });
 
-  // Needs badge (#240, #343, #345) — the nudge count rides the Nudges rail tab.
-  // Same source (/api/curator/needs) and same refresh events, so curator
-  // dismiss/snooze actions keep it live.
+  // Needs badge (#240, #343, #345, #519) — the Curator tab's count. Same refresh
+  // events as before, so answering, deferring or dismissing keeps it live.
   const railBadge = document.getElementById('nudges-rail-badge');
   if (railBadge) {
     async function refreshRailBadge() {
       try {
-        const res = await fetch('/api/curator/needs');
+        // #519: ONE count = every open, non-deferred question, nudge and need.
+        const res = await fetch('/api/curator/queue?summary=1');
         if (!res.ok) return;
         const data = await res.json();
-        const n = Array.isArray(data) ? data.length : 0;
+        const n = (data && data.counts && data.counts.open) || 0;
         railBadge.textContent = n > 99 ? '99+' : n;  // #396: cap wide counts
         railBadge.hidden = n === 0;
       } catch (err) { /* leave whatever's shown */ }

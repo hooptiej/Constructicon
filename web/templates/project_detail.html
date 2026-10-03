@@ -76,28 +76,41 @@
       {% endif %}
       {% endif %}
 
-      {# "Needs your input": only when this card has open decisions. Accept resolves with the suggested
-         answer, Choose... offers the options (single-pick) or opens the admin queue (multi-pick). #}
-      {% for d in card_open_decisions %}
-      <div class="dp-needs" role="group" aria-label="Needs your input" data-decision-id="{{ d.decision_id }}" data-multi="{{ 1 if d.multi else 0 }}" data-suggested='{{ d.suggested_keys | tojson }}'>
+      {# "Needs your input" (#515, #519): this card's slice of the Curator queue (questions, nudges, needs).
+         A question can be accepted, answered via Choose, or deferred; a nudge/need links to the group that
+         fixes it, and can be deferred or dismissed. Deferred items stay listed, muted, with Bring back. #}
+      {% for d in card_queue['items'] %}
+      <div class="dp-needs{% if d.deferred %} dp-needs-deferred{% endif %}" role="group" aria-label="{{ 'Deferred' if d.deferred else 'Needs your input' }}"
+           data-cq-key="{{ d.key }}" data-cq-kind="{{ d.type }}"{% if d.type == 'question' %} data-decision-id="{{ d.id }}" data-multi="{{ 1 if d.multi else 0 }}" data-suggested='{{ d.suggested.picks | tojson }}'{% endif %}>
         <span class="dp-needs-dot" aria-hidden="true"></span>
         <div class="dp-needs-text">
-          Needs your input: <strong>{{ d.field or d.need }}</strong>. {{ d.question }}
-          {% if d.suggested_labels %}Suggested: {{ d.suggested_labels | join(', ') }}{% if d.suggested_reason %} ({{ d.suggested_reason }}){% endif %}.{% endif %}
+          {% if d.deferred %}<em>Deferred.</em> {% endif %}{{ 'Needs your input' if d.type == 'question' else ('Suggestion' if d.type == 'nudge' else 'Gap') }}:
+          {% if d.type == 'question' %}<strong>{{ d.field or d.kind }}</strong>. {% endif %}{{ d.label }}
+          {% if d.suggested and d.suggested.labels and not d.deferred %}Suggested: {{ d.suggested.labels | join(', ') }}{% if d.suggested.reason %} ({{ d.suggested.reason }}){% endif %}.{% endif %}
         </div>
         <div class="dp-needs-actions">
-          {% if d.suggested_labels %}<button type="button" class="dp-btn dp-btn-primary dp-needs-accept">Accept</button>{% endif %}
-          {% if d.multi %}
-          <a class="dp-btn" href="/admin#decision-{{ d.decision_id }}">Choose&hellip;</a>
+          {% if d.deferred %}
+          <button type="button" class="dp-btn dp-needs-bring-back">Bring back</button>
           {% else %}
-          <button type="button" class="dp-btn dp-needs-choose" aria-expanded="false">Choose&hellip;</button>
+            {% if d.type == 'question' %}
+              {% if d.suggested and d.suggested.picks %}<button type="button" class="dp-btn dp-btn-primary dp-needs-accept">Accept</button>{% endif %}
+              {% if d.multi %}
+              <a class="dp-btn" href="/curator">Choose&hellip;</a>
+              {% else %}
+              <button type="button" class="dp-btn dp-needs-choose" aria-expanded="false">Choose&hellip;</button>
+              {% endif %}
+            {% elif d.group %}
+              <a class="dp-btn dp-btn-primary" href="{{ d.href }}">{{ d.fix_label }}</a>
+            {% endif %}
+            <button type="button" class="dp-btn dp-needs-defer" title="Move to the Deferred list. No timer: it stays until you bring it back.">Defer</button>
+            {% if d.dismissible %}<button type="button" class="dp-btn dp-needs-dismiss" title="Remove for good">Dismiss</button>{% endif %}
           {% endif %}
         </div>
-        {% if not d.multi %}
+        {% if d.type == 'question' and not d.multi and not d.deferred %}
         <div class="dp-needs-actions dp-needs-chooser" hidden>
-          <label class="dp-sr-label" for="needs-pick-{{ d.decision_id }}">Answer</label>
-          <select class="input dp-needs-pick" id="needs-pick-{{ d.decision_id }}">
-            {% for o in d.options %}<option value="{{ o.key }}"{% if o.key in d.suggested_keys %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
+          <label class="dp-sr-label" for="needs-pick-{{ d.id }}">Answer</label>
+          <select class="input dp-needs-pick" id="needs-pick-{{ d.id }}">
+            {% for o in d.options %}<option value="{{ o.key }}"{% if o.key in d.suggested.picks %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
           </select>
           <button type="button" class="dp-btn dp-needs-apply">Use this answer</button>
         </div>
@@ -109,7 +122,7 @@
       {# ---- IDENTITY ---- #}
       {% set identity_view %}
       <dl class="dp-rows">
-        <div class="dp-row"><dt>Kind</dt><dd>{{ card_status.kind_label }}{% if card_open_decisions | selectattr('need', 'equalto', 'card_kind') | list %} <span class="dp-muted">(question open)</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Kind</dt><dd>{{ card_status.kind_label }}{% if card_queue['items'] | selectattr('kind', 'equalto', 'card_kind') | list %} <span class="dp-muted">(question open)</span>{% endif %}</dd></div>
         <div class="dp-row"><dt>Hobbies</dt><dd>{% for h in project_hobbies %}<a href="/hobby/{{ h.slug }}">{{ h.name }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
         <div class="dp-row"><dt>{{ 'Members' if is_group else 'Family' }}</dt><dd>{% for c in (family_info.members if is_group else family_info.families) %}<a href="/project/{{ c.slug }}">{{ c.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
         {% if not is_group %}<div class="dp-row"><dt>Part of</dt><dd>{% if parent_card %}<a href="/project/{{ parent_card.slug }}">{{ parent_card.title }}</a>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>{% endif %}

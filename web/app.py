@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, card_rules, cards, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
+from core import automatch, backup, captions, card_rules, cards, curation_queue, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
 from core import version as version_info
 from core.db import PROVENANCE_TYPES, PROJECT_STATUSES, BRAND_ROLES
 
@@ -1307,19 +1307,14 @@ def gallery_page_redirect(request: Request):
     return RedirectResponse("/", status_code=308)
 
 
-def _decision_strip(decision):
-    """#515: one open card decision as the project page's "Needs your input" strip
-    shows it: the summary plus whether it is a multi-pick question, the labels of the
-    suggested answer(s), and the suggested key(s) for the Accept button. A decision
-    with no suggestion gets no Accept (only Choose)."""
-    d = cards.decision_summary(decision)
-    suggested = d.get("suggested")
-    keys = suggested if isinstance(suggested, list) else ([suggested] if suggested else [])
-    labels = {o["key"]: o["label"] for o in d["options"]}
-    d["multi"] = isinstance(suggested, list) or d["need"] in (cards.KIND_CARD_BUILT_FOR, cards.KIND_CARD_FAMILY_MEMBERS)
-    d["suggested_keys"] = [k for k in keys if k in labels]
-    d["suggested_labels"] = [labels[k] for k in d["suggested_keys"]]
-    return d
+def _card_queue_strip(slug):
+    """#515/#519: this card's slice of the Curator queue, for the project page's "Needs your
+    input" strip. The same items the Curator drawer shows for the card (questions, nudges,
+    needs), open ones first and then the deferred ones, each carrying the suggested key(s)
+    for the Accept button (no suggestion = no Accept, only Choose)."""
+    q = curation_queue.build_queue(card=slug)
+    items = [i for g in q["groups"] for i in g["items"]] + [i for g in q["deferred"] for i in g["items"]]
+    return {"items": items, "counts": q["counts"]}
 
 
 @app.get("/project/{slug}", response_class=HTMLResponse)
@@ -1457,7 +1452,7 @@ def project_detail_page(request: Request, slug: str):
             "card_extra": cards.whereabouts_fields(project),
             "card_whereabouts_options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
             "card_provenance_options": [{"key": k, "label": card_rules.CARD_PROVENANCE_LABELS[k]} for k in card_rules.CARD_PROVENANCE],
-            "card_open_decisions": [_decision_strip(d) for d in cards.open_card_decisions(project["slug"])],
+            "card_queue": _card_queue_strip(project["slug"]),
             # #515: the "Part of" parent, for the Identity group's fact sheet.
             "parent_card": db.get_project(project["parent_id"]) if project.get("parent_id") else None,
             # V2 cards 3.10: resolved home + the choices for the manual override.
@@ -2931,36 +2926,66 @@ def api_curator_list_needs(request: Request, kind: str | None = None, limit: int
 
 
 @app.post("/api/curator/needs/dismiss")
-def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | float | None = Form(None)):
-    """Dismiss or snooze a nudge.
+def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | None = Form(None)):
+    """Dismiss a nudge or need for good (#519: the timed snooze is gone; use Defer).
 
-    nudge_key: the nudge to suppress (from the nudges list).
-    snooze_until: optional epoch timestamp (float) or ISO 8601 datetime string.
-        If omitted or None, the nudge is permanently dismissed.
-        If provided, the nudge is snoozed until that time.
+    nudge_key: the item's key (from the queue or the nudges list). A question
+    ("decision:<id>") can't be dismissed: answer it or defer it.
 
-    Returns {ok: true} on success.
-    """
-    action = "snooze" if snooze_until is not None else "dismiss"
-    snooze_epoch = None
+    Returns {ok: true} on success."""
+    if snooze_until:
+        raise HTTPException(status_code=400, detail="Snooze was replaced by Defer: POST /api/curator/queue/defer")
+    try:
+        result = curation_queue.dismiss(nudge_key)
+    except curation_queue.QueueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse(result)
 
-    if snooze_until is not None:
-        if isinstance(snooze_until, (int, float)):
-            snooze_epoch = float(snooze_until)
-        else:
-            # Form values always arrive as strings; accept either an epoch
-            # timestamp ("1789856789.1") or an ISO 8601 datetime.
-            s = str(snooze_until).strip()
-            try:
-                snooze_epoch = float(s)
-            except ValueError:
-                try:
-                    snooze_epoch = datetime.fromisoformat(s).timestamp()
-                except ValueError:
-                    raise HTTPException(status_code=400, detail="snooze_until must be an epoch timestamp or ISO 8601 datetime")
 
-    db.add_curator_dismissal(nudge_key, action, snooze_until=snooze_epoch)
-    return JSONResponse({"ok": True})
+# --- Curator queue (#519): questions + nudges + needs, grouped by card ---
+
+@app.get("/api/curator/queue")
+def api_curator_queue(card: str | None = None, summary: bool = False):
+    """The unified Curator queue, grouped by card: {groups, deferred, counts}. `card`
+    limits it to one card's slice; `summary=1` returns only the counts (the nav badge)."""
+    q = curation_queue.build_queue(card=card)
+    if summary:
+        return JSONResponse({"counts": q["counts"]})
+    return JSONResponse(q)
+
+
+@app.get("/api/curator/queue/html", response_class=HTMLResponse)
+def api_curator_queue_html(request: Request):
+    """The queue as a server-rendered fragment (autoescaped Jinja; each card group wears the
+    shared mini card face from _card.html). The Curator drawer and /curator both load this."""
+    q = curation_queue.build_queue()
+    faces = {}
+    for g in q["groups"] + q["deferred"]:
+        if g["type"] == "card" and g["slug"] not in faces:
+            p = db.get_project(g["slug"])
+            if p is not None:
+                faces[g["slug"]] = _to_card_face(p)
+    return templates.TemplateResponse(request, "_curation_queue.html", {"q": q, "faces": faces})
+
+
+def _queue_action(fn, key):
+    try:
+        return JSONResponse(fn(key))
+    except curation_queue.QueueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/curator/queue/defer")
+def api_curator_queue_defer(key: str = Form(...)):
+    """Defer an item (any question, nudge or need): it moves to the Deferred section, with no
+    timer, until it is answered or brought back."""
+    return _queue_action(curation_queue.defer, key)
+
+
+@app.post("/api/curator/queue/bring-back")
+def api_curator_queue_bring_back(key: str = Form(...)):
+    """Bring a deferred item back into the main queue."""
+    return _queue_action(curation_queue.bring_back, key)
 
 
 # --- Hobbies (#360) ---

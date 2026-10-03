@@ -526,6 +526,12 @@ def init_db():
         # data only, safe to drop rather than migrate. Confirmed with Jason 2026-08-27.
         conn.execute("DROP TABLE IF EXISTS uploads")
         conn.executescript(SCHEMA)
+        # #519: the timed snooze is gone, replaced by Defer (no wait time). Snoozes still in
+        # effect become deferrals; expired ones are dropped (they had already come back).
+        # Idempotent: once no 'snooze' rows remain, both statements touch nothing.
+        conn.execute("UPDATE curator_dismissals SET action = 'defer', snooze_until = NULL "
+                     "WHERE action = 'snooze' AND snooze_until IS NOT NULL AND snooze_until > ?", (time.time(),))
+        conn.execute("DELETE FROM curator_dismissals WHERE action = 'snooze'")
         existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(capture_events)")}
         for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
             if column not in existing_columns:
@@ -2673,6 +2679,7 @@ IMAGE_TABLE_KEYS = {
     "project_relations": ("slug_a", "slug_b", "type"),
     "blog_entry_projects": ("entry_id", "project_id"),
     "pending_decisions": ("id",),
+    "curator_dismissals": ("nudge_key",),
     "blog_tags": ("id",),
     "capture_events": ("slug",),
     "post_tags": ("post_slug", "tag_id"),
@@ -3359,49 +3366,68 @@ def resolve_pending_decision(decision_id, resolution=None, log=None):
         conn.close()
 
 
-# --- Curator dismissals (Stage 3) ---
-# Suppression of nudges: a nudge is derived on-demand (never stored), but
-# dismissals (and snoozes) are stored so they persist across sessions.
+# --- Curator queue state: Defer and Dismiss (Stage 3, #519) ---
+# Nudges and computed needs are derived on-demand (never stored); stored decisions live
+# in pending_decisions. What IS stored here is the owner's choice about an item, keyed by
+# a stable string key: 'decision:<id>' (a stored question), '<kind>:project:<id>' /
+# '<kind>:global' (a nudge) or 'need:<need>:<card or hobby slug>' (a computed need).
+#   action 'dismiss' = gone for good (nudges and needs only, never a question)
+#   action 'defer'   = moved to the Deferred section, no timer; stays until answered or
+#                      brought back. Replaces the old timed 'snooze' (init_db migrates
+#                      any snooze still running into a defer).
+# Both go through ImageLog so each is a change-log row and can be undone.
 
-def add_curator_dismissal(nudge_key, action, snooze_until=None):
-    """Add or replace a dismissal for a nudge. action is 'dismiss' (permanent)
-    or 'snooze' (temporary, until snooze_until epoch). If a dismissal for
-    this nudge_key already exists, it's deleted and replaced (new decision
-    supersedes the old)."""
+CURATOR_DISMISS = "dismiss"
+CURATOR_DEFER = "defer"
+
+
+def set_curator_state(key, action, actor="owner-ui", batch_id=None, affected_slugs=None):
+    """Set an item's queue state to 'dismiss' or 'defer' (replacing whatever it had).
+    Returns True when something changed."""
+    if action not in (CURATOR_DISMISS, CURATOR_DEFER):
+        raise ValueError(f"Unknown curator state {action!r}")
+    changed = False
+    with ImageLog(action, actor, batch_id, affected_slugs=affected_slugs) as il:
+        existing = il.get("curator_dismissals", {"nudge_key": key})
+        if existing is not None:
+            if existing["action"] == action:
+                return False
+            il.delete("curator_dismissals", {"nudge_key": key})
+        il.insert("curator_dismissals", {"nudge_key": key},
+                  {"action": action, "snooze_until": None, "created_at": time.time()})
+        changed = True
+    return changed
+
+
+def clear_curator_defer(key, actor="owner-ui", batch_id=None, affected_slugs=None):
+    """Bring a deferred item back into the main queue. Only a 'defer' row is removed
+    (a dismissal is not undone by this). Returns True when something changed."""
+    changed = False
+    with ImageLog("bring_back", actor, batch_id, affected_slugs=affected_slugs) as il:
+        existing = il.get("curator_dismissals", {"nudge_key": key})
+        if existing is not None and existing["action"] == CURATOR_DEFER:
+            il.delete("curator_dismissals", {"nudge_key": key})
+            changed = True
+    return changed
+
+
+def list_curator_states():
+    """{key: 'dismiss' | 'defer'} for every stored queue state."""
     conn = get_conn()
     try:
-        # Delete any existing row for this nudge_key
-        conn.execute("DELETE FROM curator_dismissals WHERE nudge_key = ?", (nudge_key,))
-        # Insert the new one
-        conn.execute(
-            "INSERT INTO curator_dismissals (nudge_key, action, snooze_until, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (nudge_key, action, snooze_until, time.time()),
-        )
-        conn.commit()
+        return {r["nudge_key"]: r["action"] for r in conn.execute("SELECT nudge_key, action FROM curator_dismissals")}
     finally:
         conn.close()
 
 
 def list_active_curator_dismissals():
-    """Return a dict {nudge_key: {...dismissal dict...}} of dismissals that are
-    still in effect. A 'dismiss' action always suppresses; a 'snooze' action
-    only suppresses if snooze_until > now. Expired snoozes do NOT suppress."""
+    """{nudge_key: row dict} of permanent dismissals (what the nudge list hides).
+    Deferred items are NOT in here: they stay in the list, flagged, so the queue can
+    show them in its Deferred section."""
     conn = get_conn()
     try:
-        rows = conn.execute("SELECT * FROM curator_dismissals").fetchall()
-        result = {}
-        now = time.time()
-        for row in rows:
-            d = dict(row)
-            # Check if this dismissal is still active
-            if d["action"] == "dismiss":
-                result[d["nudge_key"]] = d
-            elif d["action"] == "snooze" and d["snooze_until"] is not None:
-                if d["snooze_until"] > now:
-                    result[d["nudge_key"]] = d
-                # else: snooze is expired, don't include it
-        return result
+        rows = conn.execute("SELECT * FROM curator_dismissals WHERE action = 'dismiss'").fetchall()
+        return {r["nudge_key"]: dict(r) for r in rows}
     finally:
         conn.close()
 

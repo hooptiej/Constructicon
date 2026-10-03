@@ -458,14 +458,11 @@ def score_project(project_id_or_dict):
 
 def _score_means_to_an_end(project):
     """Special scoring for means-to-an-end status.
-    Only checks if project is linked to a parent or has related projects.
+    Only checks that the project is connected (hobby, family, nesting or a link).
     """
-    # Check: parent_id non-null OR ≥1 related-project link
-    has_parent = project.get("parent_id") is not None
-    related = _get_related_projects(project)
-    has_related = len(related) >= 1
-
-    linked = has_parent or has_related
+    # Check: any real connection (#534, owner: "relax means-to-an-end"): a hobby, a
+    # family/collection, nesting, or a link, the same set as the connections check.
+    linked = project["id"] in db.connected_project_ids()
 
     checklist = [
         {

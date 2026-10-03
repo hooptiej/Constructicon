@@ -1456,10 +1456,7 @@ def hobby_detail_page(request: Request, slug: str):
         request, "hobby.html",
         {
             "hobby": {
-                "id": hobby["id"],
-                "name": hobby["name"],
-                "slug": hobby["slug"],
-                "status": hobby.get("hobby_status", "active"),
+                **cards.hobby_fields(hobby),
                 "projects": [
                     {
                         "id": p["id"],
@@ -2800,8 +2797,9 @@ def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | flo
 def api_list_hobbies(request: Request):
     """List all hobbies (tags marked is_hobby=1) with their project counts.
 
-    Returns a list of hobby tag dicts."""
-    return JSONResponse(db.list_hobbies())
+    Returns a list of hobby tag dicts, each with `status` (active|inactive), `group_code`,
+    and the computed mismatch `flags` (V2 cards 3.3; never stored)."""
+    return JSONResponse([{**h, **cards.hobby_fields(h)} for h in db.list_hobbies()])
 
 
 @app.post("/api/hobbies")
@@ -2833,10 +2831,7 @@ def api_get_hobby(request: Request, id_or_slug: str):
     items = db.list_posts_for_tag(hobby["id"], include_descendants=False)
 
     return JSONResponse({
-        "id": hobby["id"],
-        "name": hobby["name"],
-        "slug": hobby["slug"],
-        "status": hobby.get("hobby_status"),
+        **cards.hobby_fields(hobby),
         "projects": [
             {
                 "id": p["id"],
@@ -2852,19 +2847,29 @@ def api_get_hobby(request: Request, id_or_slug: str):
 
 @app.post("/api/hobby/{id_or_slug}/status")
 def api_set_hobby_status(request: Request, id_or_slug: str, status: str = Form(...)):
-    """Update a hobby's status (active/dormant/abandoned).
+    """Set a hobby's manual Active/Inactive switch (V2 cards 3.3).
 
-    Returns the updated hobby dict."""
+    `dormant` / `abandoned` are deprecated aliases for `inactive` (a `warnings` entry says
+    so). A bad value is a CardError -> HTTP 422 {error:{code:'bad_hobby_activity'}}.
+    Returns the updated hobby dict (with computed flags) plus `warnings`."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
         raise HTTPException(status_code=404, detail="hobby not found")
 
-    try:
-        db.set_hobby_status(hobby["id"], status)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    result = cards.set_hobby_activity(hobby["id"], status, actor="owner-ui")
+    updated = db.get_hobby(hobby["id"])
+    return JSONResponse({**updated, **cards.hobby_fields(updated), "warnings": result.warnings})
 
-    return JSONResponse(db.get_hobby(hobby["id"]))
+
+@app.post("/api/hobby/{id_or_slug}/group-code")
+def api_set_hobby_group_code(request: Request, id_or_slug: str, group_code: str = Form(...)):
+    """Edit a hobby's 2-4 char group code (V2 cards 3.9). Unique across hobbies."""
+    hobby = db.get_hobby(id_or_slug)
+    if hobby is None:
+        raise HTTPException(status_code=404, detail="hobby not found")
+    cards.set_group_code(hobby["id"], group_code, actor="owner-ui")
+    updated = db.get_hobby(hobby["id"])
+    return JSONResponse({**updated, **cards.hobby_fields(updated)})
 
 
 @app.post("/api/hobby/{id_or_slug}/add-project")

@@ -47,9 +47,11 @@ async function loadHobbies() {
           <div class="project-item-body">
             <div class="project-item-title">${encodeHtml(hobby.name)}</div>
             <div class="project-item-meta">
-              <span style="display:inline-block;padding:2px 6px;background:rgba(127,163,124,0.2);border-radius:2px;font-size:11px;color:#7FA37C;margin-right:4px">${encodeHtml(hobby.hobby_status || 'active')}</span>
+              ${hobby.group_code ? `<span style="display:inline-block;padding:2px 6px;border:1px solid #6E6B57;border-radius:2px;font-size:11px;letter-spacing:.05em;margin-right:4px" title="Group code">${encodeHtml(hobby.group_code)}</span>` : ''}
+              <span style="display:inline-block;padding:2px 6px;background:${hobby.status === 'inactive' ? 'rgba(168,164,143,0.2)' : 'rgba(127,163,124,0.2)'};border-radius:2px;font-size:11px;color:${hobby.status === 'inactive' ? '#A8A48F' : '#7FA37C'};margin-right:4px">${encodeHtml(hobby.status_label || 'Active')}</span>
               ${hobby.project_count || 0} project${hobby.project_count === 1 ? '' : 's'}
             </div>
+            ${(hobby.flags || []).map(f => `<div class="hobby-flag" style="margin-top:4px;font-size:11px;color:#C9A227" title="${encodeHtml(f.detail)}">&#9888; ${encodeHtml(f.label)}</div>`).join('')}
           </div>
         </a>
       </div>

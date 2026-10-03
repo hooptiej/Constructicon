@@ -5,6 +5,8 @@ across multiple dimensions. Stage 3 will reuse these rules for automated nudges;
 the scoring model is intentionally declarative and separated from policy.
 """
 
+import json
+
 from core import cards, db, timeline
 from core.object_types import get_object_type
 
@@ -27,7 +29,7 @@ SCORING_RULES = {
         "weight": 25,
         "items": [
             {"name": "cover_image", "description": "cover image set (cover_slug non-null)"},
-            {"name": "captions", "description": "≥60% of caption-capable objects (images, video) have a description"},
+            {"name": "captions", "description": "≥60% of caption-capable objects (images, video) have a description or auto-caption"},
         ],
     },
     "timeline": {
@@ -65,6 +67,17 @@ STATUS_APPLICABILITY = {
     "means-to-an-end": "parent_or_related_only",  # Only check parent_id or related links
 }
 
+
+
+def _auto_caption(item):
+    """#532: the item's moondream auto-caption, if any (type_metadata may be a dict or JSON text)."""
+    tm = item.get("type_metadata") or {}
+    if isinstance(tm, str):
+        try:
+            tm = json.loads(tm)
+        except ValueError:
+            return False
+    return bool(((tm or {}).get("auto_caption") or "").strip())
 
 def _normalize_status(status):
     """Map legacy statuses to current ones."""
@@ -273,9 +286,10 @@ def score_project(project_id_or_dict):
     # Check 2: captions (#532). Only caption-capable items (images, video: the
     # object-type registry's caption_capable) are in the check; a project with
     # none is excused. An item counts if it has a real `description` OR a
-    # `content_description` (trimmed, non-empty). A raw auto_caption suggestion
-    # (type_metadata) does NOT count until accepted via "Use as description",
-    # which writes `description`. display_name never counts: it's often an
+    # `content_description` (trimmed, non-empty), OR a moondream auto_caption
+    # (type_metadata.auto_caption): owner decision on #532 (2026-10-03), since 556 of
+    # 695 captionable items are auto-captioned only and the check should flag projects
+    # with genuinely uncaptioned images. display_name never counts: it's often an
     # auto-populated filename.
     caption_threshold = 0.6
     cap_items = [i for i in content if get_object_type(i.get("media_type")).caption_capable]
@@ -283,6 +297,7 @@ def score_project(project_id_or_dict):
         captions_present = sum(
             1 for item in cap_items
             if (item.get("description") or "").strip() or (item.get("content_description") or "").strip()
+            or _auto_caption(item)
         )
         captions_passed = captions_present / len(cap_items) >= caption_threshold
     else:

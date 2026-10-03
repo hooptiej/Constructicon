@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, card_rules, cards, curator_needs, db, decisions, ingest, object_types, ocr, storage, timeline
+from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, ingest, object_types, ocr, storage, timeline
 from core import version as version_info
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
@@ -1946,8 +1946,9 @@ def constructicon_list_needs(kind: str | None = None, limit: int | None = None) 
         - kind: filter by nudge kind (e.g., 'missing_cover', 'unfiled_objects')
         - limit: cap the result count (default: all)
 
-    Nudges are filtered by active dismissals — dismissed or snoozed nudges
-    are excluded automatically.
+    Dismissed nudges are excluded automatically. Deferred ones stay in the list with
+    deferred=true. For the whole picture (questions + nudges + needs grouped by card, with
+    deferred items split out) use constructicon_curation_queue.
     """
     needs = curator_needs.list_needs()
 
@@ -1963,19 +1964,70 @@ def constructicon_list_needs(kind: str | None = None, limit: int | None = None) 
 
 
 @mcp.tool()
-def constructicon_dismiss_need(nudge_key: str, snooze_until: float | None = None) -> dict:
-    """Dismiss or snooze a nudge.
+def constructicon_dismiss_need(nudge_key: str) -> dict:
+    """Dismiss a nudge or computed need for good. (The timed snooze is gone: to set
+    something aside without losing it, use constructicon_defer.)
 
-    nudge_key: the nudge_key from constructicon_list_needs (stable id).
-    snooze_until: optional unix epoch timestamp (float). If omitted or None,
-        the nudge is permanently dismissed. If provided, the nudge is snoozed
-        until that time.
+    nudge_key: the `key` of a nudge/need from constructicon_curation_queue (or the
+        nudge_key from constructicon_list_needs). A question ("decision:<id>") can't be
+        dismissed: answer it or defer it.
 
-    Returns {ok: true} on success.
-    """
-    action = "snooze" if snooze_until is not None else "dismiss"
-    db.add_curator_dismissal(nudge_key, action, snooze_until=snooze_until)
-    return {"ok": True}
+    Returns {ok: true, changed}. Recorded in the change log, so it can be undone."""
+    try:
+        return curation_queue.dismiss(nudge_key, actor="mcp")
+    except curation_queue.QueueError as e:
+        return {"error": {"code": "bad_request", "message": str(e)}}
+
+
+@mcp.tool()
+def constructicon_curation_queue(card: str | None = None, include_deferred: bool = True) -> dict:
+    """The Curator queue: every open question, nudge and need in ONE list, grouped by card
+    (the same thing the owner sees in the Curator tab).
+
+    Returns {groups, deferred, counts}. Each group is one card (type 'card': slug, title,
+    card_kind, activity, last_touched) or a non-card bucket (type 'hobby' = one hobby's
+    flags, 'uploads' = file-level questions about fresh uploads, 'collection' = whole-
+    collection nudges like unfiled objects). Order: Active cards first, then most recently
+    touched; then hobbies, uploads, collection. Inside a group: questions first (lowest
+    confidence first), then nudges, then needs.
+
+    Each item: {type: question|nudge|need, key, label, kind, group, href, deferred,
+    dismissible} plus, for a question, {id, options, suggested: {picks, labels, reason},
+    confidence, multi}. `group` is the details-panel group that fixes it (the page
+    /project/<slug>?edit=<group>). Answer a question with constructicon_resolve_pending_decision
+    (id, choice) or constructicon_resolve_decisions (accept_suggested). Set something aside with
+    constructicon_defer (no timer); bring it back with constructicon_bring_back; dismiss a
+    nudge/need for good with constructicon_dismiss_need. counts.open is the number on the
+    Curator tab's badge (open, non-deferred items).
+
+    card: limit to one card's slice (slug). include_deferred=false drops the Deferred section."""
+    q = curation_queue.build_queue(card=card)
+    if not include_deferred:
+        q = {**q, "deferred": []}
+    return q
+
+
+@mcp.tool()
+def constructicon_defer(key: str) -> dict:
+    """Defer a queue item (a question, nudge or need) from constructicon_curation_queue.
+    It moves to the trailing Deferred section, with no timer, and stays there until it
+    is answered or brought back (constructicon_bring_back). Recorded in the change log.
+
+    key: the item's `key` ("decision:<id>", "<kind>:project:<id>", "need:<need>:<slug>")."""
+    try:
+        return curation_queue.defer(key, actor="mcp")
+    except curation_queue.QueueError as e:
+        return {"error": {"code": "bad_request", "message": str(e)}}
+
+
+@mcp.tool()
+def constructicon_bring_back(key: str) -> dict:
+    """Bring a deferred queue item back into the main queue (undo constructicon_defer).
+    key: the item's `key`. A dismissed nudge is not brought back by this."""
+    try:
+        return curation_queue.bring_back(key, actor="mcp")
+    except curation_queue.QueueError as e:
+        return {"error": {"code": "bad_request", "message": str(e)}}
 
 
 @mcp.tool()

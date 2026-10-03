@@ -1,0 +1,45 @@
+/* The Curator queue (#519): one list of questions, nudges and needs, grouped by card.
+   Markup: templates/_curation_queue.html; behaviour: static/js/curator-queue.js.
+   Buttons reuse .dp-btn (details.css) and the card face reuses .cx-mini (cards.css). */
+
+.cq-summary { margin: 0 0 12px; font-size: 13px; color: var(--text-2); }
+.cq-group {
+  display: flex; flex-direction: column; gap: 10px; padding: 12px; margin-bottom: 14px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px;
+}
+.cq-group-head { display: flex; gap: 14px; align-items: flex-start; }
+.cq-face { flex: 0 0 auto; }
+.cq-group-title { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cq-group-title h3 { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.cq-group-title h3 a { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--text-3); }
+.cq-group-title h3 a:hover, .cq-group-title h3 a:focus-visible { color: var(--accent); }
+.cq-group-meta { font-size: 12px; color: var(--text-2); }
+
+.cq-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cq-group-head + .cq-items { margin-left: 0; }
+.cq-item {
+  display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 12px; border-radius: 8px;
+  background: var(--card); box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.cq-item[data-cq-type="question"] { background: #2B2615; box-shadow: inset 0 0 0 1px #5A4A1E; }
+.cq-item-deferred { opacity: .8; }
+.cq-item-main { flex: 1 1 280px; min-width: 0; display: flex; gap: 10px; align-items: flex-start; }
+.cq-item-text { min-width: 0; }
+.cq-label { font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.cq-detail { font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
+.cq-suggest { margin-top: 3px; font-size: 12px; color: #F0E2B6; overflow-wrap: anywhere; }
+.cq-tag {
+  flex: 0 0 auto; font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 999px; background: var(--chip); color: var(--text-2);
+}
+.cq-tag-question { background: var(--card-pip-on, #E8B93A); color: #17191E; }
+.cq-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+a.dp-btn { text-decoration: none; display: inline-block; }
+.cq-chooser { flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.cq-chooser fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.cq-option { font-size: 13px; color: var(--text); display: flex; gap: 6px; align-items: baseline; }
+.cq-error { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--hazard-red-soft); }
+.cq-chooser[hidden], .cq-error[hidden] { display: none; }
+.cq-deferred { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border-strong); }
+.cq-deferred-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--text-2); }
+.cq-item button:focus-visible, .cq-item a:focus-visible { outline: 2px solid var(--card-pip-on, #E8B93A); outline-offset: 2px; }

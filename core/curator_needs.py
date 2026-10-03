@@ -1,6 +1,7 @@
 """Curator Stage 3a: nudge engine for deriving actionable needs from project scores.
 
-Nudges are DERIVED on-demand, never stored. Only dismissals/snoozes are persisted.
+Nudges are DERIVED on-demand, never stored. Only dismissals/deferrals are persisted (#519:
+Defer replaced the timed snooze).
 This module is the single source of truth for what nudges exist and how to rank them.
 """
 
@@ -66,6 +67,135 @@ def _nudge_key_for_global(kind):
     return f"{kind}:global"
 
 
+def project_nudges(project, dismissed=None):
+    """The derived nudges for ONE project (the per-project half of list_needs), unsorted.
+    `dismissed` is db.list_active_curator_dismissals() (fetched if not given); dismissed
+    nudges are left out, deferred ones are kept."""
+    if dismissed is None:
+        dismissed = db.list_active_curator_dismissals()
+    nudges = []
+    score = curator.score_project(project)
+
+    # Skip silent projects (they emit nothing)
+    if score["silent"]:
+        return nudges
+
+    project_id = project["id"]
+    project_status = score["status"]
+    weight = _status_weight(project_status)
+
+    # Emit nudges from unmet checks
+    # Track which kinds we've emitted for this project to avoid duplicates
+    # (e.g., both "related_projects" and "tags" map to "weak_connections")
+    emitted_kinds = set()
+
+    for unmet in score["unmet"]:
+        dimension = unmet["dimension"]
+        item = unmet["item"]
+
+        # Skip provenance_diversity entirely
+        if dimension == "story" and item == "provenance_diversity":
+            continue
+
+        key = (dimension, item)
+        if key not in _UNMET_TO_NUDGE:
+            # Unknown check; skip silently (shouldn't happen)
+            continue
+
+        kind, base_impact = _UNMET_TO_NUDGE[key]
+
+        # Emit ONE nudge per project per kind (avoid duplicates)
+        if kind in emitted_kinds:
+            continue
+        emitted_kinds.add(kind)
+
+        nudge_key = _nudge_key_for_project(kind, project_id)
+        if nudge_key in dismissed:
+            continue  # Suppressed by dismissal
+
+        # Compute action descriptor
+        action = _action_for_kind(kind, project)
+
+        priority = base_impact * weight
+
+        nudges.append({
+            "nudge_key": nudge_key,
+            "kind": kind,
+            "target_type": "project",
+            "target_id": project_id,
+            "target_slug": project["slug"],
+            "title": _title_for_nudge(kind, project),
+            "summary": f"{kind}: {project['title']}",
+            "priority": priority,
+            "base_impact": base_impact,
+            "status_weight": weight,
+            "action": action,
+        })
+
+    # Stale WIP detector
+    if project_status == "wip":
+        # #404: exclude the write-up doc — a today-saved write-up must not
+        # make a stale WIP look freshly worked-on.
+        items = curator.content_items(project, db.list_project_items(project_id))
+        if items:  # Only check if there are items
+            most_recent_date = max(
+                timeline.resolve_item_date(item) for item in items
+            )
+            days_since = (time.time() - most_recent_date) / (24 * 3600)
+            if days_since > 90:
+                kind = "stale_wip"
+                nudge_key = _nudge_key_for_project(kind, project_id)
+                if nudge_key not in dismissed:
+                    base_impact = 6
+                    priority = base_impact * weight
+                    nudges.append({
+                        "nudge_key": nudge_key,
+                        "kind": kind,
+                        "target_type": "project",
+                        "target_id": project_id,
+                        "target_slug": project["slug"],
+                        "title": f"{project['title']} is stale (WIP)",
+                        "summary": f"No activity in {int(days_since)} days",
+                        "priority": priority,
+                        "base_impact": base_impact,
+                        "status_weight": weight,
+                        "action": {
+                            "type": "set_status",
+                            "project_slug": project["slug"],
+                        },
+                    })
+    return nudges
+
+
+def _sort_key(nudge):
+    # Easy-first: lower effort floats to the top (quick wins first).
+    effort = _EFFORT_RANK.get(nudge["kind"], _DEFAULT_EFFORT)
+    # Within an effort tier, higher impact leads (priority DESC).
+    priority = -nudge["priority"]
+
+    # Target recency (newest first = smallest epoch last, so negate)
+    # For global nudges, use current time (most recent)
+    if nudge["target_type"] == "global":
+        recency = -time.time()
+    else:
+        # Find the most recent project item date
+        project = db.get_project(nudge["target_id"])
+        items = curator.content_items(project, db.list_project_items(nudge["target_id"]))
+        if items:
+            recency = -max(timeline.resolve_item_date(item) for item in items)
+        else:
+            recency = -project["created_at"]
+
+    # Nudge key as final tiebreaker (lexicographic)
+    return (effort, priority, recency, nudge["nudge_key"])
+
+
+def sort_nudges(nudges):
+    """Rank nudges the way list_needs does: easy wins first, then impact, then recency (#519: the
+    per-card slice on the project page uses this too, so it matches the queue)."""
+    return sorted(nudges, key=_sort_key)
+
+
 def list_needs():
     """Build the full set of currently-detected nudges, filter by dismissals,
     rank by priority, and return sorted list.
@@ -80,96 +210,7 @@ def list_needs():
     all_projects = db.list_projects()
 
     for project in all_projects:
-        score = curator.score_project(project)
-
-        # Skip silent projects (they emit nothing)
-        if score["silent"]:
-            continue
-
-        project_id = project["id"]
-        project_status = score["status"]
-        weight = _status_weight(project_status)
-
-        # Emit nudges from unmet checks
-        # Track which kinds we've emitted for this project to avoid duplicates
-        # (e.g., both "related_projects" and "tags" map to "weak_connections")
-        emitted_kinds = set()
-
-        for unmet in score["unmet"]:
-            dimension = unmet["dimension"]
-            item = unmet["item"]
-
-            # Skip provenance_diversity entirely
-            if dimension == "story" and item == "provenance_diversity":
-                continue
-
-            key = (dimension, item)
-            if key not in _UNMET_TO_NUDGE:
-                # Unknown check; skip silently (shouldn't happen)
-                continue
-
-            kind, base_impact = _UNMET_TO_NUDGE[key]
-
-            # Emit ONE nudge per project per kind (avoid duplicates)
-            if kind in emitted_kinds:
-                continue
-            emitted_kinds.add(kind)
-
-            nudge_key = _nudge_key_for_project(kind, project_id)
-            if nudge_key in dismissed:
-                continue  # Suppressed by dismissal
-
-            # Compute action descriptor
-            action = _action_for_kind(kind, project)
-
-            priority = base_impact * weight
-
-            nudges.append({
-                "nudge_key": nudge_key,
-                "kind": kind,
-                "target_type": "project",
-                "target_id": project_id,
-                "target_slug": project["slug"],
-                "title": _title_for_nudge(kind, project),
-                "summary": f"{kind}: {project['title']}",
-                "priority": priority,
-                "base_impact": base_impact,
-                "status_weight": weight,
-                "action": action,
-            })
-
-        # Stale WIP detector
-        if project_status == "wip":
-            # #404: exclude the write-up doc — a today-saved write-up must not
-            # make a stale WIP look freshly worked-on.
-            items = curator.content_items(project, db.list_project_items(project_id))
-            if items:  # Only check if there are items
-                most_recent_date = max(
-                    timeline.resolve_item_date(item) for item in items
-                )
-                days_since = (time.time() - most_recent_date) / (24 * 3600)
-                if days_since > 90:
-                    kind = "stale_wip"
-                    nudge_key = _nudge_key_for_project(kind, project_id)
-                    if nudge_key not in dismissed:
-                        base_impact = 6
-                        priority = base_impact * weight
-                        nudges.append({
-                            "nudge_key": nudge_key,
-                            "kind": kind,
-                            "target_type": "project",
-                            "target_id": project_id,
-                            "target_slug": project["slug"],
-                            "title": f"{project['title']} is stale (WIP)",
-                            "summary": f"No activity in {int(days_since)} days",
-                            "priority": priority,
-                            "base_impact": base_impact,
-                            "status_weight": weight,
-                            "action": {
-                                "type": "set_status",
-                                "project_slug": project["slug"],
-                            },
-                        })
+        nudges.extend(project_nudges(project, dismissed))
 
     # --- Global/aggregate detectors ---
     global_weight = 1  # Global nudges always use weight 1
@@ -246,37 +287,16 @@ def list_needs():
     # possible_correlation: STUB — do not implement (Stage 4)
 
     # --- Sort and return ---
-    # Sort by priority DESC, tie-break by target recency (created_at of project/item),
-    # then by id if still tied
-    def sort_key(nudge):
-        # Easy-first: lower effort floats to the top (quick wins first).
-        effort = _EFFORT_RANK.get(nudge["kind"], _DEFAULT_EFFORT)
-        # Within an effort tier, higher impact leads (priority DESC).
-        priority = -nudge["priority"]
-
-        # Target recency (newest first = smallest epoch last, so negate)
-        # For global nudges, use current time (most recent)
-        if nudge["target_type"] == "global":
-            recency = -time.time()
-        else:
-            # Find the most recent project item date
-            project = db.get_project(nudge["target_id"])
-            items = curator.content_items(project, db.list_project_items(nudge["target_id"]))
-            if items:
-                recency = -max(timeline.resolve_item_date(item) for item in items)
-            else:
-                recency = -project["created_at"]
-
-        # Nudge key as final tiebreaker (lexicographic)
-        return (effort, priority, recency, nudge["nudge_key"])
-
-    nudges.sort(key=sort_key)
+    nudges = sort_nudges(nudges)
+    states = db.list_curator_states()
+    for n in nudges:
+        n["deferred"] = states.get(n["nudge_key"]) == db.CURATOR_DEFER
     return nudges
 
 
 def count_active_needs():
-    """Return the count of active needs (filtered by dismissals)."""
-    return len(list_needs())
+    """Return the count of active, non-deferred needs."""
+    return len([n for n in list_needs() if not n["deferred"]])
 
 
 def _count_unaccepted_captions():

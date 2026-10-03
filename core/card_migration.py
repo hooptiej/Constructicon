@@ -19,6 +19,7 @@ it gets the LEAST-CLAIMING valid value now, the payload records exactly what was
 applied, and the suggestion is separate and may differ.
 """
 
+import json
 import re
 
 from . import card_rules, changes, db, timeline
@@ -473,6 +474,44 @@ def run_v2c_4():
     finally:
         conn.close()
     return {"queued": 1 if did is not None else 0}
+
+
+def run_v2c_5():
+    """Piece 5 (spec 4.7): the new whereabouts / provenance / credit / highlight columns
+    start empty (nothing is guessed). The one data change: the v1 'reference-only'
+    cards (migrated to kind=collection in piece 1) get provenance='referenced'.
+
+    Idempotent without a marker column: only rows whose provenance IS NULL are touched,
+    and an audit row (op migration_v2c_5) records each, so the owner clearing a value
+    later is not undone on restart ONLY because we skip when that op already ran for the
+    card. Returns {"referenced": n}."""
+    conn = db.get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT id, slug FROM projects WHERE status = 'reference-only' AND kind = 'collection' "
+            "AND provenance IS NULL").fetchall()
+        done = set()
+        for (raw,) in conn.execute("SELECT affected_slugs FROM audit_log WHERE op = 'migration_v2c_5'").fetchall():
+            done.update(json.loads(raw or "[]"))
+        n = 0
+        batch_id = changes.new_batch_id()
+        for r in rows:
+            if r["slug"] in done:
+                continue
+            conn.execute("UPDATE projects SET provenance = 'referenced' WHERE id = ? AND provenance IS NULL", (r["id"],))
+            db.insert_change_log(
+                conn, "migration_v2c_5", changes.ACTOR_MIGRATION,
+                [changes.row_image("projects", {"id": r["id"]}, {"provenance": None}, {"provenance": "referenced"})],
+                batch_id=batch_id, affected_slugs=[r["slug"]])
+            n += 1
+        conn.commit()
+        return {"referenced": n}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 # --- Applying -----------------------------------------------------------------------

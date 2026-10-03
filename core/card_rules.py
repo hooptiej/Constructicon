@@ -46,9 +46,49 @@ STOP_REASON_LABELS = {"failed": "Failed", "abandoned": "Abandoned"}
 # Event cards only allow these stages (3.2 rule 4).
 EVENT_STAGES = ("idea", "in_progress", "done", "stopped")
 
-# Whereabouts values (3.4). Defined now because validate_status's cross-field
-# rule (3.2 rule 5) refers to them; the column and its setter arrive in piece 5.
+# --- Whereabouts (3.4) -------------------------------------------------------
+# Where the physical thing is now. NULL = not recorded / not applicable.
 WHEREABOUTS = ("have_it", "partial", "parted_out", "sold", "gifted", "lost", "never_built")
+WHEREABOUTS_LABELS = {
+    "have_it": "Have it",
+    "partial": "Partial",
+    "parted_out": "Parted out",
+    "sold": "Sold",
+    "gifted": "Gifted",
+    "lost": "Lost",
+    "never_built": "Never built",
+}
+# Kinds a whereabouts value applies to (an action, event or family has no physical whereabouts).
+WHEREABOUTS_KINDS = ("thing", "project", "collection")
+
+# --- Card-level provenance (3.5) ---------------------------------------------
+CARD_PROVENANCE = ("created", "found", "collected", "referenced", "client_owned")
+CARD_PROVENANCE_LABELS = {
+    "created": "Created",
+    "found": "Found",
+    "collected": "Collected",
+    "referenced": "Referenced",
+    "client_owned": "Client-owned",
+}
+# File-level (capture_events.provenance) value -> the card-vocabulary reading shown
+# on an asset card. `documented` is deliberately file-only (a record OF something).
+FILE_PROVENANCE_LABELS = {
+    "found": "Found",
+    "created": "Created",
+    "reference": "Referenced",
+    "result": "Created",
+    "design": "Created",
+    "documented": "Documented",
+}
+# File value -> the card provenance it counts toward in a majority suggestion.
+# `documented` is evidence, not an origin, so it never votes.
+FILE_PROVENANCE_TO_CARD = {
+    "found": "found",
+    "created": "created",
+    "reference": "referenced",
+    "result": "created",
+    "design": "created",
+}
 
 # --- Hobby activity (3.3) ------------------------------------------------------
 # A hobby's two-value manual switch (blog_tags.hobby_status). Never computed; the
@@ -110,6 +150,59 @@ def validate_kind(kind):
     if kind not in KINDS:
         raise CardError("bad_kind", f"Unknown kind {kind!r}. Choose one of: {', '.join(KINDS)}.")
     return kind
+
+
+def whereabouts_label(value):
+    return WHEREABOUTS_LABELS.get(value, value or "")
+
+
+def card_provenance_label(value):
+    return CARD_PROVENANCE_LABELS.get(value, value or "")
+
+
+def file_provenance_label(value, card_provenance=None):
+    """Display label for a per-file provenance value on an asset card (3.5 table).
+    A NULL file value inherits the owning card's provenance FOR DISPLAY ONLY (pass
+    `card_provenance`); returns None when neither is set. Unknown custom values
+    are shown as-is (the file vocabulary is loose)."""
+    if value in (None, ""):
+        return CARD_PROVENANCE_LABELS.get(card_provenance) if card_provenance else None
+    return FILE_PROVENANCE_LABELS.get(value, value)
+
+
+def validate_provenance(value):
+    """Returns the card provenance unchanged (None / '' clear it) or raises
+    CardError('bad_provenance')."""
+    if value in (None, ""):
+        return None
+    if value not in CARD_PROVENANCE:
+        raise CardError("bad_provenance",
+                        f"Unknown provenance {value!r}. Choose one of: {', '.join(CARD_PROVENANCE)}.")
+    return value
+
+
+def validate_whereabouts(kind, value, stage=None):
+    """Whereabouts (3.4) for a card of `kind` currently at `stage`. None clears and
+    always passes. Raises CardError('bad_whereabouts'): unknown value; a kind it
+    doesn't apply to (action / event / family); the 3.2 rule 5 cross-field rules
+    (in_use needs have_it or partial; never_built excludes in_progress / in_use)."""
+    if value in (None, ""):
+        return None
+    if value not in WHEREABOUTS:
+        raise CardError("bad_whereabouts",
+                        f"Unknown whereabouts {value!r}. Choose one of: {', '.join(WHEREABOUTS)}.")
+    kind = kind or DEFAULT_KIND
+    if kind not in WHEREABOUTS_KINDS:
+        raise CardError("bad_whereabouts",
+                        f"Whereabouts doesn't apply to a {kind_label(kind)} (only to: "
+                        f"{', '.join(kind_label(k) for k in WHEREABOUTS_KINDS)}).")
+    if stage == "in_use" and value not in ("have_it", "partial"):
+        raise CardError("bad_whereabouts",
+                        f"A card that is in use can't be {value!r} (only 'have_it' or 'partial'); "
+                        "change its stage first.")
+    if value == "never_built" and stage in ("in_progress", "in_use"):
+        raise CardError("bad_whereabouts", f"A card that is {stage!r} can't be 'never_built'; change its stage first.")
+    return value
 
 
 def validate_status(kind, stage, stop_reason=None, activity=None, whereabouts=None):

@@ -154,6 +154,7 @@ def _to_public_project(project):
         # status is kind / activity / stage / stop_reason below.
         "status": project["status"],
         **cards.status_fields(project),
+        **cards.whereabouts_fields(project),
         "cover_slug": project.get("cover_slug"),
         "writeup_slug": project.get("writeup_slug"),
         "parent_id": project.get("parent_id"),
@@ -1454,6 +1455,66 @@ def constructicon_set_kind(card: str | int, kind: str, force: bool = False, dry_
 
 
 @mcp.tool()
+def constructicon_set_whereabouts(card: str | int, whereabouts: str | None = None, note: str | None = None,
+                                  clear_note: bool = False, dry_run: bool = False) -> dict:
+    """Set (or clear) where a card's physical thing is now. V2 cards 3.4.
+
+    whereabouts: have_it | partial | parted_out | sold | gifted | lost | never_built,
+    or omit/null to CLEAR it (null = not recorded). Applies to thing, project and
+    collection cards only; an action, event or family is refused. Cross-rules with
+    the card's stage: an in_use card can only be have_it or partial; a never_built
+    card can't be in_progress or in_use. Violations return
+    {"ok": false, "error": {"code": "bad_whereabouts", "message": ...}}; nothing is written.
+    note: optional free text ("Skyhawk model on the shelf; parts printed, not
+    assembled"); leave it out to keep the existing note, pass clear_note=true to erase it.
+
+    card: project id or slug. dry_run=true previews without writing.
+    Returns {ok, dry_run, changes: [{card, field, before, after}], warnings, batch_id}.
+    """
+    try:
+        return cards.set_whereabouts(card, whereabouts, "" if clear_note else (note if note is not None else ...),
+                                     dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_set_card_provenance(card: str | int, provenance: str | None = None, credit: str | None = None,
+                                      clear_credit: bool = False, dry_run: bool = False) -> dict:
+    """Set (or clear) a CARD's provenance and optional credit. V2 cards 3.5.
+
+    provenance: created | found | collected | referenced | client_owned, or omit/null
+    to CLEAR it. One value per card; a card with mixed origins should be split into
+    separate cards, never "found + own". credit: who designed it / where it came from
+    (leave out to keep the existing credit; clear_credit=true erases it). Bad values
+    return {"ok": false, "error": {"code": "bad_provenance", ...}}.
+
+    This is NOT constructicon_set_provenance, which sets the per-FILE provenance
+    (found/created/documented/result/reference/design) on one object by file slug and
+    is unchanged. A file with no provenance of its own shows its card's for display only.
+
+    card: project id or slug. dry_run=true previews without writing.
+    Returns {ok, dry_run, changes, warnings, batch_id}.
+    """
+    try:
+        return cards.set_provenance(card, provenance, "" if clear_credit else (credit if credit is not None else ...),
+                                    dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_set_card_highlight(card: str | int, on: bool = False, dry_run: bool = False) -> dict:
+    """Mark or unmark a CARD as highlighted ("this one is special"). V2 cards 3.12.
+    Independent of the per-file highlight (constructicon_set_highlight, which takes a
+    file slug). card: project id or slug. Returns {ok, dry_run, changes, warnings, batch_id}."""
+    try:
+        return cards.set_highlight(card, on, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
 def constructicon_nest(child: str | int, parent: str | int, replace: bool = False, dry_run: bool = False) -> dict:
     """Make `child` PART OF `parent` (nesting: the child only makes sense inside its
     parent, e.g. a Lua script inside the truck it runs on). V2 cards 3.7.
@@ -1607,7 +1668,11 @@ def constructicon_list_needs_decision(kind: str | None = None, need: str | None 
     Active hobby untouched for ~2 years). Fix those with constructicon_set_hobby_status.
     Also computed: need = untyped_link (a v1 'related' pair where a typed reading is
     plausible; `link` = {a, b, type} is the suggestion, apply with constructicon_retype_links).
-    More computed needs (missing provenance, ...) join in with later pieces.
+    Also computed: need = missing_provenance (a card with no provenance; `suggested` is the
+    majority file provenance mapped to a card value when >50% of its non-write-up files
+    agree, never applied; fix with constructicon_set_card_provenance),
+    missing_provenance_credit (a found/collected card with no credit) and
+    missing_whereabouts (a Thing with none; fix with constructicon_set_whereabouts).
 
     Filters: kind (the card's kind, or 'hobby' for hobby needs only; any other kind
     leaves hobby needs out), need, hobby (slug), limit.

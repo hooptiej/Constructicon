@@ -257,6 +257,15 @@ To add a new object type (issue #448 contract v2):
   `card_migration.run_v2c_3` (never moves anything); resolving it runs
   unnest -> set_kind family -> add_to_family in one change-log batch.
 
+- **Provenance options (#529)** — the card list (`projects.provenance`) and the
+  file list (`capture_events.provenance`) are rows of `provenance_options(scope,
+  key, label, sort_order, retired_at)`, seeded idempotently by `init_db` and
+  managed in `/admin`. `core/provenance_options.py` owns reads, validation
+  (active keys for new writes; a record's existing retired key stays valid) and
+  change-logged writes. Pickers, labels and the MCP tools read the table; the
+  old constants in `card_rules` / `db.PROVENANCE_TYPES` are only the seed.
+  `scripts/test_provenance_options.py` runs on a throwaway DB, no server.
+
 ### Tag hierarchy gotcha — walk the tree, don't just keyword-search
 
 Tags are hierarchical (`blog_tags.parent_id`), e.g. `Kerbal Space Program

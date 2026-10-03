@@ -86,6 +86,46 @@
       <div id="admin-restricted-list" class="admin-redacted-list"></div>
     </section>
 
+    <!-- Provenance options (#529) — the two editable "where did this come from" lists:
+         the CARD list (projects.provenance) and the FILE list (capture_events.provenance).
+         Add / rename the label / retire / reorder. A retired option keeps working and
+         displaying on records that already have it but can't be picked for new ones; keys
+         are stable and never change. Rendered by the script below from
+         GET/POST /api/provenance-options (core/provenance_options.py, change-logged). -->
+    <section class="admin-panel admin-panel-wide" id="admin-provenance-section" aria-labelledby="admin-provenance-heading">
+      <div class="admin-panel-header">
+        <div>
+          <h2 id="admin-provenance-heading">Provenance options</h2>
+          <div class="admin-row-hint">The choices offered for where a card or a file came from. Rename changes only the label; retire hides an option from pickers but records that already use it keep it.</div>
+        </div>
+      </div>
+      <div class="prov-lists">
+        <div class="prov-list" data-scope="card">
+          <h3 id="prov-heading-card">Card provenance</h3>
+          <ul class="prov-items" id="prov-items-card" aria-labelledby="prov-heading-card"></ul>
+          <form class="prov-add" data-scope="card" autocomplete="off">
+            <label for="prov-add-label-card">New option label</label>
+            <input type="text" class="input" id="prov-add-label-card" maxlength="60" required>
+            <label for="prov-add-key-card">Key <span class="optional">(optional, lowercase slug)</span></label>
+            <input type="text" class="input mono" id="prov-add-key-card" maxlength="40" pattern="[a-z0-9][a-z0-9_]*">
+            <button type="submit" class="btn-ms">Add to card list</button>
+          </form>
+        </div>
+        <div class="prov-list" data-scope="file">
+          <h3 id="prov-heading-file">File provenance</h3>
+          <ul class="prov-items" id="prov-items-file" aria-labelledby="prov-heading-file"></ul>
+          <form class="prov-add" data-scope="file" autocomplete="off">
+            <label for="prov-add-label-file">New option label</label>
+            <input type="text" class="input" id="prov-add-label-file" maxlength="60" required>
+            <label for="prov-add-key-file">Key <span class="optional">(optional, lowercase slug)</span></label>
+            <input type="text" class="input mono" id="prov-add-key-file" maxlength="40" pattern="[a-z0-9][a-z0-9_]*">
+            <button type="submit" class="btn-ms">Add to file list</button>
+          </form>
+        </div>
+      </div>
+      <div id="prov-status" class="backup-status" role="status" aria-live="polite"></div>
+    </section>
+
     <!-- API Keys (#55) — general secrets store for the app itself, starting
          with a YouTube Data API key (real view/like/comment counts, full
          descriptions, tags, duration — see #54) rather than wiring a key in
@@ -265,6 +305,18 @@
 <style>
 /* (#345) Curator-nudge styles moved to style.css with the Nudges drawer. */
 
+/* Provenance options (#529) */
+.prov-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }
+.prov-list h3 { font-size: 0.95rem; margin: 0 0 0.5rem; }
+.prov-items { list-style: none; margin: 0 0 0.75rem; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.prov-item { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; padding: 0.35rem 0.5rem; border: 1px solid #e0e0e0; border-radius: 4px; }
+.prov-item.is-retired { opacity: 0.65; }
+.prov-item .prov-label { flex: 1 1 8rem; min-width: 6rem; }
+.prov-item .prov-key { font-size: 0.8rem; color: var(--text-secondary, #666); }
+.prov-item button { padding: 0.15rem 0.5rem; }
+.prov-add { display: flex; flex-direction: column; gap: 0.3rem; align-items: flex-start; }
+.prov-add label { font-size: 0.85rem; }
+
 .admin-storage-content {
   display: flex;
   flex-direction: column;
@@ -348,6 +400,102 @@
 
   // (#345) The Curator nudges logic that used to live here moved to the Nudges
   // nav-rail drawer (_nudges_drawer.html) along with its markup and styles.
+
+  // Provenance options (#529). Everything user-visible goes through escapeHtml; the
+  // server is the source of truth (every action returns the whole list for its scope).
+  const PROV_SCOPES = ['card', 'file'];
+  const provStatus = document.getElementById('prov-status');
+
+  function provMsg(text, isError) {
+    provStatus.textContent = text || '';
+    provStatus.style.color = isError ? '#b00020' : '';
+  }
+
+  function renderProvList(scope, options) {
+    const ul = document.getElementById(`prov-items-${scope}`);
+    ul.innerHTML = options.map((o, i) => {
+      const k = escapeHtml(o.key);
+      const l = escapeHtml(o.label);
+      return `<li class="prov-item${o.retired ? ' is-retired' : ''}" data-key="${k}">
+        <span class="prov-label">${l}${o.retired ? ' <em>(retired)</em>' : ''}</span>
+        <code class="prov-key">${k}</code>
+        <button type="button" class="btn-ms" data-act="up" aria-label="Move ${l} up"${i === 0 ? ' disabled' : ''}>&uarr;</button>
+        <button type="button" class="btn-ms" data-act="down" aria-label="Move ${l} down"${i === options.length - 1 ? ' disabled' : ''}>&darr;</button>
+        <button type="button" class="btn-ms" data-act="rename" aria-label="Rename ${l}">Rename</button>
+        <button type="button" class="btn-ms" data-act="${o.retired ? 'unretire' : 'retire'}" aria-label="${o.retired ? 'Un-retire' : 'Retire'} ${l}">${o.retired ? 'Un-retire' : 'Retire'}</button>
+      </li>`;
+    }).join('');
+  }
+
+  async function provCall(scope, path, fields) {
+    const res = await fetch(`/api/provenance-options/${encodeURIComponent(scope)}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields || {}),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = (body.error && body.error.message) || body.detail || 'That failed.';
+      throw new Error(typeof msg === 'string' ? msg : 'That failed.');
+    }
+    renderProvList(scope, body.options);
+    return body;
+  }
+
+  async function loadProvLists() {
+    for (const scope of PROV_SCOPES) {
+      try {
+        const res = await fetch(`/api/provenance-options?scope=${scope}&include_retired=1`);
+        renderProvList(scope, (await res.json()).options || []);
+      } catch (e) { provMsg('Could not load the provenance lists.', true); }
+    }
+  }
+
+  PROV_SCOPES.forEach((scope) => {
+    document.getElementById(`prov-items-${scope}`).addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('button[data-act]');
+      if (!btn) return;
+      const li = btn.closest('li');
+      const key = li.dataset.key;
+      const act = btn.dataset.act;
+      const base = `/${encodeURIComponent(key)}`;
+      try {
+        if (act === 'rename') {
+          const current = li.querySelector('.prov-label').textContent.replace(' (retired)', '');
+          const next = prompt(`New label for "${key}"`, current);
+          if (next === null) return;
+          await provCall(scope, `${base}/rename`, { label: next });
+          provMsg(`Renamed ${key}.`);
+        } else if (act === 'up' || act === 'down') {
+          await provCall(scope, `${base}/move`, { direction: act });
+          provMsg('');
+        } else {
+          await provCall(scope, `${base}/${act}`);
+          provMsg(act === 'retire' ? `Retired ${key}: existing records keep it.` : `Un-retired ${key}.`);
+        }
+      } catch (e) { provMsg(e.message, true); }
+    });
+  });
+
+  document.querySelectorAll('.prov-add').forEach((form) => {
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const scope = form.dataset.scope;
+      const label = document.getElementById(`prov-add-label-${scope}`);
+      const keyInput = document.getElementById(`prov-add-key-${scope}`);
+      // No key typed: derive a slug from the label (the server still validates it).
+      const key = keyInput.value.trim() ||
+        label.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      try {
+        await provCall(scope, '', { key, label: label.value });
+        label.value = '';
+        keyInput.value = '';
+        provMsg(`Added ${key} to the ${scope} list.`);
+      } catch (e) { provMsg(e.message, true); }
+    });
+  });
+
+  loadProvLists();
 
   // "Delete all" — the endpoint deletes every upload/tag/project regardless
   // of which page you're on, so it lives here with the other global actions

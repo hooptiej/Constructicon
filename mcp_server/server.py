@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, ingest, object_types, ocr, storage, timeline
+from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, ingest, object_types, ocr, provenance_options, storage, timeline
 from core import version as version_info
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
@@ -1282,19 +1282,44 @@ def constructicon_set_agent_notes(slug: str, notes: str | None = None) -> dict |
 
 
 @mcp.tool()
+def constructicon_list_provenance_options(scope: str = "card", include_retired: bool = False) -> dict:
+    """The live, owner-editable provenance lists (#529). Read-only; the owner adds,
+    renames, retires and reorders options in /admin.
+
+    scope: "card" (what constructicon_set_card_provenance accepts) or "file" (what
+    constructicon_set_provenance accepts). include_retired=true also returns retired
+    options (retired ones can't be set on anything new).
+    Returns {"ok": true, "scope", "options": [{key, label, sort_order, retired}]}.
+    """
+    try:
+        opts = provenance_options.list_options(scope, include_retired=include_retired)
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+    return {"ok": True, "scope": scope,
+            "options": [{k: o[k] for k in ("key", "label", "sort_order", "retired")} for o in opts]}
+
+
+@mcp.tool()
 def constructicon_set_provenance(slug: str, provenance: str | None = None) -> dict | None:
     """Set or clear an object's provenance classification (#341).
 
-    Provenance describes how an object came to be captured: "found", "created",
-    "documented", "result" (outcome of a process), "reference" (cited or sourced
-    from elsewhere), "design" (drafted/designed). The set is loose and extensible
-    — trim in use as patterns emerge.
+    Provenance describes how an object came to be captured. The allowed values are
+    an editable list (#529) the owner manages in /admin; it starts as found, created,
+    documented, result (outcome of a process), reference (cited or sourced from
+    elsewhere), design (drafted/designed) and purchased. Call
+    constructicon_list_provenance_options(scope="file") for the live list. A value
+    that isn't an active key returns {"ok": false, "error": {"code":
+    "bad_provenance", ...}} naming the active keys; an object that already holds a
+    since-retired key keeps it.
 
-    provenance: one of the standard types, a custom value, or None to clear.
+    provenance: an active key, or None to clear.
     Returns the updated object (the usual public shape plus "provenance"),
     or None if not found.
     """
-    row = db.set_provenance(slug, provenance)
+    try:
+        row = db.set_provenance(slug, provenance)
+    except card_rules.CardError as e:
+        return _card_error_result(e)
     if row is None:
         return None
     return {**_to_public(row), "provenance": row.get("provenance")}
@@ -1490,8 +1515,11 @@ def constructicon_set_card_provenance(card: str | int, provenance: str | None = 
                                       clear_credit: bool = False, dry_run: bool = False) -> dict:
     """Set (or clear) a CARD's provenance and optional credit. V2 cards 3.5.
 
-    provenance: created | found | collected | referenced | client_owned, or omit/null
-    to CLEAR it. One value per card; a card with mixed origins should be split into
+    provenance: an active key of the editable card list (#529; starts as created |
+    found | collected | referenced | client_owned | purchased; the owner manages it in
+    /admin, and constructicon_list_provenance_options(scope="card") returns the live
+    list), or omit/null to CLEAR it. A card that already holds a since-retired key
+    keeps it. One value per card; a card with mixed origins should be split into
     separate cards, never "found + own". credit: who designed it / where it came from
     (leave out to keep the existing credit; clear_credit=true erases it). Bad values
     return {"ok": false, "error": {"code": "bad_provenance", ...}}.

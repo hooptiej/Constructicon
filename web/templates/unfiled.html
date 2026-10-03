@@ -51,7 +51,7 @@
 
     <select class="filter-select" id="bulk-provenance-select" title="Set provenance for selection">
       <option value="">Set provenance…</option>
-      {% for prov in PROVENANCE_TYPES %}<option value="{{ prov }}">{{ prov }}</option>{% endfor %}
+      {% for o in file_provenance_options %}<option value="{{ o.key }}">{{ o.label }}</option>{% endfor %}
     </select>
     <button type="button" class="ocr-retry-btn" id="apply-provenance-btn">Apply</button>
 

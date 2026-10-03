@@ -196,7 +196,7 @@ def set_provenance(card, provenance=None, credit=..., *, dry_run=False, actor=ch
     the per-file provenance (db.set_provenance / constructicon_set_provenance), which
     is untouched. One value per card: mixed origins are separate cards (3.5)."""
     row = get_card(card)
-    value = card_rules.validate_provenance(provenance)
+    value = card_rules.validate_provenance(provenance, current=row.get("provenance"))
     fields = {"provenance": value}
     if credit is not ...:
         fields["provenance_credit"] = (credit or "").strip() or None
@@ -267,6 +267,8 @@ def provenance_whereabouts_needs(kind=None, hobby_ids=None, only_id=None):
     no provenance; carries the majority-file suggestion when there is one),
     missing_provenance_credit (found / collected card with no credit) and
     missing_whereabouts (a Thing with no whereabouts). `only_id` limits it to one card."""
+    from . import provenance_options  # lazy, as elsewhere in this module
+    prov_options = provenance_options.list_options("card")  # #529: the live, editable list
     rows = []
     for c in db.list_projects():
         if only_id is not None and c["id"] != only_id:
@@ -279,13 +281,13 @@ def provenance_whereabouts_needs(kind=None, hobby_ids=None, only_id=None):
             sug = suggest_provenance(c)
             rows.append({
                 "need": NEED_MISSING_PROVENANCE, "card_slug": c["slug"], "title": c["title"],
-                "detail": "No provenance recorded (created, found, collected, referenced or client-owned).",
+                "detail": "No provenance recorded (" + ", ".join(o["label"].lower() for o in prov_options) + ").",
                 "suggested": sug["value"] if sug else None,
                 "suggested_reason": (f"{sug['files']} of {sug['counted']} files map to "
                                      f"{card_rules.card_provenance_label(sug['value'])}.") if sug else None,
                 "confidence": ("medium" if sug and sug["share"] >= 0.8 else "low") if sug else None,
                 "decision_id": None,
-                "options": [{"key": k, "label": card_rules.CARD_PROVENANCE_LABELS[k]} for k in card_rules.CARD_PROVENANCE],
+                "options": [{"key": o["key"], "label": o["label"]} for o in prov_options],
             })
         elif prov in CREDIT_PROVENANCE and not (c.get("provenance_credit") or "").strip():
             rows.append({

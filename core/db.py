@@ -753,6 +753,9 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_family_members_member ON family_members(member_id);
         """)
+        # Editable provenance lists (#529): table + idempotent seed from the old fixed lists.
+        from . import provenance_options
+        provenance_options.ensure_table_and_seed(conn)
         conn.commit()
         _rebuild_project_relations_typed(conn)
     finally:
@@ -1187,12 +1190,15 @@ def set_agent_notes(slug, notes):
 def set_provenance(slug, provenance):
     """Sets or clears an object's provenance classification (#341).
 
-    provenance: one of PROVENANCE_TYPES, or None to clear.
-    Controlled vocab (loose, extensible).
+    provenance: an ACTIVE key of the editable file list (#529), the row's current value
+    (even if retired), or None to clear. Anything else raises
+    CardError('bad_provenance') listing the active keys.
     Returns the updated row, or None if not found."""
     existing = get_by_slug(slug)
     if existing is None:
         return None
+    from . import provenance_options
+    provenance = provenance_options.validate("file", provenance, current=existing.get("provenance"))
     conn = get_conn()
     try:
         conn.execute("UPDATE capture_events SET provenance = ? WHERE slug = ?", (provenance, slug))
@@ -2780,6 +2786,7 @@ IMAGE_TABLE_KEYS = {
     "blog_tags": ("id",),
     "capture_events": ("slug",),
     "post_tags": ("post_slug", "tag_id"),
+    "provenance_options": ("scope", "key"),
 }
 _IMAGE_ROWID_TABLES = ("project_items", "project_hobbies", "family_members", "project_relations",
                        "blog_entry_projects", "post_tags")

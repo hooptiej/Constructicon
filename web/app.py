@@ -1450,6 +1450,9 @@ def project_detail_page(request: Request, slug: str):
             "card_status": cards.status_fields(project),
             # V2 cards 3.4 / 3.5 / 3.12: whereabouts, card provenance + credit, highlight.
             "card_extra": cards.whereabouts_fields(project),
+            # #523: autocomplete suggestions for the free-text credit / whereabouts-note inputs.
+            "suggest_credit": db.distinct_card_values("provenance_credit"),
+            "suggest_whereabouts_note": db.distinct_card_values("whereabouts_note"),
             "card_whereabouts_options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
             "card_provenance_options": [{"key": k, "label": card_rules.CARD_PROVENANCE_LABELS[k]} for k in card_rules.CARD_PROVENANCE],
             "card_queue": _card_queue_strip(project["slug"]),

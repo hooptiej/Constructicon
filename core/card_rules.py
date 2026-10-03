@@ -531,3 +531,49 @@ def validate_group_code(value):
     if not (2 <= len(v) <= 4) or not v.isalnum():
         raise CardError("bad_group_code", "A group code is 2-4 letters or digits.")
     return v
+
+
+# --- Piece 6: home, bulk, split (3.10, section 6) ----------------------------------
+HOME_KINDS = ("card", "hobby")
+HOME_SOURCES = ("override", "parent", "family", "hobby", "none")
+
+# Operations constructicon_bulk_edit may run (spec section 6, bulk). Allow-list: anything
+# else is refused with bad_bulk_op.
+BULK_OPS = ("set_status", "set_kind", "set_whereabouts", "set_card_provenance", "set_home", "set_card_highlight",
+            "add_to_hobby", "remove_from_hobby", "add_to_family", "remove_from_family", "nest", "unnest",
+            "link", "unlink", "retype_link", "set_hobby_activity")
+
+SPLIT_RELATIONS = ("child", "sibling")
+# Keys a split part may carry (anything else is refused so a typo can't silently do nothing).
+SPLIT_PART_KEYS = ("title", "kind", "description", "move_description", "provenance", "provenance_credit", "stage",
+                   "stop_reason", "whereabouts", "whereabouts_note", "relation", "file_slugs", "link_to_source",
+                   "hobbies", "families", "highlight")
+
+
+def validate_home_kind(value):
+    if value not in HOME_KINDS:
+        raise CardError("bad_home", f"A home is a card or a hobby, not {value!r}.")
+    return value
+
+
+def validate_bulk_op(op):
+    if op not in BULK_OPS:
+        raise CardError("bad_bulk_op", f"{op!r} can't be run in bulk. Choose one of: {', '.join(BULK_OPS)}.")
+    return op
+
+
+def validate_split_part(part, index=0):
+    """Shape check for one split_card part (the field values themselves are validated by the
+    same validators a manual edit uses, when the part is built). Returns the relation."""
+    if not isinstance(part, dict):
+        raise CardError("bad_split", f"Part {index + 1} must be an object.")
+    unknown = sorted(set(part) - set(SPLIT_PART_KEYS))
+    if unknown:
+        raise CardError("bad_split", f"Part {index + 1} has unknown field(s): {', '.join(unknown)}.",
+                        {"allowed": list(SPLIT_PART_KEYS)})
+    if not (part.get("title") or "").strip():
+        raise CardError("bad_split", f"Part {index + 1} needs a title.")
+    relation = part.get("relation") or "sibling"
+    if relation not in SPLIT_RELATIONS:
+        raise CardError("bad_split", f"Part {index + 1}: relation must be 'child' or 'sibling'.")
+    return relation

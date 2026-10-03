@@ -120,6 +120,18 @@
       </label>
       <span id="card-extra-msg" style="font-size:12px;color:#6E6B57"></span>
     </div>
+    {# V2 cards 3.10: home (breadcrumb / export link target). Automatic unless overridden; not a thing to curate. #}
+    <div id="home-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:12px">
+      <label for="home-select" style="color:var(--text-muted)">Home:</label>
+      <select id="home-select" class="input" style="font-size:12px;max-width:260px">
+        <option value="">Automatic{% if card_home.title %} ({{ card_home.title }}){% endif %}</option>
+        <optgroup label="Cards">{% for o in home_card_options %}<option value="{{ o.value }}" {% if card_home_value == o.value %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</optgroup>
+        <optgroup label="Hobbies">{% for o in home_hobby_options %}<option value="{{ o.value }}" {% if card_home_value == o.value %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</optgroup>
+      </select>
+      <span style="color:var(--text-muted)">{% if card_home.type %}currently: {{ card_home.title }} ({{ card_home.source }}){% else %}currently: the home page{% endif %}</span>
+      <button type="button" id="unnest-btn" class="btn" style="font-size:12px;{% if not project.parent_id %}display:none{% endif %}" title="Take this card out of its parent">Unnest</button>
+      <span id="home-msg" style="color:#6E6B57"></span>
+    </div>
     {# V2 cards 3.6: family / collection membership. A family or collection card
        lists its MEMBERS (and can take more); any other card shows the families it
        is IN (a card can be in several). Membership is not nesting: no file moves. #}
@@ -926,6 +938,33 @@ stopReasonSelect.addEventListener('change', () => {
   kindSelect.addEventListener('change', () => {
     const applies = ['thing', 'project', 'collection'].includes(kindSelect.value);
     document.getElementById('whereabouts-group').style.display = applies ? 'inline-flex' : 'none';
+  });
+})();
+
+// V2 cards 3.10 / 3.7: home override and unnest.
+(function () {
+  const sel = document.getElementById('home-select');
+  const msg = document.getElementById('home-msg');
+  const unnest = document.getElementById('unnest-btn');
+  if (!sel) return;
+  let saved = sel.value;
+  function say(t, bad) { msg.textContent = t; msg.style.color = bad ? '#C0392B' : '#6E6B57'; }
+  async function post(path, fields) {
+    const res = await fetch(`/api/projects/${projectId}/${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields).toString(),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body.error && body.error.message) || body.detail || `Couldn't save (${res.status})`);
+    return body;
+  }
+  sel.addEventListener('change', async () => {
+    try { await post('home', { target: sel.value }); saved = sel.value; say('Saved.'); }
+    catch (e) { sel.value = saved; say(e.message, true); }
+  });
+  if (unnest) unnest.addEventListener('click', async () => {
+    try { await post('unnest', {}); say('Unnested. Reloading...'); location.reload(); }
+    catch (e) { say(e.message, true); }
   });
 })();
 

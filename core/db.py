@@ -4,8 +4,10 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 # timeline is pure (no DB access — see its module docstring), so this
@@ -347,6 +349,13 @@ def list_clients():
 
 
 def get_conn():
+    # While this thread is inside `transaction()` (V2 cards piece 6) every helper that
+    # asks for a connection gets the shared transaction connection instead, so a
+    # composite card operation (split, merge, bulk, undo) is one atomic unit and can be
+    # dry-run by rolling the whole thing back.
+    shared = getattr(_ambient, "conn", None)
+    if shared is not None:
+        return shared
     # timeout=30: wait up to 30 seconds if DB is locked by another writer (default 5s).
     # check_same_thread=False: safe here since we create a fresh connection per call.
     conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
@@ -354,6 +363,114 @@ def get_conn():
     # Enable WAL (Write-Ahead Logging) for better concurrency.
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
+
+
+# --- Ambient transactions (V2 cards piece 6) ---------------------------------------
+# `with transaction() as tx:` opens ONE write transaction on this thread. Every
+# db helper that calls get_conn() inside the block shares it: commit()/rollback()/
+# close() on the shared handle are no-ops and `BEGIN` is swallowed, so existing
+# helpers keep working unchanged but their writes land in (and read back from) the
+# one transaction. Leaving the block commits; an exception, or dry_run=True, rolls
+# the whole thing back. Blocks nest via SAVEPOINTs (tx.savepoint() for per-item
+# rollback in a bulk call). Thread-local: other threads are unaffected (they wait
+# on SQLite's write lock for the short time the transaction is open).
+_ambient = threading.local()
+
+
+class _SharedConn:
+    """Stands in for a sqlite3 connection inside transaction(). Delegates everything
+    except the transaction-control calls, which the transaction() block owns."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, *args):
+        if sql.lstrip().upper().startswith(("BEGIN", "COMMIT", "ROLLBACK", "END")):
+            return self._conn.execute("SELECT 1")
+        return self._conn.execute(sql, *args)
+
+    def executemany(self, sql, seq):
+        return self._conn.executemany(sql, seq)
+
+    def cursor(self):
+        return self._conn.cursor()
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+    def executescript(self, *_a, **_k):
+        raise RuntimeError("executescript would commit the surrounding transaction")
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class _Tx:
+    """Handle yielded by transaction(); see savepoint()."""
+
+    def __init__(self, conn):
+        self.conn = conn
+        self._n = 0
+
+    @contextmanager
+    def savepoint(self):
+        """Nested unit: kept on normal exit, rolled back (and the exception re-raised)
+        on error. Use `try/except` around the `with` to carry on past a failed item."""
+        self._n += 1
+        name = f"sp_{self._n}"
+        self.conn.execute(f"SAVEPOINT {name}")
+        try:
+            yield
+        except BaseException:
+            self.conn.execute(f"ROLLBACK TO {name}")
+            self.conn.execute(f"RELEASE {name}")
+            raise
+        else:
+            self.conn.execute(f"RELEASE {name}")
+
+
+@contextmanager
+def transaction(dry_run=False):
+    """See the block comment above. dry_run=True rolls back on exit instead of committing.
+    Re-entrant: a nested block runs inside a savepoint of the outer one."""
+    outer = getattr(_ambient, "tx", None)
+    if outer is not None:
+        try:
+            with outer.savepoint():
+                yield outer
+                if dry_run:
+                    raise _DryRunRollback()
+        except _DryRunRollback:
+            pass
+        return
+    real = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False, isolation_level=None)
+    real.row_factory = sqlite3.Row
+    real.execute("PRAGMA journal_mode=WAL")
+    real.execute("BEGIN IMMEDIATE")
+    tx = _Tx(_SharedConn(real))
+    _ambient.conn, _ambient.tx = tx.conn, tx
+    try:
+        yield tx
+    except BaseException:
+        _ambient.conn = _ambient.tx = None
+        real.execute("ROLLBACK")
+        real.close()
+        raise
+    _ambient.conn = _ambient.tx = None
+    try:
+        real.execute("ROLLBACK" if dry_run else "COMMIT")
+    finally:
+        real.close()
+
+
+class _DryRunRollback(Exception):
+    """Internal: unwinds a nested dry-run block's savepoint."""
 
 
 # --- #388: processing-drawer status source -------------------------------
@@ -550,6 +667,11 @@ def init_db():
             ("provenance_credit", "TEXT"),
             ("highlight", "INTEGER NOT NULL DEFAULT 0"),
         ):
+            if column not in existing_project_columns:
+                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+        # V2 cards piece 6 (3.10): manual home override for the breadcrumb / export link.
+        # NULL = automatic (parent, then first family, then first hobby). Not curated.
+        for column, ddl_type in (("home_kind", "TEXT"), ("home_ref", "INTEGER")):
             if column not in existing_project_columns:
                 conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
         # Change log: audit_log grows nullable columns so core operations can record
@@ -1874,7 +1996,7 @@ def list_recent_posts(limit=10):
 # member posts, rather than being derived from tag membership.
 
 def create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None, with_writeup=True,
-                   kind=None, stage=None, stop_reason=None, actor="owner-ui"):
+                   kind=None, stage=None, stop_reason=None, actor="owner-ui", batch_id=None):
     """Auto-generates a unique slug from title, same dedup-with-numeric-
     suffix pattern as get_or_create_tag.
 
@@ -1892,6 +2014,7 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
     rule violation raises card_rules.CardError. The legacy `status` column keeps
     its default and is otherwise frozen (the static export still reads it)."""
     from . import card_rules, changes
+    batch_id = batch_id or changes.new_batch_id()
     kind = card_rules.validate_kind(kind or card_rules.DEFAULT_KIND)
     status_triple = card_rules.validate_status(kind, stage or card_rules.DEFAULT_STAGE, stop_reason)
     if parent_id is not None:
@@ -1944,7 +2067,7 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
             conn, "create_card", actor,
             [{"table": "projects", "key": {"id": project_id}, "before": None,
               "after": {"slug": slug, "title": title, "kind": kind, **status_triple, "parent_id": parent_id}}],
-            batch_id=changes.new_batch_id(), affected_slugs=[slug],
+            batch_id=batch_id, affected_slugs=[slug],
         )
         conn.commit()
     finally:
@@ -1956,17 +2079,18 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
     # writeup used to live only in web/app.py's _create_writeup_for_project.)
     # with_writeup=False is the opt-out for a caller that deliberately wants none.
     if with_writeup:
-        project["writeup_slug"] = _make_project_writeup(project)
+        project["writeup_slug"] = _make_project_writeup(project, actor=actor, batch_id=batch_id)
     return project
 
 
-def _make_project_writeup(project):
+def _make_project_writeup(project, actor="owner-ui", batch_id=None):
     """Create the blank document-type write-up for a project and wire it up:
     a capture_event with an empty type_metadata.body, added to the project's
     items, tagged with the project's linked tag (so it's reachable via tag
     browsing, #219), and set as the project's writeup_slug. Returns the slug."""
     from . import storage
     writeup_slug = storage.make_slug()
+    before_card = get_project(project["id"]) or {}
     insert_content(
         slug=writeup_slug,
         uploaded_by=SOURCE_AUTHORED,
@@ -1978,6 +2102,27 @@ def _make_project_writeup(project):
     if project.get("tag_id"):
         attach_tags(writeup_slug, [project["tag_id"]])
     update_project(project["id"], writeup_slug=writeup_slug)
+    if batch_id:
+        # Image the write-up's three rows (V2 cards 3.13) so undoing the card's creation
+        # (or a split part) takes its auto-made blank write-up with it.
+        conn = get_conn()
+        try:
+            after_card = conn.execute("SELECT writeup_slug, updated_at FROM projects WHERE id = ?",
+                                      (project["id"],)).fetchone()
+            muts = [
+                {"table": "capture_events", "key": {"slug": writeup_slug}, "before": None,
+                 "after": image_get(conn, "capture_events", {"slug": writeup_slug})},
+                {"table": "project_items", "key": {"project_id": project["id"], "post_slug": writeup_slug},
+                 "before": None,
+                 "after": image_get(conn, "project_items", {"project_id": project["id"], "post_slug": writeup_slug})},
+                {"table": "projects", "key": {"id": project["id"]},
+                 "before": {"writeup_slug": before_card.get("writeup_slug"), "updated_at": before_card.get("updated_at")},
+                 "after": {"writeup_slug": after_card["writeup_slug"], "updated_at": after_card["updated_at"]}},
+            ]
+            insert_change_log(conn, "create_writeup", actor, muts, batch_id=batch_id, affected_slugs=[project["slug"]])
+            conn.commit()
+        finally:
+            conn.close()
     return writeup_slug
 
 
@@ -2514,6 +2659,347 @@ def list_change_log(card_slug=None, batch_id=None, limit=50):
         conn.close()
 
 
+# --- Row images, undo, and card-operation write helpers (V2 cards piece 6, 3.13) ---
+# Every composite card operation records `row images` ({table, key, before, after})
+# so `undo` can invert them generically. The tables below are the ones an image may
+# name; `rowid` rides along for tables without an INTEGER PRIMARY KEY so undoing a
+# delete restores the row in its original position (membership order is rowid order).
+
+IMAGE_TABLE_KEYS = {
+    "projects": ("id",),
+    "project_items": ("project_id", "post_slug"),
+    "project_hobbies": ("project_id", "hobby_tag_id"),
+    "family_members": ("family_id", "member_id"),
+    "project_relations": ("slug_a", "slug_b", "type"),
+    "blog_entry_projects": ("entry_id", "project_id"),
+    "pending_decisions": ("id",),
+    "blog_tags": ("id",),
+    "capture_events": ("slug",),
+    "post_tags": ("post_slug", "tag_id"),
+}
+_IMAGE_ROWID_TABLES = ("project_items", "project_hobbies", "family_members", "project_relations",
+                       "blog_entry_projects", "post_tags")
+
+
+class UndoConflict(Exception):
+    """A row no longer matches the state the change log recorded (someone changed it)."""
+
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.details = details or {}
+
+
+def _image_columns(conn, table):
+    """Non-BLOB columns of `table` (embeddings are never imaged)."""
+    return [r["name"] for r in conn.execute(f"PRAGMA table_info({table})") if (r["type"] or "").upper() != "BLOB"]
+
+
+def _key_where(table, key):
+    cols = IMAGE_TABLE_KEYS[table]
+    return " AND ".join(f"{c} = ?" for c in cols), [key[c] for c in cols]
+
+
+def image_get(conn, table, key):
+    """The current full row image for `key` (None when absent)."""
+    where, args = _key_where(table, key)
+    cols = _image_columns(conn, table)
+    select = ", ".join(cols)
+    if table in _IMAGE_ROWID_TABLES:
+        select = "rowid AS rowid, " + select
+    row = conn.execute(f"SELECT {select} FROM {table} WHERE {where}", args).fetchone()
+    return dict(row) if row else None
+
+
+def _image_insert_row(conn, table, key, values):
+    row = {**key, **values}
+    cols = list(row)
+    conn.execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
+                 [row[c] for c in cols])
+
+
+def _image_update_row(conn, table, key, fields):
+    fields = {k: v for k, v in fields.items() if k != "rowid" and k not in IMAGE_TABLE_KEYS[table]}
+    if not fields:
+        return
+    where, args = _key_where(table, key)
+    conn.execute(f"UPDATE {table} SET {', '.join(f'{c} = ?' for c in fields)} WHERE {where}",
+                 list(fields.values()) + args)
+
+
+def _image_delete_row(conn, table, key):
+    where, args = _key_where(table, key)
+    conn.execute(f"DELETE FROM {table} WHERE {where}", args)
+
+
+class ImageLog:
+    """Writes rows through a connection and collects their row images; flush() records
+    them as ONE change-log row. Use inside `transaction()` (or any connection) so the
+    writes and their log row commit together."""
+
+    def __init__(self, op, actor, batch_id, affected_slugs=None, conn=None):
+        self.conn = conn or get_conn()
+        self.op, self.actor, self.batch_id = op, actor, batch_id
+        self.slugs = list(affected_slugs or [])
+        self.muts = []
+
+    def get(self, table, key):
+        return image_get(self.conn, table, key)
+
+    def insert(self, table, key, values):
+        _image_insert_row(self.conn, table, key, values)
+        self.muts.append({"table": table, "key": dict(key), "before": None, "after": image_get(self.conn, table, key)})
+
+    def update(self, table, key, fields):
+        before = image_get(self.conn, table, key)
+        if before is None:
+            return False
+        if all(before.get(c) == v for c, v in fields.items()):
+            return False
+        _image_update_row(self.conn, table, key, fields)
+        after = image_get(self.conn, table, key)
+        cols = [c for c in fields if before.get(c) != after.get(c)]
+        self.muts.append({"table": table, "key": dict(key),
+                          "before": {c: before.get(c) for c in cols}, "after": {c: after.get(c) for c in cols}})
+        return True
+
+    def delete(self, table, key):
+        before = image_get(self.conn, table, key)
+        if before is None:
+            return False
+        _image_delete_row(self.conn, table, key)
+        self.muts.append({"table": table, "key": dict(key), "before": before, "after": None})
+        return True
+
+    def flush(self):
+        if not self.muts:
+            return None
+        row_id = insert_change_log(self.conn, self.op, self.actor, self.muts, batch_id=self.batch_id,
+                                   affected_slugs=sorted(set(self.slugs)))
+        self.muts = []
+        return row_id
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        # Inside transaction() these three calls are no-ops on the shared connection; on a
+        # private connection they commit (or roll back) and release it.
+        try:
+            if exc_type is None:
+                self.flush()
+                self.conn.commit()
+            else:
+                self.conn.rollback()
+        finally:
+            self.conn.close()
+        return False
+
+
+def invert_image(conn, mutation, force=False):
+    """Applies the inverse of one row image (after -> before). Unless `force`, raises
+    UndoConflict when the row no longer equals the recorded `after`. Returns the
+    mutation that was actually applied ({table, key, before: <what was there>,
+    after: <what is there now>}) so the undo can itself be logged and undone."""
+    table, key = mutation["table"], mutation["key"]
+    if table not in IMAGE_TABLE_KEYS:
+        raise UndoConflict(f"Can't undo a change to {table!r}.", {"table": table})
+    expected, target = mutation.get("after"), mutation.get("before")
+    current = image_get(conn, table, key)
+    if not force:
+        if expected is None and current is not None:
+            raise UndoConflict(f"A {table} row {key} exists now but didn't when the change was made.",
+                               {"table": table, "key": key, "found": "row exists", "expected": "no row"})
+        if expected is not None:
+            if current is None:
+                raise UndoConflict(f"The {table} row {key} was deleted since.",
+                                   {"table": table, "key": key, "found": "no row", "expected": "row"})
+            # updated_at last: it moves on every edit, so a real field difference is the better explanation.
+            for col, want in sorted(expected.items(), key=lambda kv: kv[0] == "updated_at"):
+                if col == "rowid":
+                    continue
+                if current.get(col) != want:
+                    raise UndoConflict(
+                        f"{table} {key} changed since: {col} is {current.get(col)!r}, was {want!r} when logged.",
+                        {"table": table, "key": key, "field": col, "found": current.get(col), "expected": want})
+    if target is None:
+        if current is not None:
+            if table == "capture_events":
+                conn.execute("DELETE FROM post_tags WHERE post_slug = ?", (key["slug"],))
+            _image_delete_row(conn, table, key)
+        return {"table": table, "key": key, "before": current, "after": None}
+    if current is None:
+        _image_insert_row(conn, table, key, dict(target))
+    else:
+        _image_update_row(conn, table, key, target)
+    return {"table": table, "key": key, "before": current, "after": image_get(conn, table, key)}
+
+
+def get_change_rows(audit_id=None, batch_id=None):
+    """Change-log rows (op set) by audit id or batch id, oldest first, mutations parsed."""
+    conn = get_conn()
+    try:
+        if audit_id is not None:
+            rows = conn.execute("SELECT * FROM audit_log WHERE op IS NOT NULL AND id = ?", (audit_id,)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM audit_log WHERE op IS NOT NULL AND batch_id = ? ORDER BY id",
+                                (batch_id,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["mutations"] = json.loads(d["mutations"]) if d.get("mutations") else []
+            d["affected_slugs"] = json.loads(d["affected_slugs"]) if d.get("affected_slugs") else []
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
+def mark_change_rows_undone(row_ids, undone_by):
+    """Stamps audit rows as reversed by `undone_by` (None clears the stamp)."""
+    conn = get_conn()
+    try:
+        conn.executemany("UPDATE audit_log SET undone_by = ? WHERE id = ?", [(undone_by, i) for i in row_ids])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_table_rows(tables):
+    """{table: row_count}: used to prove a dry run wrote nothing."""
+    conn = get_conn()
+    try:
+        return {t: conn.execute(f"SELECT COUNT(*) AS n FROM {t}").fetchone()["n"] for t in tables}
+    finally:
+        conn.close()
+
+
+# Readers the reshaping operations (split / merge / move) plan from. Plain SELECTs.
+
+def list_project_item_rows(project_id):
+    """Raw project_items rows incl. rowid, in sort_order then rowid order."""
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT rowid AS rowid, project_id, post_slug, sort_order FROM project_items WHERE project_id = ? "
+            "ORDER BY sort_order, rowid", (project_id,))]
+    finally:
+        conn.close()
+
+
+def list_hobby_rows(project_id):
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT rowid AS rowid, project_id, hobby_tag_id FROM project_hobbies WHERE project_id = ? ORDER BY rowid",
+            (project_id,))]
+    finally:
+        conn.close()
+
+
+def list_family_rows(card_id, as_member=True):
+    """family_members rows where `card_id` is the member (as_member) or the family."""
+    conn = get_conn()
+    try:
+        col = "member_id" if as_member else "family_id"
+        return [dict(r) for r in conn.execute(
+            f"SELECT rowid AS rowid, family_id, member_id, sort_order, created_at FROM family_members "
+            f"WHERE {col} = ? ORDER BY created_at, rowid", (card_id,))]
+    finally:
+        conn.close()
+
+
+def list_entry_project_rows(project_id):
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT rowid AS rowid, entry_id, project_id, sort_order, note FROM blog_entry_projects "
+            "WHERE project_id = ?", (project_id,))]
+    finally:
+        conn.close()
+
+
+def list_projects_referencing(card_id):
+    """Cards that point at `card_id` through cover_project_id or a card home override."""
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM projects WHERE cover_project_id = ? OR (home_kind = 'card' AND home_ref = ?)",
+            (card_id, card_id))]
+    finally:
+        conn.close()
+
+
+def list_post_tag_rows(post_slug):
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT rowid AS rowid, post_slug, tag_id FROM post_tags WHERE post_slug = ?", (post_slug,))]
+    finally:
+        conn.close()
+
+
+def write_card_row(card_id, fields, op, actor, batch_id=None):
+    """Non-card-column fields on a projects row (description, cover_slug, ...), imaged
+    with updated_at. Returns True when something changed."""
+    with ImageLog(op, actor, batch_id) as log:
+        row = log.get("projects", {"id": card_id})
+        if row is None:
+            return False
+        log.slugs.append(row["slug"])
+        return log.update("projects", {"id": card_id}, {**fields, "updated_at": time.time()})
+
+
+def insert_card_hobby(project_id, tag_id, op, actor, batch_id=None, affected_slugs=None):
+    """Adds a hobby membership (idempotent) and images it. True if a row was added."""
+    with ImageLog(op, actor, batch_id, affected_slugs) as log:
+        if log.get("project_hobbies", {"project_id": project_id, "hobby_tag_id": tag_id}) is not None:
+            return False
+        log.insert("project_hobbies", {"project_id": project_id, "hobby_tag_id": tag_id}, {})
+        return True
+
+
+def delete_card_hobby(project_id, tag_id, op, actor, batch_id=None, affected_slugs=None):
+    with ImageLog(op, actor, batch_id, affected_slugs) as log:
+        return log.delete("project_hobbies", {"project_id": project_id, "hobby_tag_id": tag_id})
+
+
+def write_card_items(project_id, add_slugs, remove_slugs, op, actor, batch_id=None, affected_slugs=None):
+    """Adds and/or removes files on a card (project_items), imaging every row.
+    Added files go at the end; already-present ones are skipped. Returns
+    (added, removed) slug lists."""
+    removed, added = [], []
+    with ImageLog(op, actor, batch_id, affected_slugs) as log:
+        for slug in remove_slugs:
+            if log.delete("project_items", {"project_id": project_id, "post_slug": slug}):
+                removed.append(slug)
+        if add_slugs:
+            nxt = log.conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM project_items WHERE project_id = ?",
+                (project_id,)).fetchone()["n"]
+            for slug in add_slugs:
+                if log.get("project_items", {"project_id": project_id, "post_slug": slug}) is not None:
+                    continue
+                log.insert("project_items", {"project_id": project_id, "post_slug": slug}, {"sort_order": nxt})
+                nxt += 1
+                added.append(slug)
+    return added, removed
+
+
+def write_images(op, actor, batch_id, affected_slugs, fn):
+    """Runs `fn(log)` with an ImageLog (log.insert / update / delete / get); the images are
+    recorded as one change-log row. For merge's many small writes."""
+    with ImageLog(op, actor, batch_id, affected_slugs) as log:
+        return fn(log)
+
+
+def blank_document_body(slug):
+    """True when `slug` is a document whose body is empty/whitespace (a blank write-up)."""
+    row = get_by_slug(slug)
+    if row is None or row.get("media_type") != "document":
+        return False
+    return not ((row.get("type_metadata") or {}).get("body") or "").strip()
+
+
 def _table_exists(conn, name):
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?", (name,)).fetchone() is not None
 
@@ -2653,7 +3139,8 @@ def remove_family_member(family_id, member_id, op, actor, batch_id=None, affecte
 # Columns a card operation may write on `projects` (anything else is refused, so
 # a typo in core/cards.py can't write an arbitrary column).
 CARD_WRITABLE_COLUMNS = ("kind", "activity", "stage", "stop_reason", "parent_id",
-                         "whereabouts", "whereabouts_note", "provenance", "provenance_credit", "highlight")
+                         "whereabouts", "whereabouts_note", "provenance", "provenance_credit", "highlight",
+                         "home_kind", "home_ref")
 
 
 def update_card_columns(card_id, fields, op, actor, batch_id=None, bump_updated=True):
@@ -2677,13 +3164,17 @@ def update_card_columns(card_id, fields, op, actor, batch_id=None, bump_updated=
             return before, dict(fields)
         sets = ", ".join(f"{c} = ?" for c in fields)
         args = list(fields.values())
+        img_before, img_after = dict(before), dict(fields)
         if bump_updated:
+            now = time.time()
             sets += ", updated_at = ?"
-            args.append(time.time())
+            args.append(now)
+            # updated_at rides in the row image so undo can restore it exactly.
+            img_before["updated_at"], img_after["updated_at"] = row["updated_at"], now
         conn.execute(f"UPDATE projects SET {sets} WHERE id = ?", args + [card_id])
         insert_change_log(
             conn, op, actor,
-            [{"table": "projects", "key": {"id": card_id}, "before": before, "after": dict(fields)}],
+            [{"table": "projects", "key": {"id": card_id}, "before": img_before, "after": img_after}],
             batch_id=batch_id, affected_slugs=[row["slug"]],
         )
         conn.commit()
@@ -2838,7 +3329,7 @@ def media_type_counts():
         conn.close()
 
 
-def resolve_pending_decision(decision_id, resolution=None):
+def resolve_pending_decision(decision_id, resolution=None, log=None):
     """Marks a decision resolved, recording what was chosen (any JSON-able
     value — for project_match, the list of project ids applied, possibly
     empty for "none of these") inside payload["resolution"]. Resolved rows
@@ -2851,10 +3342,17 @@ def resolve_pending_decision(decision_id, resolution=None):
             return None
         payload = json.loads(row["payload"]) if row["payload"] else {}
         payload["resolution"] = resolution
-        conn.execute(
-            "UPDATE pending_decisions SET resolved_at = ?, payload = ? WHERE id = ?",
-            (time.time(), json.dumps(payload), decision_id),
-        )
+        now = time.time()
+        if log:
+            # V2 cards 3.13: `log` = {op, actor, batch_id}; the resolution is imaged so it can be undone.
+            il = ImageLog(log["op"], log["actor"], log.get("batch_id"), conn=conn)
+            il.update("pending_decisions", {"id": decision_id}, {"resolved_at": now, "payload": json.dumps(payload)})
+            il.flush()
+        else:
+            conn.execute(
+                "UPDATE pending_decisions SET resolved_at = ?, payload = ? WHERE id = ?",
+                (now, json.dumps(payload), decision_id),
+            )
         conn.commit()
         return get_pending_decision(decision_id)
     finally:

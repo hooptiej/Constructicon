@@ -1418,6 +1418,13 @@ def project_detail_page(request: Request, slug: str):
             "card_whereabouts_options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
             "card_provenance_options": [{"key": k, "label": card_rules.CARD_PROVENANCE_LABELS[k]} for k in card_rules.CARD_PROVENANCE],
             "card_open_decisions": [cards.decision_summary(d) for d in cards.open_card_decisions(project["slug"])],
+            # V2 cards 3.10: resolved home + the choices for the manual override.
+            "card_home": cards.resolve_home(project["id"]),
+            "card_home_value": (f"{project['home_kind']}:{project['home_ref']}" if project.get("home_kind") else ""),
+            "home_card_options": [{"value": f"card:{c['id']}", "label": c["title"]}
+                                  for c in sorted(db.list_projects(), key=lambda c: c["title"].lower())
+                                  if c["id"] != project["id"]],
+            "home_hobby_options": [{"value": f"hobby:{h['id']}", "label": h["name"]} for h in db.list_hobbies()],
             # V2 cards 3.6: families this card is in / members of this family or collection.
             "family_info": cards.family_fields(project),
             "project_score": project_score,
@@ -2688,6 +2695,42 @@ def api_set_card_highlight(project_id: str, on: str = Form("0")):
     """V2 cards 3.12: the card's own highlight flag (independent of file highlights)."""
     result = cards.set_highlight(project_id, on.strip().lower() in ("1", "true", "on", "yes"), actor="owner-ui")
     return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
+
+
+@app.post("/api/projects/{project_id}/home")
+def api_set_card_home(project_id: str, target: str = Form("")):
+    """V2 cards 3.10: override the card's home ('card:<slug>' / 'hobby:<slug>'); blank
+    clears the override (back to automatic: parent, first family, first hobby). 422 bad_home."""
+    result = cards.set_home(project_id, target.strip() or None, actor="owner-ui")
+    return JSONResponse({**result.to_dict(), "home": cards.resolve_home(project_id)})
+
+
+@app.post("/api/projects/{project_id}/nest")
+def api_nest_card(project_id: str, parent: str = Form(...), replace: str = Form("0")):
+    """V2 cards 3.7: make this card part of `parent` (id or slug). CardErrors: 409 nest_*."""
+    result = cards.nest(project_id, parent, replace=replace.strip().lower() in ("1", "true", "on", "yes"),
+                        actor="owner-ui")
+    return JSONResponse(result.to_dict())
+
+
+@app.post("/api/projects/{project_id}/unnest")
+def api_unnest_card(project_id: str):
+    """V2 cards 3.7: take this card out of its parent (no-op if it has none)."""
+    return JSONResponse(cards.unnest(project_id, actor="owner-ui").to_dict())
+
+
+@app.get("/api/projects/{project_id}/explain")
+def api_explain_card(project_id: str):
+    """V2 cards 6: everything about a card in one JSON object (same as constructicon_explain_card)."""
+    return JSONResponse(cards.explain_card(project_id))
+
+
+@app.post("/api/changes/{batch_id}/undo")
+def api_undo_change(batch_id: str, force: str = Form("0")):
+    """V2 cards 3.13: undo a change-log row (numeric id) or batch. 409 undo_conflict when a
+    row changed since; 422 undo_refused for migration rows / already-undone entries."""
+    result = cards.undo(batch_id, force=force.strip().lower() in ("1", "true", "on", "yes"), actor="owner-ui")
+    return JSONResponse(result.to_dict())
 
 
 @app.post("/api/families/{family_id}/members/add")

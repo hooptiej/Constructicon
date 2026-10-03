@@ -775,12 +775,15 @@ def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) 
 
 
 @mcp.tool()
-def constructicon_set_project_writeup(project_id: str | int, slug: str) -> dict | None:
+def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_words: bool | None = None) -> dict | None:
     """Set a project's write-up document to a given object.
 
     The object must exist and be an item whose type declares writeup_body_key
     (i.e., can serve as a write-up). The item is also added to the project's
     items if not already present.
+    owner_words (optional): true marks the write-up as holding the OWNER'S OWN wording (the
+    oral-history flow), which earns the card its "owner words" pip (V2 cards 3.11); false
+    clears the mark; omit to leave it alone.
     Returns the updated project, or None if not found.
     """
     project = db.get_project(project_id)
@@ -795,6 +798,8 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str) -> dict 
 
     # Add the writeup document to the project items if not already there
     db.add_item_to_project(project["id"], slug)
+    if owner_words is not None:
+        db.update_content_metadata(slug, type_metadata={"owner_words": bool(owner_words)})
 
     # Update the project's writeup_slug
     updated = db.update_project(project["id"], writeup_slug=slug)
@@ -971,7 +976,7 @@ def constructicon_add_project_to_hobby(project_slug: str, hobby_slug: str) -> di
     if hobby is None:
         raise ValueError("hobby not found")
 
-    db.add_project_to_hobby(project["id"], hobby["id"])
+    cards.add_to_hobby(project["id"], hobby["id"], actor="mcp")  # logged (V2 cards 3.13)
 
     # Return the updated hobby
     updated_hobby = db.get_hobby(hobby["id"])
@@ -1575,7 +1580,8 @@ def constructicon_remove_from_family(family: str | int, member: str | int, dry_r
 # --- Typed links (V2 cards 3.8) ---
 
 @mcp.tool()
-def constructicon_link(a: str | int, b: str | int, type: str, note: str = "", dry_run: bool = False) -> dict:
+def constructicon_link(a: str | int, b: str | int, type: str, note: str = "", dry_run: bool = False,
+                       batch_id: str | None = None) -> dict:
     """Link two cards: "a <type> b". V2 cards 3.8.
 
     type: built_for (a was built for b) | applies_to (a is applied to b) | used_in
@@ -1589,10 +1595,12 @@ def constructicon_link(a: str | int, b: str | int, type: str, note: str = "", dr
     bad_link (unknown type, self-link, a family/collection as the source of
     built_for/applies_to/used_in), link_conflict (already linked, or related over a
     typed pair), not_found (no such card). dry_run=true previews.
+    batch_id (optional): join an earlier call's batch so one constructicon_undo reverses
+    them together (e.g. the split_card, link, add_to_hobby of a reorganization).
     Returns {ok, dry_run, changes, warnings, batch_id}.
     """
     try:
-        return cards.link(a, b, type, note, dry_run=dry_run, actor="mcp").to_dict()
+        return cards.link(a, b, type, note, dry_run=dry_run, actor="mcp", batch_id=batch_id).to_dict()
     except card_rules.CardError as e:
         return _card_error_result(e)
 
@@ -1653,7 +1661,8 @@ def constructicon_list_links(card: str | int) -> list[dict] | dict:
 
 @mcp.tool()
 def constructicon_list_needs_decision(kind: str | None = None, need: str | None = None,
-                                      hobby: str | None = None, limit: int | None = None) -> list[dict]:
+                                      hobby: str | None = None, limit: int | None = None,
+                                      card: str | int | None = None) -> list[dict]:
     """List cards waiting on an owner decision, with a suggested answer for each.
 
     Two sources. STORED questions queued by the v1 -> v2 migration:
@@ -1673,14 +1682,230 @@ def constructicon_list_needs_decision(kind: str | None = None, need: str | None 
     agree, never applied; fix with constructicon_set_card_provenance),
     missing_provenance_credit (a found/collected card with no credit) and
     missing_whereabouts (a Thing with none; fix with constructicon_set_whereabouts).
+    Also computed: need = status_conflict (active/inactive disagrees with the parent card, or Done
+    with nested work still in progress) and blank_writeup_with_files (the auto-made write-up is
+    still empty although the card has files). To clear many stored questions at once, see
+    constructicon_resolve_decisions (accept_suggested + dry-run).
 
-    Filters: kind (the card's kind, or 'hobby' for hobby needs only; any other kind
+    Filters: card (one card, slug or id), kind (the card's kind, or 'hobby' for hobby needs only; any other kind
     leaves hobby needs out), need, hobby (slug), limit.
     Each row: {need, card_slug, title, detail, suggested, suggested_reason,
     confidence, decision_id, options: [{key, label}]}. `suggested` is only a
     suggestion; nothing is applied until the decision is resolved.
     """
-    return cards.list_needs_decision(kind=kind, need=need, hobby=hobby, limit=limit)
+    return cards.list_needs_decision(kind=kind, need=need, hobby=hobby, limit=limit, card=card)
+
+
+# --- V2 cards piece 6: the reorganizing toolkit (spec 7.1 / 7.3) -------------------
+# Thin wrappers over core/cards.py; no rule lives here. Single-card tools apply by
+# default; bulk tools (bulk_edit, resolve_decisions, retype_links) are DRY-RUN by default.
+
+@mcp.tool()
+def constructicon_split_card(source: str | int, parts: list[dict], keep_in_source: bool = False,
+                             dry_run: bool = False, batch_id: str | None = None) -> dict:
+    """Carve files (and a description) out of one card into new cards. V2 cards 6 / 7.4.
+
+    `parts` is a list; each part is {title, kind='project', relation='sibling'|'child',
+    stage, stop_reason, provenance, provenance_credit, whereabouts, whereabouts_note,
+    description, move_description, file_slugs: [file slugs], link_to_source: {type, note?}
+    or null, hobbies: 'inherit'|[hobby slugs], families: 'inherit'|[family slugs], highlight}.
+    A `child` is nested under the source (nest rules apply); a `sibling` has no parent and,
+    by default, gets the source's hobbies and family memberships copied (a child gets none
+    unless you say so). Each part gets its own kind, provenance, stage and whereabouts, and
+    is a full card with the usual blank write-up. Files in file_slugs are MOVED out of the
+    source (one file may be named by several parts; it lands in each) unless
+    keep_in_source=true (then copied); the source's write-up can't be split out.
+
+    All in one transaction under one batch_id: any rule violation writes nothing. Pass that
+    batch_id to later calls (constructicon_link, constructicon_add_to_hobby) to keep the
+    whole reorganization in one batch, and constructicon_undo(batch_id) reverses it.
+    dry_run=true previews exactly what would happen. Returns {ok, dry_run, changes, warnings,
+    batch_id, created: [{id, slug, title, kind, relation, files}]}."""
+    try:
+        return cards.split_card(source, parts, keep_in_source=keep_in_source, dry_run=dry_run, actor="mcp",
+                                batch_id=batch_id).to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_merge_cards(keep: str | int, absorb: list[str | int], dry_run: bool = False,
+                              batch_id: str | None = None) -> dict:
+    """Fold one or more cards into `keep` (the reverse of split). V2 cards 6.
+
+    Files are unioned (deduped); hobbies and family memberships unioned; the absorbed
+    cards' children are re-parented to `keep`; links are re-pointed (self-links and duplicates
+    dropped; a typed link beats a related one on the same pair); blog-entry attachments
+    re-pointed. keep's cover and write-up win; an absorbed card's blank write-up goes with it
+    and a real one stays as an ordinary file. Open questions about absorbed cards are resolved
+    as stale. The absorbed card rows are deleted but row-imaged: constructicon_undo(batch_id)
+    brings them back with the same id and files. Refused (nothing written) with nest_cycle, or
+    bad_merge for a family/collection merged with a non-group card. dry_run=true previews.
+    Returns {ok, dry_run, changes, warnings, batch_id, keep, absorbed}."""
+    try:
+        return cards.merge_cards(keep, absorb, dry_run=dry_run, actor="mcp", batch_id=batch_id).to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_move_files(slugs: list[str], from_card: str | int, to_card: str | int, dry_run: bool = False,
+                             batch_id: str | None = None) -> dict:
+    """Move files (by slug) from one card to another: they leave from_card and join to_card.
+    A card's own write-up can't be moved. Refused with bad_files if a file isn't in from_card.
+    dry_run=true previews. Returns {ok, dry_run, changes, warnings, batch_id}."""
+    try:
+        return cards.move_files(slugs, from_card, to_card, dry_run=dry_run, actor="mcp", batch_id=batch_id).to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_copy_files(slugs: list[str], from_card: str | int, to_card: str | int, dry_run: bool = False,
+                             batch_id: str | None = None) -> dict:
+    """Add files from one card to another WITHOUT removing them (files are many-to-many, so
+    a photo can live in a project and in a Thing). Same rules as constructicon_move_files."""
+    try:
+        return cards.copy_files(slugs, from_card, to_card, dry_run=dry_run, actor="mcp", batch_id=batch_id).to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_add_to_hobby(card: str | int, hobby: str | int, dry_run: bool = False,
+                               batch_id: str | None = None) -> dict:
+    """Put a card in a hobby (many allowed; adding twice is a no-op). Logged and undoable.
+    (constructicon_add_project_to_hobby is the older name for the same thing.)
+    Returns {ok, dry_run, changes, warnings, batch_id}."""
+    try:
+        return cards.add_to_hobby(card, hobby, dry_run=dry_run, actor="mcp", batch_id=batch_id).to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_remove_from_hobby(card: str | int, hobby: str | int, dry_run: bool = False,
+                                    batch_id: str | None = None) -> dict:
+    """Take a card out of a hobby (no-op if it wasn't in it). Logged and undoable."""
+    try:
+        return cards.remove_from_hobby(card, hobby, dry_run=dry_run, actor="mcp", batch_id=batch_id).to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_set_home(card: str | int, target: str | int | None = None, dry_run: bool = False) -> dict:
+    """Override a card's home (the breadcrumb parent / export link target), or clear the override.
+    V2 cards 3.10. The automatic home is: the parent, else the first family the card is in, else
+    its first hobby, else the home page; a manual override beats all of that.
+
+    target: 'card:<slug>', 'hobby:<slug>', or a bare card slug/id (a bare name that is no card
+    is tried as a hobby). Omit/null to CLEAR the override (back to automatic). A card can't be its
+    own home (bad_home). A dangling override (target deleted) silently falls back to automatic and
+    shows up in constructicon_explain_card's warnings. Home is not something to curate: this is for
+    the rare correction. Returns {ok, dry_run, changes, warnings, batch_id}."""
+    try:
+        return cards.set_home(card, target, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_explain_card(card: str | int) -> dict:
+    """Everything about a card in one call: what to read BEFORE proposing a change. Read-only.
+    V2 cards 6.
+
+    Returns identity (id, slug, title, description), kind, activity/stage/stop_reason (+ labels),
+    `provisional` (true while the status is still the migration's guess), whereabouts/provenance
+    (+ notes, credits), highlight, `hobbies` (with group codes and activity), `families`,
+    `members` (for a family/collection), `parent`, `children`, `links` (typed, with direction),
+    `home` (resolved + source: override|parent|family|hobby|none, + dangling_override) and
+    `home_chain` (the breadcrumb), `files` (total, counts per media type, earliest/latest date),
+    `level` (the 0-5 pips: cover, dates, writeup, owner_words, stack, each with a reason),
+    `open_decisions` (stored questions, with suggested answers), `needs` (computed needs for this
+    card), `warnings`, `suggestions` (computed provenance, suggested typed links) and
+    `recent_changes` (the last 5 change-log rows, with batch ids for undo)."""
+    try:
+        return cards.explain_card(card)
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_bulk_edit(op: str, items: list[dict], dry_run: bool = True, partial_ok: bool = False) -> dict:
+    """Run ONE setter over many cards. DRY-RUN BY DEFAULT: pass dry_run=false to write. V2 cards 6.
+
+    op (allow-listed): set_status, set_kind, set_whereabouts, set_card_provenance, set_home,
+    set_card_highlight, add_to_hobby, remove_from_hobby, add_to_family, remove_from_family, nest,
+    unnest, link, unlink, retype_link, set_hobby_activity.
+    items: [{card, args: {...}}] where `card` is the subject and args are that setter's other
+    arguments, e.g. op='set_status' -> {card: 'x', args: {stage: 'done'}}; op='add_to_hobby' ->
+    {card: 'x', args: {hobby: '3d-printing'}}; op='add_to_family' -> {card: <member>, args:
+    {family: <family>}}; op='nest' -> {card: <child>, args: {parent: <parent>}}; op='link' ->
+    {card: a, args: {b, type, note?}}; op='set_hobby_activity' -> {card: <hobby slug>, args:
+    {value: 'inactive'}}. Unknown arguments are refused.
+
+    Items run in order inside one transaction (later ones see earlier ones). Every item is
+    validated and reported with its before/after. All-or-nothing: if ANY item fails nothing is
+    written, unless partial_ok=true, which applies the valid ones and reports the rest. One
+    batch_id: constructicon_undo(batch_id) reverses the lot.
+    Returns {ok, dry_run, op, applied, changes, warnings, batch_id, items: [{card, ok, applied,
+    changes, warnings, error?}]}."""
+    try:
+        return cards.bulk(op, items, dry_run=dry_run, partial_ok=partial_ok, actor="mcp")
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_resolve_decisions(items: list, accept_suggested: bool = False, dry_run: bool = True,
+                                    partial_ok: bool = False) -> dict:
+    """Clear many card questions (card_status / card_built_for / card_kind / card_family_members)
+    at once. DRY-RUN BY DEFAULT: pass dry_run=false to write. V2 cards 7.3.
+
+    items: [{decision_id, choice}] (or {decision_id, choices: [..]} for multi-answer questions);
+    with accept_suggested=true, just a list of decision ids: each is answered with ITS OWN
+    suggested option, and a question with no suggestion is skipped (reported, not an error).
+    Find ids and suggestions with constructicon_list_needs_decision. Each answer runs through the
+    same validators as a manual edit. One transaction, one batch_id (undoable): if a decision can't
+    be applied nothing is written, unless partial_ok=true.
+    Returns {ok, dry_run, batch_id, applied, would_apply, skipped, failed, changes, warnings,
+    items: [{decision_id, card_slug, choice, status: applied|would_apply|skipped|failed|rolled_back,
+    changes, reason?, error?}]}."""
+    try:
+        return cards.resolve_decisions(items, accept_suggested=accept_suggested, dry_run=dry_run,
+                                       partial_ok=partial_ok, actor="mcp")
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_undo(audit_id: str | int, force: bool = False, dry_run: bool = False) -> dict:
+    """Reverse a change-log entry, or a whole batch. V2 cards 3.13.
+
+    audit_id: one change-log row id (from constructicon_list_changes), or a batch_id (every row
+    of that operation or bulk call, reversed newest-first in one transaction). Writes its own
+    log row, so an undo can itself be undone. REFUSES, writing nothing, with
+    {"ok": false, "error": {code}}: undo_conflict (a row it would restore was changed since;
+    the message names the field and values; force=true overrides), undo_refused (a migration row,
+    an entry that was already undone, or one that recorded no row images), not_found.
+    dry_run=true reports what would be reversed. Returns {ok, dry_run, changes, warnings,
+    batch_id, undone: [audit ids], undone_ops}."""
+    try:
+        return cards.undo(audit_id, force=force, dry_run=dry_run, actor="mcp").to_dict()
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_list_changes(card: str | int | None = None, batch_id: str | None = None, limit: int = 50) -> list[dict]:
+    """The change log, newest first: [{id, op, actor, batch_id, timestamp, affected_slugs,
+    undone_by, mutations}]. Every core write is recorded with row images (table, key, before,
+    after). `card` narrows to one card's slug/id; `batch_id` to one operation. Feed an `id` or a
+    `batch_id` to constructicon_undo."""
+    return cards.list_changes(card=card, batch_id=batch_id, limit=limit)
+
+
 
 
 # --- Curator Stage 3a: Nudges ---

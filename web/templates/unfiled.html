@@ -128,13 +128,17 @@
     az: (a, b) => a.display_name.localeCompare(b.display_name),
   };
 
+  // #517: first batch of cards only, more on scroll; keep=true so a re-render after a bulk
+  // action doesn't collapse the list back to the top.
+  const unfiledPager = ItemCards.pager(grid, cardHtml);
+
   function visibleItems() {
     return typeFilter ? items.filter(item => item.media_type === typeFilter) : items;
   }
 
   function render() {
     const visible = visibleItems().slice().sort(SORTERS[sortSelect.value]);
-    grid.innerHTML = visible.map(cardHtml).join('');
+    unfiledPager.set(visible, true);
     emptyState.style.display = visible.length ? 'none' : 'block';
     countLabel.textContent = typeFilter
       ? `${visible.length} of ${items.length} upload${items.length === 1 ? '' : 's'} shown (filtered by type).`

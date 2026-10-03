@@ -1,5 +1,6 @@
 """SQLite index for Constructicon. One row per upload."""
 
+import functools
 import json
 import os
 import re
@@ -454,19 +455,70 @@ def transaction(dry_run=False):
     real.execute("PRAGMA journal_mode=WAL")
     real.execute("BEGIN IMMEDIATE")
     tx = _Tx(_SharedConn(real))
+    prev_conn = getattr(_ambient, "conn", None)  # a read_session() this block sits inside
+    _ambient.memo = None  # writes are coming: a read_session's memo (below) must not outlive them
     _ambient.conn, _ambient.tx = tx.conn, tx
     try:
         yield tx
     except BaseException:
-        _ambient.conn = _ambient.tx = None
+        _ambient.conn, _ambient.tx = prev_conn, None
         real.execute("ROLLBACK")
         real.close()
         raise
-    _ambient.conn = _ambient.tx = None
+    _ambient.conn, _ambient.tx = prev_conn, None
     try:
         real.execute("ROLLBACK" if dry_run else "COMMIT")
     finally:
         real.close()
+
+
+@contextmanager
+def read_session():
+    """(#524) One shared connection for a read-heavy computation. get_conn() opens and closes
+    a fresh connection per call (~0.8 ms each), and a whole Curator queue build makes about
+    2,500 of them: roughly 2 seconds of pure connect/close. Inside this block every helper
+    that calls get_conn() gets the one connection instead. No write lock is taken (unlike
+    transaction()): statements autocommit, so a write made inside still lands, and other
+    writers are never blocked. Re-entrant, and a no-op when this thread is already inside a
+    transaction() or another read_session()."""
+    if getattr(_ambient, "conn", None) is not None:
+        yield
+        return
+    real = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False, isolation_level=None)
+    real.row_factory = sqlite3.Row
+    real.execute("PRAGMA journal_mode=WAL")
+    _ambient.conn = _SharedConn(real)
+    _ambient.memo = {}  # per-session cache for list_project_items (read-only work, so it can't go stale)
+    try:
+        yield
+    finally:
+        _ambient.conn = None
+        _ambient.memo = None
+        real.close()
+
+
+def in_read_session(fn):
+    """Decorator: run `fn` inside read_session()."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with read_session():
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+def change_fingerprint():
+    """(#524) A cheap token that changes whenever ANY process commits to the database: the
+    mtime and size of the main file and its WAL. Used to cache derived data (the Curator
+    queue) for as long as nothing at all has been written, with no list of 'writes that
+    matter' to keep in sync. Returns a tuple, or None if the files can't be read."""
+    out = []
+    for suffix in ("", "-wal"):
+        try:
+            st = os.stat(f"{DB_PATH}{suffix}")
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
 
 
 class _DryRunRollback(Exception):
@@ -1931,6 +1983,26 @@ def list_tags_for_post(post_slug):
         conn.close()
 
 
+def tag_ids_for_posts(post_slugs):
+    """(#524) The set of tag ids attached to any of `post_slugs`, in as few queries as
+    possible (list_tags_for_post once per post was the Curator's biggest N+1)."""
+    slugs = list(post_slugs or [])
+    out = set()
+    if not slugs:
+        return out
+    conn = get_conn()
+    try:
+        for i in range(0, len(slugs), 500):  # stay well under SQLite's variable limit
+            chunk = slugs[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            out.update(r[0] for r in conn.execute(
+                f"SELECT DISTINCT t.id FROM blog_tags t JOIN post_tags pt ON pt.tag_id = t.id "
+                f"WHERE pt.post_slug IN ({marks})", chunk))
+        return out
+    finally:
+        conn.close()
+
+
 def list_tag_tree():
     """Every tag, nested under its parent — the Projects page's table of
     contents renders straight from this. Built in Python rather than a
@@ -2447,7 +2519,14 @@ def list_project_items(project_id):
     remains the tie-break for items resolving to the same instant — the
     column itself, and the manual-curation discipline behind project
     membership, are untouched (see CLAUDE.md's "Projects are curated, not
-    auto-generated")."""
+    auto-generated").
+
+    (#524) Inside read_session() the result is kept for the rest of the session (the
+    Curator derives from the same project's items 3 or 4 times). The returned list is a
+    fresh one each time; the item dicts are shared, so treat them as read-only there."""
+    memo = getattr(_ambient, "memo", None)
+    if memo is not None and ("items", project_id) in memo:
+        return list(memo[("items", project_id)])
     conn = get_conn()
     try:
         rows = conn.execute(
@@ -2457,6 +2536,9 @@ def list_project_items(project_id):
         ).fetchall()
         items = [_row_to_dict(r) for r in rows]
         items.sort(key=timeline.resolve_item_date)
+        if memo is not None:
+            memo[("items", project_id)] = items
+            return list(items)
         return items
     finally:
         conn.close()
@@ -2515,6 +2597,21 @@ def list_unfiled_items(limit=10000, include_brand=False):
             (limit,),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_unfiled_items(include_brand=False):
+    """(#524) len(list_unfiled_items(limit=huge)) without building a dict per row: the same
+    WHERE clause, counted in SQL. For callers that only want the number (the Curator's
+    unfiled-objects nudge)."""
+    conn = get_conn()
+    try:
+        brand_clause = "" if include_brand else "AND ce.is_brand_asset = 0 "
+        return conn.execute(
+            "SELECT COUNT(*) FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
+            "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + _not_restricted("ce.") + " " + brand_clause
+        ).fetchone()[0]
     finally:
         conn.close()
 

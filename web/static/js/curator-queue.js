@@ -2,9 +2,14 @@
    autoescaped); this file only loads it and wires its buttons. No value from the server is ever put
    into the page through innerHTML except that fragment itself.
 
-     CuratorQueue.mount(rootEl, { onCount(open, deferred) })
-       loads GET /api/curator/queue/html into rootEl, re-loads whenever
-       'constructicon:needs-changed' fires, and handles:
+     CuratorQueue.mount(rootEl, { onCount(open, deferred), isActive() })
+       loads GET /api/curator/queue/html (the shell: one collapsed header per card group, with its
+       item count) into rootEl, re-loads whenever 'constructicon:needs-changed' fires (not while
+       isActive() says the host, e.g. a closed drawer, is hidden: it re-loads on its next reload()),
+       and handles:
+         toggle       expand / collapse a group; its items are fetched on first expand from
+                      GET /api/curator/queue/html?group=<id>&section=open|deferred (#524), and
+                      stay expanded across reloads
          accept       resolve the question with its suggested key(s)
          choose       show the options; the form's submit resolves with the picked key(s)
          defer / bring-back / dismiss
@@ -49,17 +54,59 @@
     root.appendChild(live);
     root.appendChild(body);
     var focusKey = null;
+    var expanded = {};   // "section|group id" -> true, for groups the owner has opened
+    var stale = false;   // a reload was skipped while the host was hidden
+    var loadSeq = 0;
+
+    function groupKey(sec) { return sec.dataset.cqSection + '|' + sec.dataset.cqGroup; }
+
+    // Fetch one group's items into its (already unhidden) body element.
+    async function fillGroup(sec) {
+      var bodyEl = sec.querySelector('.cq-group-body');
+      var url = '/api/curator/queue/html?group=' + encodeURIComponent(sec.dataset.cqGroup) +
+        '&section=' + encodeURIComponent(sec.dataset.cqSection);
+      bodyEl.setAttribute('aria-busy', 'true');
+      try {
+        var res = await fetch(url);
+        if (!res.ok) throw new Error('status ' + res.status);
+        bodyEl.innerHTML = await res.text();
+      } catch (e) {
+        bodyEl.textContent = 'Could not load this group. Collapse it and open it again to retry.';
+        delete expanded[groupKey(sec)];
+      } finally {
+        bodyEl.removeAttribute('aria-busy');
+      }
+    }
+
+    function setOpen(sec, on) {
+      sec.querySelector('.cq-group-toggle').setAttribute('aria-expanded', on ? 'true' : 'false');
+      sec.querySelector('.cq-group-body').hidden = !on;
+    }
 
     async function load() {
+      if (opts.isActive && !opts.isActive()) { stale = true; return; }
+      stale = false;
+      var seq = ++loadSeq;
       try {
         var res = await fetch('/api/curator/queue/html');
         if (!res.ok) return;
-        body.innerHTML = await res.text();
+        // Build the new shell off-screen, re-open the groups that were open, then swap it in
+        // once, so the list never collapses and re-grows under the owner's cursor.
+        var next = document.createElement('div');
+        next.className = 'cq-body';
+        next.innerHTML = await res.text();
+        var pending = [];
+        next.querySelectorAll('.cq-group').forEach(function (sec) {
+          if (expanded[groupKey(sec)]) { setOpen(sec, true); pending.push(fillGroup(sec)); }
+        });
+        await Promise.all(pending);
+        if (seq !== loadSeq) return;   // a newer load superseded this one
+        body.replaceChildren.apply(body, Array.prototype.slice.call(next.childNodes));
         var r = body.querySelector('.cq-root');
         if (r && opts.onCount) opts.onCount(parseInt(r.dataset.cqOpen || '0', 10), parseInt(r.dataset.cqDeferred || '0', 10));
         if (focusKey) {
           var again = Array.prototype.find.call(body.querySelectorAll('.cq-item'), function (el) { return el.dataset.cqKey === focusKey; });
-          var target = again ? again.querySelector('button, a') : body.querySelector('.cq-item button, .cq-item a');
+          var target = again ? again.querySelector('button, a') : body.querySelector('.cq-group-toggle');
           if (target) target.focus();
           focusKey = null;
         }
@@ -71,6 +118,16 @@
       // Move focus to the neighbouring item so a keyboard user is not dropped at the top.
       var sib = nextFocusItem && (nextFocusItem.nextElementSibling || nextFocusItem.previousElementSibling);
       focusKey = sib && sib.dataset ? sib.dataset.cqKey : null;
+      // In place: the item leaves its group right now; the reload below then settles the counts.
+      if (nextFocusItem && nextFocusItem.parentNode) {
+        var sec = nextFocusItem.closest('.cq-group');
+        nextFocusItem.remove();
+        if (sec) {
+          var left = sec.querySelectorAll('.cq-item').length;
+          var meta = sec.querySelector('.cq-group-meta');
+          if (meta) meta.textContent = meta.textContent.replace(/^\d+ items?/, left + ' item' + (left === 1 ? '' : 's'));
+        }
+      }
       document.dispatchEvent(new CustomEvent('constructicon:needs-changed'));
     }
 
@@ -111,6 +168,18 @@
     body.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-cq-action]');
       if (!btn) return;
+      if (btn.dataset.cqAction === 'toggle') {
+        var group = btn.closest('.cq-group');
+        var on = btn.getAttribute('aria-expanded') !== 'true';
+        setOpen(group, on);
+        if (on) {
+          expanded[groupKey(group)] = true;
+          if (!group.querySelector('.cq-group-body').childNodes.length) fillGroup(group);
+        } else {
+          delete expanded[groupKey(group)];
+        }
+        return;
+      }
       var item = btn.closest('.cq-item');
       if (!item) return;
       var action = btn.dataset.cqAction;
@@ -148,7 +217,7 @@
 
     document.addEventListener('constructicon:needs-changed', load);
     load();
-    return { reload: load };
+    return { reload: load, isStale: function () { return stale; } };
   }
 
   window.CuratorQueue = { mount: mount };

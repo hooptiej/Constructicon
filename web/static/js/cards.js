@@ -128,5 +128,61 @@
     return '<div class="' + cls + '" data-slug="' + esc(item.slug) + '"' + w + '>' + face(item, opts) + tools(item, opts) + '</div>';
   }
 
-  window.ItemCards = { html: html, face: face, esc: esc };
+  /* Incremental rendering (#517). A grid of ~1,700 cards is thousands of DOM nodes and
+     image slots; this draws the first `batch` and appends more as the "Show more" row nears
+     the viewport (or is clicked). Sorting and filtering stay over the FULL list: callers hand
+     pager.set() the whole sorted/filtered array each time.
+       var pager = ItemCards.pager(gridEl, cardFn, { batch: 120 });
+       pager.set(list)        redraw from the top
+       pager.set(list, true)  redraw but keep as many cards as were already showing
+     The "Show more" row is a child of the grid (full-width), so it scrolls with the cards
+     even when the grid itself is the scroll container (home Files panel). */
+  function pager(grid, cardFn, opts) {
+    var batch = (opts && opts.batch) || 120;
+    var list = [];
+    var shown = 0;
+    var io = null;
+
+    function moreRow() {
+      var left = list.length - shown;
+      return '<div class="cx-more" style="grid-column:1/-1;text-align:center;padding:8px 0">' +
+        '<button type="button" class="btn-secondary cx-more-btn">Show ' + Math.min(batch, left) +
+        ' more (' + left + ' left)</button></div>';
+    }
+    function watch() {
+      if (io) { io.disconnect(); io = null; }
+      var row = grid.querySelector('.cx-more');
+      if (!row) return;
+      row.querySelector('.cx-more-btn').addEventListener('click', more);
+      if (typeof IntersectionObserver === 'function') {
+        io = new IntersectionObserver(function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) more();
+        }, { rootMargin: '600px' });
+        io.observe(row);
+      }
+    }
+    function draw() {
+      grid.innerHTML = list.slice(0, shown).map(cardFn).join('') + (shown < list.length ? moreRow() : '');
+      watch();
+    }
+    function more() {
+      var row = grid.querySelector('.cx-more');
+      if (!row) return;
+      var from = shown;
+      shown = Math.min(list.length, shown + batch);
+      row.remove();
+      grid.insertAdjacentHTML('beforeend', list.slice(from, shown).map(cardFn).join('') + (shown < list.length ? moreRow() : ''));
+      watch();
+    }
+    return {
+      set: function (next, keep) {
+        list = next;
+        shown = Math.min(list.length, keep ? Math.max(batch, shown) : batch);
+        draw();
+      },
+      get shown() { return shown; }
+    };
+  }
+
+  window.ItemCards = { html: html, face: face, esc: esc, pager: pager };
 })();

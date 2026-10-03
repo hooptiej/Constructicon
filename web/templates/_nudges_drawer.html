@@ -3,7 +3,8 @@
      most recently touched) with a trailing Deferred section. The list is server-rendered
      (_curation_queue.html) and wired by static/js/curator-queue.js; the count badge on the Curator
      tab (_nav_tabs.html) counts open, non-deferred items from the same queue. The fragment loads
-     on first open and again on every open or constructicon:needs-changed. -->
+     on first open and again on every open or (while open) constructicon:needs-changed. Since #524
+     it is only the shell (collapsed groups with counts); a group's items load when it is opened. -->
 <button type="button" id="nudges-drawer-trigger" style="display:none" aria-hidden="true" tabindex="-1"></button>
 <div class="drawer-backdrop" id="nudges-drawer-backdrop"></div>
 <div class="wide-drawer nudges-drawer" id="nudges-drawer" role="dialog" aria-label="Curator">
@@ -30,7 +31,10 @@
     backdrop.classList.add('open');
     if (!queue && window.CuratorQueue) {
       queue = window.CuratorQueue.mount(list, {
-        onCount: (open) => { count.textContent = open ? `(${open})` : ''; }
+        onCount: (open) => { count.textContent = open ? `(${open})` : ''; },
+        // #524: while the drawer is shut, a needs-changed event must not rebuild the list;
+        // it is re-loaded when the drawer next opens.
+        isActive: () => drawer.classList.contains('open')
       });
     } else if (queue) {
       queue.reload();  // refresh on every open so the list is current

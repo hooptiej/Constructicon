@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, card_rules, cards, curation_queue, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
+from core import automatch, backup, captions, card_payload, card_rules, cards, curation_queue, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
 from core import version as version_info
 from core import provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
@@ -430,6 +430,14 @@ def _public_items(rows):
         it["codes"] = [code_map[t] for t in (it["tags"] or []) if t in code_map]
         out.append(it)
     return out
+
+
+# #517: the item grids (home Files panel, /unfiled, user gallery, hobby loose objects) embed
+# their items as inline JSON. They get the slim card_payload projection, not the full
+# _to_public record (see core/card_payload.py for the whitelist).
+def _card_items(rows):
+    """_public_items(rows) slimmed for embedding in a page (#517)."""
+    return [card_payload.card_item_public(it) for it in _public_items(rows)]
 
 
 
@@ -916,7 +924,7 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
     # means all of them — same unbounded-limit precedent db.list_unfiled_items
     # already set for the old Unfiled widget, not a new perf tradeoff.
     files_by_type = {
-        mt: _public_items(rows)
+        mt: _card_items(rows)
         for mt, rows in db.list_recent_items_by_type(limit_per_type=10000).items()
     }
     # Timeline feature: the gallery rail shows every project (including
@@ -1495,7 +1503,7 @@ def unfiled_page(request: Request):
     with bulk selection/filing tools the widget has no room for. Reuses the
     exact same db.list_unfiled_items()/_to_public() data shape the widget
     already uses, so the gallery-card markup is identical everywhere."""
-    unfiled_items = _public_items(db.list_unfiled_items())
+    unfiled_items = _card_items(db.list_unfiled_items())
     return templates.TemplateResponse(
         request, "unfiled.html",
         {"unfiled_items": unfiled_items, "file_provenance_options": provenance_options.picker_options("file")},
@@ -1562,7 +1570,7 @@ def hobby_detail_page(request: Request, slug: str):
                                        needs_input=bool(queue["items"]))
     hobby_face["cover_url"] = _project_cover_url(hobby_face["cover_slug"]) if hobby_face["cover_slug"] else None
 
-    loose = _public_items(db.list_loose_hobby_objects(hobby["id"]))
+    loose = _card_items(db.list_loose_hobby_objects(hobby["id"]))
     start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
     return templates.TemplateResponse(
@@ -1598,7 +1606,7 @@ def wallpaper_page(request: Request):
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str):
     rows = db.search(uploaded_by=uploader, limit=1000)
-    items = _public_items(rows)
+    items = _card_items(rows)
     return templates.TemplateResponse(
         request, "user_gallery.html",
         {"uploader": uploader, "uploader_display": uploader, "items": items},
@@ -3042,25 +3050,38 @@ def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | Non
 @app.get("/api/curator/queue")
 def api_curator_queue(card: str | None = None, summary: bool = False):
     """The unified Curator queue, grouped by card: {groups, deferred, counts}. `card`
-    limits it to one card's slice; `summary=1` returns only the counts (the nav badge)."""
-    q = curation_queue.build_queue(card=card)
+    limits it to one card's slice; `summary=1` returns only the counts (the nav badge).
+    (#524) The whole-queue and summary forms come from curation_queue's cache, which is
+    rebuilt only after something has been written to the database."""
+    if card:
+        q = curation_queue.build_queue(card=card)
+    else:
+        q = curation_queue.cached_queue()
     if summary:
         return JSONResponse({"counts": q["counts"]})
     return JSONResponse(q)
 
 
 @app.get("/api/curator/queue/html", response_class=HTMLResponse)
-def api_curator_queue_html(request: Request):
-    """The queue as a server-rendered fragment (autoescaped Jinja; each card group wears the
-    shared mini card face from _card.html). The Curator drawer and /curator both load this."""
-    q = curation_queue.build_queue()
-    faces = {}
-    for g in q["groups"] + q["deferred"]:
-        if g["type"] == "card" and g["slug"] not in faces:
-            p = db.get_project(g["slug"])
-            if p is not None:
-                faces[g["slug"]] = _to_card_face(p)
-    return templates.TemplateResponse(request, "_curation_queue.html", {"q": q, "faces": faces})
+def api_curator_queue_html(request: Request, group: str | None = None, card: str | None = None,
+                           section: str = "open"):
+    """The queue as a server-rendered fragment (autoescaped Jinja). Since #524 it is lazy:
+    with no parameters it is just the shell, one collapsed header per group with its item
+    count. `group` (a group id: card:<slug>, hobby:<slug>, uploads, collection; or `card`, a
+    bare card slug) with `section` (open | deferred) returns that one group's items and, for a
+    card, its mini card face from _card.html. The Curator drawer and /curator both use it."""
+    if card and not group:
+        group = f"card:{card}"
+    if not group:
+        return templates.TemplateResponse(request, "_curation_queue.html", {"q": curation_queue.cached_queue()})
+    section = "deferred" if section == "deferred" else "open"
+    g, items = curation_queue.group_items(group, section)
+    face = None
+    if g is not None and g["type"] == "card":
+        p = db.get_project(g["slug"])
+        if p is not None:
+            face = _to_card_face(p)
+    return templates.TemplateResponse(request, "_curation_group.html", {"items": items, "face": face})
 
 
 def _queue_action(fn, key):

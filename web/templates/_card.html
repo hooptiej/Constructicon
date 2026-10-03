@@ -1,0 +1,75 @@
+{#- V2 card face (docs/design/v2-cards.md 8.1). One macro, three sizes.
+
+     {% from "_card.html" import card %}
+     {{ card(c, "full") }}          size: "full" | "small" | "mini"
+
+     `c` is a core.cards.card_face() dict plus `cover_url` (the home page adds it), or a
+     manually assembled dict for a file card (kind "asset": title, dates, cover_url, type_line,
+     provenance, href; no level, no stats). Every value is autoescaped by Jinja; nothing
+     here is marked |safe. The whole card is one real link. Styles: static/css/cards.css.
+     Vocabulary rule: plain labels only (spec section 1). -#}
+
+{% macro kind_icon(kind) -%}
+<svg class="cx-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true" focusable="false">
+{%- if kind == "project" %}<path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="m3 13 9 5 9-5"/>
+{%- elif kind == "thing" %}<path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>
+{%- elif kind == "action" %}<path d="M13 2 5 14h6l-1 8 8-12h-6l1-8Z"/>
+{%- elif kind == "hobby" %}<path d="m3 20 6-10 4 6 3-4 5 8H3Z"/>
+{%- elif kind == "family" %}<rect x="3" y="3" width="11" height="11" rx="1.5"/><rect x="10" y="10" width="11" height="11" rx="1.5"/>
+{%- elif kind == "collection" %}<path d="M4 7h16v13H4V7Z"/><path d="M7 7V4h10v3M9 12h6"/>
+{%- elif kind == "event" %}<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>
+{%- else %}<path d="M6 3h8l4 4v14H6V3Z"/><path d="M14 3v4h4"/>
+{%- endif %}
+</svg>
+{%- endmacro %}
+
+{% macro card(c, size="full") -%}
+{%- set kind = c.kind or "asset" -%}
+{%- set href = c.href or ("/project/" ~ c.slug) -%}
+{%- set inactive = c.activity == "inactive" -%}
+<a class="cx cx-{{ size }} cx-kind-{{ kind }}{% if inactive %} cx-inactive{% endif %}{% if c.stage == 'stopped' %} cx-stopped{% endif %}" href="{{ href }}" data-card-kind="{{ kind }}"{% if c.slug %} data-card-slug="{{ c.slug }}"{% endif %}>
+  <span class="cx-namebar">
+    <span class="cx-name">{{ c.title }}</span>
+    <span class="cx-kind" title="{{ c.kind_label or c.type_line }}">{{ kind_icon(kind) }}<span class="cx-sr">{{ c.kind_label or "File" }}: </span></span>
+  </span>
+  <span class="cx-dates-row">
+    <span class="cx-dates">{{ c.dates }}</span>
+    {% if c.show_level %}
+    <span class="cx-pips" role="img" aria-label="Curation level {{ c.level }} of 5">
+      {%- for i in range(5) %}<span class="cx-pip{% if i < c.level %} on{% endif %}"></span>{% endfor -%}
+    </span>
+    {% endif %}
+  </span>
+  <span class="cx-art">
+    {% if c.cover_url %}
+    <img src="{{ c.cover_url }}" loading="lazy" alt="Cover image for {{ c.title }}">
+    {% else %}
+    <span class="cx-art-empty">{{ kind_icon(kind) }}<span>No cover yet</span></span>
+    {% endif %}
+  </span>
+  <span class="cx-typeline">
+    <span class="cx-type">{{ c.type_line }}</span>
+    <span class="cx-codes">
+      {%- for code in c.codes %}<span class="cx-code">{{ code }}</span>{% endfor -%}
+      {%- if c.highlight %}<span class="cx-hl on" role="img" aria-label="Highlighted"></span>{% else %}<span class="cx-hl" aria-hidden="true"></span>{% endif -%}
+    </span>
+  </span>
+  <span class="cx-body">
+    {% for line in c.facts %}<span class="cx-fact">{{ line }}</span>{% endfor %}
+    {% if c.facts_more %}<span class="cx-fact cx-more">+{{ c.facts_more }} more</span>{% endif %}
+    {% if c.flavor %}<span class="cx-flavor">{{ c.flavor }}</span>{% endif %}
+  </span>
+  <span class="cx-boxes">
+    {% if c.stage_label %}
+    <span class="cx-box cx-status"><span class="cx-dot{% if not inactive %} on{% endif %}" aria-hidden="true"></span>{{ c.stage_label }}{% if c.stage == 'stopped' and c.stop_reason_label %} - {{ c.stop_reason_label | lower }}{% endif %}{% if c.needs_input %}<span class="cx-needs" title="A question about this card is waiting in the admin pane"> - needs your input</span>{% endif %}</span>
+    {% endif %}
+    {% if c.stats %}
+    <span class="cx-box cx-stats">{% for s in c.stats %}{% if s.n %}<span class="cx-stat">{{ s.label }} {{ s.n }}</span>{% endif %}{% endfor %}</span>
+    {% endif %}
+  </span>
+  <span class="cx-foot">
+    <span class="cx-prov">{{ c.provenance }}</span>
+    {% if c.order %}<span class="cx-order">{{ c.order.n }} of {{ c.order.of }}</span>{% endif %}
+  </span>
+</a>
+{%- endmacro %}

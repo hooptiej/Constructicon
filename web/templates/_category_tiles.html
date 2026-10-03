@@ -7,7 +7,8 @@
   <div class="tag-chip-row">
     <a class="tag-chip{% if not selected_tag_slug and not show_reference_selected %} active{% endif %}" href="/" title="All projects">All</a>
     {% for t in top_tags %}
-    <a class="tag-chip{% if selected_tag_slug == t.slug %} active{% endif %}" href="/?hobby={{ t.slug }}" title="{{ t.name }}">{{ t.name }}</a>
+    {# V2 cards: an inactive hobby's chip is dimmed (still clickable) #}
+    <a class="tag-chip{% if selected_tag_slug == t.slug %} active{% endif %}{% if t.hobby_status == 'inactive' %} tag-chip-dim{% endif %}" href="/?hobby={{ t.slug }}" title="{{ t.name }}{% if t.hobby_status == 'inactive' %} (inactive){% endif %}">{{ t.name }}</a>
     {% endfor %}
     {% if show_reference_pill %}
     <a class="tag-chip{% if show_reference_selected %} active{% endif %}" href="/?ref=1" title="Reference material">Reference</a>

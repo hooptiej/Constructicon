@@ -22,7 +22,7 @@
 {% include "_admin_drawer.html" %}
 {% include "_processing_drawer.html" %}
 {% include "_nav_tabs.html" %}
-<div class="app-version" title="Constructicon version (#508)">v{{ app_version() }}</div>
+<div class="app-version" title="Constructicon version (#508)">{% set _v = app_version() %}{{ "v" ~ _v if _v[0].isdigit() else _v }}</div>
 {% endif %}
 </body>
 </html>

@@ -28,6 +28,10 @@
 }
 
 .cx {
+  /* position: relative keeps the card's absolutely-positioned pieces (.cx-sr) inside
+     the card. Without it they escape any overflow:auto grid (the home Files panel,
+     ~1,700 cards) and stretch the PAGE's scroll height into hundreds of empty screens. */
+  position: relative;
   --cx-w: 320px;
   --frame: var(--card-frame-asset);
   --band: var(--card-band-asset);

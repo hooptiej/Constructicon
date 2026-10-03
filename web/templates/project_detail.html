@@ -117,14 +117,26 @@
       </select>
       <span id="family-error" class="error-text" style="display:none;font-size:12px"></span>
     </div>
-    {# #408: peer project links (mirrors the "In hobbies" row above). Resolves
-       the weak_connections nudge's related-projects half, which had no UI. #}
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
-      <label style="font-size:12px;color:var(--text-muted)">Related projects:</label>
-      <div id="related-projects-container" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-height:24px"></div>
-      <select id="add-related-project-select" class="input" style="max-width:220px;font-size:12px">
-        <option value="">+ Add related projectâ€¦</option>
-      </select>
+    {# #408 / V2 cards 3.8: typed links, grouped by type. A link "a <type> b" reads
+       forward on the source card and in reverse on the target ("Built for" / "Made
+       for this"); `related` is symmetric. The picker adds a link in either direction;
+       a typed link over a related pair upgrades it, related over a typed pair is
+       refused (the server's message is shown). #}
+    <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-top:10px">
+      <label style="font-size:12px;color:var(--text-muted);padding-top:4px">Links:</label>
+      <div id="links-container" style="display:flex;flex-direction:column;gap:6px;min-height:24px"></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <select id="link-type-select" class="input" style="max-width:170px;font-size:12px" aria-label="Link type">
+          {% for t in link_types %}
+          <option value="{{ t.key }}|out">{{ t.forward }}{% if t.key == 'related' %} (peer){% endif %}…</option>
+          {% if t.key != 'related' %}<option value="{{ t.key }}|in">{{ t.reverse }}…</option>{% endif %}
+          {% endfor %}
+        </select>
+        <select id="link-target-select" class="input" style="max-width:220px;font-size:12px" aria-label="Link to">
+          <option value="">+ Link to a card…</option>
+        </select>
+      </div>
+      <span id="links-error" class="error-text" style="display:none;font-size:12px"></span>
     </div>
 
     {# #414: blog entries that feature this project. Read-only â€” the link is
@@ -147,43 +159,77 @@
     <script>
     (function () {
       const SLUG = {{ project.slug | tojson }};
-      let related = {{ related_projects | tojson }};
+      const LINK_TYPES = {{ link_types | tojson }};
+      let links = {{ links | tojson }};
       let allProjects = [];
-      const container = document.getElementById('related-projects-container');
-      const select = document.getElementById('add-related-project-select');
+      const container = document.getElementById('links-container');
+      const select = document.getElementById('link-target-select');
+      const typeSelect = document.getElementById('link-type-select');
+      const errEl = document.getElementById('links-error');
       function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+      function showError(msg) { errEl.textContent = msg || ''; errEl.style.display = msg ? '' : 'none'; }
+      async function post(url, fields) {
+        const fd = new FormData(); Object.keys(fields).forEach(k => fd.append(k, fields[k]));
+        const r = await fetch(url, { method: 'POST', body: fd });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { showError((data.error && data.error.message) || data.detail || 'Could not change that link.'); return false; }
+        showError(''); links = data.links || links; render(); refreshPicker(); return true;
+      }
+      // "a <type> b": for an `out` link this card is a; for an `in` link the other card is.
+      function pair(l) { return l.direction === 'in' ? [l.slug, SLUG] : [SLUG, l.slug]; }
       function render() {
         container.innerHTML = '';
-        if (!related.length) {
+        if (!links.length) {
           container.innerHTML = '<span style="font-size:12px;color:var(--text-muted)">none yet</span>';
           return;
         }
-        related.forEach(p => {
-          const chip = document.createElement('span');
-          chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--chip);border:1px solid var(--border);border-radius:100px;padding:3px 10px';
-          chip.innerHTML = '<a href="/project/' + encodeURIComponent(p.slug) + '" style="color:var(--text);text-decoration:none">' + esc(p.title) + '</a>';
-          const x = document.createElement('button');
-          x.type = 'button'; x.textContent = 'Ã—'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove');
-          x.style.cssText = 'background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;line-height:1;padding:0';
-          x.onclick = async () => {
-            const fd = new FormData(); fd.append('related_slug', p.slug);
-            const r = await fetch('/api/project/' + encodeURIComponent(SLUG) + '/related/remove', { method: 'POST', body: fd });
-            if (r.ok) { related = await r.json(); render(); refreshPicker(); }
-          };
-          chip.appendChild(x); container.appendChild(chip);
+        const groups = [];
+        links.forEach(l => {
+          const key = l.type + '|' + l.direction;
+          let g = groups.find(x => x.key === key);
+          if (!g) { g = { key, label: l.label, items: [] }; groups.push(g); }
+          g.items.push(l);
+        });
+        groups.forEach(g => {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center';
+          row.innerHTML = '<span style="font-size:11px;color:var(--text-muted);min-width:84px">' + esc(g.label) + '</span>';
+          g.items.forEach(l => {
+            const chip = document.createElement('span');
+            chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--chip);border:1px solid var(--border);border-radius:100px;padding:3px 10px';
+            chip.innerHTML = '<a href="/project/' + encodeURIComponent(l.slug) + '" style="color:var(--text);text-decoration:none">' + esc(l.title) + '</a>';
+            const retype = document.createElement('select');
+            retype.className = 'input'; retype.title = 'Change this link type'; retype.setAttribute('aria-label', 'Change link type');
+            retype.style.cssText = 'font-size:11px;padding:0 2px;max-width:92px';
+            retype.innerHTML = '<option value="">type…</option>' + LINK_TYPES.filter(t => t.key !== l.type)
+              .map(t => '<option value="' + t.key + '">' + esc(t.forward) + '</option>').join('');
+            retype.onchange = async () => {
+              if (!retype.value) return;
+              const [a, b] = pair(l);
+              await post('/api/links/retype', { a, b, from_type: l.type, to_type: retype.value });
+              retype.value = '';
+            };
+            const x = document.createElement('button');
+            x.type = 'button'; x.textContent = '\u00d7'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove');
+            x.style.cssText = 'background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;line-height:1;padding:0';
+            x.onclick = () => { const [a, b] = pair(l); post('/api/links/remove', { a, b, type: l.type }); };
+            chip.appendChild(retype); chip.appendChild(x); row.appendChild(chip);
+          });
+          container.appendChild(row);
         });
       }
       function refreshPicker() {
-        const relatedSlugs = new Set(related.map(p => p.slug));
+        // Any card but this one can be picked: a pair may carry several typed links, and the
+        // server refuses the combinations that can't coexist, with a clear message.
         select.querySelectorAll('option:not([value=""])').forEach(o => o.remove());
-        allProjects.filter(p => p.slug !== SLUG && !relatedSlugs.has(p.slug))
+        allProjects.filter(p => p.slug !== SLUG)
           .forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.title; select.appendChild(o); });
       }
       select.addEventListener('change', async () => {
-        const rs = select.value; if (!rs) return; select.value = '';
-        const fd = new FormData(); fd.append('related_slug', rs);
-        const r = await fetch('/api/project/' + encodeURIComponent(SLUG) + '/related', { method: 'POST', body: fd });
-        if (r.ok) { related = await r.json(); render(); refreshPicker(); }
+        const other = select.value; if (!other) return; select.value = '';
+        const [type, dir] = typeSelect.value.split('|');
+        const [a, b] = dir === 'in' ? [other, SLUG] : [SLUG, other];
+        await post('/api/links', { a, b, type });
       });
       fetch('/api/projects').then(r => r.ok ? r.json() : []).then(d => { allProjects = d; refreshPicker(); }).catch(() => {});
       render();

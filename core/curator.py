@@ -508,7 +508,7 @@ def _get_related_projects(project):
                 related.append(s); seen.add(s["id"])
 
     # Explicit peer links (#408)
-    for rp in db.list_related_projects(project["slug"]):
+    for rp in db.list_linked_projects(project["slug"]):  # any link type (V2 3.8)
         if rp["id"] != project["id"] and rp["id"] not in seen:
             related.append(rp); seen.add(rp["id"])
 

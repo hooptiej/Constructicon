@@ -180,12 +180,45 @@
 .cx-mini-row { display: flex; flex-wrap: wrap; gap: 12px; overflow-y: auto; max-height: 460px; padding: 2px 4px 6px 2px; }
 .cx-slot { display: block; max-width: 100%; }
 
+/* #514 featured card: sized to its column instead of a fixed 320px. The row is a size
+   container, so cqw is the row's own width: 46% of it, never under the old 320px and never
+   over 520px (the card is 5:7, so 520 wide is 728 tall). If the row is too narrow to put the
+   small cards beside it the grid wraps below (flex-wrap above). Without cqw support it keeps
+   320px. Phone width: see the media query below. */
+.cx-active-row { container-type: inline-size; }
+@supports (width: 1cqw) {
+  .cx-active-row .cx-full { --cx-w: clamp(320px, 46cqw, 520px); }
+}
+
+/* #514 item cards: the shared client renderer (static/js/cards.js) wraps the asset card
+   (same markup as the macro, mini size) with a tools strip under it: lamps, type badge,
+   client, tags and the select checkbox, which cannot live inside the card's link. */
+.cx-item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, max-content)); justify-content: space-evenly; gap: 16px 12px; align-items: start; }
+.cx-item-grid.cx-item-grid-roomy { gap: 22px 18px; }
+.cx-item { --cx-w: 150px; width: var(--cx-w); max-width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.cx-item-small { --cx-w: 220px; }
+.cx-item > .cx { --cx-w: inherit; }
+.cx-item-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11px; color: var(--text-2); min-width: 0; padding: 0 2px; }
+.cx-item-lamps { display: inline-flex; align-items: center; gap: 3px; }
+.cx-item-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px; background: rgba(20, 23, 15, .72); border: 1px solid rgba(226, 214, 150, .14); font-size: 12px; line-height: 1; }
+.cx-item-redacted-badge { font-size: 10px; color: var(--text-3); }
+.cx-item-tags { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+.cx-item-tools .client-badge { font-size: 10.5px; max-width: 100%; }
+.cx-item-tools .chip { font-size: 10px; padding: 1px 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cx-item-tools .card-select-row { margin-left: auto; }
+.cx-item-redacted .cx-art { opacity: .8; }
+@media (max-width: 600px) {
+  .cx-item-grid .cx-item { --cx-w: 150px; }
+}
+
 /* Phone width: the featured card fits the column; small and mini keep two to a row */
 @media (max-width: 600px) {
   .cx { --cx-w: min(320px, calc(100vw - 72px)); }
   .cx-small { --cx-w: calc((100vw - 84px) / 2); }
   .cx-mini { --cx-w: calc((100vw - 80px) / 2); max-width: 170px; }
   .cx-active-row { flex-direction: column; align-items: center; }
+  /* featured: full column width on a phone (the row is the container), never over 420px */
+  @supports (width: 1cqw) { .cx-active-row .cx-full { --cx-w: min(100cqw, 420px); } }
   .cx-active-grid { gap: 12px; justify-content: center; }
 }
 

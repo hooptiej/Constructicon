@@ -356,6 +356,66 @@ def curator_status(card, provisional_legacy=None):
     return "wip"
 
 
+def export_status(card):
+    """The v1-vocabulary status the STATIC EXPORT should use for a card (#512).
+
+    projects.status is frozen at the V2 migration; the live status is
+    kind/stage/stop_reason. The export keeps speaking v1, so this returns the
+    legacy-equivalent word:
+
+    * Unchanged card: if (kind, stage, stop_reason) is still exactly what
+      migration_target() mapped the frozen status to (including the provisional
+      values for queued ones), return the frozen `status` untouched. So a
+      `complete` card still provisional `done` stays `complete`, `archived`
+      stays `archived`, and an unchanged export is byte-identical.
+    * Changed or new card: map from the live stage.
+
+        kind collection (any stage)       -> reference-only
+        stage in_progress                 -> wip
+        stage done                        -> complete   (event done too)
+        stage in_use                      -> complete   (finished, still used)
+        stage paused                      -> shelved
+        stage stopped + stop_reason failed     -> failed
+        stage stopped + stop_reason abandoned  -> abandoned
+        stage idea                        -> idea
+        no stage at all (pre-migration row)    -> frozen status, else wip
+    """
+    frozen = card.get("status")
+    stage = card.get("stage")
+    if not stage:
+        return frozen or "wip"
+    tgt = migration_target(frozen)
+    if (tgt["kind"], tgt["stage"], tgt["stop_reason"]) == (
+            card.get("kind") or "project", stage, card.get("stop_reason") or None):
+        return frozen
+    if card.get("kind") == "collection":
+        return "reference-only"
+    if stage == "in_progress":
+        return "wip"
+    if stage in ("done", "in_use"):
+        return "complete"
+    if stage == "paused":
+        return "shelved"
+    if stage == "idea":
+        return "idea"
+    if stage == "stopped":
+        return "failed" if card.get("stop_reason") == "failed" else "abandoned"
+    return "wip"
+
+
+def export_included_by_default(card):
+    """Whether the export-everything default includes this card (#512). v1 used
+    db.list_projects(status="active"), i.e. only cards whose status was the literal
+    word 'active' (the other in-progress word, 'wip', never matched; that quirk is
+    kept so unchanged output stays byte-identical). Unchanged cards therefore keep
+    that rule on their frozen status; a card whose stage has changed is included
+    exactly when it is now in progress."""
+    status = export_status(card)
+    if status == card.get("status"):
+        return status == "active"
+    return status in ("wip", "active")
+
+
 # --- Families, collections and nesting (3.6, 3.7) ---------------------------------
 
 def validate_membership(family, member):

@@ -27,6 +27,8 @@ Ordering (owner decisions on #519):
 """
 
 import re
+import threading
+import time
 from urllib.parse import quote
 
 from . import cards, curator_needs, db, decisions
@@ -248,6 +250,23 @@ def _arrange(items_by_group, groups):
     return out
 
 
+# Overlapping items (#524). Where the Curator's scoring (a nudge) and a computed need say the
+# same thing about the same card, the queue shows ONE item, not two:
+#   nudge `missing_writeup`  +  need `blank_writeup_with_files`
+# The nudge is kept (it already has the owner's Defer / Dismiss history under its key, and its
+# place in the Curator's effort order); it takes on the need's more specific wording (how many
+# files the card has). Defer or Dismiss on either of the two applies to the merged item, so an
+# answer to one is never undone by the other reappearing.
+DEDUPE_PAIRS = (("missing_writeup", cards.NEED_BLANK_WRITEUP_WITH_FILES),)
+
+
+def _dedupe_keys(card):
+    """(nudge key, need key) of the overlapping pair for one card."""
+    return (f"missing_writeup:project:{card['id']}",
+            f"need:{cards.NEED_BLANK_WRITEUP_WITH_FILES}:{card['slug']}")
+
+
+@db.in_read_session
 def build_queue(card=None, hobby=None):
     """The unified queue. `card` (slug) limits it to that one card's slice (the project
     page's strip); `hobby` (slug) limits it to that hobby's own needs (the hobby page's
@@ -296,6 +315,7 @@ def build_queue(card=None, hobby=None):
         nudges = [dict(n, deferred=n["nudge_key"] in deferred_keys) for n in nudges]
     else:
         nudges = curator_needs.list_needs()
+    merged_nudges = {}  # nudge key -> its queue item, for the overlap dedupe below
     for n in nudges:
         if n["kind"] == "confirm_automatch":
             continue  # the project_match questions themselves are in the queue
@@ -303,7 +323,15 @@ def build_queue(card=None, hobby=None):
             c = card_row or db.get_project(n["target_id"])
             if c is None:
                 continue
-            put(f"card:{c['slug']}", _card_group(c), _nudge_item(n))
+            nkey, need_k = _dedupe_keys(c)
+            if n["nudge_key"] == nkey and need_k in dismissed:
+                continue  # the owner dismissed this same gap under its other name
+            item = _nudge_item(n)
+            put(f"card:{c['slug']}", _card_group(c), item)
+            if n["nudge_key"] == nkey:
+                merged_nudges[nkey] = item
+                if need_k in deferred_keys:
+                    item["deferred"] = True  # deferred under its other name
         elif not card_row:
             put("collection", _plain_group("collection", "collection", "Whole collection", "/"), _nudge_item(n))
 
@@ -323,6 +351,13 @@ def build_queue(card=None, hobby=None):
             c = card_row or db.get_project(r["card_slug"])
             if c is None:
                 continue
+            if r["need"] == cards.NEED_BLANK_WRITEUP_WITH_FILES:
+                nkey = _dedupe_keys(c)[0]
+                if nkey in merged_nudges:
+                    merged_nudges[nkey]["detail"] = item["label"]  # one item, with the file count
+                    continue
+                if nkey in dismissed:
+                    continue
             put(f"card:{c['slug']}", _card_group(c), item)
         elif hobby_row or not card_row:
             hs = r.get("hobby_slug")
@@ -345,6 +380,73 @@ def _counts(open_groups, deferred_groups):
         "nudges": sum(1 for i in flat if i["type"] == TYPE_NUDGE),
         "needs": sum(1 for i in flat if i["type"] == TYPE_NEED),
     }
+
+
+# --- the cached whole queue (#524) -------------------------------------------------
+# Every page load asks for the badge count, and the full queue costs a lot to derive. So the
+# unfiltered queue is built once and kept while NOTHING has been written to the database
+# (db.change_fingerprint: file mtime/size of the DB and its WAL, so a write from the web
+# process, the MCP sidecar or a script all count) and for at most CACHE_TTL seconds (the
+# time-based nudges, e.g. a WIP going stale after 90 days, never wait long). The badge, the
+# summary, the fragment's group headers and the JSON all read this one build, so the badge
+# count is by construction the full queue's open count.
+CACHE_TTL = 120.0
+_cache = {"fp": None, "at": 0.0, "q": None}
+_cache_lock = threading.Lock()   # guards the dict
+_build_lock = threading.Lock()   # one build at a time: concurrent callers wait, then reuse it
+
+
+def _cached():
+    fp = db.change_fingerprint()
+    with _cache_lock:
+        if _cache["q"] is not None and fp is not None and _cache["fp"] == fp and time.time() - _cache["at"] < CACHE_TTL:
+            return _cache["q"]
+    return None
+
+
+def cached_queue():
+    """The unfiltered queue, from the cache when nothing has been written since it was built.
+    Treat the result as read-only: it is shared."""
+    hit = _cached()
+    if hit is not None:
+        return hit
+    with _build_lock:
+        hit = _cached()          # another caller may have built it while we waited
+        if hit is not None:
+            return hit
+        fp = db.change_fingerprint()   # taken BEFORE the build: a write during it invalidates it
+        q = build_queue()
+        with _cache_lock:
+            _cache.update(fp=fp, at=time.time(), q=q)
+        return q
+
+
+def cached_counts():
+    """The Curator badge: {"open", "deferred", "questions", "nudges", "needs"}."""
+    return cached_queue()["counts"]
+
+
+def invalidate_cache():
+    with _cache_lock:
+        _cache.update(fp=None, at=0.0, q=None)
+
+
+def group_items(gid, section="open"):
+    """One group's items (for expanding a collapsed group). `gid` is a group id from the queue
+    (card:<slug>, hobby:<slug>, uploads, collection); `section` is "open" or "deferred".
+    Returns (group dict or None, items). A card or hobby builds only its own slice, so
+    expanding a group never rebuilds the whole queue."""
+    key = "deferred" if section == "deferred" else "groups"
+    if gid.startswith("card:"):
+        q = build_queue(card=gid[5:])
+    elif gid.startswith("hobby:"):
+        q = build_queue(hobby=gid[6:])
+    else:
+        q = cached_queue()
+    for g in q[key]:
+        if g["id"] == gid:
+            return g, g["items"]
+    return None, []
 
 
 # --- actions -----------------------------------------------------------------------

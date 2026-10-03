@@ -1,76 +1,31 @@
-{#- The Curator queue (#519), server-rendered. Loaded into the Curator drawer and /curator by
-     static/js/curator-queue.js, which wires the buttons (data-cq-action). Everything is
-     autoescaped; nothing is marked |safe. Each card group wears the shared mini card face
-     from _card.html (no second card design). Vocabulary: plain labels only. -#}
-{% from "_card.html" import card %}
+{#- The Curator queue (#519, lazy since #524), server-rendered. Loaded into the Curator drawer and
+     /curator by static/js/curator-queue.js, which wires the buttons (data-cq-action).
+     Everything is autoescaped; nothing is marked |safe. This is only the SHELL: one collapsed
+     header per card group with its item count. A group's items (and its mini card face, from
+     _card.html) are fetched when it is expanded: GET /api/curator/queue/html?group=...&section=...
+     renders _curation_group.html. Vocabulary: plain labels only. -#}
 
-{% macro item_row(i) -%}
-<li class="cq-item{% if i.deferred %} cq-item-deferred{% endif %}" data-cq-key="{{ i.key }}" data-cq-type="{{ i.type }}"{% if i.id %} data-cq-id="{{ i.id }}"{% endif %}
-    data-cq-multi="{{ 1 if i.multi else 0 }}" data-cq-param="{{ i.answer_param or 'choice' }}" data-cq-suggested='{{ (i.suggested.picks if i.suggested else []) | tojson }}'>
-  <div class="cq-item-main">
-    <span class="cq-tag cq-tag-{{ i.type }}">{{ 'Question' if i.type == 'question' else ('Nudge' if i.type == 'nudge' else 'Need') }}</span>
-    <div class="cq-item-text">
-      <div class="cq-label">{{ i.label }}</div>
-      {% if i.detail %}<div class="cq-detail">{{ i.detail }}</div>{% endif %}
-      {% if i.suggested and i.suggested.labels %}
-      <div class="cq-suggest">Suggested: {{ i.suggested.labels | join(', ') }}{% if i.suggested.reason %} ({{ i.suggested.reason }}){% endif %}{% if i.confidence %}, {{ i.confidence }} confidence{% endif %}.</div>
-      {% endif %}
-    </div>
-  </div>
-  <div class="cq-actions">
-    {% if i.deferred %}
-    <button type="button" class="dp-btn" data-cq-action="bring-back">Bring back</button>
-    {% else %}
-      {% if i.type == 'question' %}
-        {% if i.suggested and i.suggested.picks %}<button type="button" class="dp-btn dp-btn-primary" data-cq-action="accept">Accept</button>{% endif %}
-        <button type="button" class="dp-btn" data-cq-action="choose" aria-expanded="false">Choose&hellip;</button>
-      {% endif %}
-      {% if i.type != 'question' or i.kind in ('project_match', 'retype') %}
-        <a class="dp-btn" href="{{ i.href }}">{{ i.fix_label }}</a>
-      {% endif %}
-      <button type="button" class="dp-btn" data-cq-action="defer" title="Move to the Deferred list. No timer: it stays there until you bring it back.">Defer</button>
-      {% if i.dismissible %}<button type="button" class="dp-btn" data-cq-action="dismiss" title="Remove for good">Dismiss</button>{% endif %}
-    {% endif %}
-  </div>
-  {% if i.type == 'question' and not i.deferred %}
-  <form class="cq-chooser" hidden>
-    <fieldset>
-      <legend class="dp-sr-label">Answer</legend>
-      {% for o in i.options %}
-      <label class="cq-option"><input type="{{ 'checkbox' if i.multi else 'radio' }}" name="pick" value="{{ o.key }}"{% if o.suggested or (i.kind == 'retype' and i.current == o.key and not i.suggested.picks) %} checked{% endif %}> {{ o.label }}{% if o.reason %} <span class="cq-detail">({{ o.reason }})</span>{% endif %}</label>
-      {% endfor %}
-    </fieldset>
-    <button type="submit" class="dp-btn dp-btn-primary">{% if i.kind == 'project_match' %}Add to the ticked projects{% else %}Use this answer{% endif %}</button>
-    {% if i.kind == 'project_match' %}<span class="cq-detail">Tick none to add it to no project.</span>{% endif %}
-  </form>
-  {% endif %}
-  <p class="cq-error" role="alert" hidden></p>
-</li>
-{%- endmacro %}
-
-{% macro render_groups(groups, faces, prefix) -%}
+{% macro render_groups(groups, section) -%}
 {% for g in groups %}
-<section class="cq-group" data-cq-group="{{ g.id }}" aria-labelledby="cq-h-{{ prefix }}-{{ loop.index }}">
-  <div class="cq-group-head">
-    {% if g.type == 'card' and faces.get(g.slug) %}
-    <div class="cq-face">{{ card(faces[g.slug], "mini") }}</div>
-    {% endif %}
-    <div class="cq-group-title">
-      <h3 id="cq-h-{{ prefix }}-{{ loop.index }}"><a href="{{ g.href }}">{{ g.title }}</a></h3>
-      <span class="cq-group-meta">{{ g['items'] | length }} item{{ '' if g['items'] | length == 1 else 's' }}{% if g.type == 'card' and g.activity %} &middot; {{ g.activity | capitalize }}{% elif g.type == 'hobby' %} &middot; Hobby{% endif %}</span>
-    </div>
-  </div>
-  <ul class="cq-items">
-    {% for i in g['items'] %}{{ item_row(i) }}{% endfor %}
-  </ul>
+{% set n = g['items'] | length %}
+<section class="cq-group" data-cq-group="{{ g.id }}" data-cq-section="{{ section }}" data-cq-count="{{ n }}">
+  <h3 class="cq-group-head">
+    <button type="button" class="cq-group-toggle" data-cq-action="toggle" aria-expanded="false" aria-controls="cq-body-{{ section }}-{{ loop.index }}">
+      <span class="cq-chev" aria-hidden="true"></span>
+      <span class="cq-group-name">{{ g.title }}</span>
+      <span class="cq-group-meta">{{ n }} item{{ '' if n == 1 else 's' }}{% if g.type == 'card' and g.activity %} &middot; {{ g.activity | capitalize }}{% elif g.type == 'hobby' %} &middot; Hobby{% endif %}</span>
+    </button>
+    <a class="cq-group-open" href="{{ g.href }}">Open<span class="dp-sr-label"> {{ g.title }}</span></a>
+  </h3>
+  <div class="cq-group-body" id="cq-body-{{ section }}-{{ loop.index }}" hidden></div>
 </section>
 {% endfor %}
 {%- endmacro %}
 
 <div class="cq-root" data-cq-open="{{ q.counts.open }}" data-cq-deferred="{{ q.counts.deferred }}">
   {% if q.groups %}
-  <p class="cq-summary">{{ q.counts.open }} open: {{ q.counts.questions }} question{{ '' if q.counts.questions == 1 else 's' }}, {{ q.counts.nudges }} nudge{{ '' if q.counts.nudges == 1 else 's' }}, {{ q.counts.needs }} need{{ '' if q.counts.needs == 1 else 's' }}. Grouped by card, Active cards first.</p>
-  {{ render_groups(q.groups, faces, 'o') }}
+  <p class="cq-summary">{{ q.counts.open }} open: {{ q.counts.questions }} question{{ '' if q.counts.questions == 1 else 's' }}, {{ q.counts.nudges }} nudge{{ '' if q.counts.nudges == 1 else 's' }}, {{ q.counts.needs }} need{{ '' if q.counts.needs == 1 else 's' }}. Grouped by card, Active cards first. Open a group to see its items.</p>
+  {{ render_groups(q.groups, 'open') }}
   {% else %}
   <div class="audit-log-empty">All clear: nothing needs your attention.</div>
   {% endif %}
@@ -79,7 +34,7 @@
   <section class="cq-deferred" aria-labelledby="cq-deferred-h">
     <h2 id="cq-deferred-h" class="cq-deferred-title">Deferred ({{ q.counts.deferred }})</h2>
     <p class="cq-summary">Set aside, no timer. They stay here until you answer them or bring them back.</p>
-    {{ render_groups(q.deferred, faces, 'd') }}
+    {{ render_groups(q.deferred, 'deferred') }}
   </section>
   {% endif %}
 </div>

@@ -179,7 +179,7 @@ def score_project(project_id_or_dict):
     # #404: per-object coverage + timeline checks run over content only, never
     # the write-up doc (which is scored separately as story/writeup_body).
     content = content_items(project, items)
-    project_tags = _get_project_tags(project)
+    project_tags = _get_project_tags(project, items)
 
     # Build checklist
     checklist = []
@@ -469,8 +469,10 @@ def _score_means_to_an_end(project):
     }
 
 
-def _get_project_tags(project):
-    """Get all tags for a project: project-level tag_id plus tags on its items."""
+def _get_project_tags(project, items=None):
+    """Get all tags for a project: project-level tag_id plus tags on its items.
+    `items` (db.list_project_items) can be passed in so the caller's list is reused, and the
+    item tags come back in one query rather than one per item (#524)."""
     tags = set()
 
     # Project-level tag_id
@@ -480,11 +482,9 @@ def _get_project_tags(project):
             tags.add(tag["id"])
 
     # Tags on project items
-    items = db.list_project_items(project["id"])
-    for item in items:
-        item_tags = db.list_tags_for_post(item["slug"])
-        for tag in item_tags:
-            tags.add(tag["id"])
+    if items is None:
+        items = db.list_project_items(project["id"])
+    tags.update(db.tag_ids_for_posts([item["slug"] for item in items]))
 
     return list(tags)
 
@@ -515,6 +515,7 @@ def _get_related_projects(project):
     return related
 
 
+@db.in_read_session
 def score_all_projects():
     """Score every project and return aggregate dashboard data.
 
@@ -545,8 +546,7 @@ def score_all_projects():
             gap_buckets[key] = gap_buckets.get(key, 0) + 1
 
     # Unfiled count
-    unfiled = db.list_unfiled_items(limit=1000000)
-    unfiled_count = len(unfiled)
+    unfiled_count = db.count_unfiled_items()
 
     return {
         "projects_by_status": projects_by_status,

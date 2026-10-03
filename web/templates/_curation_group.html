@@ -1,0 +1,9 @@
+{#- One expanded Curator queue group (#524): the card's mini face and its items. Fetched by
+     static/js/curator-queue.js when a collapsed group is opened. Autoescaped, no |safe. -#}
+{% from "_card.html" import card %}
+{% from "_curation_items.html" import item_row %}
+{% if face %}<div class="cq-face">{{ card(face, "mini") }}</div>{% endif %}
+<ul class="cq-items">
+  {% for i in items %}{{ item_row(i) }}{% endfor %}
+</ul>
+{% if not items %}<p class="cq-summary">Nothing left in this group.</p>{% endif %}

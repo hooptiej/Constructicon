@@ -2994,25 +2994,38 @@ def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | Non
 @app.get("/api/curator/queue")
 def api_curator_queue(card: str | None = None, summary: bool = False):
     """The unified Curator queue, grouped by card: {groups, deferred, counts}. `card`
-    limits it to one card's slice; `summary=1` returns only the counts (the nav badge)."""
-    q = curation_queue.build_queue(card=card)
+    limits it to one card's slice; `summary=1` returns only the counts (the nav badge).
+    (#524) The whole-queue and summary forms come from curation_queue's cache, which is
+    rebuilt only after something has been written to the database."""
+    if card:
+        q = curation_queue.build_queue(card=card)
+    else:
+        q = curation_queue.cached_queue()
     if summary:
         return JSONResponse({"counts": q["counts"]})
     return JSONResponse(q)
 
 
 @app.get("/api/curator/queue/html", response_class=HTMLResponse)
-def api_curator_queue_html(request: Request):
-    """The queue as a server-rendered fragment (autoescaped Jinja; each card group wears the
-    shared mini card face from _card.html). The Curator drawer and /curator both load this."""
-    q = curation_queue.build_queue()
-    faces = {}
-    for g in q["groups"] + q["deferred"]:
-        if g["type"] == "card" and g["slug"] not in faces:
-            p = db.get_project(g["slug"])
-            if p is not None:
-                faces[g["slug"]] = _to_card_face(p)
-    return templates.TemplateResponse(request, "_curation_queue.html", {"q": q, "faces": faces})
+def api_curator_queue_html(request: Request, group: str | None = None, card: str | None = None,
+                           section: str = "open"):
+    """The queue as a server-rendered fragment (autoescaped Jinja). Since #524 it is lazy:
+    with no parameters it is just the shell, one collapsed header per group with its item
+    count. `group` (a group id: card:<slug>, hobby:<slug>, uploads, collection; or `card`, a
+    bare card slug) with `section` (open | deferred) returns that one group's items and, for a
+    card, its mini card face from _card.html. The Curator drawer and /curator both use it."""
+    if card and not group:
+        group = f"card:{card}"
+    if not group:
+        return templates.TemplateResponse(request, "_curation_queue.html", {"q": curation_queue.cached_queue()})
+    section = "deferred" if section == "deferred" else "open"
+    g, items = curation_queue.group_items(group, section)
+    face = None
+    if g is not None and g["type"] == "card":
+        p = db.get_project(g["slug"])
+        if p is not None:
+            face = _to_card_face(p)
+    return templates.TemplateResponse(request, "_curation_group.html", {"items": items, "face": face})
 
 
 def _queue_action(fn, key):

@@ -135,6 +135,22 @@ def _file_question(entry):
             "group": None, "href": link, "fix_label": "Open file", "file_title": title,
             "deferred": False, "dismissible": False,
         }
+    if entry["kind"] == "item_supersedes":
+        # #477: "does this new file replace an earlier one?" -- pick a candidate or "No, it's separate".
+        options = [{"key": o["key"], "label": o.get("label", o["key"]), "reason": None,
+                    "suggested": o["key"] == entry.get("suggested")} for o in entry.get("options", [])]
+        picks = [o["key"] for o in options if o["suggested"]]
+        return {
+            "type": TYPE_QUESTION, "key": decision_key(entry["id"]), "id": entry["id"], "kind": "item_supersedes",
+            "label": entry.get("question") or f"Does “{title}” replace an earlier file?",
+            "field": None,
+            "suggested": {"picks": picks, "labels": [o["label"] for o in options if o["suggested"]],
+                          "reason": entry.get("suggested_reason")},
+            "confidence": entry.get("confidence"),
+            "options": options, "multi": False, "answer_param": "choice",
+            "group": None, "href": link, "fix_label": "Open file", "file_title": title,
+            "deferred": False, "dismissible": False,
+        }
     current = entry.get("current_type")
     options = [{"key": o["key"], "label": o.get("label", o["key"]), "reason": None,
                 "suggested": bool(o.get("suggested"))} for o in entry.get("options", [])]

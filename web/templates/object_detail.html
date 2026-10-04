@@ -41,6 +41,14 @@
     </div>
   </div>
 
+  {# #477: revision chain banner. A superseded item points at the current revision. #}
+  {% if revisions.in_chain and revisions.superseded %}
+  <div class="rev-banner" role="status">
+    <strong>Superseded</strong>, see <a href="/object/{{ revisions.current.slug }}">{{ revisions.current.title }}</a>
+    <span class="dp-muted">(rev {{ revisions.of }}, the current revision). This file is rev {{ revisions.rev }} of {{ revisions.of }}.</span>
+  </div>
+  {% endif %}
+
   <div class="dp-hero">
     <div class="dp-hero-left dp-wide">
       <div class="detail-preview">
@@ -213,6 +221,19 @@
       {% set where_view %}
       <dl class="dp-rows">
         <div class="dp-row"><dt>Projects</dt><dd>{% for p in item.projects %}<a href="/project/{{ p.slug }}">{{ p.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">Not in any project</span>{% endfor %}</dd></div>
+        {# #477: the revision stack, oldest to newest; this item and the current revision are marked. #}
+        <div class="dp-row" id="revisions"><dt>Revisions</dt><dd>
+          {% if revisions.in_chain %}
+          <ol class="rev-stack" aria-label="Revision chain, oldest first">
+            {% for c in revisions.chain %}
+            <li{% if c.is_this %} class="rev-this" aria-current="true"{% endif %}>
+              {% if c.is_this %}<span>{{ c.title }}</span>{% else %}<a href="/object/{{ c.slug }}">{{ c.title }}</a>{% endif %}
+              <span class="rev-tag">rev {{ c.rev }}{% if c.is_current %}, current{% endif %}</span>
+            </li>
+            {% endfor %}
+          </ol>
+          {% else %}<span class="dp-muted">No other revisions</span>{% endif %}
+        </dd></div>
       </dl>
       {% endset %}
       {% set where_edit %}
@@ -227,6 +248,15 @@
         </select>
         <label class="dp-sr-label" for="detail-new-project-input">New project name</label>
         <input class="input mono" id="detail-new-project-input" placeholder="New project name" style="display:none">
+      </div>
+      <div class="dp-field">
+        <span class="dp-label">Revisions</span>
+        <div class="dp-link-row">
+          <button type="button" class="dp-btn" id="rev-superseded-by-btn" title="A newer file replaces this one">Mark as superseded by&hellip;</button>
+          <button type="button" class="dp-btn" id="rev-replaces-btn" title="This file replaces an older one">This replaces&hellip;</button>
+          {% if revisions.in_chain %}<button type="button" class="dp-btn" id="rev-remove-btn" title="Takes this file out of the chain; its neighbours link up with each other">Remove from revision chain</button>{% endif %}
+        </div>
+        <p class="dp-error" id="rev-error" role="alert"></p>
       </div>
       <div class="dp-field">
         <span class="dp-label">Related</span>
@@ -371,6 +401,19 @@
       <input id="related-search-input" placeholder="Search description, tags, filename...">
     </div>
     <div class="existing-avatar-grid" id="related-picker-grid"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="rev-modal-backdrop">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <h2 id="rev-modal-title">Pick the newer file</h2>
+      <button type="button" class="modal-close" id="rev-modal-close">&times;</button>
+    </div>
+    <div class="search-box" style="margin-bottom:12px">
+      <input id="rev-search-input" placeholder="Search filename, description..." aria-label="Search for the other file">
+    </div>
+    <div class="rev-picker" id="rev-picker-grid"></div>
   </div>
 </div>
 
@@ -1286,6 +1329,62 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     });
   }
   loadSimilar();
+}
+
+// --- #477: revisions. "Mark as superseded by..." (a newer file replaces this one), "This replaces..."
+// (this one replaces an older file) and "Remove from revision chain". The server validates (cycles,
+// redacted items, one successor / predecessor each); its message lands under the buttons.
+{
+  const revBackdrop = document.getElementById('rev-modal-backdrop');
+  const revGrid = document.getElementById('rev-picker-grid');
+  const revSearch = document.getElementById('rev-search-input');
+  const revError = document.getElementById('rev-error');
+  let revMode = 'superseded-by';
+  async function revPost(path, form) {
+    revError.textContent = '';
+    const res = await fetch('/api/image/{{ item.slug }}/' + path, { method: 'POST', body: form });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) { window.location.hash = 'revisions'; window.location.reload(); return; }
+    revError.textContent = (body && (body.detail || (body.error && body.error.message))) || 'That did not work.';
+    revBackdrop.classList.remove('active');
+  }
+  async function loadRevPicker(query) {
+    revGrid.innerHTML = '<p class="empty-state">Loading...</p>';
+    const params = new URLSearchParams();
+    if (query) params.set('query', query);
+    const res = await fetch('/api/search?' + params);
+    const found = (await res.json()).filter(i => i.slug !== '{{ item.slug }}' && !i.redacted);
+    if (!found.length) { revGrid.innerHTML = '<p class="empty-state">No matching files.</p>'; return; }
+    revGrid.innerHTML = found.slice(0, 40).map(i =>
+      '<button type="button" class="rev-pick" data-slug="' + escapeHtml(i.slug) + '">' +
+      (i.thumb_url ? '<img src="' + escapeHtml(i.thumb_url) + '" loading="lazy" alt="">' : '<span class="rev-pick-noimg"></span>') +
+      '<span>' + escapeHtml(i.display_name || i.filename || i.slug) +
+      (i.superseded_by ? ' <em class="dp-muted">(superseded)</em>' : '') + '</span></button>').join('');
+  }
+  function openRevPicker(mode) {
+    revMode = mode;
+    document.getElementById('rev-modal-title').textContent = mode === 'superseded-by' ? 'Pick the newer file' : 'Pick the older file this replaces';
+    revBackdrop.classList.add('active');
+    revSearch.value = '';
+    loadRevPicker('');
+  }
+  document.getElementById('rev-superseded-by-btn').addEventListener('click', () => openRevPicker('superseded-by'));
+  document.getElementById('rev-replaces-btn').addEventListener('click', () => openRevPicker('replaces'));
+  const revRemove = document.getElementById('rev-remove-btn');
+  if (revRemove) revRemove.addEventListener('click', () => {
+    if (confirm('Take this file out of its revision chain? The files on either side link up with each other.')) revPost('revisions/remove', new FormData());
+  });
+  document.getElementById('rev-modal-close').addEventListener('click', () => revBackdrop.classList.remove('active'));
+  revBackdrop.addEventListener('click', (e) => { if (e.target === revBackdrop) revBackdrop.classList.remove('active'); });
+  let revTimer;
+  revSearch.addEventListener('input', () => { clearTimeout(revTimer); revTimer = setTimeout(() => loadRevPicker(revSearch.value), 200); });
+  revGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.rev-pick');
+    if (!btn) return;
+    const form = new FormData();
+    if (revMode === 'superseded-by') { form.append('new_slug', btn.dataset.slug); revPost('superseded-by', form); }
+    else { form.append('old_slug', btn.dataset.slug); revPost('supersedes', form); }
+  });
 }
 
 // #448: generic type-action buttons for per-type handlers

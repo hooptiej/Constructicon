@@ -316,3 +316,8 @@
 .dp-menu a { display: block; font-size: 13px; text-decoration: none; border-radius: 6px; padding: 8px 10px; color: var(--text); }
 .dp-menu a:hover, .dp-menu a:focus-visible { background: var(--chip); }
 @media (max-width: 640px) { .hp-row { gap: 24px 20px; } }
+/* #477: revision chains. Badge on item cards, the line under a grid, and the project grid's marker. */
+.cx-rev-badge { font-size: 10px; color: var(--text-3); text-decoration: none; }
+.cx-rev-old { color: var(--warn); border-color: var(--warn); }
+.rev-badge { font-size: 10px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--warn); color: var(--warn); vertical-align: middle; }
+.rev-note { margin: 4px 0 8px; font-size: 12px; color: var(--text-3); }

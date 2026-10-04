@@ -75,6 +75,13 @@ CREATE TABLE IF NOT EXISTS capture_event_relations (
     created_at REAL NOT NULL,
     PRIMARY KEY (slug_a, slug_b)
 );
+CREATE TABLE IF NOT EXISTS item_revisions (
+    old_slug TEXT PRIMARY KEY,
+    new_slug TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+-- UNIQUE: an item supersedes at most one other, so a chain is linear (A -> B -> C), never a fork.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_item_revisions_new ON item_revisions(new_slug);
 CREATE TABLE IF NOT EXISTS blog_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -1454,7 +1461,8 @@ def list_restricted():
         conn.close()
 
 
-def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False):
+def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False,
+           include_superseded=True):
     """Keyword/filter search over capture_events, most recent first.
 
     #282: redacted rows are excluded by default, same as every other
@@ -1489,6 +1497,10 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, inclu
             clauses.append("redacted = 0" + _not_restricted())
         if not include_brand:
             clauses.append("is_brand_asset = 0")
+        if not include_superseded:
+            # #477: browse views pass False so only the current revision of a chain lists;
+            # search itself keeps finding old revisions (callers mark them superseded).
+            clauses.append(_not_superseded().replace(" AND ", "", 1))
         if query:
             clauses.append("(description LIKE ? OR filename LIKE ? OR extracted_text LIKE ?)")
             params += [f"%{query}%", f"%{query}%", f"%{query}%"]
@@ -1610,6 +1622,8 @@ def delete_upload(slug):
     try:
         conn.execute("DELETE FROM capture_events WHERE slug = ?", (slug,))
         conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? OR slug_b = ?", (slug, slug))
+        # #477: take the item out of its revision chain, closing the gap (A -> B -> C minus B = A -> C).
+        _unlink_revision(conn, slug)
         conn.execute("DELETE FROM project_items WHERE post_slug = ?", (slug,))
         conn.execute("DELETE FROM post_tags WHERE post_slug = ?", (slug,))
         # #240: an open "which project?" question about a row that no longer
@@ -1709,6 +1723,44 @@ def list_related(slug):
         return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
+
+
+# --- Revision chains (#477) ---
+# item_revisions(old_slug PK, new_slug): "new supersedes old", at most one successor per item,
+# so a chain A -> B -> C is two rows and the current revision is the item with no row of its
+# own. Validation and the change log live in core/revisions.py; this is the raw access the
+# listings share. Deliberately NOT capture_event_relations: that table is symmetric and its
+# add_relation merges tags/projects, neither of which fits a directed "replaces" link.
+
+def _unlink_revision(conn, slug):
+    """Removes `slug` from its chain on the caller's connection: its predecessors are
+    re-pointed at its successor (or become the chain's end when there is none)."""
+    row = conn.execute("SELECT new_slug FROM item_revisions WHERE old_slug = ?", (slug,)).fetchone()
+    if row is not None:
+        conn.execute("DELETE FROM item_revisions WHERE old_slug = ?", (slug,))  # first: new_slug is UNIQUE
+        conn.execute("UPDATE item_revisions SET new_slug = ? WHERE new_slug = ?", (row["new_slug"], slug))
+    else:
+        conn.execute("DELETE FROM item_revisions WHERE new_slug = ?", (slug,))
+
+
+def revision_pairs():
+    """{old_slug: new_slug} for every direct supersedes link. One small query."""
+    conn = get_conn()
+    try:
+        return {r["old_slug"]: r["new_slug"] for r in conn.execute("SELECT old_slug, new_slug FROM item_revisions")}
+    finally:
+        conn.close()
+
+
+def superseded_slugs():
+    """Slugs that have a successor (everything in a chain except its current revision)."""
+    return set(revision_pairs())
+
+
+def _not_superseded(prefix=""):
+    """SQL fragment keeping superseded items out of a browse query (#477): only the
+    current revision of each chain is listed. `prefix` is a table alias like "ce."."""
+    return f" AND NOT EXISTS (SELECT 1 FROM item_revisions ir WHERE ir.old_slug = {prefix}slug)"
 
 
 # --- Project-to-project relations (#408) ---
@@ -2586,7 +2638,7 @@ def list_projects_for_post(post_slug):
         conn.close()
 
 
-def list_unfiled_items(limit=10000, include_brand=False):
+def list_unfiled_items(limit=10000, include_brand=False, include_superseded=False):
     """capture_events rows with no project_items row — "unfiled" uploads
     (#41). #17 moved the raw upload gallery into the home page's
     hover/drag pop-out and left the main page showing only Project tiles;
@@ -2617,6 +2669,8 @@ def list_unfiled_items(limit=10000, include_brand=False):
         # belongs in the Brand Vault, not the home "Unfiled" section. include_brand
         # re-includes them for an explicit enumerate-everything caller.
         brand_clause = "" if include_brand else "AND ce.is_brand_asset = 0 "
+        if not include_superseded:  # #477: a superseded file is not "unfiled work", its current revision is
+            brand_clause += _not_superseded("ce.").lstrip() + " "
         rows = conn.execute(
             "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
             "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + _not_restricted("ce.") + " " + brand_clause +
@@ -2628,13 +2682,15 @@ def list_unfiled_items(limit=10000, include_brand=False):
         conn.close()
 
 
-def count_unfiled_items(include_brand=False):
+def count_unfiled_items(include_brand=False, include_superseded=False):
     """(#524) len(list_unfiled_items(limit=huge)) without building a dict per row: the same
     WHERE clause, counted in SQL. For callers that only want the number (the Curator's
     unfiled-objects nudge)."""
     conn = get_conn()
     try:
         brand_clause = "" if include_brand else "AND ce.is_brand_asset = 0 "
+        if not include_superseded:
+            brand_clause += _not_superseded("ce.").lstrip() + " "
         return conn.execute(
             "SELECT COUNT(*) FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
             "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + _not_restricted("ce.") + " " + brand_clause
@@ -2666,7 +2722,7 @@ def list_loose_reference_objects(limit=500):
         conn.close()
 
 
-def list_recent_items_by_type(limit_per_type=10, include_brand=False):
+def list_recent_items_by_type(limit_per_type=10, include_brand=False, include_superseded=False):
     """Most recent capture_events rows, independently fetched per media_type.
     Each type gets its own N most recent items, rather than competing within
     a shared global pool. Returns a dict keyed by media_type, each value a
@@ -2685,6 +2741,8 @@ def list_recent_items_by_type(limit_per_type=10, include_brand=False):
         # #417: brand assets are excluded by default -- the Files home widget
         # is general browse, not the Brand Vault. include_brand re-includes them.
         brand_clause = "" if include_brand else " AND is_brand_asset = 0"
+        if not include_superseded:  # #477: current revisions only
+            brand_clause += _not_superseded()
         # Fetch all distinct media_types that have at least one (non-redacted,
         # #282) row -- a type whose only rows are redacted gets no tab.
         media_type_rows = conn.execute(
@@ -2814,6 +2872,7 @@ IMAGE_TABLE_KEYS = {
     "capture_events": ("slug",),
     "post_tags": ("post_slug", "tag_id"),
     "provenance_options": ("scope", "key"),
+    "item_revisions": ("old_slug",),  # #477: one successor per item
 }
 _IMAGE_ROWID_TABLES = ("project_items", "project_hobbies", "family_members", "project_relations",
                        "blog_entry_projects", "post_tags")
@@ -4043,7 +4102,7 @@ def list_projects_for_hobby(tag_id):
         conn.close()
 
 
-def list_loose_hobby_objects(tag_id):
+def list_loose_hobby_objects(tag_id, include_superseded=False):
     """Objects tagged with a hobby that sit in none of its member projects (#525): the
     hobby page's "loose objects". Every tagged object, not capped like list_posts_for_tag's
     default. Newest first, as list_posts_for_tag returns them."""
@@ -4055,7 +4114,8 @@ def list_loose_hobby_objects(tag_id):
             "WHERE ph.hobby_tag_id = ?", (tag_id,)).fetchall()}
     finally:
         conn.close()
-    return [r for r in tagged if r["slug"] not in in_members]
+    hidden = set() if include_superseded else superseded_slugs()  # #477
+    return [r for r in tagged if r["slug"] not in in_members and r["slug"] not in hidden]
 
 
 def list_hobbies_for_project(project_id):

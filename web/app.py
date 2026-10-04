@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import FormData
 
-from core import automatch, backup, captions, card_payload, card_rules, cards, curation_queue, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, similarity, site_export, storage, thumbnails, timeline
+from core import automatch, backup, captions, card_payload, card_rules, cards, curation_queue, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, revisions, similarity, site_export, storage, thumbnails, timeline
 from core import version as version_info
 from core import physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
@@ -429,7 +429,7 @@ def _public_items(rows):
         it = _to_public(r)
         it["codes"] = [code_map[t] for t in (it["tags"] or []) if t in code_map]
         out.append(it)
-    return out
+    return revisions.decorate(out)  # #477: superseded_by / rev for the card badge
 
 
 # #517: the item grids (home Files panel, /unfiled, user gallery, hobby loose objects) embed
@@ -438,6 +438,29 @@ def _public_items(rows):
 def _card_items(rows):
     """_public_items(rows) slimmed for embedding in a page (#517)."""
     return [card_payload.card_item_public(it) for it in _public_items(rows)]
+
+
+def _split_revisions(rows, show_all):
+    """#477: browse grids list only the CURRENT revision of each chain. Returns (rows to show,
+    how many superseded rows the grid has); with show_all the older revisions stay (their cards
+    carry a Superseded badge). `rows` are capture_events dicts fetched WITH superseded items."""
+    sup = db.superseded_slugs()
+    if not sup:
+        return rows, 0
+    n = sum(1 for r in rows if r["slug"] in sup)
+    return (rows if show_all else [r for r in rows if r["slug"] not in sup]), n
+
+
+def _rev_note(request, count, show_all):
+    """The small "N older revisions hidden / Show older revisions" line under a grid (templates/
+    _revisions_note.html). None when the grid has no superseded items. Toggled with ?rev=all."""
+    if not count:
+        return None
+    params = {k: v for k, v in request.query_params.items() if k != "rev"}
+    if not show_all:
+        params["rev"] = "all"
+    from urllib.parse import urlencode
+    return {"count": count, "all": show_all, "href": request.url.path + ("?" + urlencode(params) if params else "")}
 
 
 
@@ -838,7 +861,7 @@ def api_version():
 # --- Pages ---
 
 @app.get("/", response_class=HTMLResponse)
-def home_page(request: Request, hobby: str = "", ref: str = ""):
+def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
     """Home is the gallery itself (left third) plus a curated Projects
     section (right two-thirds) — see README's Projects/tag-tree note for why
     projects and blog_tags are separate concepts. The pill row filters by
@@ -917,16 +940,20 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
     # `client` field, which several past widget versions conflated with
     # "no project"), just reduced to slugs since that's all the merged
     # card's per-item marking needs.
-    unfiled_slugs = [r["slug"] for r in db.list_unfiled_items()]
+    show_all_revs = rev == "all"  # #477: Files panel lists current revisions only unless ?rev=all
+    unfiled_slugs = [r["slug"] for r in db.list_unfiled_items(include_superseded=True)]
     # #107/#256: every uploaded item, independent per media_type (each type
     # contributes its own full list rather than competing within one global
     # pool), so every type that has uploads gets a tab and "all files" really
     # means all of them — same unbounded-limit precedent db.list_unfiled_items
     # already set for the old Unfiled widget, not a new perf tradeoff.
-    files_by_type = {
-        mt: _card_items(rows)
-        for mt, rows in db.list_recent_items_by_type(limit_per_type=10000).items()
-    }
+    files_by_type = {}
+    older_revs = 0
+    for mt, rows in db.list_recent_items_by_type(limit_per_type=10000, include_superseded=True).items():
+        rows, n_sup = _split_revisions(rows, show_all_revs)
+        older_revs += n_sup
+        if rows:
+            files_by_type[mt] = _card_items(rows)
     # Timeline feature: the gallery rail shows every project (including
     # children, with an is_child flag) in date order -- deliberately built
     # from all_projects, not the top-level-only `projects` local above that
@@ -965,6 +992,7 @@ def home_page(request: Request, hobby: str = "", ref: str = ""):
             "owner_initials": _owner_initials,
             "unfiled_slugs": unfiled_slugs,
             "files_by_type": files_by_type,
+            "rev_note": _rev_note(request, older_revs, show_all_revs),
             "timeline_projects": timeline_projects,
         },
     )
@@ -1137,6 +1165,10 @@ def api_list_pending_decisions():
             entry["question"] = item.get("question", "")
             entry["options"] = item.get("options", [])
             entry["current_type"] = item.get("current_type")
+        elif item["kind"] == revisions.KIND_ITEM_SUPERSEDES:
+            entry["question"] = item.get("question", "")
+            entry["options"] = item.get("options", [])
+            entry["suggested"] = item.get("suggested")
         items.append(entry)
     return JSONResponse({"count": len(items), "items": items})
 
@@ -1327,14 +1359,15 @@ def _card_queue_strip(slug=None, hobby=None):
 
 
 @app.get("/project/{slug}", response_class=HTMLResponse)
-def project_detail_page(request: Request, slug: str):
+def project_detail_page(request: Request, slug: str, rev: str = ""):
     project = db.get_project(slug)
     if project is None:
         raise HTTPException(status_code=404, detail="not found")
     # raw_items feeds both the card grid (via _to_content_public below) and
     # the Timeline feature's span resolution (core/timeline.py), which needs
     # the raw capture_events fields _to_content_public's card shape drops.
-    raw_items = db.list_project_items(project["id"])
+    # #477: only the current revision of a chain is a card/stack member unless ?rev=all.
+    raw_items, n_sup = _split_revisions(db.list_project_items(project["id"]), rev == "all")
     items = [_to_content_public(r, project_slug=slug) for r in raw_items]
     child_projects = db.list_child_projects(project["id"])
     ancestors = db.list_project_ancestors(project["id"])
@@ -1377,10 +1410,12 @@ def project_detail_page(request: Request, slug: str):
     # moment for a span). One stable sort over the merged list keeps
     # list_project_items' own sort_order tie-break for same-instant items.
     grid_entries = []
+    older_slugs = db.superseded_slugs()  # #477: marks older revisions when ?rev=all shows them
     for raw, public in zip(raw_items, items):
         effective_date = timeline.resolve_item_date(raw)
         grid_entries.append({
             "kind": "item",
+            "superseded": raw["slug"] in older_slugs,
             "sort_date": effective_date,
             "date_display": _friendly_date(effective_date),
             "writeup_capable": object_types.can_be_writeup(raw),
@@ -1479,6 +1514,7 @@ def project_detail_page(request: Request, slug: str):
             "family_info": family_info,
             "header_card": header_card,
             "stacks": stacks,
+            "rev_note": _rev_note(request, n_sup, rev == "all"),
             "beside_cards": beside_cards,
             "home_crumbs": home_crumbs,
             "project_score": project_score,
@@ -1498,15 +1534,17 @@ def project_detail_page(request: Request, slug: str):
 
 
 @app.get("/unfiled", response_class=HTMLResponse)
-def unfiled_page(request: Request):
+def unfiled_page(request: Request, rev: str = ""):
     """Issue #98: full-page version of home.html's compact Unfiled widget,
     with bulk selection/filing tools the widget has no room for. Reuses the
     exact same db.list_unfiled_items()/_to_public() data shape the widget
     already uses, so the gallery-card markup is identical everywhere."""
-    unfiled_items = _card_items(db.list_unfiled_items())
+    rows, n_sup = _split_revisions(db.list_unfiled_items(include_superseded=True), rev == "all")  # #477
+    unfiled_items = _card_items(rows)
     return templates.TemplateResponse(
         request, "unfiled.html",
-        {"unfiled_items": unfiled_items, "file_provenance_options": provenance_options.picker_options("file")},
+        {"unfiled_items": unfiled_items, "file_provenance_options": provenance_options.picker_options("file"),
+         "rev_note": _rev_note(request, n_sup, rev == "all")},
     )
 
 
@@ -1517,7 +1555,7 @@ def hobbies_page(request: Request):
 
 
 @app.get("/hobby/{slug}", response_class=HTMLResponse)
-def hobby_detail_page(request: Request, slug: str):
+def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     """Hobby page (#360, rebuilt #525 on the same patterns as the project page and home):
     the hobby's own card + a details panel (STATUS / IDENTITY / DATES), the Curator strip for
     this hobby, each member project as a small card with a pile of its files, and the loose
@@ -1570,7 +1608,8 @@ def hobby_detail_page(request: Request, slug: str):
                                        needs_input=bool(queue["items"]))
     hobby_face["cover_url"] = _project_cover_url(hobby_face["cover_slug"]) if hobby_face["cover_slug"] else None
 
-    loose = _card_items(db.list_loose_hobby_objects(hobby["id"]))
+    loose_rows, n_sup = _split_revisions(db.list_loose_hobby_objects(hobby["id"], include_superseded=True), rev == "all")  # #477
+    loose = _card_items(loose_rows)
     start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
     return templates.TemplateResponse(
@@ -1583,6 +1622,7 @@ def hobby_detail_page(request: Request, slug: str):
             "inactive_nodes": inactive_roots,
             "project_count": len(projects),
             "loose_items": loose,
+            "rev_note": _rev_note(request, n_sup, rev == "all"),
             "dates_label": hobby_face["dates"],
             "dates_start": _friendly_date(start) if start else None,
             "dates_end": _friendly_date(end) if end else None,
@@ -1604,12 +1644,13 @@ def wallpaper_page(request: Request):
 
 
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
-def user_gallery_page(request: Request, uploader: str):
-    rows = db.search(uploaded_by=uploader, limit=1000)
+def user_gallery_page(request: Request, uploader: str, rev: str = ""):
+    rows, n_sup = _split_revisions(db.search(uploaded_by=uploader, limit=1000), rev == "all")  # #477
     items = _card_items(rows)
     return templates.TemplateResponse(
         request, "user_gallery.html",
-        {"uploader": uploader, "uploader_display": uploader, "items": items},
+        {"uploader": uploader, "uploader_display": uploader, "items": items,
+         "rev_note": _rev_note(request, n_sup, rev == "all")},
     )
 
 
@@ -1660,7 +1701,7 @@ def object_detail_page(request: Request, slug: str):
     }
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
+        {"item": item, "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
     )
 
 
@@ -2356,6 +2397,38 @@ def api_add_related(request: Request, slug: str, related_slug: str = Form(...)):
 def api_remove_related(request: Request, slug: str, related_slug: str = Form(...)):
     db.remove_relation(slug, related_slug)
     return JSONResponse([_to_public(r) for r in db.list_related(slug)])
+
+
+# --- Revision chains (#477) ---
+# Core (core/revisions.py) validates and writes through the change log; a rule violation is a
+# CardError, which the app-wide handler turns into the shared 422/409/404 {error:{code,message}}.
+
+@app.get("/api/image/{slug}/revisions")
+def api_get_revisions(slug: str):
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return JSONResponse(revisions.revision_view(slug))
+
+
+@app.post("/api/image/{slug}/superseded-by")
+def api_mark_superseded_by(slug: str, new_slug: str = Form(...)):
+    """`new_slug` replaces this item (this item becomes "Superseded, see <current>")."""
+    result = revisions.mark_superseded(slug, new_slug, actor="owner-ui")
+    return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
+
+
+@app.post("/api/image/{slug}/supersedes")
+def api_mark_supersedes(slug: str, old_slug: str = Form(...)):
+    """This item replaces `old_slug`."""
+    result = revisions.mark_superseded(old_slug, slug, actor="owner-ui")
+    return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
+
+
+@app.post("/api/image/{slug}/revisions/remove")
+def api_remove_from_revisions(slug: str):
+    """Takes this item out of its chain; its neighbours link up (A -> B -> C minus B = A -> C)."""
+    result = revisions.remove_from_chain(slug, actor="owner-ui")
+    return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
 
 @app.post("/api/image/{slug}/project")
@@ -3691,7 +3764,8 @@ def api_tags(request: Request):
 def api_search(request: Request, query: str = "", tags: str = "", client: str = ""):
     tag_list = [t for t in tags.split(",") if t] or None
     results = db.search(query=query or None, tags=tag_list, client=client or None)
-    return JSONResponse([_to_public(r) for r in results])
+    # #477: search still finds old revisions, but marks them (superseded_by = the current one).
+    return JSONResponse(revisions.decorate([_to_public(r) for r in results]))
 
 
 # --- Site export (generate static site for deployment) ---

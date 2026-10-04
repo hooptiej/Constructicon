@@ -109,6 +109,15 @@ def auto_match(slug, texts):
             )
     except Exception as e:
         print(f"automatch failed for {slug}: {e!r}", flush=True)
+    # #477: a new file whose name matches an existing item (same stem, other rev/date suffix)
+    # queues a "does this replace ...?" question. Only asks; never links by itself.
+    try:
+        from . import revisions
+        asked = revisions.queue_replace_question(slug)
+        if asked:
+            print(f"revisions {slug}: queued replace question #{asked}", flush=True)
+    except Exception as e:
+        print(f"revision check failed for {slug}: {e!r}", flush=True)
 
 
 def ensure_capture_thumbnail(slug):

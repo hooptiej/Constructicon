@@ -116,10 +116,13 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     # project row itself doesn't carry it, so fetch it here and attach it as
     # project["writeup"] for the template (#337, same pattern as project_export).
     project_items = {}  # project_id -> list of items
+    older_revisions = db.superseded_slugs()
     for project_id, project in projects.items():
         # #443: restricted items (keys/certs) can sit on a project in the
         # owner's reference, but never in the museum.
-        items = [i for i in db.list_project_items(project_id) if not object_types.is_restricted(i)]
+        # #477: only the current revision of a chain goes in the museum; no revisions, no change.
+        items = [i for i in db.list_project_items(project_id)
+                 if not object_types.is_restricted(i) and i["slug"] not in older_revisions]
         project_items[project_id] = items
         if not items:
             warnings.append(f"Project '{project['slug']}' has no items")

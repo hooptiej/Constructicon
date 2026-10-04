@@ -15,6 +15,7 @@
     <div>
       <h1 class="page-title">Unfiled</h1>
       <p class="page-subtitle" id="unfiled-count-label">{{ unfiled_items | length }} upload{{ 's' if unfiled_items|length != 1 else '' }} not yet added to a project.</p>
+      {% include "_revisions_note.html" %}
     </div>
     <div style="display: flex; gap: 8px; align-items: center;">
       <div class="sort-control">

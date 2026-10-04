@@ -14,6 +14,7 @@
     <div>
       <h1 class="page-title">{{ uploader_display }}</h1>
       <p class="page-subtitle">{{ items | length }} upload{{ 's' if items|length != 1 else '' }}</p>
+      {% include "_revisions_note.html" %}
     </div>
     <div class="user-gallery-controls">
       <!-- Delete mode (#24) — was a toggle in the admin pop-out, which was

@@ -3,12 +3,14 @@
 The "Needs your input" queue is a generic ask-don't-guess mechanism:
 - project_match: an upload matched multiple project titles
 - retype: a file's pre_store_fn deferred classification to the owner
+- item_supersedes: a new file looks like another revision of an existing one (#477);
+  answered with a candidate slug (creates the supersedes link) or "none"
 
 This module centralizes the list/cleanup and resolve logic so both the web
 API and the MCP server use the same decision workflow.
 """
 
-from core import automatch, cards, changes, db, ingest, object_types
+from core import automatch, cards, changes, db, ingest, object_types, revisions
 
 
 class DecisionNotFound(Exception):
@@ -120,6 +122,20 @@ def list_open():
             entry["question"] = decision["payload"].get("question", "")
             entry["current_type"] = row.get("media_type")
 
+        elif decision["kind"] == revisions.KIND_ITEM_SUPERSEDES:
+            # #477: "does this replace ...?" -- drop candidates that have since been superseded
+            # or removed; with none left (or the file already linked by hand) it's stale.
+            live = revisions.live_candidates(decision)
+            if not live:
+                db.resolve_pending_decision(decision["id"], {"stale": "no candidates left"})
+                continue
+            payload = decision["payload"]
+            entry["options"] = [o for o in payload.get("options", []) if o["key"] in live or o["key"] == revisions.NONE_KEY]
+            entry["question"] = payload.get("question", "")
+            entry["suggested"] = payload.get("suggested") if payload.get("suggested") in live else None
+            entry["suggested_reason"] = payload.get("suggested_reason") if entry["suggested"] else None
+            entry["confidence"] = payload.get("confidence") if entry["suggested"] else None
+
         items.append(entry)
 
     return items
@@ -188,6 +204,13 @@ def resolve(decision_id, choice="", project_ids=(), choices=(), actor=changes.AC
             "choice": choice or None,
             "kept": bool(row and choice and choice == row.get("media_type")),
         })
+
+    elif decision["kind"] == revisions.KIND_ITEM_SUPERSEDES:
+        allowed_keys = {o["key"] for o in decision["payload"].get("options", [])}
+        if choice not in allowed_keys:
+            raise InvalidChoice(f"'{choice}' is not one of this question's options: {sorted(allowed_keys)}")
+        # May raise card_rules.CardError (e.g. the candidate was superseded meanwhile): the decision stays open.
+        return revisions.resolve_decision(decision, choice, actor=actor)
 
     else:
         raise UnknownDecisionKind(f"Unknown decision kind: {decision['kind']}")

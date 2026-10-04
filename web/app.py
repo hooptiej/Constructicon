@@ -31,6 +31,7 @@ from core import automatch, backup, captions, card_payload, card_rules, cards, c
 from core import version as version_info
 from core import physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
+from web import request_guard
 
 app = FastAPI()
 
@@ -106,27 +107,11 @@ templates.env.globals["upload_max_mb"] = storage.MAX_MB
 
 # --- Audit logging middleware ---
 
-def _scrub_secrets(form_data):
-    """Remove values from form_data dict whose keys look like secrets (contain
-    'key', 'secret', 'token', 'password', etc., case-insensitive) and replace
-    with a redaction marker. Returns a new dict without mutating the original."""
-    if not form_data:
-        return {}
-    scrubbed = {}
-    secret_keywords = {"key", "secret", "token", "password", "api", "auth"}
-    for key, value in form_data.items():
-        key_lower = key.lower()
-        # Check if any secret keyword is in the key name
-        if any(keyword in key_lower for keyword in secret_keywords):
-            scrubbed[key] = "[REDACTED]"
-        elif hasattr(value, "filename"):
-            # A multipart file field (Starlette UploadFile) — not
-            # JSON-serializable and its content isn't audit-log-worthy
-            # anyway, so log just enough to identify it.
-            scrubbed[key] = f"<file: {value.filename}>"
-        else:
-            scrubbed[key] = value
-    return scrubbed
+def _scrub_secrets(form_data, path=""):
+    """#559: redaction is route-driven (see web/request_guard.py): routes that
+    carry secrets log no values, and the field-name heuristic is only a backstop.
+    Returns a new dict without mutating the original."""
+    return request_guard.redact_audit_body(path, form_data)
 
 
 # #438: request bodies above this aren't read into memory for the audit log —
@@ -159,7 +144,7 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # Only audit mutating /api/* requests
-        is_mutating = request.method in {"POST", "PUT", "DELETE"}
+        is_mutating = request.method in {"POST", "PUT", "PATCH", "DELETE"}
         is_api = request.url.path.startswith("/api/")
         should_audit = is_mutating and is_api
 
@@ -167,7 +152,7 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
         skip_reason = _audit_body_skip_reason(request) if should_audit else None
         if skip_reason:
             form_data = {"_body": skip_reason}
-        elif should_audit and request.method in {"POST", "PUT"}:
+        elif should_audit and request.method in {"POST", "PUT", "PATCH"}:
             # Read the request body so we can log it. Starlette automatically caches
             # the body after the first read, so the handler can read it again.
             try:
@@ -221,7 +206,7 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
             raise
         finally:
             if should_audit:
-                scrubbed_form = _scrub_secrets(form_data)
+                scrubbed_form = _scrub_secrets(form_data, request.url.path)
                 affected_slugs = []
                 # Try to extract affected slugs from the path (e.g., /api/image/{slug})
                 if "/image/" in request.url.path:
@@ -265,6 +250,8 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(AuditLoggingMiddleware)
+# #558: outermost, so a forged cross-origin request is refused before anything runs.
+app.add_middleware(request_guard.OriginGuardMiddleware)
 
 # Source (capture_events.tech): who or what actually added a row, and how —
 # see core/db.py's SOURCE_* constants/source_group() for the full vocabulary
@@ -998,15 +985,24 @@ def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
     )
 
 
+DELETE_ALL_PHRASE = "DELETE EVERYTHING"
+
+
 @app.post("/api/delete-all")
-def api_delete_all():
+def api_delete_all(confirm: str = Form("")):
     """Wipe every capture_events row (and its files), plus tags and
     projects — a full reset. Stands in for imagerepo's old per-user
     'delete my uploads' button now that multi-user accounts are gone;
     single-owner site, so 'my uploads' and 'everything' are the same set.
     Development convenience while content/schema are still in flux, not a
     feature meant to stick around once the site has real content worth
-    protecting."""
+    protecting.
+
+    #558: requires the typed phrase (confirm=DELETE EVERYTHING), so a forged or
+    accidental bodiless POST can't wipe the archive. The audit middleware writes
+    the row for the request (with the confirm field)."""
+    if confirm.strip() != DELETE_ALL_PHRASE:
+        raise HTTPException(status_code=400, detail=f"Type {DELETE_ALL_PHRASE!r} in the confirm field to delete everything")
     # include_redacted (#282) / include_brand (#417): search() hides redacted
     # rows and brand assets by default; a full reset has to take them too or
     # they'd survive as orphaned rows + storage files.
@@ -3622,6 +3618,15 @@ def api_delete_blog_entry(slug: str):
     return JSONResponse({"deleted": True})
 
 
+def _require_json_content_type(request: Request):
+    """#558: JSON-body routes only accept Content-Type: application/json (415
+    otherwise). A cross-site <form enctype="text/plain"> can smuggle a JSON-looking
+    body with no preflight; requiring the JSON type forces a CORS preflight."""
+    ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype != "application/json":
+        raise HTTPException(status_code=415, detail="Content-Type must be application/json")
+
+
 @app.put("/api/blog-entries/{slug}/projects")
 async def api_set_blog_entry_projects(
     request: Request,
@@ -3633,6 +3638,7 @@ async def api_set_blog_entry_projects(
     if entry is None:
         raise HTTPException(status_code=404, detail="Blog entry not found")
 
+    _require_json_content_type(request)
     try:
         body = await request.json()
     except Exception:
@@ -3668,6 +3674,7 @@ async def api_set_blog_entry_items(
     if entry is None:
         raise HTTPException(status_code=404, detail="Blog entry not found")
 
+    _require_json_content_type(request)
     try:
         body = await request.json()
     except Exception:
@@ -3787,6 +3794,7 @@ async def api_export_build(request: Request):
     Returns the build report with project/entry/media counts and any warnings.
     Saves the submitted config to app settings for next time.
     """
+    _require_json_content_type(request)
     try:
         body = await request.json()
     except Exception:
@@ -3860,6 +3868,7 @@ async def api_export_publish(request: Request):
         "pages_url": "https://..."
     }
     """
+    _require_json_content_type(request)
     try:
         body = await request.json()
     except Exception:

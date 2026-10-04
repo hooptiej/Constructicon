@@ -748,6 +748,23 @@ def init_db():
             if column not in existing_audit_columns:
                 conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {ddl_type}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_batch ON audit_log(batch_id)")
+        # #559: scrub saved setting values out of old audit rows. Before the route-driven
+        # redaction, POST /api/settings logged {"key": ..., "value": <the secret>}.
+        # Idempotent: only rows still carrying a non-redacted value are rewritten.
+        for row in conn.execute("SELECT id, form_body FROM audit_log WHERE path = '/api/settings'").fetchall():
+            try:
+                body = json.loads(row["form_body"]) if row["form_body"] else {}
+            except (ValueError, TypeError):
+                body = None
+            if isinstance(body, dict):
+                if "value" not in body or body["value"] == "[REDACTED]":
+                    continue
+                body["value"] = "[REDACTED]"
+            elif body is not None and not body:
+                continue
+            else:
+                body = {"_body": "[REDACTED]"}
+            conn.execute("UPDATE audit_log SET form_body = ? WHERE id = ?", (json.dumps(body), row["id"]))
         # family_members (V2 cards 3.6): many-to-many membership for kind=family and
         # kind=collection cards. Not nesting: membership never moves or copies files.
         conn.executescript("""

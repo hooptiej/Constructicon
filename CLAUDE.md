@@ -323,6 +323,28 @@ configuration gap for that session, not evidence the server itself is gone.
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.
 
+## Web owns background work; MCP enqueues (#549)
+
+`constructicon-web` and `constructicon-mcp` are two processes on one SQLite DB, so
+anything that must happen "only once" cannot live in process-local state.
+
+- **Captions:** only the web process captions. `mcp_server/server.py` sets
+  `CONSTRUCTICON_ROLE=mcp`, and in that role `captions.run_caption` marks the item
+  caption-pending and inserts into the `caption_queue` table instead of calling the GPU.
+  Every caption trigger (upload, import, retype via `ingest.run_in_thread`, a future one)
+  goes through `run_caption`, so no call site can slip past. Web's `captions.start_queue_worker()`
+  thread drains the queue one at a time through `run_caption`, so `CAPTION_LOCK`, the
+  breaker and the cooldown still apply; it leaves the queue alone while the breaker is open
+  and backs off 2s -> 15s when idle. A queue row is removed only after the caption ran.
+- **Migrations:** one-time data migrations are named steps in `db.MIGRATIONS`, recorded in
+  `schema_migrations`, and run by `db.init_db()` in web only, each inside one
+  `BEGIN IMMEDIATE` (`db.transaction()`) so check-and-apply is atomic across processes.
+  The MCP calls `db.init_db(migrate=False)`: schema DDL only, plus a log line if migrations
+  are pending. A new data rewrite goes in `MIGRATIONS`, never straight into `init_db`, and
+  must be idempotent (so an existing DB can safely record it on first run).
+- **OCR self-heal:** the startup re-fire of `ocr_status='pending'` rows and the periodic
+  watchdog live in web only (`web/app.py`), and cover OCR started by MCP too.
+
 ## Build / test / run
 
 No test suite exists in this repo today (no `tests/`, no CI config) —

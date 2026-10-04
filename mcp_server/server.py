@@ -19,6 +19,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# #549: this is NOT the process that does background work. core.captions.run_caption checks this
+# role and enqueues (caption_queue table) instead of calling the GPU; the web process drains it.
+os.environ["CONSTRUCTICON_ROLE"] = "mcp"
+
 from mcp.server.mcpserver import MCPServer
 
 from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, ingest, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
@@ -2285,18 +2289,8 @@ def constructicon_run_type_action(slug: str, action: str) -> dict:
 
 
 if __name__ == "__main__":
-    db.init_db()
-    # Self-heal: this process (or the web one) may have been killed while OCR
-    # was still queued/running for a row, leaving it stuck at "pending"
-    # forever otherwise — shared DB, so either process catches the other's.
-    # Fired as background threads, not run here directly, so a pile-up of
-    # stuck rows can't block this process from ever reaching mcp.run().
-    # The periodic watchdog for rows that go stale while this process stays
-    # up lives in web/app.py — same shared DB, no need to duplicate it here.
-    stuck = db.list_pending_ocr()
-    if stuck:
-        print(f"re-running OCR for {len(stuck)} row(s) left pending by a prior process")
-        for row in stuck:
-            db.set_ocr_status(row["slug"], "pending")
-            threading.Thread(target=ocr.run_ocr, args=(row["slug"],), daemon=True).start()
+    # #549: web owns background work (migrations, OCR self-heal, captions). This process only
+    # runs the idempotent schema DDL; a stuck OCR row is healed by web's startup pass and its
+    # periodic watchdog (same shared DB), and captions are enqueued, never run, here.
+    db.init_db(migrate=False)
     mcp.run(transport="streamable-http", host="0.0.0.0", port=8100, stateless_http=True)

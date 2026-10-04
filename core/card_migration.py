@@ -3,7 +3,8 @@
 Piece 1: `v2c_1` -- maps v1 `projects.status` onto kind / activity / stage /
 stop_reason (4.2), and queues owner decisions for the judgment calls.
 
-Run from core.db.init_db(). Idempotent by construction, no marker needed:
+Run once each, web process only, via core.db.MIGRATIONS / schema_migrations (#549). Still
+idempotent by construction, which is what lets an existing DB record them safely:
   * a card is migrated only while its `stage IS NULL`, and cards created after
     the migration always get a stage, so a second run finds nothing to do;
   * decisions are queued with db.queue_decision_once (skips any existing row,

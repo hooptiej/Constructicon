@@ -828,10 +828,13 @@ async def startup():
     # requests at all).
     stuck = db.list_pending_ocr()
     if stuck:
-        print(f"re-running OCR for {len(stuck)} row(s) left pending by a prior process")
+        print(f"re-running OCR for {len(stuck)} row(s) left pending by a prior process", flush=True)
         for row in stuck:
             _refire_ocr(row["slug"])
     asyncio.create_task(_ocr_watchdog())
+    # #549: web is the ONLY process that captions: it drains the caption_queue table (filled by
+    # the MCP process), one at a time, through captions.run_caption (lock + breaker + cooldown).
+    captions.start_queue_worker()
 
 
 @app.get("/healthz")

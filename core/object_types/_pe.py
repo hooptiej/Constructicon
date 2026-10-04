@@ -160,7 +160,7 @@ def reclassify(row, new_type):
     """Shared by both Reclassify actions: retype the row, and close any open
     "installer or app?" question about it, since this answers it."""
     from .. import db, ingest  # lazy: ingest imports the registry
-    ingest.retype(row["slug"], new_type, lambda f, *args: None)
+    ingest.retype(row["slug"], new_type, ingest.run_in_thread)
     for decision in db.list_pending_decisions("retype"):
         if decision["post_slug"] == row["slug"]:
             db.resolve_pending_decision(decision["id"], {"choice": new_type, "via": "reclassify action"})

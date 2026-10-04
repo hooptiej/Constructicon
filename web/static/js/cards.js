@@ -107,8 +107,8 @@
     if (item.superseded_by) parts.push('<a class="cx-item-badge cx-rev-badge cx-rev-old" href="/object/' + esc(item.superseded_by) + '" title="A newer revision replaces this file. Open the current revision.">Superseded</a>');
     else if (item.rev) parts.push('<a class="cx-item-badge cx-rev-badge" href="/object/' + esc(item.slug) + '#revisions" title="Revision ' + esc(item.rev) + ' (the current one). Older revisions are on its page.">rev ' + esc(item.rev) + '</a>');
     if (item.type_icon) parts.push('<span class="cx-item-badge" title="' + esc(item.type_label || item.type_badge || '') + '">' + esc(item.type_icon) + '</span>');
-    parts.push('<span class="client-badge"><span class="client-dot" style="background:' + esc(colorFor(item.client)) + '"></span>' +
-      '<span class="client-name">' + esc(item.client || (opts.noClientLabel || 'No project yet')) + '</span></span>');
+    // #563: the per-card client badge is gone (keyed on the dead `client` field, so it showed the
+    // same empty-state text on every card); the amber unfiled lamp above is the real signal.
     var by = item.uploaded_by_display;
     if (by) parts.push('<span class="uploader-label" title="Uploaded by">' + esc(by) + '</span>');
     var tags = item.tags || [];

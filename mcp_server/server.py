@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, ingest, object_types, ocr, provenance_options, revisions, storage, timeline
+from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, ingest, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core import version as version_info
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
@@ -403,7 +403,10 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
     if display_name is not None or icon is not None:
         row = db.rename_object(slug, display_name=display_name, icon=icon)
     if type_metadata is not None:
-        db.set_type_metadata(slug, type_metadata)
+        # #563: merge (top-level keys), same as the web route; replacing wholesale wiped
+        # captions / YouTube stats / ID3 / rotation. #425: clean the physical-piece keys.
+        cleaned = physical_piece.clean_fields(dict(type_metadata))
+        db.update_content_metadata(slug, type_metadata=cleaned)
         row = db.get_by_slug(slug)
     if reset_display_date:
         db.set_display_date_override(slug, None)
@@ -1205,7 +1208,9 @@ def constructicon_get_posts_for_tag(tag_name: str) -> list[dict]:
 
     Returns a list of objects.
     """
-    tag = db.get_or_create_tag(tag_name, parent_id=None)
+    tag = db._find_tag_by_name(tag_name)  # #563: a lookup must not create the tag
+    if tag is None:
+        raise ValueError(f"No such tag: {tag_name!r}")
     rows = db.list_posts_for_tag(tag["id"], limit=10000)
     return [_to_public(r) for r in rows]
 
@@ -1237,7 +1242,9 @@ def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
     row = db.get_by_slug(slug)
     if row is None:
         return None
-    tag = db.get_or_create_tag(tag_name, parent_id=None)
+    tag = db._find_tag_by_name(tag_name)  # #563: a lookup must not create the tag
+    if tag is None:
+        raise ValueError(f"No such tag: {tag_name!r}")
     db.detach_tag(slug, tag["id"])
     return _to_public(db.get_by_slug(slug))
 
@@ -2236,6 +2243,7 @@ def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", p
         return {"error": str(e)}
 
 
+@mcp.tool()
 def constructicon_run_type_action(slug: str, action: str) -> dict:
     """#448: Run a per-type action on an object. Actions are declared per type
     (ObjectTypeSpec.actions). See constructicon_get for the available actions

@@ -25,14 +25,44 @@ exist yet.
 
 ## Architecture at a glance
 
-- **`web/app.py`** — FastAPI/Starlette app (`@app.get`/`@app.post`
-  decorators, `HTTPException`, `JSONResponse`/`HTMLResponse`). All HTTP
-  routes live in this one file (~1700 lines): page routes
-  (`/`, `/object/{slug}`, `/project/{slug}`, `/gallery/user/{uploader}`,
-  `/account`) render Jinja2 templates from `web/templates/`; `/api/*`
-  routes are the JSON/form API the templates' JS calls; `/f/{slug}` and
-  `/f/{slug}/thumb` are the public hotlink + thumbnail routes (stable URLs
-  meant to be embedded elsewhere).
+- **`web/`** — FastAPI/Starlette app, split into routers (#547). The ASGI
+  entry point is still `web.app:app`.
+  - `web/app.py` is only the assembly point: `app = FastAPI()`, the
+    `CardError` exception handler, the static mounts (`/static`, `/brand`,
+    `/preview`), middleware (audit logging inside the request guard, which
+    stays outermost), the startup hook (`init_db` migrations, OCR self-heal +
+    watchdog, caption queue worker) and the `include_router` calls.
+  - `web/routes/` holds one plain `APIRouter()` per area, **no prefix** (each
+    route writes its full path): `pages.py` (HTML pages + legacy redirects),
+    `items.py` (`/api/upload`, `/api/content`, `/api/image/*`, per-item
+    captions, gallery, bulk, tags, search, multi-delete), `cards.py`
+    (`/api/projects*`, `/api/project/*`, `/api/cards/*`, `/api/links*`,
+    `/api/families/*`, `/api/changes/*`), `hobbies.py`, `curator.py`
+    (`/api/curator/*`, `/api/pending-decisions*`), `blog_export.py`
+    (`/api/blog-entries*`, `/api/export/*`), `admin.py` (settings, backup,
+    delete-all, audit log, redacted/restricted, storage stats, provenance
+    options, caption tuning/breaker, desktop-app build), `files.py` (`/f/*`,
+    `/downloads/*`, brand-asset and wallpaper listings) and `meta.py`
+    (`/healthz`, `/api/version`).
+  - `web/shapes.py`: the `_to_*` response shapers and the pure helpers they
+    share. `web/common.py`: the `templates` object and its Jinja globals,
+    desktop-uploader constants, breadcrumbs / `?rev=` note helpers.
+    `web/middleware.py`: audit logging. Routers import from `common` and
+    `shapes`, never from `web.app` or from each other.
+  - **Adding a route:** put it in the router for its area, decorated
+    `@router.get(...)`/`@router.post(...)` with the full path. Registration
+    order matters only when two paths can match the same URL (first one
+    wins, e.g. `/api/projects/from-selection` must stay above
+    `/api/projects/{project_id}`): keep such routes in the same router, in
+    that order. A new area gets a new module plus one `include_router` line
+    in `app.py`. A router file's `Path(__file__)` is `web/routes/`, one level
+    deeper than the old `web/app.py`. After a routing refactor, run
+    `scripts/golden_master.py` before/after (route table, path resolution,
+    OpenAPI, ~160 GET snapshots, write round-trips) on the same DB.
+  - Page routes render Jinja2 templates from `web/templates/`; `/api/*` is
+    the JSON/form API the templates' JS calls; `/f/{slug}` and
+    `/f/{slug}/thumb` are the public hotlink + thumbnail routes (stable URLs
+    meant to be embedded elsewhere).
 - **`core/db.py`** — all SQLite access. No ORM; raw SQL via `sqlite3`, one
   `get_conn()`/`conn.close()` pair per call. This is the schema source of
   truth — read it directly rather than trusting any description here or in

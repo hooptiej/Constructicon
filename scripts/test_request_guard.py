@@ -128,6 +128,7 @@ legacy = [("/api/settings", json.dumps({"key": "[REDACTED]", "value": DUMMY})),
           ("/api/other", json.dumps({"value": "keep-me"}))]
 for path, body in legacy:
     conn.execute("INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, timestamp) VALUES ('POST', ?, ?, '[]', 200, 1)", (path, body))
+conn.execute("DELETE FROM schema_migrations WHERE name = 'audit_scrub_settings_559'")  # #549: steps run once; simulate an un-migrated DB
 conn.commit()
 conn.close()
 db.init_db()

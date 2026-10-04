@@ -828,7 +828,7 @@ async def startup():
     # requests at all).
     stuck = db.list_pending_ocr()
     if stuck:
-        print(f"re-running OCR for {len(stuck)} row(s) left pending by a prior process")
+        print(f"re-running OCR for {len(stuck)} row(s) left pending by a prior process", flush=True)
         for row in stuck:
             _refire_ocr(row["slug"])
     asyncio.create_task(_ocr_watchdog())

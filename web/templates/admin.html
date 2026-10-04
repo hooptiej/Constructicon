@@ -65,10 +65,26 @@
       <div class="admin-panel-header">
         <div>
           <h2>Redacted items <span id="admin-redacted-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Hidden from every list and search, reachable by direct link only (#282). Un-redacting puts the row back in browsing — the removed file itself can't come back.</div>
+          <div class="admin-row-hint">Hidden from every list and search, reachable by direct link only (#282). Un-redacting only puts the row back in browsing; the removed file sits in the trash for 7 days, so undo the redact (change log) to bring it back.</div>
         </div>
       </div>
       <div id="admin-redacted-list" class="admin-redacted-list"></div>
+    </section>
+
+    <!-- Trash (#541 phase B): files of deleted or redacted items, kept 7 days so the delete can be
+         undone (POST /api/changes/{batch}/undo), then purged by the web worker's hourly pass.
+         "Empty trash now" purges everything at once (typed phrase, like Delete all). -->
+    <section class="admin-panel" id="admin-trash-section">
+      <div class="admin-panel-header">
+        <div>
+          <h2>Trash <span id="admin-trash-count" class="apikey-status"></span></h2>
+          <div class="admin-row-hint">Deleted items' files wait here 7 days so a delete can be undone, then they're removed for good.</div>
+        </div>
+      </div>
+      <div id="admin-trash-summary" class="admin-row-hint">Loading…</div>
+      <div class="admin-divider"></div>
+      <button type="button" class="btn-danger admin-full-btn" id="admin-empty-trash-btn"
+              title="Removes every file in the trash now. Those deletes can no longer be undone.">Empty trash now</button>
     </section>
 
     <!-- Keys & certificates (#443) — every item of a restricted type. They
@@ -496,6 +512,37 @@
   });
 
   loadProvLists();
+
+  // Trash (#541): count, size, oldest, and a typed-phrase "Empty trash now".
+  function fmtBytes(n) {
+    if (!n) return '0 B';
+    const u = ['B', 'KB', 'MB', 'GB']; let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
+  }
+  async function loadTrash() {
+    const summary = document.getElementById('admin-trash-summary');
+    try {
+      const res = await fetch('/api/trash');
+      const t = await res.json();
+      document.getElementById('admin-trash-count').textContent = `(${t.count})`;
+      summary.textContent = t.count
+        ? `${t.count} item${t.count === 1 ? '' : 's'}, ${fmtBytes(t.bytes)}. Oldest deleted ${new Date(t.oldest * 1000).toLocaleString()}; next purge ${new Date(t.next_expiry * 1000).toLocaleString()}.`
+        : 'Empty.';
+    } catch (e) { summary.textContent = 'Could not load the trash.'; }
+  }
+  loadTrash();
+  document.getElementById('admin-empty-trash-btn').addEventListener('click', async () => {
+    const phrase = 'EMPTY TRASH';
+    const typed = prompt('This permanently removes every file in the trash; those deletes can no longer be undone. Type ' + phrase + ' to confirm.');
+    if (typed === null) return;
+    if (typed.trim() !== phrase) { alert('Phrase did not match. Nothing was removed.'); return; }
+    const res = await fetch('/api/trash/empty', { method: 'POST', body: new URLSearchParams({ confirm: phrase }) });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) alert(`Removed ${body.purged} item${body.purged === 1 ? '' : 's'} (${fmtBytes(body.bytes)}).`);
+    else alert((body.error && body.error.message) || body.detail || 'Empty trash failed.');
+    loadTrash();
+  });
 
   // "Delete all" — the endpoint deletes every upload/tag/project regardless
   // of which page you're on, so it lives here with the other global actions

@@ -191,6 +191,26 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     name TEXT PRIMARY KEY,
     applied_at REAL NOT NULL
 );
+-- #541 phase B: a deleted (or redacted) item's files sit in <storage>/.trash/<batch_id>/ for
+-- TRASH_DAYS (core/items.py) so the delete can be undone; the web worker purges them after.
+-- One row per item per batch; purged_at set = the files are gone for good (undo refuses).
+CREATE TABLE IF NOT EXISTS trash (
+    batch_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    stored_filename TEXT,
+    has_original INTEGER NOT NULL DEFAULT 0,
+    has_thumb INTEGER NOT NULL DEFAULT 0,
+    dir TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    title TEXT,
+    reason TEXT NOT NULL DEFAULT 'delete',
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    purged_at REAL,
+    embedding BLOB,
+    PRIMARY KEY (batch_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_trash_expires ON trash(purged_at, expires_at);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -1780,6 +1800,91 @@ def delete_upload(slug):
         conn.close()
 
 
+# --- Item service reads + trash (#541 phase B; the writes go through ImageLog in core/items.py) ---
+
+def item_references(slug):
+    """Every row elsewhere that an item delete removes or re-links, as image keys:
+    {relations: [(slug_a, slug_b)], successor, predecessor, project_items: [project_id],
+    post_tags: [tag_id], blog_entry_items: [entry_id], decisions: [id]}. Same set
+    delete_upload cleans, plus the blog-entry links it missed."""
+    conn = get_conn()
+    try:
+        succ = conn.execute("SELECT new_slug FROM item_revisions WHERE old_slug = ?", (slug,)).fetchone()
+        pred = conn.execute("SELECT old_slug FROM item_revisions WHERE new_slug = ?", (slug,)).fetchone()
+        return {
+            "relations": [(r["slug_a"], r["slug_b"]) for r in conn.execute(
+                "SELECT slug_a, slug_b FROM capture_event_relations WHERE slug_a = ? OR slug_b = ? ORDER BY rowid",
+                (slug, slug))],
+            "successor": succ["new_slug"] if succ else None,
+            "predecessor": pred["old_slug"] if pred else None,
+            "project_items": [r["project_id"] for r in conn.execute(
+                "SELECT project_id FROM project_items WHERE post_slug = ? ORDER BY rowid", (slug,))],
+            "post_tags": [r["tag_id"] for r in conn.execute(
+                "SELECT tag_id FROM post_tags WHERE post_slug = ? ORDER BY rowid", (slug,))],
+            "blog_entry_items": [r["entry_id"] for r in conn.execute(
+                "SELECT entry_id FROM blog_entry_items WHERE post_slug = ? ORDER BY rowid", (slug,))],
+            "decisions": [r["id"] for r in conn.execute(
+                "SELECT id FROM pending_decisions WHERE post_slug = ? ORDER BY id", (slug,))],
+        }
+    finally:
+        conn.close()
+
+
+def get_embedding(slug):
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT embedding FROM capture_events WHERE slug = ?", (slug,)).fetchone()
+        return row["embedding"] if row else None
+    finally:
+        conn.close()
+
+
+def get_trash_row(batch_id, slug):
+    """One trash entry, embedding included (None when absent)."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM trash WHERE batch_id = ? AND slug = ?", (batch_id, slug)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_trash_embedding(batch_id, slug, embedding):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE trash SET embedding = ? WHERE batch_id = ? AND slug = ?", (embedding, batch_id, slug))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_trash(expired_before=None):
+    """Unpurged trash entries, oldest first (no embedding). `expired_before` (epoch) keeps only
+    those whose expires_at is at or before it."""
+    conn = get_conn()
+    try:
+        sql = ("SELECT batch_id, slug, stored_filename, has_original, has_thumb, dir, size_bytes, title, reason, "
+               "created_at, expires_at FROM trash WHERE purged_at IS NULL")
+        args = []
+        if expired_before is not None:
+            sql += " AND expires_at <= ?"
+            args.append(expired_before)
+        return [dict(r) for r in conn.execute(sql + " ORDER BY created_at, slug", args)]
+    finally:
+        conn.close()
+
+
+def mark_trash_purged(batch_id, slug, when):
+    """The entry's files are gone for good; the row stays as a record (and makes undo refuse)."""
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE trash SET purged_at = ?, embedding = NULL WHERE batch_id = ? AND slug = ?",
+                     (when, batch_id, slug))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def add_relation(slug_a, slug_b):
     """Symmetric — stored both directions so listing either side's related
     items is a single indexed lookup, not an OR query.
@@ -3024,6 +3129,10 @@ IMAGE_TABLE_KEYS = {
     "post_tags": ("post_slug", "tag_id"),
     "provenance_options": ("scope", "key"),
     "item_revisions": ("old_slug",),  # #477: one successor per item
+    # #541 phase B (core/items.py): what an item delete touches, plus its trash entry.
+    "capture_event_relations": ("slug_a", "slug_b"),
+    "blog_entry_items": ("entry_id", "post_slug"),
+    "trash": ("batch_id", "slug"),
 }
 _IMAGE_ROWID_TABLES = ("project_items", "project_hobbies", "family_members", "project_relations",
                        "blog_entry_projects", "post_tags")

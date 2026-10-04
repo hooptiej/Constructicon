@@ -423,6 +423,7 @@
   </button>
   <img class="lightbox-img" id="lightbox-img" src="" alt="">
 </div>
+<script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 <script>
 const IS_OCR_CAPABLE = {{ item.ocr_capable | tojson }};
 const IS_FILE = {{ item.is_file | tojson }};
@@ -972,10 +973,11 @@ document.getElementById('copy-link-btn').addEventListener('click', async () => {
 const redactBtn = document.getElementById('redact-btn');
 if (redactBtn) {
   redactBtn.addEventListener('click', async () => {
-    if (!confirm('Remove the image file? The description, tags, ticket, and client info will stay for future correlation — only the file itself is deleted, and this cannot be undone.')) return;
+    if (!confirm('Remove the image file? The description, tags, ticket, and client info stay for future correlation. The file moves to trash for 7 days (you can undo until then), then it is deleted for good.')) return;
     const res = await fetch('/api/image/{{ item.slug }}/redact', { method: 'POST' });
     if (res.ok) {
-      window.location.reload();
+      const body = await res.json().catch(() => ({}));
+      window.showUndoBar('File moved to trash for 7 days.', body.batch_id, () => window.location.reload());
     } else {
       const body = await res.json().catch(() => ({ detail: 'Redact failed' }));
       alert(body.detail || 'Redact failed');
@@ -984,10 +986,13 @@ if (redactBtn) {
 }
 
 document.getElementById('delete-btn').addEventListener('click', async () => {
-  if (!confirm('Delete this entirely — file (if any) AND all metadata? This cannot be undone.')) return;
+  if (!confirm('Delete this entirely: file (if any) AND all metadata? It moves to trash for 7 days, and you can undo until then.')) return;
   const res = await fetch('/api/image/{{ item.slug }}/delete', { method: 'POST' });
   if (res.ok) {
-    window.location.href = '/';
+    const body = await res.json().catch(() => ({}));
+    document.querySelector('main') && (document.querySelector('main').style.opacity = '0.35');
+    window.showUndoBar('Deleted. It is in the trash for 7 days.', body.batch_id,
+      (how) => { if (how === 'undone') window.location.reload(); else window.location.href = '/'; });
   } else {
     const body = await res.json().catch(() => ({ detail: 'Delete failed' }));
     alert(body.detail || 'Delete failed');

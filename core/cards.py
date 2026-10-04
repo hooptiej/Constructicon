@@ -2129,6 +2129,9 @@ def _changes_from_log(rows):
                             "after": _state(a) if a and "resolved_at" in a else None})
                 continue
             if b is None or a is None:
+                if m["table"] == "capture_events":  # #541: an item row can carry a megabyte of OCR text
+                    from . import items as _items
+                    b, a = _items._slim("capture_events", b), _items._slim("capture_events", a)
                 out.append({"op": r["op"], "card": card, "table": m["table"], "key": m["key"],
                             "field": "(row)", "before": b, "after": a})
                 continue
@@ -2266,8 +2269,12 @@ def undo(target, *, force=False, dry_run=False, actor=None):
         if not r["mutations"]:
             raise CardError("undo_refused", f"Entry {r['id']} ({r['op']}) recorded no row images, so it can't be undone.",
                             {"audit_id": r["id"]})
+    # #541 phase B: an item delete/redact moved files into the trash. Plan the file side first so
+    # a purged file refuses the whole undo (trash_expired) before anything is written.
+    from . import items as _items  # lazy: items imports this module
+    file_plan = _items.undo_prepare(rows)
     batch_id = changes.new_batch_id()
-    applied, slugs = [], []
+    applied, slugs, moved = [], [], []
     try:
         with db.transaction(dry_run=dry_run):
             conn = db.get_conn()
@@ -2284,8 +2291,18 @@ def undo(target, *, force=False, dry_run=False, actor=None):
                 if r["op"] == "undo":
                     orig = [o["id"] for o in _rows_undone_by(r["id"])]
                     db.mark_change_rows_undone(orig, None)
+            if file_plan and not dry_run:
+                _items.undo_apply(file_plan, moved)  # last: a failure rolls the rows back too
     except db.UndoConflict as e:
+        _items.rollback_moves(moved)
         raise CardError("undo_conflict", str(e), e.details)
+    except BaseException:
+        _items.rollback_moves(moved)
+        raise
+    if file_plan and not dry_run:
+        _items.after_undo(rows, file_plan)
+    elif not dry_run and any(r.get("op") == _items.OP_RETYPE for r in rows):
+        _items.after_undo(rows, [])
     flat = _changes_from_log([{"op": "undo", "affected_slugs": sorted(set(slugs)), "mutations": applied}])
     return Result(True, flat, [], batch_id, dry_run,
                   {"undone": [r["id"] for r in rows], "undone_ops": [r["op"] for r in rows]})

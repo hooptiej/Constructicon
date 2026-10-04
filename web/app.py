@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core import actor as actor_ctx, captions, db, errors, ocr
+from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
 from web import request_guard
 from web.common import _STATIC_DIR
 from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
@@ -117,6 +118,23 @@ async def _ocr_watchdog():
             print(f"OCR watchdog error: {e!r}")
 
 
+TRASH_PURGE_INTERVAL_SECONDS = 3600  # #541: deleted files leave the trash after items.TRASH_DAYS
+
+
+async def _trash_purge_loop():
+    """Web owns background work (#549): the hourly pass that permanently removes trash entries
+    past their expiry. asyncio.to_thread copies this task's context, so it runs as `system`."""
+    await asyncio.sleep(60)  # let boot settle first
+    while True:
+        try:
+            result = await asyncio.to_thread(item_service.purge_expired)
+            if result["purged"]:
+                print(f"trash purge: removed {result['purged']} expired item(s), {result['bytes']} bytes", flush=True)
+        except Exception as e:
+            print(f"trash purge error: {e!r}", flush=True)
+        await asyncio.sleep(TRASH_PURGE_INTERVAL_SECONDS)
+
+
 @app.on_event("startup")
 async def startup():
     # #560: boot work (migrations, OCR self-heal, the watchdog task created below, which copies
@@ -144,6 +162,7 @@ def _startup_as_system():
     # #549: web is the ONLY process that captions: it drains the caption_queue table (filled by
     # the MCP process), one at a time, through captions.run_caption (lock + breaker + cooldown).
     captions.start_queue_worker()
+    asyncio.create_task(_trash_purge_loop())
 
 
 # --- Routers (#547) ---

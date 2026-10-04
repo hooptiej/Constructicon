@@ -10,7 +10,7 @@ This module centralizes the list/cleanup and resolve logic so both the web
 API and the MCP server use the same decision workflow.
 """
 
-from core import automatch, cards, changes, db, ingest, object_types, revisions
+from core import automatch, cards, changes, db, ingest, items, object_types, revisions
 from core.errors import Conflict, InvalidInput, NotFound
 
 
@@ -195,7 +195,7 @@ def resolve(decision_id, choice="", project_ids=(), choices=(), actor=None):
             if choice in allowed_keys:
                 # Only call retype if the choice is different from the current type
                 if choice != row.get("media_type"):
-                    ingest.retype(decision["post_slug"], choice, ingest.run_in_thread)
+                    items.retype(decision["post_slug"], choice, ingest.run_in_thread)
                     applied.append(choice)
                 else:
                     # Choice matches current type — just resolve without retying

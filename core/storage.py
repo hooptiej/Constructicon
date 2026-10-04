@@ -99,7 +99,10 @@ def save_stream(filename, fileobj, chunk_size=1024*1024):
     if hasattr(fileobj, "seek"):
         fileobj.seek(0)
 
-    ext = Path(filename).suffix.lower()
+    # #485: keep a multi-suffix extension (".tar.gz") whole so the stored file
+    # still says what it is. Lazy import: object_types imports this module.
+    from . import object_types
+    ext = object_types.file_extension(filename)
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     slug = make_slug()
     dest = STORAGE_DIR / f"{slug}{ext}"

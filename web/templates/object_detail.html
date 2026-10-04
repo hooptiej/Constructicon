@@ -183,6 +183,32 @@
       {% endfor %}
       {% endset %}
 
+      {# ---- PHYSICAL PIECE (#425): medium / dimensions / date made / where the original is. Shown when any is
+         set or the item is in the Traditional Media hobby. Saved into type_metadata via the same POST as ABOUT. ---- #}
+      {% if physical.show %}
+      {% set physical_view %}
+      <dl class="dp-rows">
+        {% for key, label, value in physical.rows %}
+        <div class="dp-row"><dt>{{ label }}</dt><dd>{% if value %}<span class="dp-pre">{{ value }}</span>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>
+        {% endfor %}
+      </dl>
+      {% endset %}
+      {% set physical_edit %}
+      {% for key, label, value in physical.rows %}
+      <div class="dp-field">
+        <label for="physical-{{ key }}">{{ label }}{% if key == 'original_location' %} <span class="optional">(optional)</span>{% endif %}</label>
+        <input class="input physical-field" id="physical-{{ key }}" type="text" data-key="{{ key }}" maxlength="200" value="{{ value }}"
+          {%- if key == 'medium' %} list="physical-medium-suggest" placeholder="ink on paper" autocomplete="off"
+          {%- elif key == 'dimensions' %} placeholder="8.5 &times; 11 in"
+          {%- elif key == 'date_made' %} placeholder="2009, 2009-06 or 2009-06-14" inputmode="numeric"
+          {%- else %} placeholder="framed, office"{% endif %}>
+        {% if key == 'medium' %}<datalist id="physical-medium-suggest">{% for v in physical.medium_suggestions %}<option value="{{ v }}">{% endfor %}</datalist>{% endif %}
+        {% if key == 'date_made' %}<p class="dp-note">When it was made, not scanned. Used as the item's date on the timeline (a date set by hand still wins).</p>{% endif %}
+      </div>
+      {% endfor %}
+      {% endset %}
+      {% endif %}
+
       {# ---- WHERE IT LIVES: projects + related. Every add / remove acts immediately (own endpoints). ---- #}
       {% set where_view %}
       <dl class="dp-rows">
@@ -312,6 +338,7 @@
 
       <div class="dp-panel">
         {{ dp_group("about", "ABOUT", about_view, about_edit, wide=true) }}
+        {% if physical.show %}{{ dp_group("physical", "PHYSICAL PIECE", physical_view, physical_edit) }}{% endif %}
         {{ dp_group("where", "WHERE IT LIVES", where_view, where_edit, where_static, done_only=true) }}
         {{ dp_group("dates", "DATES", dates_view, dates_edit) }}
         {{ dp_group("origin", "ORIGIN", origin_view, origin_edit) }}
@@ -963,6 +990,20 @@ document.getElementById('timeline-date-reset').addEventListener('click', async (
       await post(form);
     },
   });
+
+  // PHYSICAL PIECE (#425): medium / dimensions / date made / original location, merged into
+  // type_metadata by the same endpoint; the server validates date_made and answers 400 with a detail.
+  if (document.querySelector('.dp-group[data-group="physical"]')) {
+    DP.register('physical', {
+      save: async () => {
+        const fields = {};
+        document.querySelectorAll('.physical-field').forEach((el) => { fields[el.dataset.key] = el.value; });
+        const form = new FormData();
+        form.append('type_metadata', JSON.stringify(fields));
+        await post(form);
+      },
+    });
+  }
 
   // WHERE IT LIVES: projects and related act immediately (their own endpoints); Done closes.
   DP.register('where', { doneOnly: true });

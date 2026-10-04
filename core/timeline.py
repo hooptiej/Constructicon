@@ -58,6 +58,16 @@ def epoch_to_local(epoch):
     return datetime.fromtimestamp(epoch, tz=ZoneInfo(LOCAL_TIMEZONE))
 
 
+def _date_made(row):
+    """type_metadata.date_made (#425) as epoch seconds, or None. Imported lazily: physical_piece
+    imports this module back for the timezone convention."""
+    tm = row.get("type_metadata")
+    if not tm:
+        return None
+    from core import physical_piece
+    return physical_piece.date_made_epoch(tm)
+
+
 def resolve_item_date(row):
     """row is a capture_events dict (core.db.get_by_slug/_row_to_dict
     shape). timestamp is NOT NULL in the schema, so this always resolves.
@@ -73,6 +83,10 @@ def resolve_item_date(row):
     deliberate, verified real-world date and should still win."""
     if row.get("display_date_override") is not None:
         return row["display_date_override"]
+    # #425: a physical piece's own "date made" outranks content_date (a scan's creation time).
+    made = _date_made(row)
+    if made is not None:
+        return made
     if row.get("content_date") is not None:
         return row["content_date"]
     if row.get("source_modified_at") is not None:
@@ -88,6 +102,7 @@ def has_real_date(row):
     things it already knows the date of (archive imports carry their real date
     in source_modified_at, not content_date)."""
     return (row.get("display_date_override") is not None
+            or _date_made(row) is not None
             or row.get("content_date") is not None
             or row.get("source_modified_at") is not None)
 

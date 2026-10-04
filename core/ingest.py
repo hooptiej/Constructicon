@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import automatch, captions, db, embedded_metadata, object_types, ocr, storage, thumbnails
+from . import actor as actor_ctx, automatch, captions, db, embedded_metadata, object_types, ocr, storage, thumbnails
 
 
 @dataclass
@@ -142,8 +142,9 @@ def run_in_thread(fn, *args):
     """Run fn(*args) on a background daemon thread. The `run_background` for callers with no
     FastAPI BackgroundTasks (retype from a decision / type action, #563): OCR, thumbnail and
     captions all run for real, and captions.run_caption still takes CAPTION_LOCK and honours
-    the circuit breaker itself, exactly as on upload."""
-    threading.Thread(target=fn, args=args, daemon=True).start()
+    the circuit breaker itself, exactly as on upload. #560: carries the caller's actor context
+    into the thread (ContextVars don't cross threading.Thread on their own)."""
+    actor_ctx.spawn(fn, *args)
 
 
 def post_insert(slug, spec, run_background):

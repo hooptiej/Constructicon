@@ -19,6 +19,8 @@ import json
 import re
 from datetime import datetime
 
+from .errors import InvalidInput
+
 KEYS = ("medium", "dimensions", "date_made", "original_location")
 LABELS = {
     "medium": "Medium",
@@ -75,7 +77,8 @@ def clean_fields(md):
     """Validate/normalize the physical-piece keys of a type_metadata update dict (other keys
     pass through untouched). Strings are trimmed and capped at MAX_LEN; an empty string is kept
     (the route merges, so "" is how a field is cleared). Raises ValueError for a date_made that
-    is not YYYY / YYYY-MM / YYYY-MM-DD."""
+    is not YYYY / YYYY-MM / YYYY-MM-DD.
+    (#548: errors.InvalidInput, code bad_physical_piece, still a ValueError.)"""
     out = dict(md)
     for k in KEYS:
         if k not in out:
@@ -85,10 +88,10 @@ def clean_fields(md):
             out[k] = ""
             continue
         if not isinstance(v, str):
-            raise ValueError(f"{k} must be text")
+            raise InvalidInput(f"{k} must be text", code="bad_physical_piece")
         v = " ".join(v.split())[:MAX_LEN] if k != "original_location" else v.strip()[:MAX_LEN]
         if k == "date_made" and v and parse_date_made(v) is None:
-            raise ValueError("date_made must look like 2009, 2009-06 or 2009-06-14")
+            raise InvalidInput("date_made must look like 2009, 2009-06 or 2009-06-14", code="bad_physical_piece")
         out[k] = v
     return out
 

@@ -7,6 +7,7 @@ from fastapi import Request, Form, HTTPException, APIRouter
 from fastapi.responses import JSONResponse, Response
 
 from core import card_rules, cards, db, ingest, object_types, timeline
+from core.errors import NotFound
 from web.shapes import _to_card_face, _to_project_option
 
 router = APIRouter()
@@ -17,7 +18,7 @@ def api_card(slug: str):
     """The card face for one card (V2 piece 7, 8.1): zone content as JSON, plus the cover URL."""
     project = db.get_project(slug)
     if project is None:
-        return JSONResponse({"error": {"code": "not_found", "message": f"No card '{slug}'."}}, status_code=404)
+        raise NotFound(f"No card '{slug}'.")  # #548: the shared error shape (was a hand-built 404 without `detail`)
     return JSONResponse(_to_card_face(project))
 
 
@@ -82,7 +83,7 @@ def api_create_project(request: Request, title: str = Form(...), parent_id: str 
                                   "parent_id": None}, db.get_project(parent_id_int), ())
     tag = db.get_or_create_tag(title, parent_id=None)
     project = db.create_project(title, tag_id=tag["id"], parent_id=parent_id_int,
-                                kind=kind, stage=stage, stop_reason=stop_reason, actor="owner-ui")
+                                kind=kind, stage=stage, stop_reason=stop_reason)
     return JSONResponse(_to_project_option(project))
 
 
@@ -240,11 +241,10 @@ async def api_update_project(
         # "Part of" (V2 cards 3.7) goes through core.cards first, so a refusal happens
         # before anything else in this request is written.
         if parent_id_value is None:
-            cards.unnest(project["id"], actor="owner-ui")
+            cards.unnest(project["id"])
             parent_id_value = ...
         elif parent_id_value is not ...:
-            card_warnings.extend(cards.nest(project["id"], parent_id_value, replace=replace_parent,
-                                            actor="owner-ui").warnings)
+            card_warnings.extend(cards.nest(project["id"], parent_id_value, replace=replace_parent).warnings)
             parent_id_value = ...
 
         # V2 cards: kind / stage / stop_reason / activity go through core.cards (the same
@@ -258,10 +258,10 @@ async def api_update_project(
                 stage, stop_reason = legacy["stage"], legacy["stop_reason"]
             card_warnings.extend(legacy["warnings"])
         if kind:
-            card_warnings.extend(cards.set_kind(project["id"], kind, actor="owner-ui").warnings)
+            card_warnings.extend(cards.set_kind(project["id"], kind).warnings)
         if stage or activity or stop_reason:
             card_warnings.extend(cards.set_status(project["id"], stage, stop_reason or None,
-                                                  activity=activity or None, actor="owner-ui").warnings)
+                                                  activity=activity or None).warnings)
 
         try:
             updated = db.update_project(
@@ -312,7 +312,7 @@ def api_orphan_child(project_id: str, child_id: str = Form(...)):
     if child.get("parent_id") != parent_id:
         raise HTTPException(status_code=400, detail="Child is not a child of this project")
 
-    cards.unnest(child["id"], actor="owner-ui")
+    cards.unnest(child["id"])
     return JSONResponse(db.get_project(child["id"]) or {})
 
 
@@ -321,8 +321,7 @@ def api_set_whereabouts(project_id: str, whereabouts: str = Form(""), note: str 
     """V2 cards 3.4: set (blank clears) where the physical thing is now, plus an
     optional note (omit `note` to leave it alone). Rule violations are CardErrors:
     422 bad_whereabouts (wrong kind, unknown value, in_use / never_built cross-rules)."""
-    result = cards.set_whereabouts(project_id, whereabouts or None, note if note is not None else ...,
-                                   actor="owner-ui")
+    result = cards.set_whereabouts(project_id, whereabouts or None, note if note is not None else ...)
     return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
 
 
@@ -331,15 +330,14 @@ def api_set_card_provenance(project_id: str, provenance: str = Form(""), credit:
     """V2 cards 3.5: set (blank clears) the CARD's provenance and optionally its credit
     (omit `credit` to leave it alone). 422 bad_provenance on an unknown value.
     Per-file provenance (/api/image/{slug}) is a separate field and untouched."""
-    result = cards.set_provenance(project_id, provenance or None, credit if credit is not None else ...,
-                                  actor="owner-ui")
+    result = cards.set_provenance(project_id, provenance or None, credit if credit is not None else ...)
     return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
 
 
 @router.post("/api/projects/{project_id}/highlight")
 def api_set_card_highlight(project_id: str, on: str = Form("0")):
     """V2 cards 3.12: the card's own highlight flag (independent of file highlights)."""
-    result = cards.set_highlight(project_id, on.strip().lower() in ("1", "true", "on", "yes"), actor="owner-ui")
+    result = cards.set_highlight(project_id, on.strip().lower() in ("1", "true", "on", "yes"))
     return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
 
 
@@ -347,22 +345,21 @@ def api_set_card_highlight(project_id: str, on: str = Form("0")):
 def api_set_card_home(project_id: str, target: str = Form("")):
     """V2 cards 3.10: override the card's home ('card:<slug>' / 'hobby:<slug>'); blank
     clears the override (back to automatic: parent, first family, first hobby). 422 bad_home."""
-    result = cards.set_home(project_id, target.strip() or None, actor="owner-ui")
+    result = cards.set_home(project_id, target.strip() or None)
     return JSONResponse({**result.to_dict(), "home": cards.resolve_home(project_id)})
 
 
 @router.post("/api/projects/{project_id}/nest")
 def api_nest_card(project_id: str, parent: str = Form(...), replace: str = Form("0")):
     """V2 cards 3.7: make this card part of `parent` (id or slug). CardErrors: 409 nest_*."""
-    result = cards.nest(project_id, parent, replace=replace.strip().lower() in ("1", "true", "on", "yes"),
-                        actor="owner-ui")
+    result = cards.nest(project_id, parent, replace=replace.strip().lower() in ("1", "true", "on", "yes"))
     return JSONResponse(result.to_dict())
 
 
 @router.post("/api/projects/{project_id}/unnest")
 def api_unnest_card(project_id: str):
     """V2 cards 3.7: take this card out of its parent (no-op if it has none)."""
-    return JSONResponse(cards.unnest(project_id, actor="owner-ui").to_dict())
+    return JSONResponse(cards.unnest(project_id).to_dict())
 
 
 @router.get("/api/projects/{project_id}/explain")
@@ -375,7 +372,7 @@ def api_explain_card(project_id: str):
 def api_undo_change(batch_id: str, force: str = Form("0")):
     """V2 cards 3.13: undo a change-log row (numeric id) or batch. 409 undo_conflict when a
     row changed since; 422 undo_refused for migration rows / already-undone entries."""
-    result = cards.undo(batch_id, force=force.strip().lower() in ("1", "true", "on", "yes"), actor="owner-ui")
+    result = cards.undo(batch_id, force=force.strip().lower() in ("1", "true", "on", "yes"))
     return JSONResponse(result.to_dict())
 
 
@@ -384,14 +381,14 @@ def api_family_add_member(family_id: str, member: str = Form(...)):
     """V2 cards 3.6: put `member` (card id or slug) in a family or collection.
     Many-to-many; adding twice is a no-op. Rule violations are CardErrors
     (422 bad_membership). Not nesting: no file moves."""
-    result = cards.add_to_family(family_id, member, actor="owner-ui")
+    result = cards.add_to_family(family_id, member)
     return JSONResponse(result.to_dict())
 
 
 @router.post("/api/families/{family_id}/members/remove")
 def api_family_remove_member(family_id: str, member: str = Form(...)):
     """V2 cards 3.6: take `member` out of a family or collection (no-op if absent)."""
-    result = cards.remove_from_family(family_id, member, actor="owner-ui")
+    result = cards.remove_from_family(family_id, member)
     return JSONResponse(result.to_dict())
 
 
@@ -426,7 +423,7 @@ def api_delete_project(project_id: str):
 
     # Core does the work (#497): one transaction, change-log row images (undoable via
     # constructicon_undo(batch_id)), no ghost write-up / links / family rows left behind.
-    result = cards.delete_card(project["id"], actor="owner-ui")
+    result = cards.delete_card(project["id"])
     return JSONResponse({**result.to_dict(), **result.data})
 
 
@@ -479,7 +476,7 @@ def api_add_project_related(request: Request, slug: str, related_slug: str = For
     if db.get_project(related_slug) is None:
         raise HTTPException(status_code=404, detail="related project not found")
     try:
-        cards.link(slug, related_slug, "related", actor="owner-ui")
+        cards.link(slug, related_slug, "related")
     except card_rules.CardError as e:
         if not (e.code == "link_conflict" and e.details.get("reason") == "duplicate"):
             raise
@@ -489,7 +486,7 @@ def api_add_project_related(request: Request, slug: str, related_slug: str = For
 @router.post("/api/project/{slug}/related/remove")
 def api_remove_project_related(request: Request, slug: str, related_slug: str = Form(...)):
     if db.get_project(slug) is not None and db.get_project(related_slug) is not None:
-        cards.unlink(slug, related_slug, "related", actor="owner-ui")
+        cards.unlink(slug, related_slug, "related")
     return JSONResponse(_related_projects_public(slug))
 
 
@@ -506,21 +503,21 @@ def api_project_links(slug: str):
 def api_link(a: str = Form(...), b: str = Form(...), type: str = Form(...), note: str = Form("")):
     """"a <type> b". Directed types store one row, `related` two. A typed link over a
     related pair upgrades it; related over a typed pair is refused (link_conflict)."""
-    result = cards.link(a, b, type, note, actor="owner-ui")
+    result = cards.link(a, b, type, note)
     return JSONResponse({**result.to_dict(), "links": cards.list_links(a)})
 
 
 @router.post("/api/links/remove")
 def api_unlink(a: str = Form(...), b: str = Form(...), type: str = Form("")):
     """Removes the `type` link between a and b (all links on the pair when `type` is blank)."""
-    result = cards.unlink(a, b, type or None, actor="owner-ui")
+    result = cards.unlink(a, b, type or None)
     return JSONResponse({**result.to_dict(), "links": cards.list_links(a)})
 
 
 @router.post("/api/links/retype")
 def api_retype_link(a: str = Form(...), b: str = Form(...), from_type: str = Form(...), to_type: str = Form(...)):
     """Replaces the `from_type` link on the pair with "a <to_type> b" in one transaction."""
-    result = cards.retype_link(a, b, from_type, to_type, actor="owner-ui")
+    result = cards.retype_link(a, b, from_type, to_type)
     return JSONResponse({**result.to_dict(), "links": cards.list_links(a)})
 
 
@@ -540,7 +537,7 @@ def api_convert_project_to_hobby(request: Request, slug: str):
     children_count = len(db.list_child_projects(project["id"]))
     items_count = len(db.list_project_items(project["id"]))
 
-    hobby = cards.convert_project_to_hobby(project["id"], actor="owner-ui")
+    hobby = cards.convert_project_to_hobby(project["id"])
 
     if hobby is None:
         raise HTTPException(status_code=500, detail="conversion failed")

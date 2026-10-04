@@ -10,6 +10,8 @@ that add those fields (spec section 9).
 
 import re
 
+from .errors import AppError
+
 # --- Kinds (3.1) -------------------------------------------------------------
 KINDS = ("project", "thing", "action", "family", "collection", "event")
 GROUP_KINDS = ("family", "collection")
@@ -115,15 +117,13 @@ DEFAULT_KIND = "project"
 DEFAULT_STAGE = "in_progress"
 
 
-class CardError(Exception):
-    """The only exception core operations raise for rule violations (section 5).
-    `code` is a stable machine string shared by HTTP and MCP callers."""
+class CardError(AppError):
+    """A card rule violation (section 5). Since #548 it is the card flavour of the shared
+    core.errors.AppError: `code` is a stable machine string shared by HTTP and MCP callers,
+    and the status is derived from the code."""
 
     def __init__(self, code, message, details=None):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.details = details or {}
+        super().__init__(code, message, details=details)
 
     @property
     def http_status(self):
@@ -133,12 +133,6 @@ class CardError(Exception):
         if self.code.endswith("_conflict") or self.code.startswith("nest_"):
             return 409
         return 422
-
-    def to_dict(self):
-        return {"code": self.code, "message": self.message, **({"details": self.details} if self.details else {})}
-
-    def __str__(self):
-        return self.message
 
 
 def stage_label(stage):

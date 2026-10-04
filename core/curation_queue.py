@@ -32,6 +32,7 @@ import time
 from urllib.parse import quote
 
 from . import cards, curator_needs, db, decisions
+from .errors import InvalidInput
 
 TYPE_QUESTION = "question"
 TYPE_NUDGE = "nudge"
@@ -467,8 +468,10 @@ def group_items(gid, section="open"):
 
 # --- actions -----------------------------------------------------------------------
 
-class QueueError(Exception):
-    """A Defer / Bring back / Dismiss the queue refuses (carries a message for the caller)."""
+class QueueError(InvalidInput):
+    """A Defer / Bring back / Dismiss the queue refuses (carries a message for the caller).
+    #548: an AppError, 400 `bad_request` (the code the MCP tools already used)."""
+    default_code = "bad_request"
 
 
 def _slugs_for_key(key):
@@ -478,7 +481,7 @@ def _slugs_for_key(key):
     return []
 
 
-def defer(key, actor="owner-ui"):
+def defer(key, actor=None):
     """Move an item to the Deferred section. No timer; it stays until answered or brought back."""
     if not valid_key(key):
         raise QueueError(f"Not a queue item key: {key!r}")
@@ -486,14 +489,14 @@ def defer(key, actor="owner-ui"):
                                                          affected_slugs=_slugs_for_key(key))}
 
 
-def bring_back(key, actor="owner-ui"):
+def bring_back(key, actor=None):
     """Return a deferred item to the main queue."""
     if not valid_key(key):
         raise QueueError(f"Not a queue item key: {key!r}")
     return {"ok": True, "changed": db.clear_curator_defer(key, actor=actor, affected_slugs=_slugs_for_key(key))}
 
 
-def dismiss(key, actor="owner-ui"):
+def dismiss(key, actor=None):
     """Dismiss a nudge or need for good. A question (decision:<id>) can only be answered or deferred."""
     if not valid_key(key):
         raise QueueError(f"Not a queue item key: {key!r}")

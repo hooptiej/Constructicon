@@ -88,17 +88,12 @@ def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form
 
     For the V2 card_* kinds, `choice` (or several `choices`) is an option key; the
     option's patch runs through core.cards, and a rule violation comes back as the
-    shared CardError response (422/409) with the decision left open."""
-    try:
-        result = decisions.resolve(decision_id, choice=choice, project_ids=project_ids, choices=choices,
-                                   actor="owner-ui")
-        return JSONResponse(result)
-    except decisions.DecisionNotFound:
-        raise HTTPException(status_code=404, detail="No such pending decision")
-    except decisions.DecisionAlreadyResolved:
-        raise HTTPException(status_code=409, detail="Already resolved")
-    except (decisions.UnknownDecisionKind, decisions.InvalidChoice) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    shared CardError response (422/409) with the decision left open.
+
+    #548: the decisions.* refusals are AppErrors (404 not_found, 409 already_resolved,
+    400 unknown_decision_kind / invalid_choice), turned into the shared error shape by
+    the app-wide handler; `detail` is the same text as before."""
+    return JSONResponse(decisions.resolve(decision_id, choice=choice, project_ids=project_ids, choices=choices))
 
 
 # --- Curator (Stage 2) ---
@@ -160,11 +155,8 @@ def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | Non
     Returns {ok: true} on success."""
     if snooze_until:
         raise HTTPException(status_code=400, detail="Snooze was replaced by Defer: POST /api/curator/queue/defer")
-    try:
-        result = curation_queue.dismiss(nudge_key)
-    except curation_queue.QueueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return JSONResponse(result)
+    # A refusal is a curation_queue.QueueError (#548: an AppError, 400 bad_request).
+    return JSONResponse(curation_queue.dismiss(nudge_key))
 
 
 # --- Curator queue (#519): questions + nudges + needs, grouped by card ---
@@ -207,10 +199,8 @@ def api_curator_queue_html(request: Request, group: str | None = None, card: str
 
 
 def _queue_action(fn, key):
-    try:
-        return JSONResponse(fn(key))
-    except curation_queue.QueueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    # A refusal is a curation_queue.QueueError (#548: an AppError, 400 bad_request).
+    return JSONResponse(fn(key))
 
 
 @router.post("/api/curator/queue/defer")

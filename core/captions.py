@@ -51,7 +51,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import db, object_types, storage, thumbnails
+from . import actor as actor_ctx, db, object_types, storage, thumbnails
 
 OLLAMA_URL = os.environ.get("CAPTION_OLLAMA_URL", "http://ollama:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("CAPTION_OLLAMA_MODEL", "moondream")
@@ -450,13 +450,19 @@ def queue_worker_loop():
         delay = min(delay * 1.5, QUEUE_POLL_MAX_SECONDS)  # idle backoff, never a hot loop
 
 
+def _queue_worker_as_system():
+    """#560: the queue worker is background work, so whatever it writes is the 'system' actor."""
+    with actor_ctx.acting_as(actor_ctx.ACTOR_SYSTEM):
+        queue_worker_loop()
+
+
 def start_queue_worker():
     """Starts the single drain thread (idempotent). Web process only."""
     global _worker_thread
     with _worker_guard:
         if _worker_thread is not None and _worker_thread.is_alive():
             return False
-        _worker_thread = threading.Thread(target=queue_worker_loop, name="caption-queue", daemon=True)
+        _worker_thread = threading.Thread(target=_queue_worker_as_system, name="caption-queue", daemon=True)
         _worker_thread.start()
         return True
 

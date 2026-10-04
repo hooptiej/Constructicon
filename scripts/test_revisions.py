@@ -26,7 +26,7 @@ except Exception:  # no libcairo on this machine (e.g. Windows): core.decisions 
     import types
     sys.modules["cairosvg"] = types.ModuleType("cairosvg")
 
-from core import card_rules, cards, db, decisions, revisions  # noqa: E402
+from core import card_rules, cards, changes, db, decisions, revisions  # noqa: E402
 
 FAILS = []
 
@@ -155,11 +155,11 @@ revisions.mark_superseded(A, B)  # A -> B -> C again
 snapshot = pairs()
 res = revisions.remove_from_chain(B)
 check("remove B again re-links", pairs() == {A: C})
-undone = cards.undo(res["batch_id"], actor="owner-ui")
+undone = cards.undo(res["batch_id"], actor=changes.ACTOR_UI)
 check("undo of remove-from-chain restores A -> B -> C", pairs() == snapshot and undone.ok, pairs())
 res = revisions.mark_superseded(C, D)
 check("mark adds C -> D", pairs() == {**snapshot, C: D})
-cards.undo(res["batch_id"], actor="owner-ui")
+cards.undo(res["batch_id"], actor=changes.ACTOR_UI)
 check("undo of mark removes the link", pairs() == snapshot, pairs())
 
 # --- delete cleans the chain ----------------------------------------------------
@@ -202,7 +202,7 @@ check("a choice outside the options is refused (decision stays open)",
 res = decisions.resolve(did, choice=old2)
 check("resolving with a candidate creates the link", pairs() == {old1: old2, old2: new} and res["applied"] == [old2], pairs())
 check("...and resolves the decision", db.get_pending_decision(did)["resolved_at"] is not None)
-undone = cards.undo(res["batch_id"], actor="owner-ui")
+undone = cards.undo(res["batch_id"], actor=changes.ACTOR_UI)
 check("undo reverses the link AND reopens the decision",
       pairs() == {old1: old2} and db.get_pending_decision(did)["resolved_at"] is None, pairs())
 res = decisions.resolve(did, choice="none")

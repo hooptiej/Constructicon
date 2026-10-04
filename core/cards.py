@@ -20,8 +20,9 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import card_rules, changes, db, timeline
+from . import actor as actor_ctx, card_rules, changes, db, timeline
 from .card_rules import CardError
+from .errors import AppError
 
 CARD_DECISION_PREFIX = "card:"
 KIND_CARD_STATUS = "card_status"
@@ -105,7 +106,7 @@ def _status_warnings(card, new_activity, new_stage):
     return warnings
 
 
-def set_status(card, stage, stop_reason=None, *, activity=None, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None,
+def set_status(card, stage, stop_reason=None, *, activity=None, dry_run=False, actor=None, batch_id=None,
                _op="set_status"):
     """Sets stage (and stop_reason); derives and stores activity. See
     card_rules.validate_status for the rules. Any stage can follow any other."""
@@ -121,7 +122,7 @@ def set_status(card, stage, stop_reason=None, *, activity=None, dry_run=False, a
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
-def set_kind(card, kind, *, force=False, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def set_kind(card, kind, *, force=False, dry_run=False, actor=None, batch_id=None):
     """Changes a card's kind. Rules (3.1): a group kind (family, collection) must
     not be nested or be a nesting parent; leaving a group kind with members is
     refused unless force=True; the card's current stage must still be valid for
@@ -169,7 +170,7 @@ def set_kind(card, kind, *, force=False, dry_run=False, actor=changes.ACTOR_MCP,
 
 # --- Whereabouts, card provenance, highlight (3.4, 3.5, 3.12) ---------------------
 
-def set_whereabouts(card, whereabouts=None, note=..., *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def set_whereabouts(card, whereabouts=None, note=..., *, dry_run=False, actor=None, batch_id=None):
     """Sets (or, with whereabouts=None, clears) where the physical thing is now, plus
     an optional free-text note (note=... leaves the note alone; '' / None clears it).
     Validated by card_rules.validate_whereabouts (bad_whereabouts): applicable kinds
@@ -190,7 +191,7 @@ def set_whereabouts(card, whereabouts=None, note=..., *, dry_run=False, actor=ch
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
-def set_provenance(card, provenance=None, credit=..., *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def set_provenance(card, provenance=None, credit=..., *, dry_run=False, actor=None, batch_id=None):
     """Sets (or clears, with None) the CARD's provenance and optionally its credit
     (who designed it / where it came from; credit=... leaves it alone). Distinct from
     the per-file provenance (db.set_provenance / constructicon_set_provenance), which
@@ -207,7 +208,7 @@ def set_provenance(card, provenance=None, credit=..., *, dry_run=False, actor=ch
     return Result(True, rows, [], batch_id, dry_run)
 
 
-def set_highlight(card, on, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def set_highlight(card, on, *, dry_run=False, actor=None, batch_id=None):
     """The card's own 0/1 "this one is special" flag (3.12). Independent of the
     per-file highlight (capture_events.highlight), which is untouched."""
     row = get_card(card)
@@ -314,7 +315,7 @@ def _slug_of(card_id):
     return c["slug"] if c else None
 
 
-def nest(child, parent, *, replace=False, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def nest(child, parent, *, replace=False, dry_run=False, actor=None, batch_id=None):
     """Makes `child` part of `parent` (parent_id). Rules (3.7, card_rules.validate_nest):
     no self/cycle, neither end a family or collection, and a card that already
     has a different parent is refused (nest_second_parent) unless replace=True."""
@@ -335,7 +336,7 @@ def nest(child, parent, *, replace=False, dry_run=False, actor=changes.ACTOR_MCP
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
-def unnest(child, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None, _op="unnest"):
+def unnest(child, *, dry_run=False, actor=None, batch_id=None, _op="unnest"):
     """Takes `child` out of its parent (it becomes top-level). No-op when it has none."""
     row = get_card(child)
     old = row.get("parent_id")
@@ -348,7 +349,7 @@ def unnest(child, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None, _op=
     return Result(True, rows, [], batch_id, dry_run)
 
 
-def add_to_family(family, member, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None, _op="add_to_family"):
+def add_to_family(family, member, *, dry_run=False, actor=None, batch_id=None, _op="add_to_family"):
     """Adds `member` to a family or collection (many-to-many; a card can be in
     several). Validated by card_rules.validate_membership. Adding twice is a no-op."""
     fam, mem = get_card(family), get_card(member)
@@ -363,7 +364,7 @@ def add_to_family(family, member, *, dry_run=False, actor=changes.ACTOR_MCP, bat
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
-def remove_from_family(family, member, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def remove_from_family(family, member, *, dry_run=False, actor=None, batch_id=None):
     """Takes `member` out of a family or collection. No-op if it wasn't in it.
     Neither card is otherwise changed."""
     fam, mem = get_card(family), get_card(member)
@@ -434,7 +435,7 @@ def _plan_link(ar, br, link_type, note, existing):
     return deletes, inserts, rows, warnings
 
 
-def link(a, b, link_type, note="", *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None, _op="link"):
+def link(a, b, link_type, note="", *, dry_run=False, actor=None, batch_id=None, _op="link"):
     """Adds the link "a <link_type> b" (types: card_rules.LINK_TYPES). Directed types
     store one row; `related` stores two. Adding a typed link over a `related` pair
     upgrades it (the related rows are removed in the same transaction); adding
@@ -470,7 +471,7 @@ def _plan_unlink(ar, br, link_type, existing):
     return deletes, rows, warnings
 
 
-def unlink(a, b, link_type=None, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def unlink(a, b, link_type=None, *, dry_run=False, actor=None, batch_id=None):
     """Removes link(s) between two cards. With `link_type` only that type (for a
     directed type, "a <type> b" exactly; `related` removes both rows); without it,
     every link between the pair in either direction. No-op (with a warning) if
@@ -512,7 +513,7 @@ def _plan_retype(ar, br, from_type, to_type, existing, note=None):
     return deletes, inserts, rows, warnings
 
 
-def retype_link(a, b, from_type, to_type, *, note=None, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def retype_link(a, b, from_type, to_type, *, note=None, dry_run=False, actor=None, batch_id=None):
     """The single upgrade/downgrade path (3.8): replaces the `from_type` link on the
     pair (found in either direction) with "a <to_type> b", in one transaction. The
     note carries over unless one is given. CardErrors: not_found (no such link),
@@ -527,7 +528,7 @@ def retype_link(a, b, from_type, to_type, *, note=None, dry_run=False, actor=cha
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
-def retype_links(mapping, *, dry_run=True, partial_ok=False, actor=changes.ACTOR_MCP, batch_id=None):
+def retype_links(mapping, *, dry_run=True, partial_ok=False, actor=None, batch_id=None):
     """Bulk retype (7.3), for clearing v1's untyped `related` links. `mapping` is a
     list of {a, b, to_type, from_type='related'}. DRY-RUN BY DEFAULT: nothing is
     written unless dry_run=False. Validates every item first; all-or-nothing in one
@@ -800,7 +801,7 @@ def _apply_family_patches(family_row, patches_by_option, actor, batch_id):
         add_to_family(fam["id"], m["id"], actor=actor, batch_id=batch_id, _op="resolve_decision")
 
 
-def resolve_decision(decision_id, choice=None, choices=None, actor=changes.ACTOR_MCP, batch_id=None):
+def resolve_decision(decision_id, choice=None, choices=None, actor=None, batch_id=None):
     """Resolves one card_* decision. `choice` is an option key (single-choice
     questions); `choices` is a list of option keys (multi-choice questions, e.g.
     several candidate cards). The option's declarative `patch` ops run through the
@@ -813,9 +814,9 @@ def resolve_decision(decision_id, choice=None, choices=None, actor=changes.ACTOR
 
     decision = db.get_pending_decision(decision_id)
     if decision is None:
-        raise _decisions.DecisionNotFound(f"No such pending decision: {decision_id}")
+        raise _decisions.DecisionNotFound("No such pending decision", details={"decision_id": decision_id})
     if decision["resolved_at"] is not None:
-        raise _decisions.DecisionAlreadyResolved(f"Decision {decision_id} already resolved")
+        raise _decisions.DecisionAlreadyResolved("Already resolved", details={"decision_id": decision_id})
     if decision["kind"] not in CARD_DECISION_KINDS or not is_card_decision_slug(decision["post_slug"]):
         raise _decisions.UnknownDecisionKind(f"Not a card decision: {decision['kind']}")
 
@@ -851,7 +852,7 @@ def resolve_decision(decision_id, choice=None, choices=None, actor=changes.ACTOR
     db.resolve_pending_decision(decision_id, {
         "choice": picked[0] if len(picked) == 1 else picked,
         "applied_batch": batch_id,
-        "by": "owner" if actor == changes.ACTOR_UI else "claude",
+        "by": "owner" if actor_ctx.resolve(actor) == changes.ACTOR_UI else "claude",
         "at": time.time(),
     }, log={"op": "resolve_decision", "actor": actor, "batch_id": batch_id})
     return {"ok": True, "applied": picked, "batch_id": batch_id, "remaining": db.count_pending_decisions()}
@@ -911,7 +912,7 @@ def hobby_fields(hobby_row, with_flags=True):
     return out
 
 
-def set_hobby_activity(hobby, value, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def set_hobby_activity(hobby, value, *, dry_run=False, actor=None, batch_id=None):
     """Sets a hobby's manual Active/Inactive switch (3.3) and logs it. `dormant` and
     `abandoned` are deprecated aliases for `inactive` (the result carries a warning).
     Setting it never writes a flag: flags are computed on read."""
@@ -924,7 +925,7 @@ def set_hobby_activity(hobby, value, *, dry_run=False, actor=changes.ACTOR_MCP, 
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
-def set_group_code(hobby, code, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def set_group_code(hobby, code, *, dry_run=False, actor=None, batch_id=None):
     """Owner-editable hobby code (3.9): 2-4 letters/digits, unique across hobbies."""
     row = get_hobby(hobby)
     code = card_rules.validate_group_code(code)
@@ -1091,7 +1092,7 @@ def _parse_home_target(target):
     return "hobby", hob
 
 
-def set_home(card, target=None, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def set_home(card, target=None, *, dry_run=False, actor=None, batch_id=None):
     """Overrides a card's automatic home (3.10), or with target=None clears the override
     so the home goes back to automatic (parent, then first family, then first hobby).
     `target` is a card or a hobby (see _parse_home_target). A card can't be its own home."""
@@ -1169,7 +1170,7 @@ def home_chain(card, limit=12):
 
 # --- Hobby membership under the new names (3.9) ----------------------------------
 
-def add_to_hobby(card, hobby, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def add_to_hobby(card, hobby, *, dry_run=False, actor=None, batch_id=None):
     """Adds a card to a hobby (many allowed; adding twice is a no-op)."""
     row, hob = get_card(card), get_hobby(hobby)
     exists = any(r["hobby_tag_id"] == hob["id"] for r in db.list_hobby_rows(row["id"]))
@@ -1181,7 +1182,7 @@ def add_to_hobby(card, hobby, *, dry_run=False, actor=changes.ACTOR_MCP, batch_i
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
-def remove_from_hobby(card, hobby, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def remove_from_hobby(card, hobby, *, dry_run=False, actor=None, batch_id=None):
     """Takes a card out of a hobby (no-op if it wasn't in it)."""
     row, hob = get_card(card), get_hobby(hobby)
     exists = any(r["hobby_tag_id"] == hob["id"] for r in db.list_hobby_rows(row["id"]))
@@ -1241,13 +1242,13 @@ def _transfer_files(slugs, from_card, to_card, move, dry_run, actor, batch_id):
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
-def move_files(slugs, from_card, to_card, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def move_files(slugs, from_card, to_card, *, dry_run=False, actor=None, batch_id=None):
     """Moves files (by slug) from one card to another: they leave `from_card` and join
     `to_card`. A card's own write-up can't be moved."""
     return _transfer_files(slugs, from_card, to_card, True, dry_run, actor, batch_id)
 
 
-def copy_files(slugs, from_card, to_card, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def copy_files(slugs, from_card, to_card, *, dry_run=False, actor=None, batch_id=None):
     """Adds files from one card to another WITHOUT removing them (files are many-to-many)."""
     return _transfer_files(slugs, from_card, to_card, False, dry_run, actor, batch_id)
 
@@ -1271,7 +1272,7 @@ def _resolve_family_refs(spec, src):
     return [get_card(f) for f in spec]
 
 
-def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None, batch_id=None):
     """Carves files (and a description) out of `source` into new cards (spec 6).
 
     Each part: {title, kind='project', relation='sibling'|'child', stage, stop_reason,
@@ -1481,7 +1482,7 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
     rows.append({"card": keep["slug"], "field": "merged", "before": a["slug"], "after": None})
 
 
-def merge_cards(keep, absorb, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def merge_cards(keep, absorb, *, dry_run=False, actor=None, batch_id=None):
     """Folds one or more cards into `keep` (spec 6): files unioned (deduped), hobbies and
     family memberships unioned, children re-parented, links re-pointed (self-links and
     duplicates dropped), blog-entry attachments re-pointed. keep's cover and write-up win; an
@@ -1587,7 +1588,7 @@ def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolv
     return out
 
 
-def delete_card(card, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
+def delete_card(card, *, dry_run=False, actor=None, batch_id=None):
     """Deletes a card cleanly (#497), in one transaction with row images, so `undo(batch_id)`
     brings everything back. Removes its blank auto write-up (a write-up with text is kept as an
     ordinary unfiled document, with a warning), its files membership, hobby and family rows
@@ -1608,7 +1609,7 @@ def delete_card(card, *, dry_run=False, actor=changes.ACTOR_MCP, batch_id=None):
                    "writeup": out["writeup"]})
 
 
-def convert_project_to_hobby(card, *, actor=changes.ACTOR_MCP):
+def convert_project_to_hobby(card, *, actor=None):
     """Convert-to-hobby through the same clean-up (#497): links, family rows, hobby rows,
     blog-entry attachments and a blank write-up no longer survive the converted card, and
     the whole conversion is one transaction. (The tag side of the conversion is not
@@ -2049,7 +2050,7 @@ class _BulkAbort(Exception):
     pass
 
 
-def bulk(op, items, *, dry_run=True, partial_ok=False, actor=changes.ACTOR_MCP, batch_id=None):
+def bulk(op, items, *, dry_run=True, partial_ok=False, actor=None, batch_id=None):
     """Runs one allow-listed setter (card_rules.BULK_OPS) over a list of items
     [{card, args: {...}}] (spec 6). DRY-RUN BY DEFAULT. Items run in order inside one
     transaction, so later items see earlier ones; every item is validated and reported
@@ -2139,7 +2140,7 @@ def _changes_from_log(rows):
     return out
 
 
-def resolve_decisions(items, *, accept_suggested=False, dry_run=True, partial_ok=False, actor=changes.ACTOR_MCP,
+def resolve_decisions(items, *, accept_suggested=False, dry_run=True, partial_ok=False, actor=None,
                       batch_id=None):
     """Clears many card decisions at once (spec 7.3). DRY-RUN BY DEFAULT.
 
@@ -2210,11 +2211,9 @@ def resolve_decisions(items, *, accept_suggested=False, dry_run=True, partial_ok
                     entry["changes"] = _changes_from_log(new_rows)
                     entry["status"] = "would_apply" if dry_run else "applied"
                     all_changes += entry["changes"]
-                except (CardError, _decisions.DecisionNotFound, _decisions.DecisionAlreadyResolved,
-                        _decisions.UnknownDecisionKind, _decisions.InvalidChoice) as e:
+                except AppError as e:  # #548: CardError and the decisions.* refusals share one shape
                     failed += 1
-                    entry.update(status="failed",
-                                 error=e.to_dict() if isinstance(e, CardError) else {"code": type(e).__name__, "message": str(e)})
+                    entry.update(status="failed", error=e.to_dict())
             if failed and not partial_ok:
                 raise _BulkAbort()
     except _BulkAbort:
@@ -2249,7 +2248,7 @@ def _undo_rows(target):
     return rows
 
 
-def undo(target, *, force=False, dry_run=False, actor=changes.ACTOR_MCP):
+def undo(target, *, force=False, dry_run=False, actor=None):
     """Reverses a change-log entry or a whole batch (spec 3.13). Inverts every row image in
     reverse order inside one transaction and logs its own row, so an undo is itself undoable.
     REFUSES (writing nothing) when: a row was made by the migration (restore from the

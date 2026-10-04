@@ -71,11 +71,10 @@ tm = db.get_by_slug("md1")["type_metadata"]
 check("existing keys survive", tm.get("auto_caption") == "a cat" and tm.get("view_count") == 7, tm)
 check("new key added", tm.get("rotation") == 90, tm)
 check("physical-piece key cleaned", tm.get("medium") == "acrylic", tm)
-try:
-    server.constructicon_update("md1", type_metadata={"date_made": "june 2009"})
-    check("bad date_made refused", False)
-except ValueError:
-    check("bad date_made refused", True)
+# #548: MCP refusals come back as the shared error shape, not a raised ValueError.
+bad = server.constructicon_update("md1", type_metadata={"date_made": "june 2009"})
+check("bad date_made refused", isinstance(bad, dict) and bad.get("ok") is False
+      and bad["error"]["code"] == "bad_physical_piece", bad)
 check("refused update changed nothing", "date_made" not in db.get_by_slug("md1")["type_metadata"])
 
 # ---- 4. item cards: no "No project yet" badge ----------------------------------------------
@@ -140,17 +139,12 @@ def tag_count():
 
 
 n = tag_count()
-try:
-    server.constructicon_get_posts_for_tag("no-such-tag-xyz")
-    check("get_posts_for_tag unknown tag errors", False)
-except ValueError as e:
-    check("get_posts_for_tag unknown tag errors", "no-such-tag-xyz" in str(e))
+r = server.constructicon_get_posts_for_tag("no-such-tag-xyz")
+check("get_posts_for_tag unknown tag errors", isinstance(r, dict) and r["error"]["code"] == "not_found"
+      and "no-such-tag-xyz" in r["error"]["message"], r)
 make_item("tg1")
-try:
-    server.constructicon_detach_tag("tg1", "no-such-tag-xyz")
-    check("detach_tag unknown tag errors", False)
-except ValueError:
-    check("detach_tag unknown tag errors", True)
+r = server.constructicon_detach_tag("tg1", "no-such-tag-xyz")
+check("detach_tag unknown tag errors", isinstance(r, dict) and r.get("ok") is False and r["error"]["code"] == "not_found", r)
 check("neither created a tag", tag_count() == n, f"{n} -> {tag_count()}")
 server.constructicon_attach_tags("tg1", ["real-tag"])
 check("attach still creates", tag_count() == n + 1)

@@ -1,13 +1,38 @@
-"""Audit-logging middleware (#547; moved verbatim from web/app.py). Added to the app in
-web/app.py, inside the request guard (web/request_guard.py), which stays outermost."""
+"""Request middleware: the actor context (#560) and audit logging (#547; moved verbatim from
+web/app.py). Added to the app in web/app.py, inside the request guard (web/request_guard.py),
+which stays outermost: guard -> ActorMiddleware -> AuditLoggingMiddleware -> routes."""
 
 import json
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from core import db
+from core import actor as actor_ctx, db
 from web import request_guard
+
+
+# --- Actor context (#560) ---
+
+def request_actor(scope):
+    """Who is making this request. Today every HTTP request is the owner's UI; #467 (auth)
+    replaces this with the logged-in user. The one place that decides it."""
+    return actor_ctx.ACTOR_UI
+
+
+class ActorMiddleware:
+    """Pure ASGI: sets the actor ContextVar for the whole request, so the audit logger, the
+    route, run_in_threadpool, BackgroundTasks (all of which copy the context) and core's
+    change log all see it."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        with actor_ctx.acting_as(request_actor(scope)):
+            await self.app(scope, receive, send)
 
 
 # --- Audit logging middleware ---
@@ -149,6 +174,7 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                     status_code=status_code,
                     error_detail=error_detail,
                     affected_slugs=affected_slugs,
+                    actor=actor_ctx.current_actor(),  # #560
                 )
 
         return response

@@ -26,6 +26,7 @@ import time
 
 from . import changes, db
 from .card_rules import CardError
+from .errors import InvalidInput
 
 KIND_ITEM_SUPERSEDES = "item_supersedes"
 NONE_KEY = "none"
@@ -180,7 +181,7 @@ def validate_mark(old, new, pairs=None):
     return old_row, new_row
 
 
-def mark_superseded(old, new, actor=changes.ACTOR_UI, batch_id=None, dry_run=False):
+def mark_superseded(old, new, actor=None, batch_id=None, dry_run=False):
     """`new` supersedes `old` (so `old` shows "Superseded, see <current>"). One change-log entry.
     Returns {ok, dry_run, batch_id, old, new, chain: [slugs oldest first]}."""
     batch_id = batch_id or changes.new_batch_id()
@@ -192,7 +193,7 @@ def mark_superseded(old, new, actor=changes.ACTOR_UI, batch_id=None, dry_run=Fal
     return {"ok": True, "dry_run": dry_run, "batch_id": batch_id, "old": old, "new": new, "chain": chain}
 
 
-def remove_from_chain(slug, actor=changes.ACTOR_UI, batch_id=None, dry_run=False):
+def remove_from_chain(slug, actor=None, batch_id=None, dry_run=False):
     """Takes `slug` out of its revision chain and closes the gap: A -> B -> C minus B is A -> C;
     minus the oldest, B -> C stands alone; minus the current one, the previous revision becomes
     current. A no-op (ok, `removed` False) for an item in no chain."""
@@ -279,13 +280,14 @@ def live_candidates(decision):
     return out
 
 
-def resolve_decision(decision, choice, actor=changes.ACTOR_UI, dry_run=False):
+def resolve_decision(decision, choice, actor=None, dry_run=False):
     """Answers an item_supersedes question. `choice` is a candidate slug (create the link) or
     "none". Link and resolution share one batch, so one undo reverses both. A rule violation
     (CardError) leaves the decision open."""
     candidates = {o["key"] for o in decision["payload"].get("options", [])}
     if choice not in candidates:
-        raise ValueError(f"'{choice}' is not one of this question's options: {sorted(candidates)}")
+        raise InvalidInput(f"'{choice}' is not one of this question's options: {sorted(candidates)}",
+                           code="invalid_choice")
     batch_id = changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         applied = []

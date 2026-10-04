@@ -1,0 +1,13 @@
+{#- #477: the line under a browse grid that says older revisions are hidden (or shown). Needs `rev_note`
+     ({count, all, href}) from the page route; renders nothing when no item in the grid is superseded. -#}
+{% if rev_note %}
+<p class="rev-note" role="status">
+  {% if rev_note.all %}
+  Showing {{ rev_note.count }} older revision{{ '' if rev_note.count == 1 else 's' }}, marked Superseded.
+  <a href="{{ rev_note.href }}">Hide older revisions</a>
+  {% else %}
+  {{ rev_note.count }} older revision{{ '' if rev_note.count == 1 else 's' }} hidden: only the current revision of each file is listed.
+  <a href="{{ rev_note.href }}">Show older revisions ({{ rev_note.count }})</a>
+  {% endif %}
+</p>
+{% endif %}

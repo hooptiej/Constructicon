@@ -34,7 +34,10 @@ def export_project(project_id_or_slug):
     # Fetch all items in this project
     # #443: never hand restricted items (private keys/certs) to whatever
     # reads this zip (it's meant for offline/agent analysis).
-    items = [i for i in db.list_project_items(project["id"]) if not object_types.is_restricted(i)]
+    # #477: current revisions only; superseded older revisions stay out of the zip.
+    older = db.superseded_slugs()
+    items = [i for i in db.list_project_items(project["id"])
+             if not object_types.is_restricted(i) and i["slug"] not in older]
 
     # Fetch writeup body if writeup_slug is set
     writeup_body = None

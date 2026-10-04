@@ -331,6 +331,7 @@
      so it is reachable with JS off. static/js/stacks.js wires fan / "Show all N" / Esc. #}
   <section class="stacks-section" id="stacks" aria-labelledby="stacks-heading">
     <h2 class="stacks-heading" id="stacks-heading">Stacks</h2>
+    {% include "_revisions_note.html" %}
     {% if stacks or beside_cards %}
     <div class="stacks-row">
       {% for pile in stacks %}
@@ -402,7 +403,7 @@
           {% endif %}
         </div>
         <div class="project-item-body">
-          <div class="project-item-title">{{ entry.title }}</div>
+          <div class="project-item-title">{{ entry.title }}{% if entry.superseded %} <span class="rev-badge" title="A newer revision replaces this file">Superseded</span>{% endif %}</div>
           <div class="project-item-meta">{{ entry.media_type }} · {{ entry.date_display }}</div>
         </div>
       </a>

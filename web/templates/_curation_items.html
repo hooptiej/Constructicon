@@ -22,7 +22,7 @@
         {% if i.suggested and i.suggested.picks %}<button type="button" class="dp-btn dp-btn-primary" data-cq-action="accept">Accept</button>{% endif %}
         <button type="button" class="dp-btn" data-cq-action="choose" aria-expanded="false">Choose&hellip;</button>
       {% endif %}
-      {% if i.type != 'question' or i.kind in ('project_match', 'retype') %}
+      {% if i.type != 'question' or i.kind in ('project_match', 'retype', 'item_supersedes') %}
         <a class="dp-btn" href="{{ i.href }}">{{ i.fix_label }}</a>
       {% endif %}
       <button type="button" class="dp-btn" data-cq-action="defer" title="Move to the Deferred list. No timer: it stays there until you bring it back.">Defer</button>

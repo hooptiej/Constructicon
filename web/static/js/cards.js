@@ -102,6 +102,10 @@
     lamps += ocrLamp(item) + captionLamp(item);
     if (lamps) parts.push('<span class="cx-item-lamps">' + lamps + '</span>');
     if (item.redacted) parts.push('<span class="cx-item-badge cx-item-redacted-badge" title="The file was removed; the info is kept">Redacted</span>');
+    // #477: revision chain. A superseded file says so (and points at the current one); the current
+    // revision of a chain shows its position, linking to the page's revision stack.
+    if (item.superseded_by) parts.push('<a class="cx-item-badge cx-rev-badge cx-rev-old" href="/object/' + esc(item.superseded_by) + '" title="A newer revision replaces this file. Open the current revision.">Superseded</a>');
+    else if (item.rev) parts.push('<a class="cx-item-badge cx-rev-badge" href="/object/' + esc(item.slug) + '#revisions" title="Revision ' + esc(item.rev) + ' (the current one). Older revisions are on its page.">rev ' + esc(item.rev) + '</a>');
     if (item.type_icon) parts.push('<span class="cx-item-badge" title="' + esc(item.type_label || item.type_badge || '') + '">' + esc(item.type_icon) + '</span>');
     parts.push('<span class="client-badge"><span class="client-dot" style="background:' + esc(colorFor(item.client)) + '"></span>' +
       '<span class="client-name">' + esc(item.client || (opts.noClientLabel || 'No project yet')) + '</span></span>');

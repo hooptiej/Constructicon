@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, ingest, object_types, ocr, provenance_options, storage, timeline
+from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, ingest, object_types, ocr, provenance_options, revisions, storage, timeline
 from core import version as version_info
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
@@ -239,17 +239,19 @@ def constructicon_search(query: str | None = None, tags: list[str] | None = None
     provided, filters by both (AND logic). Redacted objects are excluded
     (#282) -- use constructicon_list_redacted to see those.
     """
-    return [_to_public(r) for r in db.search(query=query, tags=tags, client=None)]
+    # #477: old revisions are still found, marked with `superseded_by` (the current revision's slug) and `rev`.
+    return revisions.decorate([_to_public(r) for r in db.search(query=query, tags=tags, client=None)])
 
 
 @mcp.tool()
 def constructicon_get(slug: str) -> dict | None:
     """Get one object's metadata and hotlink URL by its slug.
 
-    Returns None if the object is not found.
+    Returns None if the object is not found. `superseded_by` (the current revision's slug, or null)
+    and `rev` (position in its revision chain, or null) say where it sits in a chain (#477).
     """
     row = db.get_by_slug(slug)
-    return _to_public(row) if row else None
+    return revisions.decorate([_to_public(row)])[0] if row else None
 
 
 @mcp.tool()
@@ -2128,10 +2130,57 @@ def constructicon_list_pending_decisions() -> list[dict]:
         elif item["kind"] == "retype":
             entry["question"] = item.get("question", "")
             entry["options"] = item.get("options", [])
+        elif item["kind"] == revisions.KIND_ITEM_SUPERSEDES:
+            # #477: options are the earlier files this upload might replace (key = their slug) + "none".
+            entry["question"] = item.get("question", "")
+            entry["options"] = item.get("options", [])
+            entry["suggested"] = item.get("suggested")
 
         result.append(entry)
 
     return result
+
+
+@mcp.tool()
+def constructicon_mark_superseded(old: str, new: str, dry_run: bool = False, batch_id: str | None = None) -> dict:
+    """Revision tracking (#477): file `new` supersedes file `old` ("rev C replaces rev B"), so `old`
+    shows "Superseded, see <current>" and drops out of browse listings (it stays findable by search
+    and one click away). Both are item slugs. A chain is linear: A -> B -> C, and the CURRENT revision
+    is the one with nothing newer. This is the explicit tool; the upload-time "does this replace ...?"
+    question is only ever answered by the owner (constructicon_resolve_pending_decision, kind
+    item_supersedes, choice = the older file's slug or "none").
+
+    Errors ({"ok": false, "error": {code, message}}): not_found; bad_revision (self-link, or a
+    redacted item); revision_cycle (new is already at or before old in the chain);
+    revision_conflict (old already has a newer revision, or new already replaces another item).
+    dry_run=true validates only. One change-log entry: constructicon_undo(batch_id) reverses it.
+    Returns {ok, dry_run, batch_id, old, new, chain: [slugs, oldest first]}."""
+    try:
+        return revisions.mark_superseded(old, new, actor="mcp", batch_id=batch_id, dry_run=dry_run)
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_remove_from_revisions(slug: str, dry_run: bool = False, batch_id: str | None = None) -> dict:
+    """Take a file out of its revision chain (#477) and close the gap: A -> B -> C minus B is
+    A -> C; minus the oldest, B -> C stands alone; minus the current one, the previous revision
+    becomes current. A no-op ({"removed": false}) for a file in no chain. Undoable with
+    constructicon_undo(batch_id). Returns {ok, dry_run, batch_id, slug, removed, chain}."""
+    try:
+        return revisions.remove_from_chain(slug, actor="mcp", batch_id=batch_id, dry_run=dry_run)
+    except card_rules.CardError as e:
+        return _card_error_result(e)
+
+
+@mcp.tool()
+def constructicon_list_revisions(slug: str) -> dict:
+    """The revision chain a file belongs to (#477), oldest first: [{slug, title, filename, rev,
+    is_current, is_this, redacted}], plus `current` (the newest revision), `superseded` (is this
+    file an older one) and this file's `rev` of `of`. {"in_chain": false} for a file with no revisions."""
+    if db.get_by_slug(slug) is None:
+        return {"ok": False, "error": {"code": "not_found", "message": f"No item {slug!r}."}}
+    return {"ok": True, **revisions.revision_view(slug)}
 
 
 @mcp.tool()

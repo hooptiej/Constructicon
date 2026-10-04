@@ -266,6 +266,23 @@ To add a new object type (issue #448 contract v2):
   old constants in `card_rules` / `db.PROVENANCE_TYPES` are only the seed.
   `scripts/test_provenance_options.py` runs on a throwaway DB, no server.
 
+- **Revision chains (#477)** — `item_revisions(old_slug PK, new_slug UNIQUE)`: "new
+  supersedes old", one successor and one predecessor per item, so a chain is
+  linear (A -> B -> C) and the CURRENT revision is the item with no successor.
+  `core/revisions.py` owns validation (no self-link, cycle, redacted item, second
+  successor/predecessor: `CardError` codes `bad_revision` / `revision_cycle` /
+  `revision_conflict`), name normalization and the change-logged writes (undo via
+  `cards.undo`). Browse listings (home Files, Unfiled, user gallery, project
+  stacks and grid, hobby loose objects) list current revisions only; `?rev=all`
+  shows older ones with a Superseded badge, `db.search()` still finds them
+  (`include_superseded` param). The static export and project zip skip older
+  revisions. Upload-time: `ingest.auto_match` queues an `item_supersedes`
+  pending decision (post_slug = the new file's slug, options = candidate slugs +
+  `none`) when the new file's normalized name matches a current item of the same
+  type. It only ever asks; the link exists only if the owner answers. Not
+  `capture_event_relations`: that one is symmetric and syncs tags/projects.
+  `scripts/test_revisions.py` runs on a throwaway DB, no server.
+
 ### Tag hierarchy gotcha — walk the tree, don't just keyword-search
 
 Tags are hierarchical (`blog_tags.parent_id`), e.g. `Kerbal Space Program

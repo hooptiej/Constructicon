@@ -13,6 +13,7 @@ CARD_ITEM_FIELDS = (
     "card_date", "thumb_url", "has_thumbnail", "redacted", "highlight", "provenance",
     "client", "uploaded_by_display", "uploaded_at", "tags", "codes",
     "ocr_status", "extracted_text", "caption_capable", "type_metadata",
+    "superseded_by", "rev",  # #477: revision chain (slug of the current revision | None, 1-based position | None)
 )
 # Lamp tooltips (OCR text, auto-caption) are a hover hint, not the document: clip them.
 CARD_TOOLTIP_CHARS = 100

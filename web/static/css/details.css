@@ -137,3 +137,15 @@
 @media (max-width: 760px) {
   .app-main.dp-page { padding-left: 20px; padding-right: 60px; }
 }
+/* #477: revision chain: the Superseded banner, the stack in WHERE IT LIVES, the "pick the other file" list. */
+.rev-banner { margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--warn); border-left-width: 4px; border-radius: 8px; background: rgba(186, 117, 23, .12); font-size: 14px; overflow-wrap: anywhere; }
+.rev-banner a { color: var(--accent); }
+.rev-stack { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rev-stack li { overflow-wrap: anywhere; }
+.rev-stack li + li::before { content: "92 a0"; color: var(--text-3); }
+.rev-stack .rev-this { font-weight: 600; }
+.rev-tag { font-size: 11px; color: var(--text-3); margin-left: 4px; }
+.rev-picker { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.rev-pick { display: flex; align-items: center; gap: 10px; text-align: left; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; font: inherit; font-size: 13px; }
+.rev-pick:hover, .rev-pick:focus-visible { border-color: var(--accent); }
+.rev-pick img, .rev-pick-noimg { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; flex: none; background: var(--chip); }

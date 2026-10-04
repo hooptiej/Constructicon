@@ -550,10 +550,8 @@ def api_refresh_thumbnail(request: Request, slug: str):
         try:
             thumb_path.unlink()
         except Exception as e:
-            return JSONResponse({
-                "ok": False,
-                "error": f"Failed to delete cached thumbnail: {e!r}"
-            })
+            # #548: a failure is an error status in the shared shape, not an HTTP 200 {ok:false}.
+            raise HTTPException(status_code=500, detail=f"Failed to delete cached thumbnail: {e!r}")
 
     # Regenerate the thumbnail
     success = thumbnails.ensure_thumbnail(row)
@@ -562,11 +560,7 @@ def api_refresh_thumbnail(request: Request, slug: str):
             "ok": True,
             "thumb_url": f"/f/{slug}/thumb"
         })
-    else:
-        return JSONResponse({
-            "ok": False,
-            "error": "Failed to generate thumbnail (see logs for details)"
-        })
+    raise HTTPException(status_code=500, detail="Failed to generate thumbnail (see logs for details)")
 
 
 @router.post("/api/image/{slug}/action/{key}")
@@ -634,21 +628,21 @@ def api_get_revisions(slug: str):
 @router.post("/api/image/{slug}/superseded-by")
 def api_mark_superseded_by(slug: str, new_slug: str = Form(...)):
     """`new_slug` replaces this item (this item becomes "Superseded, see <current>")."""
-    result = revisions.mark_superseded(slug, new_slug, actor="owner-ui")
+    result = revisions.mark_superseded(slug, new_slug)
     return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
 
 @router.post("/api/image/{slug}/supersedes")
 def api_mark_supersedes(slug: str, old_slug: str = Form(...)):
     """This item replaces `old_slug`."""
-    result = revisions.mark_superseded(old_slug, slug, actor="owner-ui")
+    result = revisions.mark_superseded(old_slug, slug)
     return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
 
 @router.post("/api/image/{slug}/revisions/remove")
 def api_remove_from_revisions(slug: str):
     """Takes this item out of its chain; its neighbours link up (A -> B -> C minus B = A -> C)."""
-    result = revisions.remove_from_chain(slug, actor="owner-ui")
+    result = revisions.remove_from_chain(slug)
     return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
 

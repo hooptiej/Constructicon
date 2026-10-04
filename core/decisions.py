@@ -11,28 +11,28 @@ API and the MCP server use the same decision workflow.
 """
 
 from core import automatch, cards, changes, db, ingest, object_types, revisions
+from core.errors import Conflict, InvalidInput, NotFound
 
 
-class DecisionNotFound(Exception):
-    """No pending decision with this ID."""
-    pass
+class DecisionNotFound(NotFound):
+    """No pending decision with this ID. (#548: an AppError, 404 not_found.)"""
 
 
-class DecisionAlreadyResolved(Exception):
-    """The decision has already been resolved."""
-    pass
+class DecisionAlreadyResolved(Conflict):
+    """The decision has already been resolved. (409 already_resolved.)"""
+    default_code = "already_resolved"
 
 
-class UnknownDecisionKind(Exception):
-    """The decision's kind is not recognized."""
-    pass
+class UnknownDecisionKind(InvalidInput):
+    """The decision's kind is not recognized. (400 unknown_decision_kind.)"""
+    default_code = "unknown_decision_kind"
 
 
-class InvalidChoice(Exception):
+class InvalidChoice(InvalidInput):
     """A retype answer that isn't one of the question's options. Raised
     rather than resolving with nothing applied, so a typo (e.g. from an MCP
-    call) can't silently discard the question."""
-    pass
+    call) can't silently discard the question. (400 invalid_choice.)"""
+    default_code = "invalid_choice"
 
 
 def list_open():
@@ -141,14 +141,14 @@ def list_open():
     return items
 
 
-def resolve(decision_id, choice="", project_ids=(), choices=(), actor=changes.ACTOR_UI):
+def resolve(decision_id, choice="", project_ids=(), choices=(), actor=None):
     """Resolve a pending decision with the owner's choice.
 
     For project_match: `project_ids` is a tuple/list of project IDs to attach to.
     For retype: `choice` is the media_type key to retype to.
     For the V2 card_* kinds: `choice` is one option key (or `choices` several);
     the option's patch runs through core.cards. May raise card_rules.CardError
-    (the decision then stays open); `actor` is 'owner-ui' or 'mcp'.
+    (the decision then stays open); `actor` defaults to the current actor context (#560).
 
     Returns a dict:
         {"ok": True, "applied": [...], "remaining": count}
@@ -164,9 +164,9 @@ def resolve(decision_id, choice="", project_ids=(), choices=(), actor=changes.AC
     """
     decision = db.get_pending_decision(decision_id)
     if decision is None:
-        raise DecisionNotFound(f"No such pending decision: {decision_id}")
+        raise DecisionNotFound("No such pending decision", details={"decision_id": decision_id})
     if decision["resolved_at"] is not None:
-        raise DecisionAlreadyResolved(f"Decision {decision_id} already resolved")
+        raise DecisionAlreadyResolved("Already resolved", details={"decision_id": decision_id})
 
     applied = []
 

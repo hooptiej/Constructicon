@@ -74,7 +74,7 @@ def api_set_hobby_status(request: Request, id_or_slug: str, status: str = Form(.
     if hobby is None:
         raise HTTPException(status_code=404, detail="hobby not found")
 
-    result = cards.set_hobby_activity(hobby["id"], status, actor="owner-ui")
+    result = cards.set_hobby_activity(hobby["id"], status)
     updated = db.get_hobby(hobby["id"])
     return JSONResponse({**updated, **cards.hobby_fields(updated), "warnings": result.warnings})
 
@@ -85,7 +85,7 @@ def api_set_hobby_group_code(request: Request, id_or_slug: str, group_code: str 
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
         raise HTTPException(status_code=404, detail="hobby not found")
-    cards.set_group_code(hobby["id"], group_code, actor="owner-ui")
+    cards.set_group_code(hobby["id"], group_code)
     updated = db.get_hobby(hobby["id"])
     return JSONResponse({**updated, **cards.hobby_fields(updated)})
 

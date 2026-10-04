@@ -184,7 +184,7 @@ def _must_exist(scope, key):
     return o
 
 
-def add(scope, key, label_text, actor=changes.ACTOR_UI, batch_id=None):
+def add(scope, key, label_text, actor=None, batch_id=None):
     """A new active option at the end of the list. The key must be a lowercase slug and
     unique within the scope (a retired key still counts, un-retire it instead)."""
     _scope(scope)
@@ -204,7 +204,7 @@ def add(scope, key, label_text, actor=changes.ACTOR_UI, batch_id=None):
     return get_option(scope, key)
 
 
-def rename(scope, key, label_text, actor=changes.ACTOR_UI, batch_id=None):
+def rename(scope, key, label_text, actor=None, batch_id=None):
     """Changes only the display label; the key (and every record using it) is untouched."""
     _must_exist(scope, key)
     text = _clean_label(label_text)
@@ -213,7 +213,7 @@ def rename(scope, key, label_text, actor=changes.ACTOR_UI, batch_id=None):
     return get_option(scope, key)
 
 
-def retire(scope, key, actor=changes.ACTOR_UI, batch_id=None):
+def retire(scope, key, actor=None, batch_id=None):
     """Hides the option from every picker and refuses it for new writes. Records that
     hold it are unchanged. The last active option of a list can't be retired."""
     o = _must_exist(scope, key)
@@ -225,14 +225,14 @@ def retire(scope, key, actor=changes.ACTOR_UI, batch_id=None):
     return get_option(scope, key)
 
 
-def unretire(scope, key, actor=changes.ACTOR_UI, batch_id=None):
+def unretire(scope, key, actor=None, batch_id=None):
     _must_exist(scope, key)
     with _log("provenance_option_unretire", actor, batch_id) as log:
         log.update("provenance_options", {"scope": scope, "key": key}, {"retired_at": None})
     return get_option(scope, key)
 
 
-def move(scope, key, direction, actor=changes.ACTOR_UI, batch_id=None):
+def move(scope, key, direction, actor=None, batch_id=None):
     """Moves an option one place 'up' or 'down' (among all options, retired ones too, so
     the order is stable when something is un-retired). Swaps sort_order with the
     neighbour; a no-op at either end."""

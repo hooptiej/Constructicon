@@ -11,35 +11,61 @@ templates object in web/common.py, audit logging in web/middleware.py.
 """
 
 import asyncio
+import json
 import sys
-import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core import captions, card_rules, db, ocr
+from core import actor as actor_ctx, captions, db, errors, ocr
 from web import request_guard
 from web.common import _STATIC_DIR
-from web.middleware import _scrub_secrets, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
+from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
 from web.routes import meta, pages, admin, items, curator, files, cards, hobbies, blog_export
 
 app = FastAPI()
 
 
-@app.exception_handler(card_rules.CardError)
-async def _card_error_handler(request: Request, exc: card_rules.CardError):
-    """V2 cards (spec section 5): a rule violation from core/ becomes HTTP 422
-    (404 missing card, 409 conflicts/nesting) with the same {code, message} the
-    MCP tools return. `detail` repeats the message so existing UI error toasts
-    (which read data.detail) keep working."""
-    return JSONResponse(
-        {"ok": False, "error": exc.to_dict(), "detail": exc.message},
-        status_code=exc.http_status,
-    )
+# --- One error shape (#548) ---
+# Every error response is {"ok": false, "error": {"code", "message"[, "details"]}, "detail": ...}.
+# `detail` stays because the page JS reads it (data.detail); for an AppError it repeats the
+# message, for an HTTPException it is the exception's own detail, unchanged.
+
+@app.exception_handler(errors.AppError)
+async def _app_error_handler(request: Request, exc: errors.AppError):
+    """Any core refusal (CardError, QueueError, decisions.*, InvalidInput, ...) becomes its
+    status (CardError: 422, 404 missing card, 409 conflicts/nesting) with the same
+    {code, message} the MCP tools return."""
+    return JSONResponse(errors.http_body(exc.code, exc.message, exc.details), status_code=exc.http_status)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Plain HTTPExceptions (routes, plus Starlette's own 404/405): same `detail` as before,
+    plus ok:false and error{code, message}, the code derived from the status."""
+    message = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, default=str)
+    return JSONResponse(errors.http_body(errors.code_for_status(exc.status_code), message, detail=exc.detail),
+                        status_code=exc.status_code, headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    """A missing/ill-typed form or query field: FastAPI's 422 `detail` list is kept as it was,
+    with ok:false and error{code: "validation_error", message} added."""
+    detail = jsonable_encoder(exc.errors())
+    parts = []
+    for e in detail:
+        loc = ".".join(str(x) for x in (e.get("loc") or [])[1:]) or "request"
+        parts.append(f"{loc}: {e.get('msg')}")
+    return JSONResponse(errors.http_body("validation_error", "; ".join(parts) or "Invalid request", detail=detail),
+                        status_code=422)
 
 
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
@@ -58,6 +84,8 @@ _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/preview", StaticFiles(directory=_PREVIEW_DIR, html=True), name="preview")
 
 app.add_middleware(AuditLoggingMiddleware)
+# #560: sets the request's actor (owner-ui) around the audit logger and the route.
+app.add_middleware(ActorMiddleware)
 # #558: outermost, so a forged cross-origin request is refused before anything runs.
 app.add_middleware(request_guard.OriginGuardMiddleware)
 
@@ -72,7 +100,7 @@ def _refire_ocr(slug):
     # here would still look exactly as stale to the watchdog on its very
     # next tick, and get fired again every interval instead of once.
     db.set_ocr_status(slug, "pending")
-    threading.Thread(target=ocr.run_ocr, args=(slug,), daemon=True).start()
+    actor_ctx.spawn(ocr.run_ocr, slug)  # #560: carries the caller's actor (system at boot/watchdog)
 
 
 
@@ -91,6 +119,13 @@ async def _ocr_watchdog():
 
 @app.on_event("startup")
 async def startup():
+    # #560: boot work (migrations, OCR self-heal, the watchdog task created below, which copies
+    # this context) is the 'system' actor.
+    with actor_ctx.acting_as(actor_ctx.ACTOR_SYSTEM):
+        _startup_as_system()
+
+
+def _startup_as_system():
     db.init_db()
     db.ensure_special_clients()
     # Self-heal: a redeploy/restart while OCR was still queued or running for

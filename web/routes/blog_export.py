@@ -259,10 +259,8 @@ async def api_export_build(request: Request):
         print(f"Build failed: {e}")
         import traceback
         traceback.print_exc()
-        return JSONResponse(
-            {"error": str(e)},
-            status_code=500
-        )
+        # #548: the shared error shape (was a bare {"error": str} 500).
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/api/export/config")

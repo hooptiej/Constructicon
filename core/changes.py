@@ -13,10 +13,8 @@ itself arrives with the reorganizing tools (piece 6).
 import uuid
 
 from . import db
-
-ACTOR_UI = "owner-ui"
-ACTOR_MCP = "mcp"
-ACTOR_MIGRATION = "migration"
+# #560: the actor constants live in core/actor.py (one source); re-exported for older callers.
+from .actor import ACTOR_MCP, ACTOR_MIGRATION, ACTOR_SCRIPT, ACTOR_SYSTEM, ACTOR_UI  # noqa: F401
 
 
 def new_batch_id():
@@ -31,7 +29,7 @@ def row_image(table, key, before, after):
 def record(op, actor, mutations, batch_id=None, affected_slugs=None, conn=None):
     """Writes one change-log row. With `conn`, joins the caller's transaction
     (the caller commits); without, opens its own connection and commits.
-    Returns the audit row id."""
+    `actor` None = the current actor context (core/actor.py). Returns the audit row id."""
     batch_id = batch_id or new_batch_id()
     if conn is not None:
         return db.insert_change_log(conn, op, actor, mutations, batch_id=batch_id, affected_slugs=affected_slugs)

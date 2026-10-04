@@ -27,7 +27,14 @@ What it records:
                  Origin header, each reverted: item edit, card field edit, provenance option
                  add + retire, a .txt upload + delete, a no-op settings write (its audit row
                  must be redacted), the cross-origin guard (403) and the JSON gate (415). The
-                 audit row each one wrote is recorded (volatile ids normalised).
+                 audit row each one wrote is recorded (volatile ids normalised), including
+                 its `actor` column (#560).
+  6. errors      (--errors) deliberate error probes (404 object/card/route, 405, bad card
+                 edit, unknown decision, bad decision choice, revision cycle, bad
+                 physical-piece date, bad queue key, missing form field): status + JSON body.
+                 compare() reports, per probe, whether the bodies differ ONLY by the shared
+                 error-shape fields `ok` / `error` (#548). The revision-cycle probe makes one
+                 link and removes it again.
                  Writes are reverted where the API allows; the provenance option it adds
                  stays (retired). Restore the DB backup afterwards for a fully clean state.
 
@@ -363,7 +370,7 @@ def snapshots(base, urls, bodies_dir):
 # --- 5. mutations -----------------------------------------------------------------------
 
 def _last_audit(conn, upload_slug=None):
-    r = conn.execute("SELECT method, path, status_code, form_body, affected_slugs FROM audit_log "
+    r = conn.execute("SELECT method, path, status_code, form_body, affected_slugs, actor FROM audit_log "
                      "WHERE path LIKE '/api/%' AND op IS NULL ORDER BY id DESC LIMIT 1").fetchone()
     if r is None:
         return None
@@ -439,6 +446,63 @@ def mutations(base, v):
     return res
 
 
+# --- 6. error probes (#548) -------------------------------------------------------------
+
+def error_probes(base):
+    from core import db
+    conn = sqlite3.connect(db.DB_PATH)
+    host = urllib.parse.urlsplit(base).netloc
+    same = {"Origin": f"http://{host}", "Content-Type": "application/x-www-form-urlencoded"}
+    out = {}
+
+    def probe(name, url, fields=None, method="POST"):
+        data = _form(fields) if fields is not None else (b"" if method == "POST" else None)
+        status, headers, body = fetch(base, url, method=method, data=data,
+                                      headers=same if method != "GET" else {})
+        try:
+            parsed = json.loads(body)
+        except Exception:
+            parsed = {"_non_json_sha256": hashlib.sha256(body).hexdigest()}
+        out[name] = {"status": status, "body": parsed}
+
+    items = [r[0] for r in conn.execute("SELECT slug FROM capture_events WHERE redacted = 0 AND slug NOT IN "
+                                        "(SELECT old_slug FROM item_revisions UNION SELECT new_slug FROM item_revisions) "
+                                        "ORDER BY id LIMIT 2")]
+    pid = conn.execute("SELECT id FROM projects ORDER BY id LIMIT 1").fetchone()[0]
+    open_dec = conn.execute("SELECT id FROM pending_decisions WHERE resolved_at IS NULL ORDER BY id LIMIT 1").fetchone()
+
+    probe("get_unknown_card_api", "/api/cards/no-such-card-golden", method="GET")
+    probe("get_unknown_object_page", "/object/no-such-object-golden", method="GET")
+    probe("get_unknown_route", "/api/no-such-route-golden", method="GET")
+    probe("method_not_allowed", "/api/projects", method="PUT")
+    probe("card_edit_bad_stage", f"/api/projects/{pid}", {"stage": "bogus-stage"})
+    probe("card_edit_bad_parent", f"/api/projects/{pid}", {"parent_id": "not-a-number"})
+    probe("decision_unknown", "/api/pending-decisions/999999999/resolve", {"choice": "x"})
+    if open_dec:
+        probe("decision_bad_choice", f"/api/pending-decisions/{open_dec[0]}/resolve", {"choice": "no-such-choice-golden"})
+    probe("queue_bad_key", "/api/curator/needs/dismiss", {"nudge_key": "not-a-key"})
+    probe("missing_form_field", f"/api/image/{items[0]}/superseded-by", {})
+    probe("physical_piece_bad_date", f"/api/image/{items[0]}", {"type_metadata": json.dumps({"date_made": "june 2009"})})
+    probe("revision_self", f"/api/image/{items[0]}/superseded-by", {"new_slug": items[0]})
+    # a real cycle: A superseded by B, then B superseded by A; then remove the link again
+    a, b = items[0], items[1]
+    st, _, _ = fetch(base, f"/api/image/{a}/superseded-by", method="POST", data=_form({"new_slug": b}), headers=same)
+    probe("revision_cycle", f"/api/image/{b}/superseded-by", {"new_slug": a})
+    fetch(base, f"/api/image/{a}/revisions/remove", method="POST", data=b"", headers=same)
+    out["_revision_link_made"] = st
+    out["_revision_cleaned"] = conn.execute("SELECT COUNT(*) FROM item_revisions WHERE old_slug IN (?, ?) "
+                                            "OR new_slug IN (?, ?)", (a, b, a, b)).fetchone()[0] == 0
+    probe("thumbnail_refresh_unknown", "/api/image/no-such-object-golden/thumbnail/refresh", {})
+    conn.close()
+    return out
+
+
+def _strip_shape(body):
+    if isinstance(body, dict):
+        return {k: v for k, v in body.items() if k not in ("ok", "error")}
+    return body
+
+
 # --- compare ----------------------------------------------------------------------------
 
 def _canon(x):
@@ -492,6 +556,23 @@ def compare(a_path, b_path):
             print(f"  {k}: {ma.get(k)}  ->  {mb.get(k)}")
         ok &= not mdiff
 
+    if "errors" in a or "errors" in b:
+        ea, eb = a.get("errors", {}), b.get("errors", {})
+        print(f"errors:     {len(ea)} vs {len(eb)} probes")
+        for k in sorted(set(ea) | set(eb)):
+            pa, pb = ea.get(k), eb.get(k)
+            if not isinstance(pa, dict) or "body" not in pa or not isinstance(pb, dict):
+                print(f"  {k}: {pa} -> {pb}")
+                continue
+            same_status = pa["status"] == pb["status"]
+            only_shape = _canon(_strip_shape(pa["body"])) == _canon(_strip_shape(pb["body"]))
+            verdict = "identical" if _canon(pa) == _canon(pb) else (
+                "only ok/error added" if same_status and only_shape else "DIFFERS")
+            print(f"  {k}: {pa['status']} -> {pb['status']}  {verdict}")
+            if verdict != "identical":
+                print(f"     before: {json.dumps(pa['body'], sort_keys=True)[:300]}")
+                print(f"     after:  {json.dumps(pb['body'], sort_keys=True)[:300]}")
+
     print("RESULT:", "IDENTICAL" if ok else "DIFFERENT")
     return 0 if ok else 1
 
@@ -503,6 +584,7 @@ def main():
     ap.add_argument("--base-url", default="http://localhost:80", help="running server for responses/mutations")
     ap.add_argument("--no-http", action="store_true", help="skip the HTTP snapshots (routes/resolution/openapi only)")
     ap.add_argument("--mutations", action="store_true", help="also run the write round-trips (writes to the DB)")
+    ap.add_argument("--errors", action="store_true", help="also run the error probes (#548; one revision link made + removed)")
     args = ap.parse_args()
 
     if args.compare:
@@ -539,6 +621,8 @@ def main():
                                       out.with_name(out.name + ".bodies"))
     if args.mutations:
         snap["mutations"] = mutations(args.base_url.rstrip("/"), v)
+    if args.errors:
+        snap["errors"] = error_probes(args.base_url.rstrip("/"))
     Path(args.out).write_text(json.dumps(snap, indent=1, sort_keys=True), encoding="utf-8")
     print(f"routes={len(routes)} resolution={len(resolution)} openapi_paths={len(snap['openapi'].get('paths', {}))}"
           f" responses={len(snap.get('responses', {}))} mutations={len(snap.get('mutations', {}))} -> {args.out}")

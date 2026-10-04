@@ -13,7 +13,7 @@ from pathlib import Path
 
 # timeline is pure (no DB access — see its module docstring), so this
 # direction of import can't cycle; it's here for list_project_items' sort.
-from . import card_rules, timeline
+from . import actor as actor_ctx, card_rules, timeline
 
 # #453: overridable so the DB can live in its own bind-mounted DIRECTORY.
 # WAL mode keeps -wal/-shm next to the DB file; with only the file
@@ -2305,7 +2305,7 @@ def list_recent_posts(limit=10):
 # member posts, rather than being derived from tag membership.
 
 def create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None, with_writeup=True,
-                   kind=None, stage=None, stop_reason=None, actor="owner-ui", batch_id=None):
+                   kind=None, stage=None, stop_reason=None, actor=None, batch_id=None):
     """Auto-generates a unique slug from title, same dedup-with-numeric-
     suffix pattern as get_or_create_tag.
 
@@ -2392,7 +2392,7 @@ def create_project(title, description="", cover_slug=None, status="active", tag_
     return project
 
 
-def _make_project_writeup(project, actor="owner-ui", batch_id=None):
+def _make_project_writeup(project, actor=None, batch_id=None):
     """Create the blank document-type write-up for a project and wire it up:
     a capture_event with an empty type_metadata.body, added to the project's
     items, tagged with the project's linked tag (so it's reachable via tag
@@ -2913,16 +2913,17 @@ def list_recent_items_by_type(limit_per_type=10, include_brand=False, include_su
 # --- Audit log ---
 # Captures mutating API requests for debugging/recovery after failures.
 
-def insert_audit_log(method, path, form_body, status_code, error_detail=None, affected_slugs=None):
+def insert_audit_log(method, path, form_body, status_code, error_detail=None, affected_slugs=None, actor=None):
     """Insert a row into the audit_log table. form_body should be a dict (will be
     JSON-serialized). affected_slugs can be a list of slugs or None. Automatically
-    records the current timestamp."""
+    records the current timestamp. #560: `actor` (default: the current actor context)
+    fills the request-log row's actor column."""
     conn = get_conn()
     try:
         now = time.time()
         conn.execute(
-            "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, actor) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 method,
                 path,
@@ -2931,6 +2932,7 @@ def insert_audit_log(method, path, form_body, status_code, error_detail=None, af
                 status_code,
                 error_detail,
                 now,
+                actor_ctx.resolve(actor),
             ),
         )
         conn.commit()
@@ -2965,7 +2967,10 @@ def list_recent_audit_logs(limit=100):
 def insert_change_log(conn, op, actor, mutations, batch_id=None, affected_slugs=None):
     """Writes one change-log row on the caller's connection (the caller commits,
     so the log row lands in the same transaction as the write it describes).
-    `mutations` is a list of {table, key, before, after} row images."""
+    `mutations` is a list of {table, key, before, after} row images.
+    `actor` None = the current actor context (core/actor.py, #560): every core write
+    passes through here, so this is where a defaulted actor is resolved."""
+    actor = actor_ctx.resolve(actor)
     cur = conn.execute(
         "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, "
         "op, actor, batch_id, mutations) VALUES (?, ?, '{}', ?, 200, NULL, ?, ?, ?, ?, ?)",
@@ -3359,7 +3364,7 @@ def count_family_members(family_id):
         conn.close()
 
 
-def clear_family_members(family_id, op="set_kind", actor="mcp", batch_id=None, affected_slugs=None):
+def clear_family_members(family_id, op="set_kind", actor=None, batch_id=None, affected_slugs=None):
     """Drops a group card's membership rows (set_kind force=True), logging one
     row image per dropped membership so the drop is undoable. No-op before the
     family_members table exists."""
@@ -3742,7 +3747,7 @@ CURATOR_DISMISS = "dismiss"
 CURATOR_DEFER = "defer"
 
 
-def set_curator_state(key, action, actor="owner-ui", batch_id=None, affected_slugs=None):
+def set_curator_state(key, action, actor=None, batch_id=None, affected_slugs=None):
     """Set an item's queue state to 'dismiss' or 'defer' (replacing whatever it had).
     Returns True when something changed."""
     if action not in (CURATOR_DISMISS, CURATOR_DEFER):
@@ -3760,7 +3765,7 @@ def set_curator_state(key, action, actor="owner-ui", batch_id=None, affected_slu
     return changed
 
 
-def clear_curator_defer(key, actor="owner-ui", batch_id=None, affected_slugs=None):
+def clear_curator_defer(key, actor=None, batch_id=None, affected_slugs=None):
     """Bring a deferred item back into the main queue. Only a 'defer' row is removed
     (a dismissal is not undone by this). Returns True when something changed."""
     changed = False
@@ -4321,7 +4326,7 @@ def delete_project(project_id):
     project = get_project(project_id)
     if project is None:
         return None
-    res = cards.delete_card(project["id"], actor="system")
+    res = cards.delete_card(project["id"])  # #560: actor from the caller's context
     return {"children_orphaned": res.data["children_orphaned"], "items_detached": res.data["items_detached"],
             "writeup": res.data["writeup"], "warnings": res.warnings, "batch_id": res.batch_id}
 

@@ -27,11 +27,12 @@ exist yet.
 
 - **`web/`** — FastAPI/Starlette app, split into routers (#547). The ASGI
   entry point is still `web.app:app`.
-  - `web/app.py` is only the assembly point: `app = FastAPI()`, the
-    `CardError` exception handler, the static mounts (`/static`, `/brand`,
-    `/preview`), middleware (audit logging inside the request guard, which
-    stays outermost), the startup hook (`init_db` migrations, OCR self-heal +
-    watchdog, caption queue worker) and the `include_router` calls.
+  - `web/app.py` is only the assembly point: `app = FastAPI()`, the error
+    handlers (one shape, see "Actor and errors" below), the static mounts
+    (`/static`, `/brand`, `/preview`), middleware (request guard outermost,
+    then the actor context, then audit logging), the startup hook (`init_db`
+    migrations, OCR self-heal + watchdog, caption queue worker; runs as the
+    `system` actor) and the `include_router` calls.
   - `web/routes/` holds one plain `APIRouter()` per area, **no prefix** (each
     route writes its full path): `pages.py` (HTML pages + legacy redirects),
     `items.py` (`/api/upload`, `/api/content`, `/api/image/*`, per-item
@@ -47,7 +48,7 @@ exist yet.
   - `web/shapes.py`: the `_to_*` response shapers and the pure helpers they
     share. `web/common.py`: the `templates` object and its Jinja globals,
     desktop-uploader constants, breadcrumbs / `?rev=` note helpers.
-    `web/middleware.py`: audit logging. Routers import from `common` and
+    `web/middleware.py`: the actor middleware and audit logging. Routers import from `common` and
     `shapes`, never from `web.app` or from each other.
   - **Adding a route:** put it in the router for its area, decorated
     `@router.get(...)`/`@router.post(...)` with the full path. Registration
@@ -149,6 +150,52 @@ exist yet.
   `static/css/details.css`. A group's Save calls the same `/api/...` endpoints
   the old scattered controls called; new fields go into a group, not back onto
   the page loose. Live pages only: nothing here touches the static export.
+
+## Actor and errors (#560, #548; phase A of the service layer #541)
+
+**Who did it: `core/actor.py`.** The actor is a `ContextVar`, set once per entry
+point, never a string literal at a call site.
+- HTTP: `web/middleware.py`'s `ActorMiddleware` sets `owner-ui` per request
+  (`request_actor()` is the hook #467 will point at the logged-in user). The
+  request-log rows in `audit_log` record it too.
+- MCP: every tool runs inside `acting_as("mcp")` (the `@mcp.tool()` wrapper, below).
+- Boot, the OCR watchdog and the caption queue worker run as `system`. A script
+  started from `scripts/` defaults to `script`.
+- Read it with `actor.current_actor()`; run a block as someone with
+  `with actor.acting_as(actor.ACTOR_UI):`. Constants (`ACTOR_UI`, `ACTOR_MCP`,
+  `ACTOR_SYSTEM`, `ACTOR_SCRIPT`, `ACTOR_MIGRATION`) live there; `changes.ACTOR_*`
+  re-exports them.
+- Core ops keep `actor=None` for an explicit override. None means "the context's",
+  resolved in `db.insert_change_log`. **Don't pass a literal.**
+- ContextVars don't cross `threading.Thread`: start threads with `actor.spawn(fn, *args)`
+  (or wrap with `actor.carry(fn)`). `ingest.run_in_thread` already does.
+  `run_in_threadpool`, `BackgroundTasks` and asyncio tasks copy the context themselves.
+- No context at all falls back to `system` and logs one warning per call site
+  (`no actor context at <file>:<line>`). Treat that warning as a missed entry point.
+
+**Refusing: `core/errors.py`.** Raise `AppError(code, message, status=...)` or a
+subclass: `NotFound` (404 `not_found`), `Conflict` (409), `InvalidInput` (400
+`bad_request`; also a `ValueError`). Existing families are subclasses:
+`CardError` (422; 404 `not_found`; 409 for `*_conflict` / `nest_*`),
+`curation_queue.QueueError` (400 `bad_request`), `decisions.DecisionNotFound`
+(404 `not_found`), `DecisionAlreadyResolved` (409 `already_resolved`),
+`UnknownDecisionKind` (400 `unknown_decision_kind`), `InvalidChoice` (400
+`invalid_choice`) and `physical_piece` validation (400 `bad_physical_piece`).
+Don't map these by hand in routes or tools: the two front ends do it.
+- **Web** (`web/app.py` handlers): `{"ok": false, "error": {"code", "message"[, "details"]},
+  "detail": <message>}` with the error's status. A plain `HTTPException` gets the same
+  shape: its `detail` is unchanged and the code comes from the status (`bad_request`,
+  `not_found`, `forbidden`, `conflict`, `unsupported_media_type`, ...). A FastAPI
+  validation error keeps its `detail` list, with code `validation_error`. **`detail` stays**
+  because the page JS reads it. New JS should read `(body.error && body.error.message) ||
+  body.detail`.
+- **MCP** (the `@mcp.tool()` wrapper in `mcp_server/server.py`, which replaces
+  `MCPServer.tool`; startup refuses if a registered tool bypassed it): an `AppError`,
+  `ValueError` or pydantic `ValidationError` raised in a tool becomes `{"ok": false,
+  "error": {"code", "message"[, "details"]}}`. Over MCP it is an isError result whose
+  text is that JSON. **Not found is an error**: a getter or setter whose target doesn't
+  exist returns code `not_found`, never `None` or `False`. Successful returns are unchanged.
+- Check with `scripts/test_actor_errors.py` (throwaway DB, no server).
 
 ## Adding an object type
 

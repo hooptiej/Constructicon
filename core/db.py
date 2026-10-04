@@ -181,6 +181,16 @@ CREATE TABLE IF NOT EXISTS curator_dismissals (
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_curator_dismissals_nudge_key ON curator_dismissals(nudge_key);
+CREATE TABLE IF NOT EXISTS caption_queue (
+    slug TEXT PRIMARY KEY,
+    start_step INTEGER NOT NULL DEFAULT 0,
+    cascade INTEGER NOT NULL DEFAULT 1,
+    enqueued_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at REAL NOT NULL
+);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -578,19 +588,17 @@ def get_processing_rows_by_slugs(slugs):
         conn.close()
 
 
-def init_db():
+def init_db(migrate=True):
+    """Boot-time schema setup.
+
+    #549: ONE process owns data migrations -- the web app. `migrate=True` (the default, also
+    what scripts/tests get) runs schema DDL and then every pending one-time data migration
+    (see MIGRATIONS / run_pending_migrations). The MCP server passes `migrate=False`: it only
+    runs the idempotent schema DDL below (CREATE IF NOT EXISTS / ADD COLUMN) so its queries
+    never hit a missing column, and logs any migration web hasn't applied yet."""
     conn = get_conn()
     try:
-        # Pre-generic-schema table from before the capture_events rework — sample
-        # data only, safe to drop rather than migrate. Confirmed with Jason 2026-08-27.
-        conn.execute("DROP TABLE IF EXISTS uploads")
         conn.executescript(SCHEMA)
-        # #519: the timed snooze is gone, replaced by Defer (no wait time). Snoozes still in
-        # effect become deferrals; expired ones are dropped (they had already come back).
-        # Idempotent: once no 'snooze' rows remain, both statements touch nothing.
-        conn.execute("UPDATE curator_dismissals SET action = 'defer', snooze_until = NULL "
-                     "WHERE action = 'snooze' AND snooze_until IS NOT NULL AND snooze_until > ?", (time.time(),))
-        conn.execute("DELETE FROM curator_dismissals WHERE action = 'snooze'")
         existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(capture_events)")}
         for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
             if column not in existing_columns:
@@ -744,23 +752,6 @@ def init_db():
             if column not in existing_audit_columns:
                 conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {ddl_type}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_batch ON audit_log(batch_id)")
-        # #559: scrub saved setting values out of old audit rows. Before the route-driven
-        # redaction, POST /api/settings logged {"key": ..., "value": <the secret>}.
-        # Idempotent: only rows still carrying a non-redacted value are rewritten.
-        for row in conn.execute("SELECT id, form_body FROM audit_log WHERE path = '/api/settings'").fetchall():
-            try:
-                body = json.loads(row["form_body"]) if row["form_body"] else {}
-            except (ValueError, TypeError):
-                body = None
-            if isinstance(body, dict):
-                if "value" not in body or body["value"] == "[REDACTED]":
-                    continue
-                body["value"] = "[REDACTED]"
-            elif body is not None and not body:
-                continue
-            else:
-                body = {"_body": "[REDACTED]"}
-            conn.execute("UPDATE audit_log SET form_body = ? WHERE id = ?", (json.dumps(body), row["id"]))
         # family_members (V2 cards 3.6): many-to-many membership for kind=family and
         # kind=collection cards. Not nesting: membership never moves or copies files.
         conn.executescript("""
@@ -773,20 +764,124 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_family_members_member ON family_members(member_id);
         """)
-        # Editable provenance lists (#529): table + idempotent seed from the old fixed lists.
+        # Editable provenance lists (#529): the table is schema (both processes); its seed rows
+        # are the one-time `provenance_options_seed_529` migration below.
         from . import provenance_options
-        provenance_options.ensure_table_and_seed(conn)
+        conn.execute(provenance_options.DDL)
         conn.commit()
         _rebuild_project_relations_typed(conn)
     finally:
         conn.close()
-    # Data migrations (separate connection: they read through the normal db helpers).
-    from . import card_migration
-    card_migration.run_v2c_1()
-    card_migration.run_v2c_2()
-    card_migration.run_v2c_3()
-    card_migration.run_v2c_4()
-    card_migration.run_v2c_5()
+    if migrate:
+        run_pending_migrations()
+    else:
+        pending = pending_migrations()
+        if pending:
+            print(f"schema_migrations: {len(pending)} migration(s) pending ({', '.join(pending)}); "
+                  "web owns data migrations and hasn't booted on this DB yet", flush=True)
+
+
+# --- One-time data migrations (#549) ----------------------------------------------------
+# Each step is a named function that runs at most once ever per DB: check-and-apply-and-record
+# happen inside ONE `transaction()` (BEGIN IMMEDIATE), so a concurrent boot blocks on the write
+# lock, then sees the row and skips. Every step is ALSO still idempotent on its own (they all
+# were before this table existed), which is what makes an existing DB safe: on prod/test the
+# first run of each step finds its effect already present, changes nothing (an owner decision
+# already resolved is never re-queued -- queue_decision_once skips open OR resolved rows), and
+# just records itself. Only the web process calls run_pending_migrations.
+
+def _mig_drop_legacy_uploads():
+    # Pre-generic-schema table from before the capture_events rework -- sample data only, safe
+    # to drop rather than migrate. Confirmed with Jason 2026-08-27.
+    get_conn().execute("DROP TABLE IF EXISTS uploads")
+
+
+def _mig_curator_snooze_519():
+    # #519: the timed snooze is gone, replaced by Defer (no wait time). Snoozes still in
+    # effect become deferrals; expired ones are dropped (they had already come back).
+    conn = get_conn()
+    conn.execute("UPDATE curator_dismissals SET action = 'defer', snooze_until = NULL "
+                 "WHERE action = 'snooze' AND snooze_until IS NOT NULL AND snooze_until > ?", (time.time(),))
+    conn.execute("DELETE FROM curator_dismissals WHERE action = 'snooze'")
+
+
+def _mig_audit_scrub_559():
+    # #559: scrub saved setting values out of old audit rows. Before the route-driven
+    # redaction, POST /api/settings logged {"key": ..., "value": <the secret>}. New rows are
+    # redacted at write time, so this only ever needs to run once.
+    conn = get_conn()
+    for row in conn.execute("SELECT id, form_body FROM audit_log WHERE path = '/api/settings'").fetchall():
+        try:
+            body = json.loads(row["form_body"]) if row["form_body"] else {}
+        except (ValueError, TypeError):
+            body = None
+        if isinstance(body, dict):
+            if "value" not in body or body["value"] == "[REDACTED]":
+                continue
+            body["value"] = "[REDACTED]"
+        elif body is not None and not body:
+            continue
+        else:
+            body = {"_body": "[REDACTED]"}
+        conn.execute("UPDATE audit_log SET form_body = ? WHERE id = ?", (json.dumps(body), row["id"]))
+
+
+def _mig_provenance_options_seed_529():
+    # INSERT OR IGNORE only: never renames, un-retires or duplicates anything the owner changed.
+    from . import provenance_options
+    provenance_options.ensure_table_and_seed(get_conn())
+
+
+def _mig_v2c(n):
+    def run():
+        from . import card_migration
+        getattr(card_migration, f"run_v2c_{n}")()
+    return run
+
+
+# Order matters (v2c_1 first: later steps read the kind/stage it assigns).
+MIGRATIONS = [
+    ("drop_legacy_uploads", _mig_drop_legacy_uploads),
+    ("curator_snooze_519", _mig_curator_snooze_519),
+    ("audit_scrub_settings_559", _mig_audit_scrub_559),
+    ("provenance_options_seed_529", _mig_provenance_options_seed_529),
+    ("v2c_1_kind_status", _mig_v2c(1)),
+    ("v2c_2_hobbies", _mig_v2c(2)),
+    ("v2c_3_alienwhoop_family", _mig_v2c(3)),
+    ("v2c_4_canopy_built_for", _mig_v2c(4)),
+    ("v2c_5_referenced_provenance", _mig_v2c(5)),
+]
+
+
+def applied_migrations():
+    conn = get_conn()
+    try:
+        return {r["name"]: r["applied_at"] for r in conn.execute("SELECT name, applied_at FROM schema_migrations")}
+    finally:
+        conn.close()
+
+
+def pending_migrations():
+    done = applied_migrations()
+    return [name for name, _fn in MIGRATIONS if name not in done]
+
+
+def run_pending_migrations():
+    """Runs every migration whose schema_migrations row is absent, in order, recording each.
+    Returns the list of names applied by THIS call."""
+    ran = []
+    for name, fn in MIGRATIONS:
+        if name in applied_migrations():  # cheap pre-check outside the lock
+            continue
+        with transaction() as tx:
+            if tx.conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (name,)).fetchone():
+                continue  # another process applied it while we waited for the lock
+            t0 = time.monotonic()
+            fn()
+            tx.conn.execute("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)", (name, time.time()))
+        ran.append(name)
+        print(f"schema_migrations: applied {name} ({time.monotonic() - t0:.2f}s)", flush=True)
+    return ran
 
 
 def _rebuild_project_relations_typed(conn):
@@ -803,6 +898,9 @@ def _rebuild_project_relations_typed(conn):
     conn.commit()  # nothing open here, but BEGIN IMMEDIATE must not nest
     try:
         conn.execute("BEGIN IMMEDIATE")
+        if "type" in {r["name"] for r in conn.execute("PRAGMA table_info(project_relations)")}:
+            conn.rollback()  # #549: a concurrent boot (web vs MCP) rebuilt it while we waited
+            return False
         before = conn.execute("SELECT COUNT(*) AS n FROM project_relations").fetchone()["n"]
         conn.execute("DROP TABLE IF EXISTS project_relations_new")
         conn.execute("""
@@ -951,6 +1049,41 @@ def update_content_metadata(slug, content_description=None, type_metadata=None):
         )
         conn.commit()
         return get_by_slug(slug)
+    finally:
+        conn.close()
+
+
+# --- Caption queue (#549): the MCP process enqueues, the web process's worker drains ---
+
+def enqueue_caption(slug, start_step=0, cascade=True):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO caption_queue (slug, start_step, cascade, enqueued_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(slug) DO UPDATE SET start_step = excluded.start_step, "
+            "cascade = excluded.cascade, enqueued_at = excluded.enqueued_at",
+            (slug, int(start_step), 1 if cascade else 0, time.time()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def peek_caption_queue():
+    """Oldest queued caption (not removed: it is dequeued only after it has run, so a crash
+    mid-caption leaves it queued for the next boot)."""
+    conn = get_conn()
+    try:
+        r = conn.execute("SELECT * FROM caption_queue ORDER BY enqueued_at, slug LIMIT 1").fetchone()
+        return dict(r) if r else None
+    finally:
+        conn.close()
+
+
+def dequeue_caption(slug):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM caption_queue WHERE slug = ?", (slug,))
+        conn.commit()
     finally:
         conn.close()
 

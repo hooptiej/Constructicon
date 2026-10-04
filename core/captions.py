@@ -334,7 +334,7 @@ def reset_breaker():
 
 # --- The one-image cycle ---
 
-def caption_once(image_path, prompt=None, temperature=None, num_predict=None):
+def caption_once(image_path, prompt=None, temperature=None, num_predict=None, label=None):
     """#454: The full per-image cycle under CAPTION_LOCK: one model call,
     optional guarded restart (on failure, or if RAM > ceiling), then release.
     Returns dict {caption, elapsed_seconds, restarted, restart_seconds,
@@ -342,6 +342,8 @@ def caption_once(image_path, prompt=None, temperature=None, num_predict=None):
     If circuit breaker is open, returns immediately with error message."""
     global _consecutive_failures, _breaker_reason
     with CAPTION_LOCK:
+        if label:
+            print(f"caption: model call start {label}", flush=True)  # #549: proves serialization in the logs
         if _breaker_reason:
             return {
                 "caption": None,
@@ -378,6 +380,85 @@ def caption_once(image_path, prompt=None, temperature=None, num_predict=None):
         "restart_reason": restart_reason,
         "error": error,
     }
+
+
+# --- #549: one captioner, in the web process ---
+# The GPU guard (CAPTION_LOCK, breaker, cooldown) is process-local, so only ONE process may
+# ever caption. The MCP process (CONSTRUCTICON_ROLE=mcp, set in mcp_server/server.py) enqueues
+# into the shared caption_queue table instead; web's queue worker drains it one at a time
+# through run_caption, so the lock/breaker/cooldown apply exactly as for a web upload.
+
+QUEUE_POLL_MIN_SECONDS = 2.0
+QUEUE_POLL_MAX_SECONDS = 15.0
+_worker_thread = None
+_worker_guard = threading.Lock()
+
+
+def enqueue_only():
+    """True in a process that must not caption itself (the MCP server)."""
+    return os.environ.get("CONSTRUCTICON_ROLE", "").strip().lower() == "mcp"
+
+
+def enqueue_caption(slug, start_step=0, cascade=True):
+    """Marks the item caption-pending and queues it for web's worker. Best-effort, never raises."""
+    try:
+        row = db.get_by_slug(slug)
+        if row is None or row["redacted"]:
+            return
+        spec = object_types.get_object_type(row.get("media_type"))
+        if not (spec.caption_capable and not DISABLED):
+            return
+        db.update_content_metadata(slug, type_metadata={STATUS_KEY: "pending"})
+        db.enqueue_caption(slug, start_step, cascade)
+        print(f"caption: queued {slug} for the web worker", flush=True)
+    except Exception as e:
+        print(f"caption enqueue failed for {slug}: {e!r}", flush=True)
+
+
+def _drain_one():
+    """Runs the oldest queued caption, if any and if the breaker allows. Returns True if it
+    did work (so the loop can go straight to the next one without sleeping)."""
+    if _breaker_reason:  # captioning paused: leave the queue alone until the owner resets it
+        return False
+    item = db.peek_caption_queue()
+    if item is None:
+        return False
+    slug = item["slug"]
+    row = db.get_by_slug(slug)
+    spec = object_types.get_object_type(row.get("media_type")) if row else None
+    if row is None or row["redacted"]:
+        pass
+    elif DISABLED or not spec.caption_capable:
+        db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
+    else:
+        run_caption(slug, item["start_step"], bool(item["cascade"]))
+    db.dequeue_caption(slug)
+    return True
+
+
+def queue_worker_loop():
+    delay = QUEUE_POLL_MIN_SECONDS
+    while True:
+        try:
+            if _drain_one():
+                delay = QUEUE_POLL_MIN_SECONDS
+                time.sleep(0.5)  # breathe between GPU jobs
+                continue
+        except Exception as e:
+            print(f"caption queue worker error: {e!r}", flush=True)
+        time.sleep(delay)
+        delay = min(delay * 1.5, QUEUE_POLL_MAX_SECONDS)  # idle backoff, never a hot loop
+
+
+def start_queue_worker():
+    """Starts the single drain thread (idempotent). Web process only."""
+    global _worker_thread
+    with _worker_guard:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return False
+        _worker_thread = threading.Thread(target=queue_worker_loop, name="caption-queue", daemon=True)
+        _worker_thread.start()
+        return True
 
 
 # --- Pipeline entry point ---
@@ -439,7 +520,14 @@ def run_caption(slug, start_step=0, cascade=True):
     and a manual "Regenerate" click (#250; cascade=False — run exactly the
     one step the caller picked via api_retry_caption's step-advance logic,
     even if it comes back empty, so repeated clicks give real variety
-    instead of hidden multi-step jumps behind one click)."""
+    instead of hidden multi-step jumps behind one click).
+
+    #549: in the MCP process this does NOT run -- it enqueues (see enqueue_only) and the web
+    process's queue worker calls it for real. Every caption trigger funnels through here, so
+    no call site (upload, import, retype, a future one) can caption outside web."""
+    if enqueue_only():
+        enqueue_caption(slug, start_step, cascade)
+        return
     try:
         row = db.get_by_slug(slug)
         if row is None or row["redacted"]:
@@ -457,14 +545,14 @@ def run_caption(slug, start_step=0, cascade=True):
             return
         step_index = start_step % len(STEPS)
         step_prompt, step_temperature = STEPS[step_index]
-        result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature)
+        result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug)
         if cascade:
             for next_index in range(step_index + 1, len(STEPS)):
                 if result["error"] or not _is_garbage(result["caption"]):
                     break
                 step_prompt, step_temperature = STEPS[next_index]
                 print(f"caption {_bad_response_label(result['caption'])} for {slug} — retrying with prompt {step_prompt!r} at temperature {step_temperature}", flush=True)
-                result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature)
+                result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug)
                 step_index = next_index
         if result["error"] or _is_garbage(result["caption"]):
             print(f"caption failed for {slug} at step {step_index}: {result['error'] or _bad_response_label(result['caption'])}", flush=True)

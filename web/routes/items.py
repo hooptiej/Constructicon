@@ -455,21 +455,43 @@ async def api_update_image(
 @router.post("/api/image/{slug}/redact")
 def api_redact_image(request: Request, slug: str):
     """Remove the file only — sensitive content (e.g. a visible password) —
-    but keep the metadata for future correlation. #541: the file goes to the
-    trash for 7 days (undo the returned batch_id to get it back; "Empty trash
-    now" on /admin removes it at once)."""
+    but keep the metadata for future correlation. The file is HELD in the
+    trash with no expiry (owner decision 2026-10-04): never auto-deleted, and
+    "Empty trash now" skips it. Recover it (POST .../recover-redacted) or
+    delete it permanently (POST .../delete-redacted-file)."""
     if db.get_by_slug(slug) is None:
         raise HTTPException(status_code=404, detail="not found")
     result = items.redact(slug)
-    return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id, "trash_days": items.TRASH_DAYS})
+    return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id, "held": True})
+
+
+@router.post("/api/image/{slug}/recover-redacted")
+def api_recover_redacted(slug: str):
+    """Brings a held redacted file back and un-redacts the item (as before the redact).
+    409 no_redact_hold when no file is held (already deleted, or an old redaction)."""
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    result = items.recover_redacted(slug)
+    return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id})
+
+
+@router.post("/api/image/{slug}/delete-redacted-file")
+def api_delete_redacted_file(slug: str, confirm: str = Form("")):
+    """Permanently erases the held redacted file (confirm=true). The item stays redacted,
+    metadata only. Not undoable."""
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    result = items.delete_redacted_file(slug, confirm)
+    return JSONResponse({"deleted": True, "slug": slug, "bytes": result.data["bytes"]})
 
 
 @router.post("/api/image/{slug}/unredact")
 def api_unredact_image(request: Request, slug: str):
     """#282: reverse of /redact -- clears the flag so the row rejoins
-    ordinary browsing/search. Can't bring the file back: /redact deleted it
-    from storage before setting the flag, so the row stays a file-less
-    metadata record; it's just findable again. 409 rather than a silent
+    ordinary browsing/search. For a redaction whose file is already gone
+    (old redactions, or after delete-redacted-file); the row stays a file-less
+    metadata record, just findable again. While the file is still held it
+    answers 409 redact_hold_exists: recover it or delete it permanently. 409 rather than a silent
     no-op on a row that isn't redacted, so a stale admin-page list can't
     misreport success."""
     if db.get_by_slug(slug) is None:

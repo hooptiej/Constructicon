@@ -7,7 +7,8 @@ exercises: a multi-field edit as one undoable batch, validation-before-write, dr
 undo (file back from the trash), unredact, retype + undo, delete of an item that is in a project,
 tagged, related, in a blog entry, asked about and in the MIDDLE of a revision chain (A -> B -> C
 re-link and its restore), bulk delete + undo, undo-of-undo, purge + trash_expired, and the
-empty-trash phrase. No server needed:
+empty-trash phrase, and redact HOLDS (no expiry, skipped by purge and "Empty trash now", recover,
+permanent delete, unredact refusal). No server needed:
 
     python scripts/test_items_service.py
 
@@ -172,10 +173,79 @@ check("undoing the redact brings the row AND the file back",
       row["redacted"] == 0 and row["stored_filename"] == "redact1.png"
       and sha(storage.STORAGE_DIR / "redact1.png") == orig_hash and storage.thumb_path_for(R).exists())
 check("...and the trash is empty again", trash_files() == [] and q("SELECT * FROM trash WHERE slug = ?", R) == [])
+
+# --- redact holds (owner decision 2026-10-04): held until the owner clicks -------------------
 res = items.redact(R)
-items.unredact(R)
-check("unredact is visibility only (file stays in the trash)",
-      db.get_by_slug(R)["redacted"] == 0 and "redact1.png" not in storage_files())
+hold = db.get_redact_hold(R)
+check("a redact is a HOLD: reason redact, expires_at NULL", hold and hold["reason"] == "redact"
+      and hold["expires_at"] is None and res.data["expires_at"] is None, hold)
+check("unredact is refused while the file is held", code_of(items.unredact, R) == "redact_hold_exists"
+      and db.get_by_slug(R)["redacted"] == 1)
+check("redacted list marks it held", R in db.redact_hold_slugs())
+
+# purge (hourly pass AND "everything") skips the hold, but removes an ordinary expired delete
+H1 = mk("holdpurge1")
+dres = items.delete([H1])
+c = sqlite3.connect(os.environ["CONSTRUCTICON_DB_PATH"])
+c.execute("UPDATE trash SET expires_at = ? WHERE slug = ?", (time.time() - 1, H1))
+c.execute("UPDATE trash SET created_at = created_at - 999999 WHERE slug = ?", (R,))  # the hold is ancient
+c.commit()
+c.close()
+pr = items.purge_expired(now=time.time() + 100 * 24 * 3600)  # even 100 days later
+check("purge pass: the ordinary expired delete goes, the hold survives",
+      pr["purged"] == 1 and pr["slugs"] == [H1] and pr["held_kept"] == 1
+      and db.get_redact_hold(R) is not None and f"{res.batch_id}/redact1.png" in trash_files(), pr)
+H2 = mk("holdpurge2")
+items.delete([H2])
+sm = items.trash_summary()
+check("trash summary lists redact holds separately",
+      sm["count"] == 1 and sm["held"]["count"] == 1 and sm["held"]["items"][0]["slug"] == R
+      and sm["held"]["items"][0]["expires_at"] is None and sm["held"]["bytes"] > 0, sm)
+er = items.empty_trash("EMPTY TRASH")
+check("empty trash purges ordinary deletes and skips the hold",
+      er["purged"] == 1 and er["slugs"] == [H2] and er["held_kept"] == 1
+      and db.get_redact_hold(R) is not None and f"{res.batch_id}/redact1.png" in trash_files(), er)
+
+# recover: exactly as before the redact
+rec = items.recover_redacted(R)
+row = db.get_by_slug(R)
+check("recover restores file, stored_filename and visibility",
+      row["redacted"] == 0 and row["stored_filename"] == "redact1.png"
+      and sha(storage.STORAGE_DIR / "redact1.png") == orig_hash and storage.thumb_path_for(R).exists()
+      and rec.item["redacted"] == 0)
+check("...and the hold is gone from the trash", db.get_redact_hold(R) is None and trash_files() == []
+      and q("SELECT * FROM trash WHERE slug = ?", R) == [])
+check("recover on a visible item -> not_redacted", code_of(items.recover_redacted, R) == "not_redacted")
+# undoing the recover re-holds the file
+cards.undo(rec.batch_id)
+check("undo of a recover re-holds the file (no expiry)", db.get_by_slug(R)["redacted"] == 1
+      and db.get_redact_hold(R) is not None and "redact1.png" not in storage_files())
+items.recover_redacted(R)
+check("...and it can be recovered again", db.get_by_slug(R)["stored_filename"] == "redact1.png"
+      and sha(storage.STORAGE_DIR / "redact1.png") == orig_hash)
+
+# delete the held file permanently
+R2 = mk("redact2", (30, 30, 200))
+rres = items.redact(R2)
+check("delete_redacted_file needs confirm", code_of(items.delete_redacted_file, R2) == "confirm_required"
+      and code_of(items.delete_redacted_file, R2, False) == "confirm_required"
+      and db.get_redact_hold(R2) is not None)
+n_erase = q("SELECT COUNT(*) AS n FROM audit_log WHERE op = 'item_redact_erase'")[0]["n"]
+dr = items.delete_redacted_file(R2, True)
+row = db.get_by_slug(R2)
+check("permanent delete: file gone, item stays redacted and file-less",
+      row["redacted"] == 1 and row["stored_filename"] is None and dr.data["permanent"]
+      and trash_files() == [] and "redact2.png" not in storage_files() and not items.trash_dir(rres.batch_id).exists())
+check("...the hold is marked purged and logged as a permanent record",
+      db.get_redact_hold(R2) is None and db.get_trash_row(rres.batch_id, R2)["purged_at"] is not None
+      and q("SELECT COUNT(*) AS n FROM audit_log WHERE op = 'item_redact_erase'")[0]["n"] == n_erase + 1)
+check("recover now refuses with a clear error", code_of(items.recover_redacted, R2) == "no_redact_hold")
+check("delete again -> no_redact_hold", code_of(items.delete_redacted_file, R2, True) == "no_redact_hold")
+check("undoing the redact batch after a permanent delete -> trash_expired",
+      code_of(cards.undo, rres.batch_id) == "trash_expired")
+items.unredact(R2)
+check("unredact still works for a file-less redaction", db.get_by_slug(R2)["redacted"] == 0
+      and db.get_by_slug(R2)["stored_filename"] is None)
 
 # --- retype -------------------------------------------------------------------------------
 T = mk("retype1")
@@ -295,13 +365,40 @@ check("...and changes nothing", db.get_by_slug(P) is None and audit_count() == n
       and db.get_change_rows(batch_id=res.batch_id)[0]["undone_by"] is None)
 check("...even with force", code_of(cards.undo, res.batch_id, force=True) == "trash_expired")
 
+Q = mk("empty1")
+items.delete([Q])
+R3 = mk("redact3")
+items.redact(R3)
 summary = items.trash_summary()
-check("trash summary counts the redacted file still in the trash", summary["count"] == 1 and summary["bytes"] > 0, summary)
+check("trash summary: one ordinary entry, one hold", summary["count"] == 1 and summary["bytes"] > 0
+      and summary["held"]["count"] == 1, summary)
 check("empty trash without the phrase -> confirm_required", code_of(items.empty_trash, "yes") == "confirm_required"
       and items.trash_summary()["count"] == 1)
 er = items.empty_trash("EMPTY TRASH")
-check("empty trash with the phrase purges everything", er["purged"] == 1 and items.trash_summary()["count"] == 0
-      and trash_files() == [])
+check("empty trash with the phrase purges the ordinary entry only",
+      er["purged"] == 1 and items.trash_summary()["count"] == 0 and items.trash_summary()["held"]["count"] == 1
+      and db.get_redact_hold(R3) is not None)
+items.delete_redacted_file(R3, True)
+check("trash is empty once the hold is deleted", items.trash_summary()["held"]["count"] == 0 and trash_files() == [])
+
+# an old-schema trash table (expires_at NOT NULL) is rebuilt to allow NULL, keeping its rows
+c = sqlite3.connect(os.environ["CONSTRUCTICON_DB_PATH"])
+c.execute("DROP INDEX IF EXISTS idx_trash_expires")
+c.execute("ALTER TABLE trash RENAME TO trash_new")
+c.execute("CREATE TABLE trash (batch_id TEXT NOT NULL, slug TEXT NOT NULL, stored_filename TEXT, "
+          "has_original INTEGER NOT NULL DEFAULT 0, has_thumb INTEGER NOT NULL DEFAULT 0, dir TEXT NOT NULL, "
+          "size_bytes INTEGER NOT NULL DEFAULT 0, title TEXT, reason TEXT NOT NULL DEFAULT 'delete', "
+          "created_at REAL NOT NULL, expires_at REAL NOT NULL, purged_at REAL, embedding BLOB, "
+          "PRIMARY KEY (batch_id, slug))")
+c.execute("INSERT INTO trash SELECT * FROM trash_new WHERE expires_at IS NOT NULL")
+n_old = c.execute("SELECT COUNT(*) FROM trash").fetchone()[0]
+c.execute("DROP TABLE trash_new")
+c.commit()
+c.close()
+db.init_db()
+notnull = [r["notnull"] for r in q("PRAGMA table_info(trash)") if r["name"] == "expires_at"]
+check("init_db rebuilds an old NOT NULL trash table, keeping rows",
+      notnull == [0] and q("SELECT COUNT(*) AS n FROM trash")[0]["n"] == n_old)
 
 ctx.__exit__(None, None, None)
 print()

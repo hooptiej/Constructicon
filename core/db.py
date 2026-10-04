@@ -194,6 +194,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 -- #541 phase B: a deleted (or redacted) item's files sit in <storage>/.trash/<batch_id>/ for
 -- TRASH_DAYS (core/items.py) so the delete can be undone; the web worker purges them after.
 -- One row per item per batch; purged_at set = the files are gone for good (undo refuses).
+-- expires_at NULL = a redact HOLD: kept until the owner recovers or permanently deletes it, never
+-- purged by the hourly pass or "Empty trash now".
 CREATE TABLE IF NOT EXISTS trash (
     batch_id TEXT NOT NULL,
     slug TEXT NOT NULL,
@@ -205,7 +207,7 @@ CREATE TABLE IF NOT EXISTS trash (
     title TEXT,
     reason TEXT NOT NULL DEFAULT 'delete',
     created_at REAL NOT NULL,
-    expires_at REAL NOT NULL,
+    expires_at REAL,
     purged_at REAL,
     embedding BLOB,
     PRIMARY KEY (batch_id, slug)
@@ -608,6 +610,26 @@ def get_processing_rows_by_slugs(slugs):
         conn.close()
 
 
+def _trash_expires_nullable(conn):
+    """Redact holds (items.redact) have no expiry, so trash.expires_at must allow NULL. A trash
+    table created by the first phase-B schema has it NOT NULL; rebuild it once (idempotent)."""
+    info = {r["name"]: r for r in conn.execute("PRAGMA table_info(trash)")}
+    if not info or not info["expires_at"]["notnull"]:
+        return
+    conn.execute("DROP INDEX IF EXISTS idx_trash_expires")
+    conn.execute("ALTER TABLE trash RENAME TO trash_old")
+    conn.execute("""CREATE TABLE trash (
+        batch_id TEXT NOT NULL, slug TEXT NOT NULL, stored_filename TEXT,
+        has_original INTEGER NOT NULL DEFAULT 0, has_thumb INTEGER NOT NULL DEFAULT 0,
+        dir TEXT NOT NULL, size_bytes INTEGER NOT NULL DEFAULT 0, title TEXT,
+        reason TEXT NOT NULL DEFAULT 'delete', created_at REAL NOT NULL, expires_at REAL,
+        purged_at REAL, embedding BLOB, PRIMARY KEY (batch_id, slug))""")
+    conn.execute("INSERT INTO trash SELECT batch_id, slug, stored_filename, has_original, has_thumb, dir, "
+                 "size_bytes, title, reason, created_at, expires_at, purged_at, embedding FROM trash_old")
+    conn.execute("DROP TABLE trash_old")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_trash_expires ON trash(purged_at, expires_at)")
+
+
 def init_db(migrate=True):
     """Boot-time schema setup.
 
@@ -619,6 +641,7 @@ def init_db(migrate=True):
     conn = get_conn()
     try:
         conn.executescript(SCHEMA)
+        _trash_expires_nullable(conn)
         existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(capture_events)")}
         for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
             if column not in existing_columns:
@@ -1858,18 +1881,43 @@ def set_trash_embedding(batch_id, slug, embedding):
         conn.close()
 
 
-def list_trash(expired_before=None):
+def list_trash(expired_before=None, holds=None):
     """Unpurged trash entries, oldest first (no embedding). `expired_before` (epoch) keeps only
-    those whose expires_at is at or before it."""
+    those whose expires_at is at or before it. `holds`: None = all, False = ordinary deletes only
+    (expires_at set), True = redact holds only (expires_at NULL: kept until the owner decides)."""
     conn = get_conn()
     try:
         sql = ("SELECT batch_id, slug, stored_filename, has_original, has_thumb, dir, size_bytes, title, reason, "
                "created_at, expires_at FROM trash WHERE purged_at IS NULL")
         args = []
+        if holds is True:
+            sql += " AND expires_at IS NULL"
+        elif holds is False:
+            sql += " AND expires_at IS NOT NULL"
         if expired_before is not None:
-            sql += " AND expires_at <= ?"
+            sql += " AND expires_at IS NOT NULL AND expires_at <= ?"
             args.append(expired_before)
         return [dict(r) for r in conn.execute(sql + " ORDER BY created_at, slug", args)]
+    finally:
+        conn.close()
+
+
+def get_redact_hold(slug):
+    """The live redact hold for `slug` (file still stored in the trash, no expiry), else None."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM trash WHERE slug = ? AND reason = 'redact' AND expires_at IS NULL "
+                           "AND purged_at IS NULL ORDER BY created_at DESC LIMIT 1", (slug,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def redact_hold_slugs():
+    conn = get_conn()
+    try:
+        return {r["slug"] for r in conn.execute(
+            "SELECT slug FROM trash WHERE reason = 'redact' AND expires_at IS NULL AND purged_at IS NULL")}
     finally:
         conn.close()
 

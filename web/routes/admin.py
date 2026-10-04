@@ -60,14 +60,15 @@ def api_delete_all(confirm: str = Form("")):
 
 @router.get("/api/trash")
 def api_trash():
-    """#541 phase B: what the trash holds (deleted/redacted items' files, kept 7 days):
-    {count, bytes, oldest, next_expiry, days, items}."""
+    """#541 phase B: what the trash holds. Ordinary deletes (kept 7 days):
+    {count, bytes, oldest, next_expiry, days, items}; redact holds (no expiry) under `held`."""
     return JSONResponse(items.trash_summary())
 
 
 @router.post("/api/trash/empty")
 def api_empty_trash(confirm: str = Form("")):
-    """#541: purge every trash entry now (typed phrase EMPTY TRASH, like delete-all). The
+    """#541: purge every ordinary deleted item's file now (typed phrase EMPTY TRASH, like
+    delete-all). Redact holds are NOT touched (`held_kept` says how many were skipped). The
     deletes those files came from can no longer be undone (undo answers trash_expired)."""
     return JSONResponse(items.empty_trash(confirm))
 
@@ -159,7 +160,9 @@ def api_list_redacted():
     knowing its slug. Same card shape as the gallery (_to_public -- thumb_url
     is always None here, the file is gone) plus the direct /object link,
     which keeps working for a redacted row."""
-    items = [{**_to_public(row), "link": f"/object/{row['slug']}"} for row in db.list_redacted()]
+    holds = db.redact_hold_slugs()
+    items = [{**_to_public(row), "link": f"/object/{row['slug']}", "held": row["slug"] in holds}
+             for row in db.list_redacted()]
     return JSONResponse({"count": len(items), "items": items})
 
 

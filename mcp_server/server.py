@@ -512,8 +512,9 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
 def constructicon_redact(slug: str) -> dict | None:
     """Remove a file while keeping its metadata (for sensitive content cleanup).
 
-    #541: the file moves to the trash for 7 days, then is purged for good (or at once with
-    constructicon_empty_trash). Until then constructicon_undo(batch_id) brings it back.
+    The file is HELD in the trash with no expiry: never auto-deleted, and constructicon_empty_trash
+    skips it. The owner decides: constructicon_recover_redacted(slug) restores it,
+    constructicon_delete_redacted_file(slug, confirm=True) erases it for good.
     Metadata (description, tags, etc.) is preserved. Returns the object plus "batch_id";
     errors: not_found, no_file.
     """
@@ -526,11 +527,31 @@ def constructicon_unredact(slug: str) -> dict | None:
     """Reverse of constructicon_redact (#282): clear the redacted flag so the
     object shows up in searches, project listings and tag walks again.
 
-    Visibility only: it does NOT bring the file back. To restore the file (within the
-    7-day trash window), undo the redact's batch with constructicon_undo instead.
-    Returns the updated object; errors: not_found, not_redacted.
+    Visibility only: it does NOT bring the file back, and it is for redactions whose file is
+    already gone. While the file is still held it refuses (redact_hold_exists): use
+    constructicon_recover_redacted to restore it, or constructicon_delete_redacted_file first.
+    Returns the updated object; errors: not_found, not_redacted, redact_hold_exists.
     """
     return _to_public(items.unredact(slug).item)
+
+
+@mcp.tool()
+def constructicon_recover_redacted(slug: str) -> dict:
+    """Recover a redacted object's held file and un-redact it: the object is exactly as it was
+    before the redact (file, stored_filename, visible). Returns the object plus "batch_id" (undo
+    re-holds the file). Errors: not_found, not_redacted, no_redact_hold (the file was already
+    permanently deleted, or the redaction predates held files)."""
+    result = items.recover_redacted(slug)
+    return {**_to_public(result.item), "batch_id": result.batch_id}
+
+
+@mcp.tool()
+def constructicon_delete_redacted_file(slug: str, confirm: bool = False) -> dict:
+    """PERMANENTLY delete a redacted object's held file. Pass confirm=true. The object stays
+    redacted with metadata only; constructicon_recover_redacted refuses afterwards. Not undoable.
+    Returns {"deleted": true, "slug", "bytes"}; errors: confirm_required, not_found, no_redact_hold."""
+    result = items.delete_redacted_file(slug, confirm)
+    return {"deleted": True, "slug": slug, "bytes": result.data["bytes"]}
 
 
 @mcp.tool()
@@ -584,19 +605,23 @@ def constructicon_delete_multiple(slugs: list[str]) -> dict:
 
 @mcp.tool()
 def constructicon_list_trash() -> dict:
-    """What the trash holds (#541): files of deleted or redacted objects, kept 7 days so the
-    delete can be undone. {count, bytes, oldest, next_expiry, days, items: [{slug, title,
-    batch_id, reason, size_bytes, created_at, expires_at}]}. Undo an entry with
-    constructicon_undo(batch_id)."""
+    """What the trash holds (#541). Ordinary deletes, kept 7 days so the delete can be undone:
+    {count, bytes, oldest, next_expiry, days, items: [{slug, title, batch_id, reason,
+    size_bytes, created_at, expires_at}]}. Redact holds (no expiry, kept until the owner
+    recovers or deletes them) are listed separately under `held`: {count, bytes, items}.
+    Undo a delete with constructicon_undo(batch_id)."""
     return items.trash_summary()
 
 
 @mcp.tool()
 def constructicon_empty_trash(confirm: str) -> dict:
-    """Permanently purge everything in the trash now (#541). Pass confirm="EMPTY TRASH".
-    The deletes those files came from can no longer be undone (trash_expired).
-    Returns {purged, bytes, slugs}; a wrong phrase returns confirm_required."""
-    return items.empty_trash(confirm)
+    """Permanently purge every ORDINARY deleted object's file now (#541). Pass confirm="EMPTY TRASH".
+    Redact holds are NOT touched (they wait for the owner). The deletes those files came from
+    can no longer be undone (trash_expired). Returns {purged, bytes, slugs, held_kept, message};
+    a wrong phrase returns confirm_required."""
+    r = items.empty_trash(confirm)
+    return {**r, "message": f"Purged {r['purged']} deleted item(s) ({r['bytes']} bytes). "
+                            f"{r['held_kept']} redacted file(s) are still held (not touched)."}
 
 
 @mcp.tool()

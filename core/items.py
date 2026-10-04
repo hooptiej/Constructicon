@@ -9,8 +9,11 @@ constructicon_undo(batch_id); it calls back into this module for the file side o
   update(slug, **fields)   title/icon, description, client, content_description, type_metadata
                            (merged; physical-piece keys cleaned), file provenance, highlight, brand
                            asset/role, display-date override, content_date. One Save = one batch.
-  redact(slug)             "remove file, keep info": the file goes to the trash, the row is hidden.
-  unredact(slug)           visibility only (undo the redact batch to get the file back).
+  redact(slug)             "remove file, keep info": the file goes to the trash as a HOLD (no expiry),
+                           the row is hidden. Never auto-purged.
+  recover_redacted(slug)   the held file comes back and the item is un-redacted, as before.
+  delete_redacted_file(slug, confirm)  erases the held file for good; the item stays redacted, file-less.
+  unredact(slug)           visibility only, for old file-less redactions (refused while a hold exists).
   retype(slug, type, run)  the media_type change is imaged; post-processing (OCR / thumbnail /
                            caption / embedded metadata) re-runs through the caller's runner.
   delete(slugs)            files -> <storage>/.trash/<batch_id>/, rows (and everything that points
@@ -20,7 +23,9 @@ constructicon_undo(batch_id); it calls back into this module for the file side o
 Trash (owner decision on #541, 2026-10-04): a deleted file stays in the trash for TRASH_DAYS,
 then the web worker's hourly purge removes it. Until then undo restores rows AND files. Once
 purged, undo refuses with `trash_expired` and changes nothing; ZFS snapshots stay the long-term
-net. The trash lives under the storage root, so it is on the same dataset (atomic renames, in
+net. A REDACT is different (owner decision, 2026-10-04): the file is held with no expiry until the
+owner clicks Recover or "Delete file permanently"; neither the hourly purge nor "Empty trash now"
+touches it. The trash lives under the storage root, so it is on the same dataset (atomic renames, in
 the snapshots).
 
 Pipeline writes stay raw on purpose: caption status/results (core/captions.py), upload-time
@@ -45,6 +50,9 @@ OP_UNREDACT = "item_unredact"
 OP_RETYPE = "item_retype"
 OP_DELETE = "item_delete"
 OP_PURGE = "trash_purge"
+OP_RECOVER = "item_recover_redacted"
+OP_ERASE = "item_redact_erase"
+REASON_REDACT = "redact"
 
 TRASH_DIR_NAME = ".trash"
 TRASH_DAYS = 7
@@ -249,13 +257,14 @@ def _trash_insert(log, batch_id, row, reason, embedding=None):
     if not (has_orig or has_thumb):
         return None
     now = time.time()
+    hold = reason == REASON_REDACT  # a redact hold has no expiry
     entry = {"batch_id": batch_id, "slug": slug, "stored_filename": sf, "has_original": int(has_orig),
              "has_thumb": int(has_thumb)}
     log.insert("trash", {"batch_id": batch_id, "slug": slug}, {
         "stored_filename": sf, "has_original": int(has_orig), "has_thumb": int(has_thumb),
         "dir": f"{TRASH_DIR_NAME}/{batch_id}",
         "size_bytes": (orig.stat().st_size if has_orig else 0) + (thumb.stat().st_size if has_thumb else 0),
-        "title": title_of(row), "reason": reason, "created_at": now, "expires_at": now + TRASH_TTL_SECONDS,
+        "title": title_of(row), "reason": reason, "created_at": now, "expires_at": None if hold else now + TRASH_TTL_SECONDS,
         "purged_at": None, "embedding": embedding,
     })
     return entry
@@ -264,8 +273,9 @@ def _trash_insert(log, batch_id, row, reason, embedding=None):
 # --- hide / unhide -----------------------------------------------------------------------
 
 def redact(slug, *, dry_run=False, actor=None, batch_id=None):
-    """Remove the file, keep the info: the file (and thumbnail) move to the trash, the row is
-    flagged redacted with no stored_filename. Undoing the batch brings the file back."""
+    """Remove the file, keep the info: the file (and thumbnail) move to the trash as a hold with
+    no expiry, the row is flagged redacted with no stored_filename. The owner then recovers it
+    (recover_redacted, or undoing this batch) or deletes the file permanently."""
     batch_id = batch_id or changes.new_batch_id()
     moved = []
     try:
@@ -275,7 +285,7 @@ def redact(slug, *, dry_run=False, actor=None, batch_id=None):
                 raise InvalidInput("This row has no uploaded file to redact", code="no_file")
             with db.ImageLog(OP_REDACT, actor, batch_id, [slug]) as log:
                 log.update("capture_events", {"slug": slug}, {"redacted": 1, "stored_filename": None})
-                entry = _trash_insert(log, batch_id, row, "redact")
+                entry = _trash_insert(log, batch_id, row, REASON_REDACT)
                 muts = list(log.muts)
             if entry and not dry_run:
                 for src, dst in _file_pairs(entry):
@@ -289,18 +299,90 @@ def redact(slug, *, dry_run=False, actor=None, batch_id=None):
 
 
 def unredact(slug, *, dry_run=False, actor=None, batch_id=None):
-    """Clears the redacted flag (the row rejoins browsing). Visibility only: the file stays in the
-    trash; undo the redact batch instead to restore it."""
+    """Clears the redacted flag (the row rejoins browsing). Visibility only, for old redactions
+    whose file is already gone. While a hold exists it refuses: recover the file (which also
+    un-redacts) or delete it permanently first, so a held file is never orphaned."""
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         row = get_item(slug)
         if not row["redacted"]:
             raise Conflict("This row isn't redacted", code="not_redacted")
+        if db.get_redact_hold(slug):
+            raise Conflict("The redacted file is still stored on the NAS. Recover it (which un-redacts the "
+                           "item), or delete the file permanently first.", code="redact_hold_exists")
         with db.ImageLog(OP_UNREDACT, actor, batch_id, [slug]) as log:
             log.update("capture_events", {"slug": slug}, {"redacted": 0})
             muts = list(log.muts)
         item = db.get_by_slug(slug)
     return _result(OP_UNREDACT, muts, batch_id, dry_run, item, slug=slug)
+
+
+def recover_redacted(slug, *, dry_run=False, actor=None, batch_id=None):
+    """Brings a held redacted file back: the item is exactly as before the redact (file,
+    stored_filename, visible). Its own undoable batch (undo re-holds the file)."""
+    batch_id = batch_id or changes.new_batch_id()
+    moved, t = [], None
+    try:
+        with db.transaction(dry_run=dry_run):
+            row = get_item(slug)
+            t = db.get_redact_hold(slug)
+            if t is None:
+                raise _no_hold(slug, row)
+            pairs = _file_pairs(t)
+            if not all(dst.is_file() for _src, dst in pairs):
+                raise AppError("hold_file_missing", f"The held file for {slug} is missing from the trash, so it "
+                               "can't be recovered. A ZFS snapshot is the way back.", status=410)
+            busy = [src.name for src, _dst in pairs if src.exists()]
+            if busy:
+                raise AppError("trash_conflict", f"Can't recover {slug}: {', '.join(busy)} already exists in "
+                               "storage. Nothing was changed.", status=409, details={"files": busy})
+            with db.ImageLog(OP_RECOVER, actor, batch_id, [slug]) as log:
+                log.update("capture_events", {"slug": slug}, {"redacted": 0, "stored_filename": t["stored_filename"]})
+                log.delete("trash", {"batch_id": t["batch_id"], "slug": slug})
+                muts = list(log.muts)
+            if not dry_run:
+                for src, dst in pairs:
+                    src.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(dst, src)
+                    moved.append((dst, src))
+            item = db.get_by_slug(slug)
+    except BaseException:
+        rollback_moves(moved)
+        raise
+    if not dry_run:
+        _rmdir_empty(t["batch_id"])
+        if not t.get("has_thumb") and item is not None:
+            ingest.run_in_thread(thumbnails.ensure_thumbnail, item)
+    return _result(OP_RECOVER, muts, batch_id, dry_run, item, slug=slug)
+
+
+def delete_redacted_file(slug, confirm=False, *, dry_run=False, actor=None, batch_id=None):
+    """Permanently erases a held redacted file. The item stays redacted with metadata only
+    (stored_filename NULL), exactly like the old behaviour. Not undoable. Requires confirm=True."""
+    if confirm is not True and str(confirm).strip().lower() not in ("true", "1", "yes", "on"):
+        raise InvalidInput("Pass confirm=true to permanently delete the redacted file", code="confirm_required")
+    row = get_item(slug)
+    t = db.get_redact_hold(slug)
+    if t is None:
+        raise _no_hold(slug, row)
+    batch_id = batch_id or changes.new_batch_id()
+    if dry_run:
+        return Result(True, [], [], batch_id, True, {"slug": slug, "bytes": t["size_bytes"]})
+    for _src, dst in _file_pairs(t):
+        dst.unlink(missing_ok=True)
+    _rmdir_empty(t["batch_id"])
+    db.mark_trash_purged(t["batch_id"], slug, time.time())
+    # A record, not an undoable change (no row images): the file is gone for good, like a purge.
+    changes.record(OP_ERASE, actor, [], batch_id=batch_id, affected_slugs=[slug])
+    return Result(True, [], [], batch_id, False, {"slug": slug, "bytes": t["size_bytes"], "permanent": True})
+
+
+def _no_hold(slug, row):
+    """The refusal when `slug` has no live hold."""
+    if row.get("redacted"):
+        return Conflict(f"There is no stored file to recover for {slug}: it was permanently deleted (or "
+                        "redacted before files were held). Only the metadata remains.", code="no_redact_hold")
+    return Conflict(f"{slug} isn't redacted, so there is no held file.", code="not_redacted")
 
 
 def _expiry(muts):
@@ -495,7 +577,8 @@ def purge_expired(now=None, *, everything=False, actor=None):
     """Permanently removes trash entries past expires_at (all of them with everything=True).
     Their rows stay, stamped purged_at, so undo can refuse with trash_expired."""
     now = now or time.time()
-    entries = db.list_trash(expired_before=None if everything else now)
+    # Redact holds (expires_at NULL) are never purged here: only the owner's click deletes them.
+    entries = db.list_trash(expired_before=None if everything else now, holds=False)
     purged, freed = [], 0
     for t in entries:
         for _src, dst in _file_pairs(t):
@@ -511,27 +594,36 @@ def purge_expired(now=None, *, everything=False, actor=None):
     if purged:
         # A record, not an undoable change (no row images): the files are gone.
         changes.record(OP_PURGE, actor, [], affected_slugs=purged)
-    return {"purged": len(purged), "bytes": freed, "slugs": purged}
+    return {"purged": len(purged), "bytes": freed, "slugs": purged, "held_kept": len(db.list_trash(holds=True))}
 
 
 def empty_trash(confirm="", *, actor=None):
-    """Purges everything in the trash now. Requires the typed phrase, like delete-all."""
+    """Purges every ORDINARY delete in the trash now (not redact holds: those wait for the owner).
+    Requires the typed phrase, like delete-all."""
     if (confirm or "").strip() != EMPTY_TRASH_PHRASE:
         raise InvalidInput(f"Type {EMPTY_TRASH_PHRASE!r} in the confirm field to empty the trash",
                            code="confirm_required")
     return purge_expired(everything=True, actor=actor)
 
 
+def _entry(t):
+    return {"slug": t["slug"], "title": t["title"], "batch_id": t["batch_id"], "reason": t["reason"],
+            "size_bytes": t["size_bytes"], "created_at": t["created_at"], "expires_at": t["expires_at"]}
+
+
 def trash_summary():
-    """{count, bytes, oldest, next_expiry, days, items: [...]} of what is in the trash now."""
-    entries = db.list_trash()
+    """{count, bytes, oldest, next_expiry, days, items, held: {count, bytes, items}}: ordinary
+    deletes (purged after `days`) and, separately under `held`, redact holds (no expiry; kept
+    until recovered or permanently deleted)."""
+    entries = db.list_trash(holds=False)
+    held = db.list_trash(holds=True)
     return {
         "count": len(entries),
         "bytes": sum(t.get("size_bytes") or 0 for t in entries),
         "oldest": min((t["created_at"] for t in entries), default=None),
         "next_expiry": min((t["expires_at"] for t in entries), default=None),
         "days": TRASH_DAYS,
-        "items": [{"slug": t["slug"], "title": t["title"], "batch_id": t["batch_id"], "reason": t["reason"],
-                   "size_bytes": t["size_bytes"], "created_at": t["created_at"], "expires_at": t["expires_at"]}
-                  for t in entries],
+        "items": [_entry(t) for t in entries],
+        "held": {"count": len(held), "bytes": sum(t.get("size_bytes") or 0 for t in held),
+                 "items": [_entry(t) for t in held]},
     }

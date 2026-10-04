@@ -49,6 +49,19 @@
   </div>
   {% endif %}
 
+  {% if item.redacted and redact_hold %}
+  <div class="rev-banner redact-hold-banner" role="alert" id="redact-hold-banner">
+    <strong>Redacted, but the file is still stored.</strong>
+    The redacted file is still stored on the NAS. Recover it, or delete it permanently.
+    <span class="dp-muted">It is never deleted unless you click.</span>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button type="button" class="btn-ms" id="redact-recover-btn">Recover file</button>
+      <button type="button" class="btn-danger" id="redact-erase-btn">Delete file permanently</button>
+      <span class="backup-status" id="redact-hold-msg"></span>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="dp-hero">
     <div class="dp-hero-left dp-wide">
       <div class="detail-preview">
@@ -970,14 +983,37 @@ document.getElementById('copy-link-btn').addEventListener('click', async () => {
   }
 });
 
+const recoverBtn = document.getElementById('redact-recover-btn');
+const eraseBtn = document.getElementById('redact-erase-btn');
+if (recoverBtn && eraseBtn) {
+  const holdMsg = document.getElementById('redact-hold-msg');
+  const holdFail = async (res, fallback) => {
+    const body = await res.json().catch(() => ({}));
+    holdMsg.textContent = (body.error && body.error.message) || body.detail || fallback;
+    holdMsg.className = 'backup-status backup-status-error';
+    recoverBtn.disabled = eraseBtn.disabled = false;
+  };
+  recoverBtn.addEventListener('click', async () => {
+    recoverBtn.disabled = eraseBtn.disabled = true;
+    const res = await fetch('/api/image/{{ item.slug }}/recover-redacted', { method: 'POST' });
+    if (res.ok) window.location.reload(); else holdFail(res, 'Recover failed');
+  });
+  eraseBtn.addEventListener('click', async () => {
+    if (!confirm('Permanently delete the redacted file from the NAS? This cannot be undone. The description, tags and other info stay, but the file is gone for good.')) return;
+    recoverBtn.disabled = eraseBtn.disabled = true;
+    const res = await fetch('/api/image/{{ item.slug }}/delete-redacted-file', { method: 'POST', body: new URLSearchParams({ confirm: 'true' }) });
+    if (res.ok) window.location.reload(); else holdFail(res, 'Delete failed');
+  });
+}
+
 const redactBtn = document.getElementById('redact-btn');
 if (redactBtn) {
   redactBtn.addEventListener('click', async () => {
-    if (!confirm('Remove the image file? The description, tags, ticket, and client info stay for future correlation. The file moves to trash for 7 days (you can undo until then), then it is deleted for good.')) return;
+    if (!confirm('Remove the image file? The description, tags, ticket, and client info stay for future correlation. The file is held on the NAS, never deleted unless you choose "Delete file permanently" on this page. You can recover it any time.')) return;
     const res = await fetch('/api/image/{{ item.slug }}/redact', { method: 'POST' });
     if (res.ok) {
       const body = await res.json().catch(() => ({}));
-      window.showUndoBar('File moved to trash for 7 days.', body.batch_id, () => window.location.reload());
+      window.showUndoBar('Redacted. The file is held, not deleted: recover it or delete it permanently from this page.', body.batch_id, () => window.location.reload());
     } else {
       const body = await res.json().catch(() => ({ detail: 'Redact failed' }));
       alert(body.detail || 'Redact failed');

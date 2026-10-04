@@ -38,7 +38,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
 from core import actor as actor_ctx
-from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
+from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
 
@@ -472,12 +472,10 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
     """Update an object's metadata: description, tags, display name, icon, type-specific fields,
     and/or its timeline display date.
 
-    Pass None for any field you don't want to change. type_metadata is replaced wholesale, not
-    merged — read the object's current type_metadata first if you only want to change one key.
-    (The web app's POST /api/image/{slug} merges instead, via db.update_content_metadata.)
+    Pass None for any field you don't want to change. type_metadata is MERGED by top-level key
+    (same as the web app's POST /api/image/{slug}); set a key to "" to clear it.
     content_description (e.g. a YouTube video's title) isn't exposed through this tool yet —
-    db.update_content_metadata / POST /api/image/{slug} can change it, this tool just doesn't
-    take that parameter.
+    POST /api/image/{slug} can change it, this tool just doesn't take that parameter.
 
     display_date sets a manual override for this object's position on the Constructicon
     timeline (unix timestamp, e.g. what time.time() or a datetime's .timestamp() returns).
@@ -485,44 +483,43 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
     (content_date, falling back to the upload timestamp) — it wins over display_date if both
     are passed.
 
-    Returns the updated object; a missing one returns the not_found error.
+    #541: one change-log batch for the whole call (undo it with constructicon_undo); every
+    field is validated before anything is written. Returns the updated object; a missing one
+    returns the not_found error.
     """
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
-    if description is not None or tags is not None:
-        row = db.update_tags(slug, description=description, tags=tags, client=None)
-    if display_name is not None or icon is not None:
-        row = db.rename_object(slug, display_name=display_name, icon=icon)
+    items.get_item(slug)
+    fields = {}
+    if description is not None:
+        fields["description"] = description
+    if display_name is not None:
+        fields["display_name"] = display_name
+    if icon is not None:
+        fields["icon"] = icon
     if type_metadata is not None:
-        # #563: merge (top-level keys), same as the web route; replacing wholesale wiped
-        # captions / YouTube stats / ID3 / rotation. #425: clean the physical-piece keys.
-        cleaned = physical_piece.clean_fields(dict(type_metadata))
-        db.update_content_metadata(slug, type_metadata=cleaned)
-        row = db.get_by_slug(slug)
+        # #563: merge (top-level keys), same as the web route; #425 keys cleaned in core.
+        fields["type_metadata"] = dict(type_metadata)
     if reset_display_date:
-        db.set_display_date_override(slug, None)
-        row = db.get_by_slug(slug)
+        fields["display_date_override"] = None
     elif display_date is not None:
-        db.set_display_date_override(slug, display_date)
-        row = db.get_by_slug(slug)
+        fields["display_date_override"] = display_date
+    if fields:
+        items.update(slug, **fields)
+    row = db.update_tags(slug, tags=tags) if tags is not None else db.get_by_slug(slug)  # tags: phase C
     return _to_public(row) if row else None
 
 
 @mcp.tool()
 def constructicon_redact(slug: str) -> dict | None:
-    """Delete a file while keeping its metadata (for sensitive content cleanup).
+    """Remove a file while keeping its metadata (for sensitive content cleanup).
 
-    Irreversible — the file itself cannot be recovered. Metadata (description,
-    tags, etc.) is preserved.
+    The file is HELD in the trash with no expiry: never auto-deleted, and constructicon_empty_trash
+    skips it. The owner decides: constructicon_recover_redacted(slug) restores it,
+    constructicon_delete_redacted_file(slug, confirm=True) erases it for good.
+    Metadata (description, tags, etc.) is preserved. Returns the object plus "batch_id";
+    errors: not_found, no_file.
     """
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
-    if not row.get("stored_filename"):
-        raise InvalidInput("This object has no uploaded file to redact", code="no_file")
-    storage.delete_files(slug, row["stored_filename"])
-    return _to_public(db.mark_redacted(slug))
+    result = items.redact(slug)
+    return {**_to_public(result.item), "batch_id": result.batch_id}
 
 
 @mcp.tool()
@@ -530,16 +527,31 @@ def constructicon_unredact(slug: str) -> dict | None:
     """Reverse of constructicon_redact (#282): clear the redacted flag so the
     object shows up in searches, project listings and tag walks again.
 
-    Does NOT bring the file back -- redaction deleted it permanently. The
-    object stays a file-less metadata record; it's just findable again.
-    Returns the updated object; errors: not_found, not_redacted.
+    Visibility only: it does NOT bring the file back, and it is for redactions whose file is
+    already gone. While the file is still held it refuses (redact_hold_exists): use
+    constructicon_recover_redacted to restore it, or constructicon_delete_redacted_file first.
+    Returns the updated object; errors: not_found, not_redacted, redact_hold_exists.
     """
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
-    if not row["redacted"]:
-        raise InvalidInput("This object isn't redacted", code="not_redacted")
-    return _to_public(db.unmark_redacted(slug))
+    return _to_public(items.unredact(slug).item)
+
+
+@mcp.tool()
+def constructicon_recover_redacted(slug: str) -> dict:
+    """Recover a redacted object's held file and un-redact it: the object is exactly as it was
+    before the redact (file, stored_filename, visible). Returns the object plus "batch_id" (undo
+    re-holds the file). Errors: not_found, not_redacted, no_redact_hold (the file was already
+    permanently deleted, or the redaction predates held files)."""
+    result = items.recover_redacted(slug)
+    return {**_to_public(result.item), "batch_id": result.batch_id}
+
+
+@mcp.tool()
+def constructicon_delete_redacted_file(slug: str, confirm: bool = False) -> dict:
+    """PERMANENTLY delete a redacted object's held file. Pass confirm=true. The object stays
+    redacted with metadata only; constructicon_recover_redacted refuses afterwards. Not undoable.
+    Returns {"deleted": true, "slug", "bytes"}; errors: confirm_required, not_found, no_redact_hold."""
+    result = items.delete_redacted_file(slug, confirm)
+    return {"deleted": True, "slug": slug, "bytes": result.data["bytes"]}
 
 
 @mcp.tool()
@@ -571,35 +583,45 @@ def constructicon_list_restricted() -> list[dict]:
 
 
 @mcp.tool()
-def constructicon_delete(slug: str) -> bool:
-    """Fully delete an object — file and all metadata. Irreversible.
-    Returns true; an unknown slug returns the not_found error."""
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
-    if row.get("stored_filename"):
-        storage.delete_files(slug, row["stored_filename"])
-    db.delete_upload(slug)
-    return True
+def constructicon_delete(slug: str) -> dict:
+    """Delete an object: its row, its project/tag/relation/revision-chain/blog links and any
+    open question about it. #541: the file goes to the trash for 7 days; until it is purged,
+    constructicon_undo(batch_id) restores everything (row, links and file). After that the
+    undo answers trash_expired.
+    Returns {"deleted": true, "batch_id", "expires_at"}; an unknown slug returns not_found."""
+    result = items.delete([slug])
+    return {"deleted": True, "batch_id": result.batch_id, "expires_at": result.data["expires_at"]}
 
 
 @mcp.tool()
 def constructicon_delete_multiple(slugs: list[str]) -> dict:
-    """Delete multiple objects by slug without touching tags or projects.
-
-    Returns {"deleted": count}. Unknown slugs are silently skipped.
-    Irreversible.
+    """Delete multiple objects by slug, as ONE undoable batch (files to the trash for 7 days,
+    like constructicon_delete). Unknown slugs are silently skipped.
+    Returns {"deleted": count, "batch_id"}.
     """
-    deleted = 0
-    for slug in slugs:
-        row = db.get_by_slug(slug)
-        if row is None:
-            continue
-        if row.get("stored_filename"):
-            storage.delete_files(slug, row["stored_filename"])
-        db.delete_upload(slug)
-        deleted += 1
-    return {"deleted": deleted}
+    result = items.delete(slugs, missing_ok=True)
+    return {"deleted": result.data["deleted"], "batch_id": result.batch_id}
+
+
+@mcp.tool()
+def constructicon_list_trash() -> dict:
+    """What the trash holds (#541). Ordinary deletes, kept 7 days so the delete can be undone:
+    {count, bytes, oldest, next_expiry, days, items: [{slug, title, batch_id, reason,
+    size_bytes, created_at, expires_at}]}. Redact holds (no expiry, kept until the owner
+    recovers or deletes them) are listed separately under `held`: {count, bytes, items}.
+    Undo a delete with constructicon_undo(batch_id)."""
+    return items.trash_summary()
+
+
+@mcp.tool()
+def constructicon_empty_trash(confirm: str) -> dict:
+    """Permanently purge every ORDINARY deleted object's file now (#541). Pass confirm="EMPTY TRASH".
+    Redact holds are NOT touched (they wait for the owner). The deletes those files came from
+    can no longer be undone (trash_expired). Returns {purged, bytes, slugs, held_kept, message};
+    a wrong phrase returns confirm_required."""
+    r = items.empty_trash(confirm)
+    return {**r, "message": f"Purged {r['purged']} deleted item(s) ({r['bytes']} bytes). "
+                            f"{r['held_kept']} redacted file(s) are still held (not touched)."}
 
 
 @mcp.tool()
@@ -887,7 +909,7 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
     # Add the writeup document to the project items if not already there
     db.add_item_to_project(project["id"], slug)
     if owner_words is not None:
-        db.update_content_metadata(slug, type_metadata={"owner_words": bool(owner_words)})
+        items.update(slug, type_metadata={"owner_words": bool(owner_words)})
 
     # Update the project's writeup_slug
     updated = db.update_project(project["id"], writeup_slug=slug)
@@ -1401,9 +1423,7 @@ def constructicon_set_provenance(slug: str, provenance: str | None = None) -> di
     Returns the updated object (the usual public shape plus "provenance"),
     (a missing one returns the not_found error).
     """
-    row = db.set_provenance(slug, provenance)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
+    row = items.update(slug, provenance=provenance).item
     return {**_to_public(row), "provenance": row.get("provenance")}
 
 
@@ -1424,25 +1444,8 @@ def constructicon_set_content_date(slug: str, date: str | None = None) -> dict |
     Returns the updated object (usual public shape plus "content_date" in unix
     seconds); not_found if the object doesn't exist.
     """
-    if db.get_by_slug(slug) is None:
-        raise NotFound(f"No item {slug!r}.")
-    if date is None or date.strip() == "":
-        db.set_content_date(slug, None)
-    else:
-        s = date.strip()
-        try:
-            epoch = float(s)  # already unix seconds
-        except ValueError:
-            try:
-                dt = datetime.fromisoformat(s)
-            except ValueError as e:
-                raise ValueError(
-                    f"Unrecognized date {date!r}: use an ISO date/datetime "
-                    f"('YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SS') or unix seconds"
-                ) from e
-            epoch = timeline.source_datetime_to_epoch(dt)  # naive -> Mountain Time
-        db.set_content_date(slug, epoch)
-    row = db.get_by_slug(slug)
+    items.get_item(slug)
+    row = items.update(slug, content_date=items.parse_date(date)).item  # naive ISO -> Mountain Time
     return {**_to_public(row), "content_date": row.get("content_date")}
 
 
@@ -1457,9 +1460,7 @@ def constructicon_set_highlight(slug: str, on: bool = False) -> dict | None:
     Returns the updated object (the usual public shape plus "highlight"),
     (a missing one returns the not_found error).
     """
-    row = db.set_highlight(slug, on)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
+    row = items.update(slug, highlight=on).item
     return {**_to_public(row), "highlight": row.get("highlight")}
 
 
@@ -1481,9 +1482,7 @@ def constructicon_set_brand_asset(slug: str, is_brand: bool = False, brand_role:
     Returns the updated object (the usual public shape plus
     "is_brand_asset" and "brand_role"); a missing one returns the not_found error.
     """
-    row = db.set_brand_asset(slug, is_brand, brand_role=brand_role)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
+    row = items.update(slug, is_brand_asset=is_brand, brand_role=brand_role).item
     return {**_to_public(row), "is_brand_asset": bool(row.get("is_brand_asset")), "brand_role": row.get("brand_role")}
 
 

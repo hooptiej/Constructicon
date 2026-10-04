@@ -48,6 +48,7 @@
   <div class="cx-item-grid" id="user-gallery-grid"></div>
   <p class="empty-state" id="empty-state" {% if items %}style="display:none"{% endif %}>No uploads yet.</p>
 </div>
+<script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 <script>
 const uploaderName = {{ uploader | tojson }};
 const selectedSlugs = new Set();
@@ -123,12 +124,18 @@ document.addEventListener('constructicon:delete-mode-change', (e) => {
 document.getElementById('delete-selected-btn').addEventListener('click', async () => {
   const slugs = [...selectedSlugs];
   if (!slugs.length) return;
-  if (!confirm(`Delete ${slugs.length} selected item${slugs.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+  if (!confirm(`Delete ${slugs.length} selected item${slugs.length === 1 ? '' : 's'}? They move to trash for 7 days, and you can undo until then.`)) return;
   const fd = new FormData();
   slugs.forEach(s => fd.append('slugs', s));
   const res = await fetch('/api/delete', { method: 'POST', body: fd });
   if (res.ok) {
-    window.location.reload();
+    const body = await res.json().catch(() => ({}));
+    document.querySelectorAll('.card-select:checked').forEach(cb => {
+      const card = cb.closest('.card, .gallery-card, article, li');
+      if (card) card.style.opacity = '0.3';
+    });
+    window.showUndoBar(`Deleted ${body.deleted} item${body.deleted === 1 ? '' : 's'}. In the trash for 7 days.`,
+      body.batch_id, () => window.location.reload());
   } else {
     alert('Delete failed.');
   }

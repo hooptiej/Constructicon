@@ -65,10 +65,26 @@
       <div class="admin-panel-header">
         <div>
           <h2>Redacted items <span id="admin-redacted-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Hidden from every list and search, reachable by direct link only (#282). Un-redacting puts the row back in browsing — the removed file itself can't come back.</div>
+          <div class="admin-row-hint">Hidden from every list and search, reachable by direct link only (#282). A redacted file is held on the NAS and never deleted unless you click "Delete file permanently". Recover it to put the file back, or delete it for good. Un-redact (only for rows whose file is already gone) just puts the row back in browsing.</div>
         </div>
       </div>
       <div id="admin-redacted-list" class="admin-redacted-list"></div>
+    </section>
+
+    <!-- Trash (#541 phase B): files of deleted or redacted items, kept 7 days so the delete can be
+         undone (POST /api/changes/{batch}/undo), then purged by the web worker's hourly pass.
+         "Empty trash now" purges everything at once (typed phrase, like Delete all). -->
+    <section class="admin-panel" id="admin-trash-section">
+      <div class="admin-panel-header">
+        <div>
+          <h2>Trash <span id="admin-trash-count" class="apikey-status"></span></h2>
+          <div class="admin-row-hint">Deleted items' files wait here 7 days so a delete can be undone, then they're removed for good. Redacted files are held separately, with no expiry: "Empty trash now" never touches them.</div>
+        </div>
+      </div>
+      <div id="admin-trash-summary" class="admin-row-hint">Loading…</div>
+      <div class="admin-divider"></div>
+      <button type="button" class="btn-danger admin-full-btn" id="admin-empty-trash-btn"
+              title="Removes every deleted item's file in the trash now. Those deletes can no longer be undone. Held redacted files are NOT removed.">Empty trash now</button>
     </section>
 
     <!-- Keys & certificates (#443) — every item of a restricted type. They
@@ -497,6 +513,40 @@
 
   loadProvLists();
 
+  // Trash (#541): count, size, oldest, and a typed-phrase "Empty trash now".
+  function fmtBytes(n) {
+    if (!n) return '0 B';
+    const u = ['B', 'KB', 'MB', 'GB']; let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
+  }
+  async function loadTrash() {
+    const summary = document.getElementById('admin-trash-summary');
+    try {
+      const res = await fetch('/api/trash');
+      const t = await res.json();
+      document.getElementById('admin-trash-count').textContent = `(${t.count})`;
+      const held = t.held || { count: 0, bytes: 0 };
+      let text = t.count
+        ? `${t.count} deleted item${t.count === 1 ? '' : 's'}, ${fmtBytes(t.bytes)}. Oldest deleted ${new Date(t.oldest * 1000).toLocaleString()}; next purge ${new Date(t.next_expiry * 1000).toLocaleString()}.`
+        : 'No deleted items waiting.';
+      if (held.count) text += ` ${held.count} redacted file${held.count === 1 ? '' : 's'} held (${fmtBytes(held.bytes)}), kept until you recover or delete ${held.count === 1 ? 'it' : 'them'}; "Empty trash now" skips ${held.count === 1 ? 'it' : 'them'}.`;
+      summary.textContent = text;
+    } catch (e) { summary.textContent = 'Could not load the trash.'; }
+  }
+  loadTrash();
+  document.getElementById('admin-empty-trash-btn').addEventListener('click', async () => {
+    const phrase = 'EMPTY TRASH';
+    const typed = prompt('This permanently removes the files of every deleted item in the trash; those deletes can no longer be undone. Redacted files that are held are NOT removed. Type ' + phrase + ' to confirm.');
+    if (typed === null) return;
+    if (typed.trim() !== phrase) { alert('Phrase did not match. Nothing was removed.'); return; }
+    const res = await fetch('/api/trash/empty', { method: 'POST', body: new URLSearchParams({ confirm: phrase }) });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) alert(`Removed ${body.purged} deleted item${body.purged === 1 ? '' : 's'} (${fmtBytes(body.bytes)}). ${body.held_kept} redacted file${body.held_kept === 1 ? ' is' : 's are'} still held (not touched).`);
+    else alert((body.error && body.error.message) || body.detail || 'Empty trash failed.');
+    loadTrash();
+  });
+
   // "Delete all" — the endpoint deletes every upload/tag/project regardless
   // of which page you're on, so it lives here with the other global actions
   // rather than on any one gallery view.
@@ -707,19 +757,47 @@
             <a class="pending-decision-title" href="${escapeHtml(item.link)}" title="${escapeHtml(item.display_name)}">${escapeHtml(item.display_name)}</a>
             <div class="redacted-item-meta">${escapeHtml(meta)}</div>
           </div>
-          <button type="button" class="btn-ms redacted-item-unredact"
-                  title="Clear the redacted flag so this row shows up in lists and search again. The removed file does not come back.">Un-redact</button>
+          ${item.held ? `<div class="redacted-item-actions" style="display:flex;gap:6px;flex-wrap:wrap">
+            <button type="button" class="btn-ms redacted-item-recover" title="Put the file back and un-redact the item, exactly as before.">Recover</button>
+            <button type="button" class="btn-danger redacted-item-erase" title="Erase the held file from the NAS for good. The item stays redacted, metadata only.">Delete file permanently</button>
+          </div>` : `<button type="button" class="btn-ms redacted-item-unredact"
+                  title="Clear the redacted flag so this row shows up in lists and search again. The file is already gone.">Un-redact</button>`}
         </div>
+        ${item.held ? '<div class="redacted-item-meta" style="color:var(--warn)">The redacted file is still stored on the NAS. Recover it, or delete it permanently.</div>' : ''}
         <span class="backup-status redacted-item-msg"></span>`;
       const btn = el.querySelector('.redacted-item-unredact');
       const msg = el.querySelector('.redacted-item-msg');
-      btn.addEventListener('click', async () => {
+      const recoverBtn = el.querySelector('.redacted-item-recover');
+      const eraseBtn = el.querySelector('.redacted-item-erase');
+      const holdAction = async (path, opts, label, button) => {
+        recoverBtn.disabled = eraseBtn.disabled = true;
+        button.textContent = label;
+        try {
+          const res = await fetch(`/api/image/${encodeURIComponent(item.slug)}/${path}`, opts);
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error((data.error && data.error.message) || data.detail || `Failed (${res.status})`);
+          loadRedacted(); loadTrash();
+        } catch (err) {
+          msg.textContent = err.message || 'Failed';
+          msg.className = 'backup-status backup-status-error redacted-item-msg';
+          recoverBtn.disabled = eraseBtn.disabled = false;
+          recoverBtn.textContent = 'Recover'; eraseBtn.textContent = 'Delete file permanently';
+        }
+      };
+      if (recoverBtn) {
+        recoverBtn.addEventListener('click', () => holdAction('recover-redacted', { method: 'POST' }, 'Recovering…', recoverBtn));
+        eraseBtn.addEventListener('click', () => {
+          if (!confirm('Permanently delete the redacted file from the NAS? This cannot be undone. The info stays, the file is gone for good.')) return;
+          holdAction('delete-redacted-file', { method: 'POST', body: new URLSearchParams({ confirm: 'true' }) }, 'Deleting…', eraseBtn);
+        });
+      }
+      if (btn) btn.addEventListener('click', async () => {
         btn.disabled = true;
         btn.textContent = 'Un-redacting…';
         try {
           const res = await fetch(`/api/image/${encodeURIComponent(item.slug)}/unredact`, { method: 'POST' });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.detail || `Failed (${res.status})`);
+          if (!res.ok) throw new Error((data.error && data.error.message) || data.detail || `Failed (${res.status})`);
           loadRedacted();
         } catch (err) {
           msg.textContent = err.message || 'Failed';

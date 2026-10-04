@@ -197,6 +197,56 @@ Don't map these by hand in routes or tools: the two front ends do it.
   exist returns code `not_found`, never `None` or `False`. Successful returns are unchanged.
 - Check with `scripts/test_actor_errors.py` (throwaway DB, no server).
 
+## Service layer (#541): one core module per domain
+
+Every write follows `core/cards.py`'s contract: validate everything first, one
+`db.transaction()`, rows written through `db.ImageLog` (row images in `audit_log`), a
+`Result`, `dry_run` where it makes sense. Undo is the generic `cards.undo` (POST
+`/api/changes/{id or batch}/undo`, MCP `constructicon_undo`). Web routes and MCP tools are thin
+adapters. Every table an op images must be in `db.IMAGE_TABLE_KEYS`.
+- **Cards** (`core/cards.py`, V2 pieces 1-7), **revisions** (`core/revisions.py`),
+  **provenance options** (`core/provenance_options.py`).
+- **Items (phase B): item writes go through `core/items.py`; deletes are held 7 days, then
+  purged; redacts are held until the owner clicks.** `items.update(slug, **fields)` covers display name/icon, description, client,
+  content_description, type_metadata (merged, physical-piece keys cleaned), file provenance,
+  highlight, brand asset/role, display-date override and content_date as ONE batch per call (one
+  Save = one undo). `redact` / `recover_redacted` / `delete_redacted_file` / `unredact`, `retype` (the media_type change is imaged; the caller's
+  runner re-runs OCR/thumbnail/caption; undoing a retype re-runs them for the old type) and
+  `delete`. Don't call `db.rename_object`, `update_content_metadata`, `set_type_metadata`,
+  `set_provenance`, `set_highlight`, `set_brand_asset`, `set_display_date_override`,
+  `set_content_date`, `set_media_type`, `mark_redacted`, `unmark_redacted` or `delete_upload` from
+  a route or tool. Deliberate raw exceptions: pipeline bookkeeping (caption status/results in
+  `core/captions.py`, upload-time `core/embedded_metadata.py`, a YouTube row's fetched publish
+  date, OCR state) and delete-all (phase C).
+- **Trash.** `items.delete` / `items.redact` move the file and its thumbnail to
+  `<storage>/.trash/<batch_id>/` (same dataset, so ZFS snapshots cover it) and record a `trash`
+  row. **Deletes are held 7 days, then purged** (`expires_at` = now + 7 days). **Redacts are held
+  until the owner clicks** (owner decision 2026-10-04): the row is `reason='redact'`, `expires_at`
+  NULL, and neither the hourly purge nor "Empty trash now" (`POST /api/trash/empty`,
+  `constructicon_empty_trash`) ever touches it. A redacted item's `/object/<slug>` page and the
+  /admin "Redacted items" list show "The redacted file is still stored on the NAS. Recover it, or
+  delete it permanently." with two actions: **Recover** (`items.recover_redacted`,
+  `POST /api/image/{slug}/recover-redacted`, MCP `constructicon_recover_redacted`; file,
+  `stored_filename` and visibility exactly as before the redact) and **Delete file permanently**
+  (`items.delete_redacted_file(slug, confirm)`, `POST /api/image/{slug}/delete-redacted-file`, MCP
+  `constructicon_delete_redacted_file`; confirm dialog, logged as `item_redact_erase`, not
+  undoable; the item stays redacted, metadata only, and recover then refuses with
+  `no_redact_hold`). `unredact` is only for file-less redactions and refuses with
+  `redact_hold_exists` while a hold exists. `constructicon_list_trash` lists holds separately
+  under `held`. A delete images the `capture_events` row and everything
+  pointing at it: `capture_event_relations` (both directions), `item_revisions` (incl. the
+  A -> C re-link when B leaves a chain), `project_items`, `post_tags`, `blog_entry_items`,
+  `pending_decisions` about the item and their `curator_dismissals` (`decision:<id>`). The
+  embedding (a BLOB, never imaged) rides in the trash row. Undo restores rows AND files; if the
+  file was purged it refuses with `trash_expired` (410) and writes nothing. The web worker
+  (`web/app.py`, `_trash_purge_loop`) purges expired entries hourly (rows kept, `purged_at` set);
+  `/admin` "Trash" shows count/size/oldest with a typed-phrase "Empty trash now" (`POST
+  /api/trash/empty`, confirm `EMPTY TRASH`); MCP `constructicon_list_trash` /
+  `constructicon_empty_trash`. Delete and bulk delete answer with `batch_id`; the pages offer
+  Undo (`web/static/js/undo-bar.js`). Check with `scripts/test_items_service.py` (throwaway DB).
+- Phase C: membership, tags, relations and one delete-all; phase D: hobbies, blog, the
+  stale-decision sweep, then the raw `db.*` writers go private.
+
 ## Adding an object type
 
 To add a new object type (issue #448 contract v2):
@@ -260,8 +310,9 @@ To add a new object type (issue #448 contract v2):
   - `extracted_text`, `perceptual_hash`, `embedding`, `ocr_status` —
     OCR/similarity pipeline state.
   - `redacted` — "file removed, metadata kept" (the detail page's "Remove
-    file, keep info" button / `constructicon_redact`; the caller deletes
-    the file, `db.mark_redacted` only flips the flag). Since #282 a
+    file, keep info" button / `constructicon_redact`; since #541 `items.redact`
+    holds the file in the trash with no expiry until the owner recovers it or
+    deletes it permanently, see "Trash" above). Since #282 a
     redacted row is hidden from **every** list/browse/search query in
     `core/db.py` (`search`, `list_unfiled_items`,
     `list_recent_items_by_type`, `list_project_items`,
@@ -270,7 +321,8 @@ To add a new object type (issue #448 contract v2):
     admin page's (`/admin`) "Redacted items" list (`GET /api/redacted` /
     `db.list_redacted()`) or the MCP `constructicon_list_redacted` tool.
     `POST /api/image/{slug}/unredact` / `constructicon_unredact` flips it
-    back — visibility only, the file is gone for good.
+    back — visibility only, for redactions whose file is already gone (refused while a
+    file is still held: recover it or delete it permanently first).
     `db.search(include_redacted=True)` is the one escape hatch, used only
     by the two delete-all paths so a full reset doesn't orphan hidden
     rows. There is no `redacted_at` column.
@@ -359,6 +411,13 @@ To add a new object type (issue #448 contract v2):
   type. It only ever asks; the link exists only if the owner answers. Not
   `capture_event_relations`: that one is symmetric and syncs tags/projects.
   `scripts/test_revisions.py` runs on a throwaway DB, no server.
+
+- **Trash (#541 phase B)** — `trash(batch_id, slug, stored_filename, has_original, has_thumb,
+  dir, size_bytes, title, reason 'delete'|'redact', created_at, expires_at (NULL = a redact hold), purged_at,
+  embedding)`, PK `(batch_id, slug)`, created idempotently in `SCHEMA`. Files live at
+  `<storage>/.trash/<batch_id>/<stored_filename>` (+ `<slug>_thumb.jpg`). Item writes go through
+  `core/items.py`; deletes are held 7 days then purged, redacts are held until the owner clicks
+  (see "Service layer" above).
 
 ### Tag hierarchy gotcha — walk the tree, don't just keyword-search
 

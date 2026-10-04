@@ -206,8 +206,9 @@ check("missing form field: 422 validation_error, detail list kept",
       r.status_code == 422 and b.get("ok") is False and b["error"]["code"] == "validation_error"
       and isinstance(b["detail"], list) and b["detail"][0]["loc"] == ["body", "new_slug"], r.text)
 r = client.post("/api/image/item-a", data={"type_metadata": json.dumps({"date_made": "june 2009"})})
-check("bad physical-piece date: 400, detail unchanged",
-      shape(r, 400, "bad_request", "date_made must look like 2009, 2009-06 or 2009-06-14"), r.text)
+# #541 phase B: validated in core/items.py now, so the web gets the same code as the MCP.
+check("bad physical-piece date: 400 bad_physical_piece, detail unchanged",
+      shape(r, 400, "bad_physical_piece", "date_made must look like 2009, 2009-06 or 2009-06-14"), r.text)
 client.post("/api/image/item-a/superseded-by", data={"new_slug": "item-b"})
 r = client.post("/api/image/item-b/superseded-by", data={"new_slug": "item-a"})
 check("revision cycle: 422 revision_cycle", shape(r, 422, "revision_cycle"), r.text)
@@ -241,8 +242,8 @@ check("get_posts_for_tag unknown -> not_found (was raise ValueError)",
       mcp_err(server.constructicon_get_posts_for_tag("no-such-tag"), "not_found"))
 check("run_type_action unknown -> not_found (was {'error': str})",
       mcp_err(server.constructicon_run_type_action("nope", "x"), "not_found"))
-check("set_content_date bad -> bad_request (a ValueError)",
-      mcp_err(server.constructicon_set_content_date("item-a", "not a date"), "bad_request"))
+check("set_content_date bad -> bad_date (#541: items.parse_date)",
+      mcp_err(server.constructicon_set_content_date("item-a", "not a date"), "bad_date"))
 check("update bad date_made -> bad_physical_piece",
       mcp_err(server.constructicon_update("item-a", type_metadata={"date_made": "june 2009"}), "bad_physical_piece"))
 ok = server.constructicon_get("item-a")

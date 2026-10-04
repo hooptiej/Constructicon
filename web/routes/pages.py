@@ -519,9 +519,10 @@ def object_detail_page(request: Request, slug: str):
                 or physical_piece.in_traditional_media(db, slug, item.get("tags")),
         "medium_suggestions": physical_piece.medium_suggestions(db),
     }
+    redact_hold = db.get_redact_hold(slug) if row.get("redacted") else None
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
+        {"item": item, "redact_hold": redact_hold, "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
     )
 
 

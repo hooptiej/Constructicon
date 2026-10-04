@@ -501,39 +501,5 @@ def ingest_content(
     return IngestResult(row=db.get_by_slug(slug))
 
 
-def retype(slug, new_media_type, run_background):
-    """#448: Change a row's media_type to a different registered type.
-
-    Resets OCR status if the new type is OCR-capable, deletes any existing
-    thumbnail, and re-runs embedded metadata extraction and post-insert steps.
-
-    Args:
-        slug: The row's slug.
-        new_media_type: The new media_type key (must be registered).
-        run_background: Callable to schedule background work.
-
-    Returns:
-        The updated row dict, or raises ObjectTypeContractError if new_media_type is unregistered.
-    """
-    if new_media_type not in object_types.OBJECT_TYPES:
-        raise object_types.ObjectTypeContractError(f"Unknown media_type: {new_media_type}")
-
-    spec = object_types.get_object_type(new_media_type)
-
-    # Update the media_type
-    db.set_media_type(slug, new_media_type)
-
-    # Reset OCR status if the new type is OCR-capable
-    if spec.ocr_capable:
-        db.set_ocr_status(slug, "pending")
-
-    # Delete any existing thumbnail
-    storage.thumb_path_for(slug).unlink(missing_ok=True)
-
-    # Re-run embedded metadata extraction
-    embedded_metadata.fill_missing(slug)
-
-    # Re-run post-insert steps (OCR, thumbnail, captions)
-    post_insert(slug, spec, run_background)
-
-    return db.get_by_slug(slug)
+# #541 phase B: retype moved to core/items.py (items.retype), where the media_type change is
+# change-logged and undoable; post-processing still runs through post_insert above.

@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import Request, Form, UploadFile, File, HTTPException, APIRouter
 from fastapi.responses import JSONResponse
 
-from core import backup, captions, db, object_types, storage
+from core import backup, captions, db, items, object_types, storage
 from core import provenance_options
 from web.common import DESKTOP_APP_BUILD_DIR, DESKTOP_APP_BUILD_PATH
 from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public
@@ -31,7 +31,11 @@ def api_delete_all(confirm: str = Form("")):
 
     #558: requires the typed phrase (confirm=DELETE EVERYTHING), so a forged or
     accidental bodiless POST can't wipe the archive. The audit middleware writes
-    the row for the request (with the confirm field)."""
+    the row for the request (with the confirm field).
+
+    #541: still the raw, unlogged path (phase C gives delete-all one core implementation).
+    It does NOT use the trash: files are erased on the spot, and it leaves the `trash` table
+    and <storage>/.trash alone. Phase C should run items.delete (or purge the trash too)."""
     if confirm.strip() != DELETE_ALL_PHRASE:
         raise HTTPException(status_code=400, detail=f"Type {DELETE_ALL_PHRASE!r} in the confirm field to delete everything")
     # include_redacted (#282) / include_brand (#417): search() hides redacted
@@ -52,6 +56,21 @@ def api_delete_all(confirm: str = Form("")):
     conn.commit()
     conn.close()
     return JSONResponse({"deleted": len(rows)})
+
+
+@router.get("/api/trash")
+def api_trash():
+    """#541 phase B: what the trash holds. Ordinary deletes (kept 7 days):
+    {count, bytes, oldest, next_expiry, days, items}; redact holds (no expiry) under `held`."""
+    return JSONResponse(items.trash_summary())
+
+
+@router.post("/api/trash/empty")
+def api_empty_trash(confirm: str = Form("")):
+    """#541: purge every ordinary deleted item's file now (typed phrase EMPTY TRASH, like
+    delete-all). Redact holds are NOT touched (`held_kept` says how many were skipped). The
+    deletes those files came from can no longer be undone (undo answers trash_expired)."""
+    return JSONResponse(items.empty_trash(confirm))
 
 
 @router.post("/api/backup")
@@ -141,7 +160,9 @@ def api_list_redacted():
     knowing its slug. Same card shape as the gallery (_to_public -- thumb_url
     is always None here, the file is gone) plus the direct /object link,
     which keeps working for a redacted row."""
-    items = [{**_to_public(row), "link": f"/object/{row['slug']}"} for row in db.list_redacted()]
+    holds = db.redact_hold_slugs()
+    items = [{**_to_public(row), "link": f"/object/{row['slug']}", "held": row["slug"] in holds}
+             for row in db.list_redacted()]
     return JSONResponse({"count": len(items), "items": items})
 
 

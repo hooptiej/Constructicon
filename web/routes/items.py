@@ -9,8 +9,7 @@ from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTa
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from core import captions, db, ingest, object_types, ocr, revisions, similarity, storage, thumbnails, timeline
-from core import physical_piece
+from core import captions, db, ingest, items, object_types, ocr, revisions, similarity, storage, thumbnails, timeline
 from web.common import DESKTOP_APP_CLIENT_HEADER, DESKTOP_APP_CLIENT_VALUE
 from web.shapes import _friendly_datetime, _to_project_option, _to_public
 
@@ -24,17 +23,11 @@ def api_delete_selected(slugs: list[str] = Form(...)):
     or projects. That global wipe is specific to /api/delete-all's
     full-reset button; this is the day-to-day 'clear this test content'
     path, driven by gallery checkboxes or a single object's detail page.
-    Reuses the same per-row deletion primitives as /api/delete-all."""
-    deleted = 0
-    for slug in slugs:
-        row = db.get_by_slug(slug)
-        if row is None:
-            continue
-        if row.get("stored_filename"):
-            storage.delete_files(row["slug"], row["stored_filename"])
-        db.delete_upload(row["slug"])
-        deleted += 1
-    return JSONResponse({"deleted": deleted})
+    #541: one items.delete batch (files to the trash for 7 days); unknown slugs are skipped.
+    `batch_id` undoes the lot via POST /api/changes/{batch_id}/undo."""
+    result = items.delete(slugs, missing_ok=True)
+    return JSONResponse({"deleted": result.data["deleted"], "batch_id": result.batch_id,
+                         "trash_days": items.TRASH_DAYS})
 
 
 # --- API ---
@@ -336,7 +329,7 @@ def api_mark_caption_used(slug: str):
         raise HTTPException(status_code=400, detail="No current suggested caption to mark as used")
     step_index = tm.get(captions.STEP_KEY, 0)
     step_label = captions.describe_step(step_index)
-    db.update_content_metadata(slug, type_metadata={
+    items.update(slug, type_metadata={
         captions.DESCRIPTION_STEP_KEY: step_index,
         captions.DESCRIPTION_STEP_LABEL_KEY: step_label,
         captions.DESCRIPTION_MODEL_KEY: tm.get("auto_caption_model"),
@@ -370,7 +363,7 @@ def api_caption_skip(slug: str):
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
-    db.update_content_metadata(slug, type_metadata={"auto_caption_dismissed": True})
+    items.update(slug, type_metadata={"auto_caption_dismissed": True})
     return JSONResponse({"ok": True})
 
 
@@ -394,141 +387,126 @@ async def api_update_image(
     # #213 / A5 fix: only parse and pass tags if they were actually provided
     # in the form. Defaults of None mean "don't touch this field", allowing
     # partial updates (e.g. rename-only) without inadvertently wiping tags.
+    """#541 phase B: every field below is one items.update call, so one Save is ONE change-log
+    batch (undo restores all of it). Validation (provenance key, physical-piece date, dates)
+    happens before anything is written. Free-text tags are still db.update_tags (phase C)."""
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
     tag_list = None
     if tags is not None:
         try:
             tag_list = json.loads(tags) if tags else []
         except json.JSONDecodeError:
             tag_list = []
-    row = db.update_tags(slug, description=description, tags=tag_list, client=client)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
 
     # #244: distinguish "field not provided" (None) from "field provided empty"
     # ("") so we can clear overrides -- FastAPI's Form(None) collapses BOTH
     # cases to the same None value, so read the raw form directly instead.
-    # Pass the raw string straight through to rename_object as-is ("" included)
-    # rather than normalizing "" back to None here -- rename_object's own
-    # contract already treats None as "leave unchanged" and "" as "clear back
-    # to the default fallback" (see its docstring); re-coercing "" to None
-    # before calling it would silently throw away that distinction and defeat
-    # the whole point of this fix (confirmed live: it did exactly that).
+    # A present-but-empty display_name/icon clears the override back to the
+    # default fallback; an absent one leaves it alone.
     form_data = await request.form()
-    raw_display_name = form_data.get("display_name") if "display_name" in form_data else None
-    raw_icon = form_data.get("icon") if "icon" in form_data else None
-
-    # display_name/icon (#11) — no dedicated UI yet (see #24's "Coming soon
-    # (#11)" admin-page stub), but the field/endpoint exists so a "rename"
-    # or "set icon" is at least possible by hand (a form POST here).
-    if "display_name" in form_data or "icon" in form_data:
-        row = db.rename_object(slug, display_name=raw_display_name, icon=raw_icon)
-    # content_description/type_metadata (#54): lets a caller correct a
-    # row's title-ish blurb and/or per-type metadata after creation — added
-    # for scripts/full_youtube_channel_sync.py's correction pass (site-
-    # scraped titles overwritten with the real YouTube Data API title, plus
-    # view/like/comment counts and, when applicable, the uploading channel).
-    # type_metadata is a JSON object string, MERGED into whatever the row
-    # already has (see db.update_content_metadata) rather than replacing it
-    # wholesale, so this can't be used to accidentally wipe out a field some
-    # other future writer already set.
-    if content_description is not None or type_metadata is not None:
-        parsed_metadata = None
-        if type_metadata is not None:
-            try:
-                parsed_metadata = json.loads(type_metadata) if type_metadata else {}
-            except json.JSONDecodeError:
-                raise HTTPException(status_code=400, detail="type_metadata must be valid JSON")
-            # #425: the physical-piece keys (medium, dimensions, date_made, original_location)
-            # are trimmed/length-capped and date_made must be YYYY[-MM[-DD]]; other keys pass through.
-            if isinstance(parsed_metadata, dict):
-                try:
-                    parsed_metadata = physical_piece.clean_fields(parsed_metadata)
-                except ValueError as e:
-                    raise HTTPException(status_code=400, detail=str(e))
-        row = db.update_content_metadata(slug, content_description=content_description, type_metadata=parsed_metadata)
-    # content_date (Timeline feature, #265): a correction/backfill script
-    # with a real known date (e.g. a YouTube video's publishedAt, already
-    # fetched on every scripts/full_youtube_channel_sync.py correction
-    # pass but previously had no way to write it back) sets it directly —
-    # a real value, not a manual override like display_date below.
+    fields = {}
+    if description is not None:
+        fields["description"] = description
+    if client is not None:
+        fields["client"] = client
+    # display_name/icon (#11) — a "rename" or "set icon" by hand (a form POST here).
+    if "display_name" in form_data:
+        fields["display_name"] = form_data.get("display_name")
+    if "icon" in form_data:
+        fields["icon"] = form_data.get("icon")
+    # content_description/type_metadata (#54): corrections after creation (e.g.
+    # scripts/full_youtube_channel_sync.py). type_metadata is a JSON object string, MERGED
+    # into whatever the row already has, never a wholesale replace; the #425 physical-piece
+    # keys are cleaned/validated in core.
+    if content_description is not None:
+        fields["content_description"] = content_description
+    if type_metadata is not None:
+        try:
+            fields["type_metadata"] = json.loads(type_metadata) if type_metadata else {}
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="type_metadata must be valid JSON")
+    # content_date (Timeline feature, #265): a real known date, not an override.
     if content_date is not None:
-        db.set_content_date(slug, content_date)
-        row = db.get_by_slug(slug)
-    # Timeline feature: reset_display_date wins over a stray display_date
-    # value if a client somehow sends both (mirrors the MCP tools' same
-    # reset-flag convention in mcp_server/server.py).
+        fields["content_date"] = content_date
+    # Timeline feature: reset_display_date wins over a stray display_date value.
     if reset_display_date:
-        db.set_display_date_override(slug, None)
-        row = db.get_by_slug(slug)
+        fields["display_date_override"] = None
     elif display_date:
-        # The <input type="datetime-local"> this comes from is pre-filled
-        # by _datetime_local_value in Mountain Time (see there) — parse the
-        # owner's typed value the same way, not as the container's own
-        # system timezone (UTC), or a no-op re-save would silently shift
-        # the stored time by several hours.
-        db.set_display_date_override(slug, timeline.source_datetime_to_epoch(datetime.fromisoformat(display_date)))
-        row = db.get_by_slug(slug)
-    # provenance (#341): like display_name/icon, read the raw form so ""
-    # clears the value (None-means-"don't change" convention applies here too).
-    # form_data already read above, reuse it.
+        # The <input type="datetime-local"> is pre-filled in Mountain Time (see
+        # _datetime_local_value); parse the typed value the same way, not as UTC.
+        fields["display_date_override"] = timeline.source_datetime_to_epoch(datetime.fromisoformat(display_date))
+    # provenance (#341): "" clears.
     if "provenance" in form_data:
-        raw_provenance = form_data.get("provenance") if form_data.get("provenance") else None
-        row = db.set_provenance(slug, raw_provenance)
-    # highlight (#341): truthy form value (any non-empty string) marks it as
-    # highlighted, empty/missing means off.
+        fields["provenance"] = form_data.get("provenance") or None
+    # highlight (#341): any non-empty string is on.
     if "highlight" in form_data:
-        raw_highlight = form_data.get("highlight")
-        row = db.set_highlight(slug, bool(raw_highlight))
-    # brand asset (#350): checkbox for is_brand_asset (0/1), optional text field for brand_role.
-    # Like highlight, any non-empty string is truthy for is_brand_asset.
+        fields["highlight"] = bool(form_data.get("highlight"))
+    # brand asset (#350): checkbox plus optional role.
     if "is_brand_asset" in form_data:
-        raw_is_brand = form_data.get("is_brand_asset")
-        raw_brand_role = form_data.get("brand_role") if form_data.get("brand_role") else None
-        row = db.set_brand_asset(slug, bool(raw_is_brand), brand_role=raw_brand_role)
+        fields["is_brand_asset"] = bool(form_data.get("is_brand_asset"))
+        fields["brand_role"] = form_data.get("brand_role") or None
+    if fields:
+        items.update(slug, **fields)
+    row = db.update_tags(slug, tags=tag_list) if tag_list is not None else db.get_by_slug(slug)
     return JSONResponse(_to_public(row))
 
 
 @router.post("/api/image/{slug}/redact")
 def api_redact_image(request: Request, slug: str):
-    """Delete the file only — sensitive content (e.g. a visible password) —
-    but keep the metadata for future correlation."""
-    row = db.get_by_slug(slug)
-    if row is None:
+    """Remove the file only — sensitive content (e.g. a visible password) —
+    but keep the metadata for future correlation. The file is HELD in the
+    trash with no expiry (owner decision 2026-10-04): never auto-deleted, and
+    "Empty trash now" skips it. Recover it (POST .../recover-redacted) or
+    delete it permanently (POST .../delete-redacted-file)."""
+    if db.get_by_slug(slug) is None:
         raise HTTPException(status_code=404, detail="not found")
-    if not row.get("stored_filename"):
-        raise HTTPException(status_code=400, detail="This row has no uploaded file to redact")
-    storage.delete_files(slug, row["stored_filename"])
-    updated = db.mark_redacted(slug)
-    return JSONResponse(_to_public(updated))
+    result = items.redact(slug)
+    return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id, "held": True})
+
+
+@router.post("/api/image/{slug}/recover-redacted")
+def api_recover_redacted(slug: str):
+    """Brings a held redacted file back and un-redacts the item (as before the redact).
+    409 no_redact_hold when no file is held (already deleted, or an old redaction)."""
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    result = items.recover_redacted(slug)
+    return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id})
+
+
+@router.post("/api/image/{slug}/delete-redacted-file")
+def api_delete_redacted_file(slug: str, confirm: str = Form("")):
+    """Permanently erases the held redacted file (confirm=true). The item stays redacted,
+    metadata only. Not undoable."""
+    if db.get_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    result = items.delete_redacted_file(slug, confirm)
+    return JSONResponse({"deleted": True, "slug": slug, "bytes": result.data["bytes"]})
 
 
 @router.post("/api/image/{slug}/unredact")
 def api_unredact_image(request: Request, slug: str):
     """#282: reverse of /redact -- clears the flag so the row rejoins
-    ordinary browsing/search. Can't bring the file back: /redact deleted it
-    from storage before setting the flag, so the row stays a file-less
-    metadata record; it's just findable again. 409 rather than a silent
+    ordinary browsing/search. For a redaction whose file is already gone
+    (old redactions, or after delete-redacted-file); the row stays a file-less
+    metadata record, just findable again. While the file is still held it
+    answers 409 redact_hold_exists: recover it or delete it permanently. 409 rather than a silent
     no-op on a row that isn't redacted, so a stale admin-page list can't
     misreport success."""
-    row = db.get_by_slug(slug)
-    if row is None:
+    if db.get_by_slug(slug) is None:
         raise HTTPException(status_code=404, detail="not found")
-    if not row["redacted"]:
-        raise HTTPException(status_code=409, detail="This row isn't redacted")
-    updated = db.unmark_redacted(slug)
-    return JSONResponse(_to_public(updated))
+    return JSONResponse(_to_public(items.unredact(slug).item))
 
 
 @router.post("/api/image/{slug}/delete")
 def api_delete_image(request: Request, slug: str):
-    """Full delete — file and metadata both gone, no recovery."""
-    row = db.get_by_slug(slug)
-    if row is None:
+    """Full delete — the row and everything pointing at it. #541: the file goes to the trash
+    for 7 days; POST /api/changes/{batch_id}/undo restores row, links and file until then."""
+    if db.get_by_slug(slug) is None:
         raise HTTPException(status_code=404, detail="not found")
-    if row.get("stored_filename"):
-        storage.delete_files(slug, row["stored_filename"])
-    db.delete_upload(slug)
-    return JSONResponse({"deleted": True})
+    result = items.delete([slug])
+    return JSONResponse({"deleted": True, "batch_id": result.batch_id, "trash_days": items.TRASH_DAYS})
 
 
 @router.post("/api/image/{slug}/thumbnail/refresh")

@@ -195,7 +195,7 @@ def resolve(decision_id, choice="", project_ids=(), choices=(), actor=changes.AC
             if choice in allowed_keys:
                 # Only call retype if the choice is different from the current type
                 if choice != row.get("media_type"):
-                    ingest.retype(decision["post_slug"], choice, lambda f, *args: None)
+                    ingest.retype(decision["post_slug"], choice, ingest.run_in_thread)
                     applied.append(choice)
                 else:
                     # Choice matches current type — just resolve without retying

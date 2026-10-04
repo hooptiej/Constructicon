@@ -1124,7 +1124,7 @@ convertHobbyConfirm.addEventListener('click', async () => {
     deleteProjectSuccess.style.display = 'none';
     deleteProjectConfirm.disabled = false;
     deleteProjectConfirm.textContent = 'Delete';
-    const message = `Delete "${projectTitle}"? Its ${projectChildCount} sub-project${projectChildCount === 1 ? '' : 's'} become top-level and its ${projectItemCount} object${projectItemCount === 1 ? '' : 's'} are detached — nothing else is deleted. This can't be undone.`;
+    const message = `Delete "${projectTitle}"? Its ${projectChildCount} sub-project${projectChildCount === 1 ? '' : 's'} become top-level and its ${projectItemCount} object${projectItemCount === 1 ? '' : 's'} are detached — nothing else is deleted. It can be undone afterwards from the change log (the delete is recorded with its full row images), but not from this page.`;
     deleteProjectMessage.textContent = message;
     deleteProjectBackdrop.style.display = 'flex';
   }
@@ -1151,7 +1151,7 @@ convertHobbyConfirm.addEventListener('click', async () => {
         throw new Error(body.detail || 'Deletion failed');
       }
 
-      deleteProjectSuccess.textContent = `Deleted "${projectTitle}" — orphaned ${body.children_orphaned} project${body.children_orphaned === 1 ? '' : 's'}, detached ${body.items_detached} object${body.items_detached === 1 ? '' : 's'}.`;
+      deleteProjectSuccess.textContent = `Deleted "${projectTitle}" — orphaned ${body.children_orphaned} project${body.children_orphaned === 1 ? '' : 's'}, detached ${body.items_detached} object${body.items_detached === 1 ? '' : 's'}.` + (body.batch_id ? ` To undo: change ${body.batch_id}.` : '');
       deleteProjectSuccess.style.display = 'block';
 
       setTimeout(() => {

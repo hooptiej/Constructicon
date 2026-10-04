@@ -11,6 +11,7 @@ via a `run_background` callable — the ingest module never spawns threads or ca
 scheduler itself.
 """
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -135,6 +136,14 @@ def ensure_capture_thumbnail(slug):
     row = db.get_by_slug(slug)
     if row is not None:
         thumbnails.ensure_thumbnail(row)
+
+
+def run_in_thread(fn, *args):
+    """Run fn(*args) on a background daemon thread. The `run_background` for callers with no
+    FastAPI BackgroundTasks (retype from a decision / type action, #563): OCR, thumbnail and
+    captions all run for real, and captions.run_caption still takes CAPTION_LOCK and honours
+    the circuit breaker itself, exactly as on upload."""
+    threading.Thread(target=fn, args=args, daemon=True).start()
 
 
 def post_insert(slug, spec, run_background):

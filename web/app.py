@@ -1641,7 +1641,9 @@ def wallpaper_page(request: Request):
 
 @app.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str, rev: str = ""):
-    rows, n_sup = _split_revisions(db.search(uploaded_by=uploader, limit=1000), rev == "all")  # #477
+    # #563: no 1000-row cap (it made "1000 uploads" of 1,640). The page embeds the whole list and
+    # the ItemCards pager (batches of 120) draws it lazily, so the count is the true total.
+    rows, n_sup = _split_revisions(db.search(uploaded_by=uploader, limit=10_000_000), rev == "all")  # #477
     items = _card_items(rows)
     return templates.TemplateResponse(
         request, "user_gallery.html",
@@ -2754,17 +2756,6 @@ async def api_update_project(
             # refused by core.cards.nest below (CardError -> 409/404 with a code).
             parent_id_value = parent_id_int
     replace_parent = str(_form.get("replace") or "").strip().lower() in ("1", "true", "yes", "on")
-    card_warnings = []
-    # "Part of" (V2 cards 3.7) goes through core.cards first, so a refusal happens
-    # before anything else in this request is written.
-    if parent_id_value is None:
-        cards.unnest(project["id"], actor="owner-ui")
-        parent_id_value = ...
-    elif parent_id_value is not ...:
-        card_warnings.extend(cards.nest(project["id"], parent_id_value, replace=replace_parent,
-                                        actor="owner-ui").warnings)
-        parent_id_value = ...
-
     writeup_slug_value = ...  # "..." means don't update writeup_slug
     if writeup_slug is not None:
         writeup_slug_value = writeup_slug if writeup_slug else None
@@ -2801,51 +2792,73 @@ async def api_update_project(
                 raise HTTPException(status_code=400, detail="Project is not a child of this project")
             cover_project_id_value = cover_project_int
 
-    # V2 cards: kind / stage / stop_reason / activity go through core.cards (the same
-    # validators the MCP uses; a violation is a CardError -> HTTP 422). The legacy
-    # `status` word is translated to a stage; the legacy column itself is frozen.
-    if status:
-        legacy = card_rules.legacy_to_status(status)
-        if legacy["kind"] and not kind:
-            kind = legacy["kind"]
-        if not stage:
-            stage, stop_reason = legacy["stage"], legacy["stop_reason"]
-        card_warnings.extend(legacy["warnings"])
-    if kind:
-        card_warnings.extend(cards.set_kind(project["id"], kind, actor="owner-ui").warnings)
-    if stage or activity or stop_reason:
-        card_warnings.extend(cards.set_status(project["id"], stage, stop_reason or None,
-                                              activity=activity or None, actor="owner-ui").warnings)
-
-    try:
-        updated = db.update_project(
-            project_id,
-            title=title,
-            description=description,
-            cover_slug=cover_slug,
-            parent_id=parent_id_value,
-            writeup_slug=writeup_slug_value,
-            cover_project_id=cover_project_id_value,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    # Timeline feature: each reset_*_date flag wins over its corresponding
-    # *_date value if a client somehow sends both (mirrors the object edit
-    # endpoint and the MCP tools' same reset-flag convention). start/end are
-    # independent -- clearing one doesn't touch the other.
+    # #563: parse the dates up front too (a bad value is a 400, not a 500 after the writes).
+    new_start = new_end = ...
     if reset_start_date or reset_end_date or start_date or end_date:
-        # Same Mountain-Time convention as the per-item display_date override
-        # above — these <input type="datetime-local"> fields are pre-filled
-        # in Mountain Time too (see start_date_input/end_date_input above).
-        new_start = None if reset_start_date else (timeline.source_datetime_to_epoch(datetime.fromisoformat(start_date)) if start_date else ...)
-        new_end = None if reset_end_date else (timeline.source_datetime_to_epoch(datetime.fromisoformat(end_date)) if end_date else ...)
-        updated = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
+        try:
+            new_start = None if reset_start_date else (timeline.source_datetime_to_epoch(datetime.fromisoformat(start_date)) if start_date else ...)
+            new_end = None if reset_end_date else (timeline.source_datetime_to_epoch(datetime.fromisoformat(end_date)) if end_date else ...)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date / end_date")
 
-    # Re-read so kind/stage edits made above through core.cards show in the response.
-    updated = db.get_project(project["id"]) or updated or {}
-    if card_warnings:
-        updated = {**updated, "warnings": card_warnings}
+    # #563: every check that can fail with a 400 runs above; the writes below share ONE
+    # transaction (no awaits inside it), so a refusal part-way (e.g. a CardError from the stage
+    # rules) rolls the whole request back instead of leaving the card nested but not updated.
+    card_warnings = []
+    with db.transaction():
+        # "Part of" (V2 cards 3.7) goes through core.cards first, so a refusal happens
+        # before anything else in this request is written.
+        if parent_id_value is None:
+            cards.unnest(project["id"], actor="owner-ui")
+            parent_id_value = ...
+        elif parent_id_value is not ...:
+            card_warnings.extend(cards.nest(project["id"], parent_id_value, replace=replace_parent,
+                                            actor="owner-ui").warnings)
+            parent_id_value = ...
+
+        # V2 cards: kind / stage / stop_reason / activity go through core.cards (the same
+        # validators the MCP uses; a violation is a CardError -> HTTP 422). The legacy
+        # `status` word is translated to a stage; the legacy column itself is frozen.
+        if status:
+            legacy = card_rules.legacy_to_status(status)
+            if legacy["kind"] and not kind:
+                kind = legacy["kind"]
+            if not stage:
+                stage, stop_reason = legacy["stage"], legacy["stop_reason"]
+            card_warnings.extend(legacy["warnings"])
+        if kind:
+            card_warnings.extend(cards.set_kind(project["id"], kind, actor="owner-ui").warnings)
+        if stage or activity or stop_reason:
+            card_warnings.extend(cards.set_status(project["id"], stage, stop_reason or None,
+                                                  activity=activity or None, actor="owner-ui").warnings)
+
+        try:
+            updated = db.update_project(
+                project_id,
+                title=title,
+                description=description,
+                cover_slug=cover_slug,
+                parent_id=parent_id_value,
+                writeup_slug=writeup_slug_value,
+                cover_project_id=cover_project_id_value,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # Timeline feature: each reset_*_date flag wins over its corresponding
+        # *_date value if a client somehow sends both (mirrors the object edit
+        # endpoint and the MCP tools' same reset-flag convention). start/end are
+        # independent -- clearing one doesn't touch the other.
+        if reset_start_date or reset_end_date or start_date or end_date:
+            # Same Mountain-Time convention as the per-item display_date override
+            # above — these <input type="datetime-local"> fields are pre-filled
+            # in Mountain Time too (see start_date_input/end_date_input above).
+            updated = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
+
+        # Re-read so kind/stage edits made above through core.cards show in the response.
+        updated = db.get_project(project["id"]) or updated or {}
+        if card_warnings:
+            updated = {**updated, "warnings": card_warnings}
     return JSONResponse(updated)
 
 
@@ -3007,7 +3020,7 @@ def api_remove_item_from_project(project_id: str, slug: str = Form(...)):
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Verify the object exists.
-    obj = db.get_post(slug)
+    obj = db.get_by_slug(slug)
     if obj is None:
         raise HTTPException(status_code=404, detail="Object not found")
 

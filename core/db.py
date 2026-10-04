@@ -699,10 +699,6 @@ def init_db():
         for column, ddl_type in (("provenance", "TEXT"), ("highlight", "INTEGER NOT NULL DEFAULT 0")):
             if column not in existing_columns:
                 conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
-        # Migration (#359): re-tag any objects set to the removed "failure" provenance value.
-        # Idempotent — safe to run on every init. "failure" moved to project status;
-        # re-tag objects as "documented".
-        conn.execute("UPDATE capture_events SET provenance='documented' WHERE provenance='failure'")
         # is_brand_asset + brand_role (#350): Brand kit data model. is_brand_asset flags
         # reusable branding objects (logo, logotype, icon, color, etc.); brand_role is
         # a freeform label describing their purpose.

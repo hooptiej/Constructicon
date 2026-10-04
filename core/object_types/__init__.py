@@ -417,6 +417,18 @@ for _, name, _ in pkgutil.iter_modules(__path__):
 _validate_registry()
 
 
+def file_extension(filename):
+    """Lowercased extension of `filename`, honoring multi-suffix extensions a
+    registered type claims (".tar.gz", #485): "a.tar.gz" -> ".tar.gz", while
+    "a.b.zip" -> ".zip". Longest registered compound extension wins."""
+    name = Path(filename).name.lower()
+    compound = {e for spec in OBJECT_TYPES.values() for e in spec.extensions if e.count(".") > 1}
+    for ext in sorted(compound, key=len, reverse=True):
+        if name.endswith(ext):
+            return ext
+    return Path(name).suffix
+
+
 def detect_media_type(filename, path=None):
     """Detect the media_type of a file using extension and optional content-based sniffing.
 
@@ -438,7 +450,7 @@ def detect_media_type(filename, path=None):
         6. If no sniffer matched (or no path), use the fallback spec (sniff_fn=None) if available.
         7. Otherwise, return the first sniffer's key if path=None, or None if only sniffers and no path.
     """
-    ext = Path(filename).suffix.lower()
+    ext = file_extension(filename)
     candidates = [s for s in OBJECT_TYPES.values() if ext in s.extensions]
 
     if not candidates:

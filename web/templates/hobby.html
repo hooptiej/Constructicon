@@ -29,6 +29,7 @@
         <div class="dp-menu" id="hobby-more-menu" role="menu" aria-labelledby="hobby-more-btn" hidden>
           <a role="menuitem" href="/curator">Open the Curator queue</a>
           <a role="menuitem" href="/hobbies">All hobbies</a>
+          {% if hobby.name | lower == 'traditional media' %}<a role="menuitem" href="https://github.com/hooptiej/Constructicon/blob/main/docs/capture-traditional-media.md" target="_blank" rel="noopener">How to capture a physical piece</a>{% endif %}
         </div>
       </div>
     </div>

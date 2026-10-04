@@ -29,7 +29,7 @@ from starlette.datastructures import FormData
 
 from core import automatch, backup, captions, card_payload, card_rules, cards, curation_queue, curator, curator_needs, db, decisions, ingest, markdown_render, object_types, ocr, revisions, similarity, site_export, storage, thumbnails, timeline
 from core import version as version_info
-from core import provenance_options
+from core import physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
 
 app = FastAPI()
@@ -1692,9 +1692,16 @@ def object_detail_page(request: Request, slug: str):
         trail.append({"label": home["title"], "href": f"/project/{home['slug']}"})
         trail.append({"label": item["display_name"], "href": None})
         breadcrumbs = trail
+    # #425: the PHYSICAL PIECE group shows when any field is set or the item is in Traditional Media.
+    physical = {
+        "rows": physical_piece.rows(item["type_metadata"]),
+        "show": physical_piece.has_any(item["type_metadata"])
+                or physical_piece.in_traditional_media(db, slug, item.get("tags")),
+        "medium_suggestions": physical_piece.medium_suggestions(db),
+    }
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES},
+        {"item": item, "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
     )
 
 
@@ -2210,6 +2217,13 @@ async def api_update_image(
                 parsed_metadata = json.loads(type_metadata) if type_metadata else {}
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="type_metadata must be valid JSON")
+            # #425: the physical-piece keys (medium, dimensions, date_made, original_location)
+            # are trimmed/length-capped and date_made must be YYYY[-MM[-DD]]; other keys pass through.
+            if isinstance(parsed_metadata, dict):
+                try:
+                    parsed_metadata = physical_piece.clean_fields(parsed_metadata)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
         row = db.update_content_metadata(slug, content_description=content_description, type_metadata=parsed_metadata)
     # content_date (Timeline feature, #265): a correction/backfill script
     # with a real known date (e.g. a YouTube video's publishedAt, already

@@ -15,7 +15,7 @@ Each op below writes exactly the store(s) its old raw path wrote, so behaviour i
   attach(slug, names)              post_tags only, creating missing ROOT tags. MCP attach_tags.
   detach(slug, tag_id)             post_tags only. MCP detach_tag.
   set_item_tags(slug, names)       the free-text column (full replace) plus its post_tags sync
-                                   (the old db.update_tags + sync_real_tags_for_post): every
+                                   (the old db._update_tags + sync_real_tags_for_post): every
                                    typed name gets a root tag (created if missing) attached;
                                    names that were typed before and are gone now are detached;
                                    tags that came another way (a card's linked tag, MCP) stay.
@@ -46,7 +46,7 @@ OP_MERGE = "item_tags_merge"
 # --- reads (never create) ---------------------------------------------------------------
 
 def find(name, parent_id=None):
-    """The tag a name refers to under `parent_id`, the same lookup db.get_or_create_tag did
+    """The tag a name refers to under `parent_id`, the same lookup db._get_or_create_tag did
     before creating: exact (name, parent) first; for a root lookup, a same-named tag anywhere
     in the tree (#213: never mint a duplicate root for a child's name). None when absent."""
     conn = db.get_conn()
@@ -54,6 +54,17 @@ def find(name, parent_id=None):
         row = conn.execute("SELECT * FROM blog_tags WHERE name = ? AND parent_id IS ?", (name, parent_id)).fetchone()
         if row is None and parent_id is None:
             row = conn.execute("SELECT * FROM blog_tags WHERE name = ?", (name,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def find_any(name):
+    """The first tag with this name anywhere in the tree (any parent), or None: the MCP's
+    by-name lookups (get_posts_for_tag, detach_tag). Never creates."""
+    conn = db.get_conn()
+    try:
+        row = conn.execute("SELECT * FROM blog_tags WHERE name = ?", (name,)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -150,7 +161,7 @@ def write_free_text(log, slug, names):
 
 
 def merge_free_text_name(log, slug, name):
-    """Appends `name` to the item's free-text list if it isn't there (the old db.add_tags for one
+    """Appends `name` to the item's free-text list if it isn't there (the old db._add_tags for one
     name: a card's linked tag shows as a chip on the item page, #274). True if it changed."""
     existing = _free_text(log, slug)
     if name in existing:

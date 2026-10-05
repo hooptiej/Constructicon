@@ -67,7 +67,7 @@ EMPTY_TRASH_PHRASE = "EMPTY TRASH"
 
 UPDATE_FIELDS = ("display_name", "icon", "description", "client", "content_description", "type_metadata",
                  "provenance", "highlight", "is_brand_asset", "brand_role", "display_date_override",
-                 "content_date")
+                 "content_date", "agent_notes")
 
 
 # --- helpers ---------------------------------------------------------------------------
@@ -191,6 +191,8 @@ def _plan_update(row, fields):
         cols["display_date_override"] = _epoch("display_date", fields["display_date_override"])
     if "content_date" in fields:
         cols["content_date"] = _epoch("content_date", fields["content_date"])
+    if "agent_notes" in fields:  # #206 agent-only scratch notes (MCP set_agent_notes); None clears
+        cols["agent_notes"] = fields["agent_notes"]
     return cols
 
 
@@ -428,7 +430,7 @@ def delete_redacted_file(slug, confirm=False, *, dry_run=False, actor=None, batc
     for _src, dst in _file_pairs(t):
         dst.unlink(missing_ok=True)
     _rmdir_empty(t["batch_id"])
-    db.mark_trash_purged(t["batch_id"], slug, time.time())
+    db._mark_trash_purged(t["batch_id"], slug, time.time())
     # A record, not an undoable change (no row images): the file is gone for good, like a purge.
     changes.record(OP_ERASE, actor, [], batch_id=batch_id, affected_slugs=[slug])
     return Result(True, [], [], batch_id, False, {"slug": slug, "bytes": t["size_bytes"], "permanent": True})
@@ -609,7 +611,7 @@ def undo_apply(plan, moved):
                 if src.is_file():
                     _move(src, dst, moved)
             if t.get("embedding") is not None:
-                db.set_trash_embedding(t["batch_id"], t["slug"], t["embedding"])
+                db._set_trash_embedding(t["batch_id"], t["slug"], t["embedding"])
 
 
 def after_undo(rows, plan):
@@ -645,7 +647,7 @@ def purge_expired(now=None, *, everything=False, actor=None):
                 print(f"trash purge: could not remove {dst}: {e!r}", flush=True)
                 continue
         _rmdir_empty(t["batch_id"])
-        db.mark_trash_purged(t["batch_id"], t["slug"], now)
+        db._mark_trash_purged(t["batch_id"], t["slug"], now)
         purged.append(t["slug"])
         freed += t.get("size_bytes") or 0
     if purged:

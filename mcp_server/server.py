@@ -41,7 +41,7 @@ from core import actor as actor_ctx
 from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
-from core import membership, reset
+from core import blog, changes, hobbies, membership, reset
 from core import tags as tags_svc
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
@@ -751,22 +751,10 @@ def constructicon_create_project(title: str, description: str = "", cover_slug: 
     (stopped needs stop_reason failed|abandoned). Invalid combinations return
     {"ok": false, "error": {"code": "bad_status", ...}}.
     """
-    title = title.strip()
-    if not title:
-        raise ValueError("Project name can't be empty")
-    card_rules.validate_status(card_rules.validate_kind(kind or card_rules.DEFAULT_KIND),
-                               stage or card_rules.DEFAULT_STAGE, stop_reason)
-    if parent_id is not None:
-        # Nest rules (3.7) guard creation too; checked before the tag is minted.
-        parent_row = db.get_project(parent_id)
-        if parent_row is None:
-            raise card_rules.CardError("not_found", f"No such parent card: {parent_id!r}")
-        card_rules.validate_nest({"id": None, "kind": kind or card_rules.DEFAULT_KIND, "title": title,
-                                  "parent_id": None}, parent_row, ())
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, description=description, cover_slug=cover_slug, tag_id=tag["id"],
-                                parent_id=parent_id, kind=kind, stage=stage, stop_reason=stop_reason)
-    return _to_public_project(project)
+    # #541 phase D: core validates everything first; tag + card + write-up are ONE undoable batch.
+    result = cards.create(title, description=description, cover_slug=cover_slug, parent=parent_id,
+                          kind=kind, stage=stage, stop_reason=stop_reason)
+    return {**_to_public_project(result.data["card"]), "batch_id": result.batch_id}
 
 
 @mcp.tool()
@@ -792,7 +780,8 @@ def constructicon_update_project(project_id: str | int, title: str | None = None
     Returns the updated project; a missing one returns the not_found error.
     """
     card_warnings = []
-    if db.get_project(project_id) is None:
+    project = db.get_project(project_id)
+    if project is None:
         raise NotFound(f"No card {project_id!r}.")
     if status:
         legacy = card_rules.legacy_to_status(status)
@@ -800,21 +789,18 @@ def constructicon_update_project(project_id: str | int, title: str | None = None
         if not stage:
             stage, stop_reason = legacy["stage"], legacy["stop_reason"]
         card_warnings.extend(legacy["warnings"])
-    if kind:
-        card_warnings.extend(cards.set_kind(project_id, kind).warnings)
-    if stage or stop_reason:
-        card_warnings.extend(cards.set_status(project_id, stage, stop_reason).warnings)
-    project = db.update_project(project_id, title=title, description=description,
-                                cover_slug=cover_slug)
-    if project is None:
-        raise NotFound(f"No card {project_id!r}.")
-    if reset_start_date or reset_end_date or start_date is not None or end_date is not None:
-        new_start = None if reset_start_date else (start_date if start_date is not None else ...)
-        new_end = None if reset_end_date else (end_date if end_date is not None else ...)
-        project = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
-    if not project:
-        raise NotFound(f"No card {project_id!r}.")
-    result = _to_public_project(db.get_project(project["id"]) or project)
+    new_start = None if reset_start_date else (start_date if start_date is not None else ...)
+    new_end = None if reset_end_date else (end_date if end_date is not None else ...)
+    # #541 phase D: one transaction, one batch (one constructicon_undo reverses the whole call).
+    batch_id = changes.new_batch_id()
+    with db.transaction():
+        if kind:
+            card_warnings.extend(cards.set_kind(project["id"], kind, batch_id=batch_id).warnings)
+        if stage or stop_reason:
+            card_warnings.extend(cards.set_status(project["id"], stage, stop_reason, batch_id=batch_id).warnings)
+        cards.update(project["id"], title=title, description=description, cover_slug=cover_slug,
+                     start=new_start, end=new_end, batch_id=batch_id)
+    result = {**_to_public_project(db.get_project(project["id"])), "batch_id": batch_id}
     if card_warnings:
         result["warnings"] = card_warnings
     return result
@@ -888,14 +874,15 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
         label = object_types.get_object_type(row.get("media_type")).label
         raise ValueError(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
 
-    # Add the writeup document to the project items if not already there (membership only, as before)
-    membership.add_files(project["id"], [slug], **membership.NO_EFFECTS)
-    if owner_words is not None:
-        items.update(slug, type_metadata={"owner_words": bool(owner_words)})
-
-    # Update the project's writeup_slug
-    updated = db.update_project(project["id"], writeup_slug=slug)
-    return _to_public_project(updated) if updated else None
+    # #541 phase D: membership (no side effects, as before) + the owner-words mark + writeup_slug
+    # are one transaction and one batch.
+    batch_id = changes.new_batch_id()
+    with db.transaction():
+        membership.add_files(project["id"], [slug], batch_id=batch_id, **membership.NO_EFFECTS)
+        if owner_words is not None:
+            items.update(slug, type_metadata={"owner_words": bool(owner_words)}, batch_id=batch_id)
+        updated = cards.update(project["id"], writeup_slug=slug, batch_id=batch_id).data["card"]
+    return {**_to_public_project(updated), "batch_id": batch_id}
 
 
 @mcp.tool()
@@ -992,66 +979,81 @@ def constructicon_list_hobbies() -> list[dict]:
 def constructicon_create_hobby(name: str, status: str = "active") -> dict:
     """Create an empty hobby from just a name (#418).
 
-    Mirrors POST /api/hobbies: creates (or reuses, via get_or_create_tag) a
-    top-level blog_tags row with the given name and marks it as a hobby. The
+    Mirrors POST /api/hobbies: creates (or reuses) a top-level blog_tags row with the
+    given name and marks it as a hobby, as one undoable batch (core/hobbies.py). The
     HTTP route always uses status='active'; this tool also accepts an explicit
     status so a hobby can be stood up inactive in one call.
 
     status: 'active' or 'inactive' (default 'active'); the deprecated v1 words
     'dormant'/'abandoned' are accepted and stored as 'inactive'.
     Raises ValueError if the name is blank or the status is invalid.
-    Returns the new hobby dict {id, name, slug, status, group_code}."""
-    name = name.strip()
-    if not name:
-        raise ValueError("Hobby name can't be empty")
-
-    tag = db.get_or_create_tag(name, parent_id=None)
-    db.mark_tag_as_hobby(tag["id"], status=status)
-    made = db.get_hobby(tag["id"])
-    return {
-        "id": tag["id"],
-        "name": tag["name"],
-        "slug": tag["slug"],
-        "status": made["hobby_status"],
-        "group_code": made["group_code"],
-    }
+    Returns the new hobby dict {id, name, slug, status, group_code, batch_id}."""
+    result = hobbies.create(name, status)
+    return {**result.data["hobby"], "batch_id": result.batch_id}
 
 
 @mcp.tool()
-def constructicon_convert_project_to_hobby(project_slug: str) -> dict | None:
-    """Convert an existing project into a hobby (DESTRUCTIVE).
+def constructicon_convert_project_to_hobby(project_slug: str, dry_run: bool = False) -> dict | None:
+    """Convert an existing project into a hobby (DESTRUCTIVE, but one undoable batch).
 
     The project is converted into a hobby tag, its child projects are moved to the hobby
-    via project_hobbies, its items are tagged with the hobby, and the project row is deleted.
+    via project_hobbies, its items are tagged with the hobby, and the project row is deleted
+    (its links, family rows, blog-entry attachments and a blank write-up are cleared first, as a
+    delete does). constructicon_undo(batch_id) restores the card exactly. The reverse is
+    constructicon_convert_hobby_to_card. dry_run=true reports the changes and writes nothing.
 
-    This is a one-way operation — to undo, the hobby would need to be converted back
-    manually.
-
-    Returns the new hobby tag dict with a summary of what was moved; not_found if the
-    project doesn't exist."""
+    Returns the new hobby tag dict with a summary of what was moved, plus batch_id and changes;
+    not_found if the project doesn't exist."""
     project = db.get_project(project_slug)
     if project is None:
         raise NotFound(f"No card {project_slug!r}.")
-
-    # Get counts before conversion for the summary
-    children_count = len(db.list_child_projects(project["id"]))
-    items_count = len(db.list_project_items(project["id"]))
-
-    hobby = cards.convert_project_to_hobby(project["id"])
-
-    if hobby is None:
-        raise NotFound(f"No card {project_slug!r}.")
-
+    result = hobbies.convert_from_card(project["id"], dry_run=dry_run)
+    hobby = result.data["hobby"]
     return {
         "id": hobby["id"],
         "name": hobby["name"],
         "slug": hobby["slug"],
-        "status": hobby.get("hobby_status"),
+        "status": hobby["status"],
         "summary": {
-            "children_moved": children_count,
-            "items_moved": items_count,
+            "children_moved": result.data["children_moved"],
+            "items_moved": result.data["items_moved"],
         },
+        "dry_run": result.dry_run,
+        "batch_id": result.batch_id,
+        "changes": result.changes,
+        "warnings": result.warnings,
     }
+
+
+@mcp.tool()
+def constructicon_convert_hobby_to_card(hobby: str | int, kind: str, title: str | None = None,
+                                        into_hobby: str | int | None = None, dry_run: bool = False) -> dict:
+    """Turn a hobby into a card (the reverse of constructicon_convert_project_to_hobby), as ONE
+    undoable batch. E.g. the "GI Joe" hobby -> a family card inside the Collecting hobby:
+    hobby="gi-joe", kind="family", into_hobby="collecting".
+
+    kind: family | collection | project. title: defaults to the hobby's name.
+    into_hobby: optional hobby the new card joins.
+    Rules: the card reuses the hobby's tag as its linked tag and gets the usual blank write-up;
+    its stage follows the hobby (active -> in_progress, inactive -> paused). The hobby's top-level
+    member cards become family members (family / collection) or nested parts (project); members
+    nested under another member stay under it. A member that is a family/collection, or (for
+    project) already part of a card outside the hobby, refuses the whole conversion
+    (bad_membership / nest_group_kind / nest_second_parent; nothing written). Loose objects go onto
+    the card, home overrides that named the hobby now name the card, and the hobby is unmarked.
+    dry_run=true reports every change and writes nothing.
+    Returns {ok, dry_run, changes, warnings, batch_id, card, card_id, kind, title, into_hobby,
+    hobby, members: [{slug, how}], loose_moved, homes_moved}."""
+    return hobbies.convert_to_card(hobby, kind, title, into_hobby, dry_run=dry_run).to_dict()
+
+
+@mcp.tool()
+def constructicon_unmark_hobby(hobby: str | int, dry_run: bool = False) -> dict:
+    """Stop treating a tag as a hobby: its activity and group code are cleared, its card
+    memberships removed, and cards whose home override named it go back to an automatic home.
+    The tag itself (and every file tagged with it) stays. One undoable batch.
+    Returns {ok, dry_run, changes, warnings, batch_id, hobby, cards_removed, homes_cleared}."""
+    return hobbies.unmark(hobby, dry_run=dry_run).to_dict()
 
 
 @mcp.tool()
@@ -1068,7 +1070,7 @@ def constructicon_add_project_to_hobby(project_slug: str, hobby_slug: str) -> di
     if hobby is None:
         raise NotFound(f"No hobby {hobby_slug!r}.")
 
-    cards.add_to_hobby(project["id"], hobby["id"])  # logged (V2 cards 3.13)
+    hobbies.add_card(hobby["id"], project["id"])  # logged + undoable (V2 cards 3.13, #541)
 
     # Return the updated hobby
     updated_hobby = db.get_hobby(hobby["id"])
@@ -1166,9 +1168,9 @@ def constructicon_create_blog_entry(title: str, subtitle: str = "", body: str = 
 
     Returns the created entry with projects and items (initially empty).
     """
-    entry = db.create_blog_entry(title=title, subtitle=subtitle, body=body, status=status,
-                                 cover_slug=cover_slug, content_date=content_date)
-    return _to_public_blog_entry(entry)
+    result = blog.create(title, subtitle=subtitle, body=body, status=status, cover_slug=cover_slug,
+                         content_date=content_date)  # #541 phase D: logged + undoable
+    return {**_to_public_blog_entry(result.data["entry"]), "batch_id": result.batch_id}
 
 
 @mcp.tool()
@@ -1194,7 +1196,7 @@ def constructicon_update_blog_entry(slug: str, title: str | None = None, subtitl
     passing None (None means "leave unchanged" here), so to clear one, set its
     clear_* flag instead: clear_cover_slug / clear_content_date.
 
-    (The Ellipsis sentinel db.update_blog_entry uses internally can't cross the
+    (The Ellipsis sentinel blog.update uses internally can't cross the
     MCP tool boundary — the schema generator treats an Ellipsis default as a
     required arg — so this tool maps None/clear-flags onto that sentinel.)
 
@@ -1202,23 +1204,20 @@ def constructicon_update_blog_entry(slug: str, title: str | None = None, subtitl
     """
     cover = None if clear_cover_slug else (cover_slug if cover_slug is not None else ...)
     cdate = None if clear_content_date else (content_date if content_date is not None else ...)
-    updated = db.update_blog_entry(slug, title=title, subtitle=subtitle, body=body, status=status,
-                                   cover_slug=cover, content_date=cdate)
-    if updated is None:
-        raise NotFound(f"No blog entry {slug!r}.")
-    return _to_public_blog_entry(updated)
+    result = blog.update(slug, title=title, subtitle=subtitle, body=body, status=status,
+                         cover_slug=cover, content_date=cdate)  # not_found for an unknown slug
+    return {**_to_public_blog_entry(result.data["entry"]), "batch_id": result.batch_id}
 
 
 @mcp.tool()
 def constructicon_delete_blog_entry(slug: str) -> bool:
-    """Delete a blog entry and all its attached projects/items. Irreversible.
+    """Delete a blog entry and all its attached projects/items (the cards and files stay).
+    Undoable since #541 phase D: find the batch with constructicon_list_changes and pass it to
+    constructicon_undo.
 
     Returns True if deleted; an unknown slug returns the not_found error.
     """
-    entry = db.get_blog_entry(slug)
-    if entry is None:
-        raise NotFound(f"No blog entry {slug!r}.")
-    db.delete_blog_entry(slug)
+    blog.delete(slug)
     return True
 
 
@@ -1235,11 +1234,11 @@ def constructicon_set_blog_entry_projects(slug: str, items: list[dict]) -> dict 
     if entry is None:
         raise NotFound(f"No blog entry {slug!r}.")
 
-    # Convert dicts to (project_id, note) tuples
+    # Convert dicts to (project_id, note) tuples. #541 phase D: logged + undoable; an unknown card
+    # (id or slug) is not_found instead of a row no page can show.
     project_items = [(item.get("project_id"), item.get("note", "")) for item in items]
-    db.set_entry_projects(entry["id"], project_items)
-    updated = db.get_blog_entry(slug)
-    return _to_public_blog_entry(updated) if updated else None
+    result = blog.set_projects(entry["id"], project_items)
+    return {**_to_public_blog_entry(result.data["entry"]), "batch_id": result.batch_id}
 
 
 @mcp.tool()
@@ -1255,11 +1254,10 @@ def constructicon_set_blog_entry_items(slug: str, items: list[dict]) -> dict | N
     if entry is None:
         raise NotFound(f"No blog entry {slug!r}.")
 
-    # Convert dicts to (post_slug, note) tuples
+    # Convert dicts to (post_slug, note) tuples. #541 phase D: logged + undoable; unknown file = not_found.
     post_items = [(item.get("slug"), item.get("note", "")) for item in items]
-    db.set_entry_items(entry["id"], post_items)
-    updated = db.get_blog_entry(slug)
-    return _to_public_blog_entry(updated) if updated else None
+    result = blog.set_items(entry["id"], post_items)
+    return {**_to_public_blog_entry(result.data["entry"]), "batch_id": result.batch_id}
 
 
 @mcp.tool()
@@ -1287,7 +1285,7 @@ def constructicon_get_posts_for_tag(tag_name: str) -> list[dict]:
 
     Returns a list of objects.
     """
-    tag = db._find_tag_by_name(tag_name)  # #563: a lookup must not create the tag
+    tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
         raise NotFound(f"No such tag: {tag_name!r}")
     rows = db.list_posts_for_tag(tag["id"], limit=10000)
@@ -1313,7 +1311,7 @@ def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
     row = db.get_by_slug(slug)
     if row is None:
         raise NotFound(f"No item {slug!r}.")
-    tag = db._find_tag_by_name(tag_name)  # #563: a lookup must not create the tag
+    tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
         raise NotFound(f"No such tag: {tag_name!r}")
     tags_svc.detach(slug, tag["id"])
@@ -1352,9 +1350,8 @@ def constructicon_set_agent_notes(slug: str, notes: str | None = None) -> dict |
     Returns the updated object (the usual public shape plus "agent_notes"),
     (a missing one returns the not_found error).
     """
-    row = db.set_agent_notes(slug, notes)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
+    items.update(slug, agent_notes=notes)  # #541 phase D: through the item service (not_found if missing)
+    row = db.get_by_slug(slug)
     # Never return the raw DB row: it carries the `embedding` BLOB, which
     # isn't JSON-serializable, so the tool call itself failed for every row
     # that had been through OCR (#211).
@@ -1922,6 +1919,17 @@ def constructicon_list_changes(card: str | int | None = None, batch_id: str | No
     after). `card` narrows to one card's slug/id; `batch_id` to one operation. Feed an `id` or a
     `batch_id` to constructicon_undo."""
     return cards.list_changes(card=card, batch_id=batch_id, limit=limit)
+
+
+@mcp.tool()
+def constructicon_sweep_stale_decisions(dry_run: bool = False) -> dict:
+    """Resolve every open question that can't be answered any more (#551): its file or card was
+    deleted, a project-match question has fewer than 2 candidate cards left, or a "does this
+    replace...?" question has no candidate left. The web app runs this sweep at startup and hourly;
+    listing questions never resolves anything. Logged (op sweep_stale_decisions) and undoable with
+    constructicon_undo(batch_id). Returns {ok, dry_run, changes, warnings, batch_id, resolved:
+    [{id, kind, post_slug, reason}], count, by_kind}."""
+    return decisions.sweep_stale(dry_run=dry_run).to_dict()
 
 
 

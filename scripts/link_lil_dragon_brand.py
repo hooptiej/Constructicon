@@ -15,7 +15,7 @@ Nothing is written without --execute. Run it where the database is, e.g. in the 
     python3 scripts/link_lil_dragon_brand.py --include-logos  # plan with the wider logo family
     python3 scripts/link_lil_dragon_brand.py --execute        # actually link
 
-Side effect to know about: db.add_relation (#16) also shares tags and project membership both
+Side effect to know about: db._add_relation (#16) also shares tags and project membership both
 ways, so linking pulls the assets' tags (e.g. "New Hoop Icon") and projects onto the drawing and
 vice versa. The plan prints exactly what would move. Pass --plain with --execute to write only the
 relation rows and skip that sharing. Already-linked pairs are skipped, so re-running is safe.
@@ -128,7 +128,7 @@ def main(argv=None):
             finally:
                 conn.close()
         else:
-            db.add_relation(drawing["slug"], c["slug"])
+            db._add_relation(drawing["slug"], c["slug"])
         print("linked", c["slug"], c["filename"])
     return 0
 

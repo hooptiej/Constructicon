@@ -6,7 +6,7 @@ from datetime import datetime
 from fastapi import Request, Form, HTTPException, APIRouter
 from fastapi.responses import JSONResponse, Response
 
-from core import card_rules, cards, db, membership, object_types, timeline
+from core import card_rules, cards, changes, db, hobbies, membership, timeline
 from core.errors import NotFound
 from web.shapes import _to_card_face, _to_project_option
 
@@ -70,21 +70,11 @@ def api_create_project(request: Request, title: str = Form(...), parent_id: str 
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid parent_id")
 
-    # V2 cards: validate kind/stage up front so a rejected request doesn't leave a
-    # stray root tag behind (create_project validates again; same rules).
-    kind = kind or None
-    stage = stage or None
-    stop_reason = stop_reason or None
-    card_rules.validate_status(card_rules.validate_kind(kind or card_rules.DEFAULT_KIND),
-                               stage or card_rules.DEFAULT_STAGE, stop_reason)
-    if parent_id_int is not None:
-        # Nest rules (3.7) guard creation too; checked before the tag is minted.
-        card_rules.validate_nest({"id": None, "kind": kind or card_rules.DEFAULT_KIND, "title": title,
-                                  "parent_id": None}, db.get_project(parent_id_int), ())
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"], parent_id=parent_id_int,
-                                kind=kind, stage=stage, stop_reason=stop_reason)
-    return JSONResponse(_to_project_option(project))
+    # #541 phase D: core validates kind/stage/nest before anything is written, and the tag, the
+    # card and its write-up are ONE undoable batch.
+    result = cards.create(title, parent=parent_id_int, kind=kind or None, stage=stage or None,
+                          stop_reason=stop_reason or None)
+    return JSONResponse(_to_project_option(result.data["card"]))
 
 
 @router.post("/api/projects/from-selection")
@@ -104,10 +94,11 @@ def api_create_project_from_selection(slugs: list[str] = Form(...), title: str =
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Project name can't be empty")
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"])
-    # #541 phase C: the files go on through membership (all side effects, as before), one batch.
-    membership.add_files(project["id"], slugs, missing_ok=True, **membership.UI_EFFECTS)
+    # #541 phase D: tag + card + write-up + the files (all side effects, as before) = one batch.
+    batch_id = changes.new_batch_id()
+    with db.transaction():
+        project = cards.create(title, batch_id=batch_id).data["card"]
+        membership.add_files(project["id"], slugs, missing_ok=True, batch_id=batch_id, **membership.UI_EFFECTS)
     return JSONResponse(_to_project_option(project))
 
 
@@ -121,10 +112,11 @@ def api_create_project_from_related(slug: str = Form(...), title: str = Form(...
         raise HTTPException(status_code=400, detail="Project name can't be empty")
     if db.get_by_slug(slug) is None:
         raise HTTPException(status_code=404, detail="not found")
-    tag = db.get_or_create_tag(title, parent_id=None)
-    project = db.create_project(title, tag_id=tag["id"])
-    membership.add_files(project["id"], [slug] + [r["slug"] for r in db.list_related(slug)],
-                         missing_ok=True, **membership.UI_EFFECTS)
+    batch_id = changes.new_batch_id()
+    with db.transaction():
+        project = cards.create(title, batch_id=batch_id).data["card"]
+        membership.add_files(project["id"], [slug] + [r["slug"] for r in db.list_related(slug)],
+                             missing_ok=True, batch_id=batch_id, **membership.UI_EFFECTS)
     return JSONResponse(_to_project_option(project))
 
 
@@ -186,41 +178,22 @@ async def api_update_project(
             # refused by core.cards.nest below (CardError -> 409/404 with a code).
             parent_id_value = parent_id_int
     replace_parent = str(_form.get("replace") or "").strip().lower() in ("1", "true", "yes", "on")
-    writeup_slug_value = ...  # "..." means don't update writeup_slug
+    # writeup_slug (#156): absent -> leave; "" -> clear; a slug -> core validates it (exists, can be a
+    # write-up). cover_project_id (#356): same raw-form presence logic as parent_id; core checks the
+    # child exists and is a child of this card. Both refusals are 400s with the old messages.
+    writeup_slug_value = ...
     if writeup_slug is not None:
         writeup_slug_value = writeup_slug if writeup_slug else None
-        # Validate that writeup_slug (if non-empty) points to a writeup-capable type
-        if writeup_slug_value:
-            writeup_row = db.get_by_slug(writeup_slug_value)
-            if writeup_row is None:
-                raise HTTPException(status_code=400, detail="writeup slug not found")
-            if not object_types.can_be_writeup(writeup_row):
-                label = object_types.get_object_type(writeup_row.get("media_type")).label
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{label} items can't be a project write-up (their type declares no writeup_body_key)"
-                )
-
-    # (#356): Handle cover_project_id (borrow a child project's cover).
-    # Same raw-form presence logic as parent_id: distinguish "not submitted"
-    # from "submitted empty (clear)".
-    cover_project_id_value = ...  # "..." means don't update cover_project_id
+    cover_project_id_value = ...
     if "cover_project_id" in _form:
         raw_cover_project = (str(_form.get("cover_project_id")) or "").strip()
         if raw_cover_project == "":
             cover_project_id_value = None  # explicit clear
         else:
             try:
-                cover_project_int = int(raw_cover_project)
+                cover_project_id_value = int(raw_cover_project)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid cover_project_id")
-            # Validate that the child project exists and is actually a child
-            child = db.get_project(cover_project_int)
-            if child is None:
-                raise HTTPException(status_code=400, detail="Child project not found")
-            if child.get("parent_id") != project["id"]:
-                raise HTTPException(status_code=400, detail="Project is not a child of this project")
-            cover_project_id_value = cover_project_int
 
     # #563: parse the dates up front too (a bad value is a 400, not a 500 after the writes).
     new_start = new_end = ...
@@ -234,15 +207,23 @@ async def api_update_project(
     # #563: every check that can fail with a 400 runs above; the writes below share ONE
     # transaction (no awaits inside it), so a refusal part-way (e.g. a CardError from the stage
     # rules) rolls the whole request back instead of leaving the card nested but not updated.
+    # #541 phase D: the whole Save is ONE batch, so one undo reverses all of it.
     card_warnings = []
+    batch_id = changes.new_batch_id()
     with db.transaction():
-        # "Part of" (V2 cards 3.7) goes through core.cards first, so a refusal happens
-        # before anything else in this request is written.
+        # Title / description / cover / write-up / timeline overrides: one imaged change-log row
+        # (op update_card). First, so its 400s (bad write-up or cover card) come before the
+        # nest/status refusals, as they did. The reset_* flags win over a date sent alongside.
+        cards.update(project["id"], title=title, description=description, cover_slug=cover_slug,
+                     writeup_slug=writeup_slug_value, cover_project_id=cover_project_id_value,
+                     start=new_start, end=new_end, batch_id=batch_id)
+        # "Part of" (V2 cards 3.7) goes through core.cards.
         if parent_id_value is None:
-            cards.unnest(project["id"])
+            cards.unnest(project["id"], batch_id=batch_id)
             parent_id_value = ...
         elif parent_id_value is not ...:
-            card_warnings.extend(cards.nest(project["id"], parent_id_value, replace=replace_parent).warnings)
+            card_warnings.extend(cards.nest(project["id"], parent_id_value, replace=replace_parent,
+                                            batch_id=batch_id).warnings)
             parent_id_value = ...
 
         # V2 cards: kind / stage / stop_reason / activity go through core.cards (the same
@@ -256,36 +237,13 @@ async def api_update_project(
                 stage, stop_reason = legacy["stage"], legacy["stop_reason"]
             card_warnings.extend(legacy["warnings"])
         if kind:
-            card_warnings.extend(cards.set_kind(project["id"], kind).warnings)
+            card_warnings.extend(cards.set_kind(project["id"], kind, batch_id=batch_id).warnings)
         if stage or activity or stop_reason:
             card_warnings.extend(cards.set_status(project["id"], stage, stop_reason or None,
-                                                  activity=activity or None).warnings)
-
-        try:
-            updated = db.update_project(
-                project_id,
-                title=title,
-                description=description,
-                cover_slug=cover_slug,
-                parent_id=parent_id_value,
-                writeup_slug=writeup_slug_value,
-                cover_project_id=cover_project_id_value,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        # Timeline feature: each reset_*_date flag wins over its corresponding
-        # *_date value if a client somehow sends both (mirrors the object edit
-        # endpoint and the MCP tools' same reset-flag convention). start/end are
-        # independent -- clearing one doesn't touch the other.
-        if reset_start_date or reset_end_date or start_date or end_date:
-            # Same Mountain-Time convention as the per-item display_date override
-            # above — these <input type="datetime-local"> fields are pre-filled
-            # in Mountain Time too (see start_date_input/end_date_input above).
-            updated = db.set_project_date_overrides(project_id, start=new_start, end=new_end)
+                                                  activity=activity or None, batch_id=batch_id).warnings)
 
         # Re-read so kind/stage edits made above through core.cards show in the response.
-        updated = db.get_project(project["id"]) or updated or {}
+        updated = {**(db.get_project(project["id"]) or {}), "batch_id": batch_id}
         if card_warnings:
             updated = {**updated, "warnings": card_warnings}
     return JSONResponse(updated)
@@ -522,32 +480,26 @@ def api_retype_link(a: str = Form(...), b: str = Form(...), from_type: str = For
 
 @router.post("/api/project/{slug}/convert-to-hobby")
 def api_convert_project_to_hobby(request: Request, slug: str):
-    """Convert an existing project into a hobby (DESTRUCTIVE).
+    """Convert an existing project into a hobby (DESTRUCTIVE, but undoable since #541 phase D).
 
     The project is converted into a hobby tag, its children are moved to the hobby,
-    its items are tagged with the hobby, and the project row is deleted.
+    its items are tagged with the hobby, and the project row is deleted (core/hobbies.py
+    convert_from_card: one batch; POST /api/changes/{batch_id}/undo restores the card).
 
-    Returns the new hobby tag dict with summary info about what was moved."""
+    Returns the new hobby tag dict with summary info about what was moved, plus batch_id."""
     project = db.get_project(slug)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
-
-    # Get counts before conversion
-    children_count = len(db.list_child_projects(project["id"]))
-    items_count = len(db.list_project_items(project["id"]))
-
-    hobby = cards.convert_project_to_hobby(project["id"])
-
-    if hobby is None:
-        raise HTTPException(status_code=500, detail="conversion failed")
-
+    result = hobbies.convert_from_card(project["id"])
+    hobby = result.data["hobby"]
     return JSONResponse({
         "id": hobby["id"],
         "name": hobby["name"],
         "slug": hobby["slug"],
-        "status": hobby.get("hobby_status"),
+        "status": hobby["status"],
         "summary": {
-            "children_moved": children_count,
-            "items_moved": items_count,
+            "children_moved": result.data["children_moved"],
+            "items_moved": result.data["items_moved"],
         },
+        "batch_id": result.batch_id,
     })

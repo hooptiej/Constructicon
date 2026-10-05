@@ -421,6 +421,7 @@
   </details>
   {% endif %}
   <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
+  <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 
   {% if timeline_children or timeline_items %}
   <script src="/static/js/project-video-timeline.js?v={{ static_version('js/project-video-timeline.js') }}"></script>
@@ -1056,7 +1057,7 @@ function showConvertDialog() {
   convertHobbyError.style.display = 'none';
   convertHobbySuccess.style.display = 'none';
   convertHobbyConfirm.disabled = false;
-  convertHobbyMessage.textContent = `"${convertProjectTitle}" isn't a project — make it a hobby? Its sub-projects move to the new hobby and this project entry is removed. This can't be auto-undone.`;
+  convertHobbyMessage.textContent = `"${convertProjectTitle}" isn't a project — make it a hobby? Its sub-projects move to the new hobby and this project entry is removed. You can undo it right after.`;
   convertHobbyBackdrop.style.display = 'flex';
 }
 
@@ -1090,10 +1091,17 @@ convertHobbyConfirm.addEventListener('click', async () => {
     convertHobbySuccess.innerHTML = `Made "${escHtml(hobbyName)}" a hobby — moved ${summary.children_moved || 0} sub-project${summary.children_moved === 1 ? '' : 's'} and ${summary.items_moved || 0} object${summary.items_moved === 1 ? '' : 's'}. <a href="/hobby/${encodeURIComponent(hobbySlug)}" style="color:inherit;text-decoration:underline">View hobby</a>`;
     convertHobbySuccess.style.display = 'block';
 
-    // Redirect after a brief delay
-    setTimeout(() => {
-      window.location.href = `/hobby/${hobbySlug}`;
-    }, 1500);
+    // #541 phase D: the conversion is one undoable batch. Offer Undo, then go to the hobby
+    // (or stay here, restored, if the owner undid it).
+    if (body.batch_id && window.showUndoBar) {
+      hideConvertDialog();
+      window.showUndoBar(`Made "${hobbyName}" a hobby.`, body.batch_id, (how) => {
+        if (how === 'undone') window.location.reload();
+        else window.location.href = `/hobby/${hobbySlug}`;
+      });
+    } else {
+      setTimeout(() => { window.location.href = `/hobby/${hobbySlug}`; }, 1500);
+    }
   } catch (err) {
     convertHobbyError.textContent = err.message;
     convertHobbyError.style.display = 'block';

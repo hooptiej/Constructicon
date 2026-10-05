@@ -3,7 +3,7 @@
 from fastapi import Request, Form, HTTPException, APIRouter
 from fastapi.responses import JSONResponse
 
-from core import card_rules, cards, db
+from core import card_rules, cards, db, hobbies
 from web.shapes import _to_object_detail
 
 router = APIRouter()
@@ -26,13 +26,9 @@ def api_create_hobby(request: Request, name: str = Form(...)):
 
     Creates a top-level blog_tags row with the name, marks it as a hobby
     with status='active', and returns the new hobby's id and slug."""
-    name = name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Hobby name can't be empty")
-
-    tag = db.get_or_create_tag(name, parent_id=None)
-    db.mark_tag_as_hobby(tag["id"], status="active")
-    return JSONResponse({"id": tag["id"], "slug": tag["slug"]})
+    result = hobbies.create(name, "active")  # #541 phase D: one undoable batch (tag + hobby mark)
+    hobby = result.data["hobby"]
+    return JSONResponse({"id": hobby["id"], "slug": hobby["slug"], "batch_id": result.batch_id})
 
 
 @router.get("/api/hobby/{id_or_slug}")
@@ -104,7 +100,7 @@ def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str 
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
 
-    db.add_project_to_hobby(project["id"], hobby["id"])
+    hobbies.add_card(hobby["id"], project["id"])  # #541 phase D: logged + undoable (was unlogged)
 
     projects = db.list_projects_for_hobby(hobby["id"])
     return JSONResponse([
@@ -132,7 +128,7 @@ def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id:
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
 
-    db.remove_project_from_hobby(project["id"], hobby["id"])
+    hobbies.remove_card(hobby["id"], project["id"])  # #541 phase D: logged + undoable (was unlogged)
 
     projects = db.list_projects_for_hobby(hobby["id"])
     return JSONResponse([
@@ -144,3 +140,22 @@ def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id:
         }
         for p in projects
     ])
+
+
+@router.post("/api/hobby/{id_or_slug}/unmark")
+def api_unmark_hobby(id_or_slug: str):
+    """Stop treating this tag as a hobby (#541 phase D): activity and code cleared, its card
+    memberships removed, home overrides that named it cleared. The tag stays. Undoable."""
+    return JSONResponse(hobbies.unmark(id_or_slug).to_dict())
+
+
+@router.post("/api/hobby/{id_or_slug}/convert-to-card")
+def api_convert_hobby_to_card(id_or_slug: str, kind: str = Form(...), title: str = Form(""),
+                              into_hobby: str = Form(""), dry_run: bool = Form(False)):
+    """Hobby -> card (#541 phase D; the reverse of a project's "Convert to hobby"). `kind`:
+    family | collection | project; `title` defaults to the hobby's name; `into_hobby` (optional)
+    puts the new card in another hobby. Member cards become family members (family/collection) or
+    nested parts (project), loose objects go onto the card, the hobby is unmarked. One undoable
+    batch; dry_run=true answers with the plan and writes nothing. See core/hobbies.py."""
+    result = hobbies.convert_to_card(id_or_slug, kind, title or None, into_hobby or None, dry_run=dry_run)
+    return JSONResponse(result.to_dict())

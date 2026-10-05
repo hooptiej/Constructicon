@@ -137,15 +137,15 @@ def fill_missing(slug):
         # /api/image/{slug} route's own partial-update convention.
         content_description = title if title and not row.get("content_description") else None
         if content_description is not None or new_tm:
-            row = db.update_content_metadata(slug, content_description=content_description, type_metadata=new_tm or None)
+            row = db._update_content_metadata(slug, content_description=content_description, type_metadata=new_tm or None)
         if title and row is not None and not row.get("display_name"):
-            row = db.rename_object(slug, display_name=title)
+            row = db._rename_object(slug, display_name=title)
         # content_date (#265): same fill-only-missing rule. `is None`, not
         # falsiness — 0.0 would be a real (if implausible, see the gate)
         # value, and an existing one from any source is left alone.
         content_date = plausible_content_date(found.get("content_date"))
         if content_date is not None and row is not None and row.get("content_date") is None:
-            db.set_content_date(slug, content_date)
+            db._set_content_date(slug, content_date)
             row = db.get_by_slug(slug)
     except Exception as e:
         print(f"embedded metadata fill failed for {slug}: {e!r}")

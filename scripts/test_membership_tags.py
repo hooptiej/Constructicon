@@ -43,7 +43,7 @@ except Exception:  # no libcairo here (e.g. Windows): object types import it
 
 from PIL import Image  # noqa: E402
 
-from core import actor, cards, db, ingest, items, membership, reset, revisions, storage  # noqa: E402
+from core import actor, blog, cards, db, hobbies, ingest, items, membership, reset, revisions, storage  # noqa: E402
 from core import tags as tags_svc  # noqa: E402
 from core.errors import AppError  # noqa: E402
 
@@ -89,8 +89,8 @@ def mk(slug):
 
 
 def card(title, with_tag=True):
-    tag = db.get_or_create_tag(title) if with_tag else None
-    return db.create_project(title, tag_id=tag["id"] if tag else None, with_writeup=False)
+    tag = db._get_or_create_tag(title) if with_tag else None
+    return db._create_project(title, tag_id=tag["id"] if tag else None, with_writeup=False)
 
 
 def state(card_id, slugs):
@@ -158,7 +158,7 @@ check("both undone: card empty again, no tag, no cover",
 
 # a card that has a cover keeps it; a card with no linked tag adds no tag
 Q = card("Desk Build", with_tag=False)
-db.update_project(Q["id"], cover_slug=D)
+cards.update(Q["id"], cover_slug=D)
 res = membership.add_files(Q["id"], [C], **membership.UI_EFFECTS)
 check("card with a cover keeps it; no linked tag -> no tag writes",
       db.get_project(Q["id"])["cover_slug"] == D and db.list_post_tag_rows(C) == [] and db.get_by_slug(C)["tags"] == [])
@@ -274,8 +274,8 @@ cards.undo(last_batch("remove_files"))
 cards.undo(b)
 check("undo MCP bulk add", state(R["id"], [C, D]) == before)
 W = mk("w1")
-db.update_content_metadata(W, type_metadata={"body": ""})
-db.set_media_type(W, "document")
+db._update_content_metadata(W, type_metadata={"body": ""})
+db._set_media_type(W, "document")
 with actor.acting_as(actor.ACTOR_MCP):
     server.constructicon_set_project_writeup(R["id"], W)
 check("MCP set_project_writeup: membership only (no tag, no cover)",
@@ -417,18 +417,17 @@ classified = set(reset.CLEARED_TABLES) | set(reset.KEPT_TABLES)
 unclassified = [t for t in db.list_tables() if t not in classified]
 check("every table is classified as cleared or kept by delete-all", unclassified == [], unclassified)
 # make every cleared table non-empty
-entry = db.create_blog_entry("An entry")
-db.set_entry_items(entry["id"], [(A, "")])
-db.set_entry_projects(entry["id"], [(P["id"], "")])
+entry = blog.create("An entry").data["entry"]
+blog.set_items(entry["id"], [(A, "")])
+blog.set_projects(entry["id"], [(P["id"], "")])
 db.add_pending_decision("project_match", A, {"candidate_project_ids": [P["id"]]})
 db.set_curator_state("decision:1", "dismiss")
 db.enqueue_caption(A)
 revisions.mark_superseded(B, C)
 cards.link(P["id"], Q["id"], "related")
-fam = db.create_project("Fam", kind="family", with_writeup=False)
+fam = db._create_project("Fam", kind="family", with_writeup=False)
 cards.add_to_family(fam["id"], P["id"])
-hob = db.get_or_create_tag("A Hobby")
-db.mark_tag_as_hobby(hob["id"])
+hob = hobbies.create("A Hobby").data["hobby"]
 cards.add_to_hobby(P["id"], hob["id"])
 items.delete([W])  # a trash row and a file in .trash
 db.set_setting("some_key", "kept")

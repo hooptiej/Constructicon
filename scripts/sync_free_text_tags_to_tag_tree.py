@@ -5,8 +5,8 @@ Background
 Before #165, typing a tag into an item's TAGS box (single-item save or the
 Unfiled bulk-tag flow) only ever wrote to `capture_events.tags` -- a
 free-text JSON column invisible to /api/tags (autocomplete) and the home
-page's tag-tree browsing/pills. db.update_tags() now also syncs the real
-blog_tags/post_tags tables (see db.sync_real_tags_for_post), but that only
+page's tag-tree browsing/pills. db._update_tags() now also syncs the real
+blog_tags/post_tags tables (see db._sync_real_tags_for_post), but that only
 takes effect going forward. Items tagged before the fix have tags sitting
 only in the free-text column with no corresponding blog_tags row.
 
@@ -21,11 +21,11 @@ every item with its tags" API, and this is a one-off backfill, not a
 recurring write path. The actual mutation goes through the running
 instance's own POST /api/image/{slug} (same call an object detail page's
 "Save changes" button makes), so it exercises the exact write path
-db.update_tags()/sync_real_tags_for_post go through -- no direct DB writes.
+db._update_tags()/sync_real_tags_for_post go through -- no direct DB writes.
 
 Idempotency
 -----------
-Safe to re-run: db.sync_real_tags_for_post's full-replace semantics mean
+Safe to re-run: db._sync_real_tags_for_post's full-replace semantics mean
 re-submitting an item's already-synced tags is a no-op (attach_tags uses
 INSERT OR IGNORE, detach_tag only removes tags no longer in the list).
 

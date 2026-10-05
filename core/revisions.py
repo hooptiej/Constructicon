@@ -294,6 +294,11 @@ def resolve_decision(decision, choice, actor=None, dry_run=False):
         if choice != NONE_KEY:
             mark_superseded(choice, decision["post_slug"], actor=actor, batch_id=batch_id)
             applied.append(choice)
-        db.resolve_pending_decision(decision["id"], {"choice": choice, "superseded": applied},
+        db._resolve_pending_decision(decision["id"], {"choice": choice, "superseded": applied},
                                     log={"op": OP_RESOLVE, "actor": actor, "batch_id": batch_id})
-    return {"ok": True, "applied": applied, "batch_id": batch_id, "remaining": db.count_pending_decisions()}
+    return {"ok": True, "applied": applied, "batch_id": batch_id, "remaining": _count_open()}
+
+
+def _count_open():
+    from . import decisions  # lazy: decisions imports this module
+    return decisions.count_open()

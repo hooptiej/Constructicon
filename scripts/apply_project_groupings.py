@@ -71,7 +71,7 @@ Safe to re-run against the same or a different target at any time:
   - A project is only created if no existing project has that exact title
     (case-insensitive) -- re-running finds it and reuses it rather than
     creating "Tension Biped 2".
-  - db.add_item_to_project and db.attach_tags are both INSERT OR IGNORE
+  - db._add_item_to_project and db._attach_tags are both INSERT OR IGNORE
     already (see core/db.py) -- attaching an already-attached item/tag is a
     silent no-op, not a duplicate or an error.
   - Every member lookup re-derives from the live DB on each run, so it never
@@ -276,9 +276,9 @@ def attach_project_member(project, row):
     membership AND the project's linked tag) so a script-created attachment
     looks identical to one the upload-time flow would have made -- see #1
     and _attach_to_project's docstring for why both halves matter."""
-    db.add_item_to_project(project["id"], row["slug"])
+    db._add_item_to_project(project["id"], row["slug"])
     if project.get("tag_id"):
-        db.attach_tags(row["slug"], [project["tag_id"]])
+        db._attach_tags(row["slug"], [project["tag_id"]])
 
 
 def main():

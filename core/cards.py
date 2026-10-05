@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from . import actor as actor_ctx, card_rules, changes, db, timeline
 from .card_rules import CardError
-from .errors import AppError
+from .errors import AppError, InvalidInput
 
 CARD_DECISION_PREFIX = "card:"
 KIND_CARD_STATUS = "card_status"
@@ -118,7 +118,7 @@ def set_status(card, stage, stop_reason=None, *, activity=None, dry_run=False, a
     warnings = _status_warnings(row, triple["activity"], triple["stage"])
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
-        db.update_card_columns(row["id"], triple, _op, actor, batch_id=batch_id)
+        db._update_card_columns(row["id"], triple, _op, actor, batch_id=batch_id)
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
@@ -162,9 +162,9 @@ def set_kind(card, kind, *, force=False, dry_run=False, actor=None, batch_id=Non
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
         if members and force:
-            db.clear_family_members(row["id"], op="set_kind", actor=actor, batch_id=batch_id,
+            db._clear_family_members(row["id"], op="set_kind", actor=actor, batch_id=batch_id,
                                     affected_slugs=[row["slug"]])
-        db.update_card_columns(row["id"], fields, "set_kind", actor, batch_id=batch_id)
+        db._update_card_columns(row["id"], fields, "set_kind", actor, batch_id=batch_id)
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
@@ -187,14 +187,14 @@ def set_whereabouts(card, whereabouts=None, note=..., *, dry_run=False, actor=No
         warnings.append("Whereabouts cleared; the note was kept.")
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
-        db.update_card_columns(row["id"], fields, "set_whereabouts", actor, batch_id=batch_id)
+        db._update_card_columns(row["id"], fields, "set_whereabouts", actor, batch_id=batch_id)
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
 def set_provenance(card, provenance=None, credit=..., *, dry_run=False, actor=None, batch_id=None):
     """Sets (or clears, with None) the CARD's provenance and optionally its credit
     (who designed it / where it came from; credit=... leaves it alone). Distinct from
-    the per-file provenance (db.set_provenance / constructicon_set_provenance), which
+    the per-file provenance (db._set_provenance / constructicon_set_provenance), which
     is untouched. One value per card: mixed origins are separate cards (3.5)."""
     row = get_card(card)
     value = card_rules.validate_provenance(provenance, current=row.get("provenance"))
@@ -204,7 +204,7 @@ def set_provenance(card, provenance=None, credit=..., *, dry_run=False, actor=No
     rows = _change_rows(row["slug"], {c: row.get(c) for c in fields}, fields)
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
-        db.update_card_columns(row["id"], fields, "set_provenance", actor, batch_id=batch_id)
+        db._update_card_columns(row["id"], fields, "set_provenance", actor, batch_id=batch_id)
     return Result(True, rows, [], batch_id, dry_run)
 
 
@@ -216,7 +216,7 @@ def set_highlight(card, on, *, dry_run=False, actor=None, batch_id=None):
     rows = _change_rows(row["slug"], {"highlight": row.get("highlight") or 0}, fields)
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
-        db.update_card_columns(row["id"], fields, "set_highlight", actor, batch_id=batch_id)
+        db._update_card_columns(row["id"], fields, "set_highlight", actor, batch_id=batch_id)
     return Result(True, rows, [], batch_id, dry_run)
 
 
@@ -332,7 +332,7 @@ def nest(child, parent, *, replace=False, dry_run=False, actor=None, batch_id=No
             warnings.append(f"'{row['title']}' is {row['activity']} but '{parent_row['title']}' is {parent_row['activity']}.")
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
-        db.update_card_columns(row["id"], {"parent_id": parent_row["id"]}, "nest", actor, batch_id=batch_id)
+        db._update_card_columns(row["id"], {"parent_id": parent_row["id"]}, "nest", actor, batch_id=batch_id)
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
@@ -345,7 +345,7 @@ def unnest(child, *, dry_run=False, actor=None, batch_id=None, _op="unnest"):
         rows = [{"card": row["slug"], "field": "parent", "before": _slug_of(old), "after": None}]
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
-        db.update_card_columns(row["id"], {"parent_id": None}, _op, actor, batch_id=batch_id)
+        db._update_card_columns(row["id"], {"parent_id": None}, _op, actor, batch_id=batch_id)
     return Result(True, rows, [], batch_id, dry_run)
 
 
@@ -359,7 +359,7 @@ def add_to_family(family, member, *, dry_run=False, actor=None, batch_id=None, _
     warnings = [f"'{mem['title']}' is already in '{fam['title']}'."] if exists else []
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and not exists:
-        db.add_family_member(fam["id"], mem["id"], _op, actor, batch_id=batch_id,
+        db._add_family_member(fam["id"], mem["id"], _op, actor, batch_id=batch_id,
                              affected_slugs=[fam["slug"], mem["slug"]])
     return Result(True, rows, warnings, batch_id, dry_run)
 
@@ -372,7 +372,7 @@ def remove_from_family(family, member, *, dry_run=False, actor=None, batch_id=No
     rows = [{"card": mem["slug"], "field": "in_family", "before": fam["slug"], "after": None}] if exists else []
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and exists:
-        db.remove_family_member(fam["id"], mem["id"], "remove_from_family", actor, batch_id=batch_id,
+        db._remove_family_member(fam["id"], mem["id"], "remove_from_family", actor, batch_id=batch_id,
                                 affected_slugs=[fam["slug"], mem["slug"]])
     return Result(True, rows, [], batch_id, dry_run)
 
@@ -445,7 +445,7 @@ def link(a, b, link_type, note="", *, dry_run=False, actor=None, batch_id=None, 
     deletes, inserts, rows, warnings = _plan_link(ar, br, link_type, note or "", existing)
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run:
-        db.write_project_links(deletes, inserts, _op, actor, batch_id=batch_id,
+        db._write_project_links(deletes, inserts, _op, actor, batch_id=batch_id,
                                affected_slugs=[ar["slug"], br["slug"]])
     return Result(True, rows, warnings, batch_id, dry_run)
 
@@ -484,7 +484,7 @@ def unlink(a, b, link_type=None, *, dry_run=False, actor=None, batch_id=None):
         warnings.append(f"No {what}link between '{ar['title']}' and '{br['title']}'.")
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and deletes:
-        db.write_project_links(deletes, [], "unlink", actor, batch_id=batch_id,
+        db._write_project_links(deletes, [], "unlink", actor, batch_id=batch_id,
                                affected_slugs=[ar["slug"], br["slug"]])
     return Result(True, rows, warnings, batch_id, dry_run)
 
@@ -523,7 +523,7 @@ def retype_link(a, b, from_type, to_type, *, note=None, dry_run=False, actor=Non
     deletes, inserts, rows, warnings = _plan_retype(ar, br, from_type, to_type, existing, note)
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run:
-        db.write_project_links(deletes, inserts, "retype_link", actor, batch_id=batch_id,
+        db._write_project_links(deletes, inserts, "retype_link", actor, batch_id=batch_id,
                                affected_slugs=[ar["slug"], br["slug"]])
     return Result(True, rows, warnings, batch_id, dry_run)
 
@@ -561,7 +561,7 @@ def retype_links(mapping, *, dry_run=True, partial_ok=False, actor=None, batch_i
     ok = not failed or partial_ok
     applied = 0
     if ok and not dry_run and (deletes or inserts):
-        db.write_project_links(deletes, inserts, "retype_links", actor, batch_id=batch_id,
+        db._write_project_links(deletes, inserts, "retype_links", actor, batch_id=batch_id,
                                affected_slugs=sorted(set(slugs)))
         applied = len([it for it in items if it["ok"]])
     warnings = [f"{len(failed)} item(s) can't be retyped; "
@@ -748,7 +748,7 @@ def _apply_patch(card_row, patch, actor, batch_id):
             applied.append(op)
     except CardError:
         if applied:
-            db.update_card_columns(card_row["id"], original, "resolve_decision_rollback", actor, batch_id=batch_id)
+            db._update_card_columns(card_row["id"], original, "resolve_decision_rollback", actor, batch_id=batch_id)
         raise
 
 
@@ -831,12 +831,13 @@ def resolve_decision(decision_id, choice=None, choices=None, actor=None, batch_i
         if key not in options:
             raise _decisions.InvalidChoice(f"'{key}' is not one of this question's options: {sorted(options)}")
 
+    batch_id = batch_id or changes.new_batch_id()
     card_row = _decision_card(decision)
     if card_row is None:
-        db.resolve_pending_decision(decision_id, {"stale": "card deleted"})
+        db._resolve_pending_decision(decision_id, {"stale": "card deleted"},
+                                     log={"op": "resolve_decision", "actor": actor, "batch_id": batch_id})
         raise _decisions.DecisionNotFound(f"The card for decision {decision_id} no longer exists")
 
-    batch_id = batch_id or changes.new_batch_id()
     if decision["kind"] == KIND_CARD_FAMILY_MEMBERS:
         _apply_family_patches(card_row, [options[k].get("patch") or [] for k in picked], actor, batch_id)
     else:
@@ -849,13 +850,13 @@ def resolve_decision(decision_id, choice=None, choices=None, actor=None, batch_i
         for key in picked:
             _apply_patch(card_row, options[key].get("patch") or [], actor, batch_id)
             card_row = db.get_project(card_row["id"]) or card_row
-    db.resolve_pending_decision(decision_id, {
+    db._resolve_pending_decision(decision_id, {
         "choice": picked[0] if len(picked) == 1 else picked,
         "applied_batch": batch_id,
         "by": "owner" if actor_ctx.resolve(actor) == changes.ACTOR_UI else "claude",
         "at": time.time(),
     }, log={"op": "resolve_decision", "actor": actor, "batch_id": batch_id})
-    return {"ok": True, "applied": picked, "batch_id": batch_id, "remaining": db.count_pending_decisions()}
+    return {"ok": True, "applied": picked, "batch_id": batch_id, "remaining": _decisions.count_open()}
 
 
 def decision_summary(decision):
@@ -921,7 +922,7 @@ def set_hobby_activity(hobby, value, *, dry_run=False, actor=None, batch_id=None
     rows = _change_rows(row["slug"], {"hobby_status": row.get("hobby_status")}, {"hobby_status": activity})
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
-        db.update_hobby_columns(row["id"], {"hobby_status": activity}, "set_hobby_activity", actor, batch_id=batch_id)
+        db._update_hobby_columns(row["id"], {"hobby_status": activity}, "set_hobby_activity", actor, batch_id=batch_id)
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
@@ -934,7 +935,7 @@ def set_group_code(hobby, code, *, dry_run=False, actor=None, batch_id=None):
     rows = _change_rows(row["slug"], {"group_code": row.get("group_code")}, {"group_code": code})
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
-        db.update_hobby_columns(row["id"], {"group_code": code}, "set_group_code", actor, batch_id=batch_id)
+        db._update_hobby_columns(row["id"], {"group_code": code}, "set_group_code", actor, batch_id=batch_id)
     return Result(True, rows, [], batch_id, dry_run)
 
 
@@ -1111,7 +1112,7 @@ def set_home(card, target=None, *, dry_run=False, actor=None, batch_id=None):
         rows = [{"card": row["slug"], "field": "home", "before": before_text, "after": after_text}]
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and rows:
-        db.update_card_columns(row["id"], fields, "set_home", actor, batch_id=batch_id)
+        db._update_card_columns(row["id"], fields, "set_home", actor, batch_id=batch_id)
     return Result(True, rows, [], batch_id, dry_run)
 
 
@@ -1178,7 +1179,7 @@ def add_to_hobby(card, hobby, *, dry_run=False, actor=None, batch_id=None):
     warnings = [f"'{row['title']}' is already in '{hob['name']}'."] if exists else []
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and not exists:
-        db.insert_card_hobby(row["id"], hob["id"], "add_to_hobby", actor, batch_id, [row["slug"], hob["slug"]])
+        db._insert_card_hobby(row["id"], hob["id"], "add_to_hobby", actor, batch_id, [row["slug"], hob["slug"]])
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
@@ -1189,7 +1190,7 @@ def remove_from_hobby(card, hobby, *, dry_run=False, actor=None, batch_id=None):
     rows = [{"card": row["slug"], "field": "in_hobby", "before": hob["slug"], "after": None}] if exists else []
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run and exists:
-        db.delete_card_hobby(row["id"], hob["id"], "remove_from_hobby", actor, batch_id, [row["slug"], hob["slug"]])
+        db._delete_card_hobby(row["id"], hob["id"], "remove_from_hobby", actor, batch_id, [row["slug"], hob["slug"]])
     return Result(True, rows, [], batch_id, dry_run)
 
 
@@ -1317,7 +1318,7 @@ def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None
             description = p.get("description") or ""
             if p.get("move_description"):
                 description = src.get("description") or ""
-            new = db.create_project(p["title"].strip(), description=description, kind=kind, stage=stage,
+            new = db._create_project(p["title"].strip(), description=description, kind=kind, stage=stage,
                                     stop_reason=p.get("stop_reason"),
                                     parent_id=src["id"] if relation == "child" else None,
                                     actor=actor, batch_id=batch_id)
@@ -1333,7 +1334,7 @@ def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None
             if files:
                 _membership().write(new["id"], files, [], "split_card", actor, batch_id, [new["slug"], src["slug"]])
                 if src.get("cover_slug") in files:
-                    db.write_card_row(new["id"], {"cover_slug": src["cover_slug"]}, "split_card", actor, batch_id)
+                    db._write_card_row(new["id"], {"cover_slug": src["cover_slug"]}, "split_card", actor, batch_id)
             hobby_spec = p.get("hobbies", "inherit" if relation == "sibling" else None)
             for hob in _resolve_hobby_refs(hobby_spec, src):
                 add_to_hobby(new["id"], hob["id"], actor=actor, batch_id=batch_id)
@@ -1350,7 +1351,7 @@ def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None
             for s in files:
                 rows.append({"card": fresh["slug"], "field": "file", "before": None, "after": s})
         if any(p.get("move_description") for p in parts):
-            db.write_card_row(src["id"], {"description": ""}, "split_card", actor, batch_id)
+            db._write_card_row(src["id"], {"description": ""}, "split_card", actor, batch_id)
             rows.append({"card": src["slug"], "field": "description", "before": src.get("description"), "after": ""})
         if moved_all and not keep_in_source:
             _membership().write(src["id"], [], moved_all, "split_card", actor, batch_id, [src["slug"]])
@@ -1378,14 +1379,14 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
         raise CardError("nest_cycle", f"'{keep['title']}' is nested inside '{a['title']}' (not directly), so "
                         "merging would make a cycle. Unnest one of them first.")
     if keep.get("parent_id") == a["id"]:
-        db.update_card_columns(keep["id"], {"parent_id": a.get("parent_id")}, op, actor, batch_id=batch_id)
+        db._update_card_columns(keep["id"], {"parent_id": a.get("parent_id")}, op, actor, batch_id=batch_id)
         rows.append({"card": keep["slug"], "field": "parent", "before": a["slug"], "after": _slug_of(a.get("parent_id"))})
     # Children of the absorbed card now belong to keep.
     for child in db.list_child_projects(a["id"]):
         if child["id"] == keep["id"]:
             continue
         db.check_nest(child, keep["id"], replace=True)
-        db.update_card_columns(child["id"], {"parent_id": keep["id"]}, op, actor, batch_id=batch_id)
+        db._update_card_columns(child["id"], {"parent_id": keep["id"]}, op, actor, batch_id=batch_id)
         rows.append({"card": child["slug"], "field": "parent", "before": a["slug"], "after": keep["slug"]})
     # Files: unioned into keep. A blank auto write-up is deleted with the card; a real one stays as a file.
     item_rows = db.list_project_item_rows(a["id"])
@@ -1412,27 +1413,27 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
         elif a.get("cover_project_id") and a["cover_project_id"] != keep["id"]:
             adopt["cover_project_id"] = a["cover_project_id"]
         if adopt:
-            db.write_card_row(keep["id"], adopt, op, actor, batch_id)
+            db._write_card_row(keep["id"], adopt, op, actor, batch_id)
             rows.append({"card": keep["slug"], "field": "cover", "before": None, "after": list(adopt.values())[0]})
     # Hobbies: unioned.
     for r in db.list_hobby_rows(a["id"]):
-        if db.insert_card_hobby(keep["id"], r["hobby_tag_id"], op, actor, batch_id, slugs):
+        if db._insert_card_hobby(keep["id"], r["hobby_tag_id"], op, actor, batch_id, slugs):
             hob = db.get_hobby(r["hobby_tag_id"])
             rows.append({"card": keep["slug"], "field": "in_hobby", "before": None, "after": hob["slug"] if hob else r["hobby_tag_id"]})
-        db.delete_card_hobby(a["id"], r["hobby_tag_id"], op, actor, batch_id, slugs)
+        db._delete_card_hobby(a["id"], r["hobby_tag_id"], op, actor, batch_id, slugs)
     # Family memberships (as a member), then members (as a family): unioned.
     for r in db.list_family_rows(a["id"], as_member=True):
         fam = db.get_project(r["family_id"])
         if fam is not None and fam["id"] != keep["id"]:
             res = add_to_family(fam["id"], keep["id"], actor=actor, batch_id=batch_id, _op=op)
             rows += res.changes
-        db.remove_family_member(r["family_id"], a["id"], op, actor, batch_id=batch_id, affected_slugs=slugs)
+        db._remove_family_member(r["family_id"], a["id"], op, actor, batch_id=batch_id, affected_slugs=slugs)
     for r in db.list_family_rows(a["id"], as_member=False):
         mem = db.get_project(r["member_id"])
         if mem is not None and mem["id"] != keep["id"]:
             res = add_to_family(keep["id"], mem["id"], actor=actor, batch_id=batch_id, _op=op)
             rows += res.changes
-        db.remove_family_member(a["id"], r["member_id"], op, actor, batch_id=batch_id, affected_slugs=slugs)
+        db._remove_family_member(a["id"], r["member_id"], op, actor, batch_id=batch_id, affected_slugs=slugs)
     # Links: re-pointed; self-links and duplicates dropped; a typed link beats `related` on the same pair.
     a_links = db.list_project_link_rows(slug=a["slug"])
     if a_links:
@@ -1457,7 +1458,7 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
                 else:
                     deletes.append((x, y, t))
                 warnings.append(f"'{x}' and '{y}' ended up both related and typed after the merge; the typed link was kept.")
-        db.write_project_links(deletes, inserts, op, actor, batch_id=batch_id, affected_slugs=slugs)
+        db._write_project_links(deletes, inserts, op, actor, batch_id=batch_id, affected_slugs=slugs)
     # Blog entries that featured the absorbed card now feature keep.
     def _repoint_entries(log):
         have = {r["entry_id"] for r in db.list_entry_project_rows(keep["id"])}
@@ -1469,7 +1470,7 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
     db.write_images(op, actor, batch_id, slugs, _repoint_entries)
     # Open questions about the absorbed card are moot.
     for d in open_card_decisions(a["slug"]):
-        db.resolve_pending_decision(d["id"], {"stale": f"merged into {keep['slug']}"},
+        db._resolve_pending_decision(d["id"], {"stale": f"merged into {keep['slug']}"},
                                     log={"op": op, "actor": actor, "batch_id": batch_id})
         rows.append({"card": a["slug"], "field": "decision", "before": d["kind"], "after": "resolved (stale)"})
     # Other cards that borrowed the absorbed card's cover or named it as their home.
@@ -1477,13 +1478,13 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
         if other["id"] == a["id"]:
             continue
         if other.get("cover_project_id") == a["id"]:
-            db.write_card_row(other["id"], {"cover_project_id": keep["id"] if other["id"] != keep["id"] else None},
+            db._write_card_row(other["id"], {"cover_project_id": keep["id"] if other["id"] != keep["id"] else None},
                               op, actor, batch_id)
         if other.get("home_kind") == "card" and other.get("home_ref") == a["id"]:
             new_home = (None, None) if other["id"] == keep["id"] else ("card", keep["id"])
-            db.update_card_columns(other["id"], {"home_kind": new_home[0], "home_ref": new_home[1]}, op, actor,
+            db._update_card_columns(other["id"], {"home_kind": new_home[0], "home_ref": new_home[1]}, op, actor,
                                    batch_id=batch_id)
-    db.write_card_row(keep["id"], {}, op, actor, batch_id)
+    db._write_card_row(keep["id"], {}, op, actor, batch_id)
     db.write_images(op, actor, batch_id, slugs, lambda log: log.delete("projects", {"id": a["id"]}))
     rows.append({"card": keep["slug"], "field": "merged", "before": a["slug"], "after": None})
 
@@ -1530,13 +1531,13 @@ def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolv
     out = {"children": 0, "files": 0, "writeup": None}
     # Open questions about this card are moot: resolve them with a note (never leave them dangling).
     for d in open_card_decisions(slug):
-        db.resolve_pending_decision(d["id"], {"stale": f"card '{slug}' was deleted"},
+        db._resolve_pending_decision(d["id"], {"stale": f"card '{slug}' was deleted"},
                                     log={"op": op, "actor": actor, "batch_id": batch_id})
         rows.append({"card": slug, "field": "decision", "before": d["kind"], "after": "resolved (stale)"})
     # Children are orphaned (parent_id cleared), never deleted.
     if not dissolving:
         for child in db.list_child_projects(cid):
-            db.update_card_columns(child["id"], {"parent_id": None}, op, actor, batch_id=batch_id)
+            db._update_card_columns(child["id"], {"parent_id": None}, op, actor, batch_id=batch_id)
             rows.append({"card": child["slug"], "field": "parent", "before": slug, "after": None})
             out["children"] += 1
         if out["children"]:
@@ -1548,7 +1549,7 @@ def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolv
     if blank_ws:
         for d in db.list_all_pending_decisions(post_slug=blank_ws):
             if d["resolved_at"] is None:
-                db.resolve_pending_decision(d["id"], {"stale": f"write-up of deleted card '{slug}'"},
+                db._resolve_pending_decision(d["id"], {"stale": f"write-up of deleted card '{slug}'"},
                                             log={"op": op, "actor": actor, "batch_id": batch_id})
 
         def _drop_doc(log):
@@ -1568,14 +1569,14 @@ def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolv
         _membership().write(cid, [], keep_files, op, actor, batch_id, slugs)
         out["files"] = len(keep_files)
     for r in db.list_hobby_rows(cid):
-        db.delete_card_hobby(cid, r["hobby_tag_id"], op, actor, batch_id, slugs)
+        db._delete_card_hobby(cid, r["hobby_tag_id"], op, actor, batch_id, slugs)
     for r in db.list_family_rows(cid, as_member=True):
-        db.remove_family_member(r["family_id"], cid, op, actor, batch_id=batch_id, affected_slugs=slugs)
+        db._remove_family_member(r["family_id"], cid, op, actor, batch_id=batch_id, affected_slugs=slugs)
     for r in db.list_family_rows(cid, as_member=False):
-        db.remove_family_member(cid, r["member_id"], op, actor, batch_id=batch_id, affected_slugs=slugs)
+        db._remove_family_member(cid, r["member_id"], op, actor, batch_id=batch_id, affected_slugs=slugs)
     links = db.list_project_link_rows(slug=slug)
     if links:
-        db.write_project_links([(r["slug_a"], r["slug_b"], r["type"]) for r in links], [], op, actor,
+        db._write_project_links([(r["slug_a"], r["slug_b"], r["type"]) for r in links], [], op, actor,
                                batch_id=batch_id, affected_slugs=slugs)
         for r in links:
             rows.append({"card": slug, "field": "link", "before": f"{r['slug_a']} {r['type']} {r['slug_b']}", "after": None})
@@ -1588,9 +1589,9 @@ def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolv
         if other["id"] == cid:
             continue
         if other.get("cover_project_id") == cid:
-            db.write_card_row(other["id"], {"cover_project_id": None}, op, actor, batch_id)
+            db._write_card_row(other["id"], {"cover_project_id": None}, op, actor, batch_id)
         if other.get("home_kind") == "card" and other.get("home_ref") == cid:
-            db.update_card_columns(other["id"], {"home_kind": None, "home_ref": None}, op, actor, batch_id=batch_id)
+            db._update_card_columns(other["id"], {"home_kind": None, "home_ref": None}, op, actor, batch_id=batch_id)
     return out
 
 
@@ -1615,18 +1616,114 @@ def delete_card(card, *, dry_run=False, actor=None, batch_id=None):
                    "writeup": out["writeup"]})
 
 
-def convert_project_to_hobby(card, *, actor=None):
-    """Convert-to-hobby through the same clean-up (#497): links, family rows, hobby rows,
-    blog-entry attachments and a blank write-up no longer survive the converted card, and
-    the whole conversion is one transaction. (The tag side of the conversion is not
-    row-imaged, so this is not undoable.) Returns the hobby tag dict, or None if not found."""
-    row = db.get_project(card)
+# (#541 phase D) convert_project_to_hobby moved to core/hobbies.py (`convert_from_card`), where it
+# is fully row-imaged and undoable; it still runs _clear_card_dependents(dissolving=True) first.
+
+
+# --- Creating a card and editing its own fields (#541 phase D) ------------------------
+
+OP_CREATE_CARD = "create_card"
+OP_UPDATE_CARD = "update_card"
+
+
+def create(title, *, description="", cover_slug=None, parent=None, kind=None, stage=None, stop_reason=None,
+           tag_id=None, link_tag=True, with_writeup=True, dry_run=False, actor=None, batch_id=None):
+    """Creates a card as ONE undoable batch (#541 phase D): its linked root tag (#1; reused when a
+    tag of that name exists, else created and imaged, exactly the old get_or_create_tag lookup),
+    the card row and its blank write-up document (#156/#423: added to the card, tagged with the
+    linked tag, set as writeup_slug). `cards.undo(batch_id)` removes all of it again; a tag the
+    create reused is left alone. Every rule is checked before anything is written: an empty title
+    (bad_request), kind / stage / stop_reason (card_rules, bad_status / bad_kind) and the nest
+    rules for `parent` (an id or slug; not_found / nest_*). `tag_id` links an existing tag
+    instead (hobby -> card conversion); link_tag=False makes a card with no linked tag.
+    data: {card: the new projects row (as create_project returned it), tag_created: bool}."""
+    title = (title or "").strip()
+    if not title:
+        raise InvalidInput("Project name can't be empty")
+    kind = card_rules.validate_kind(kind or card_rules.DEFAULT_KIND)
+    card_rules.validate_status(kind, stage or card_rules.DEFAULT_STAGE, stop_reason)
+    parent_row = None
+    if parent not in (None, ""):
+        parent_row = db.get_project(parent)
+        if parent_row is None:
+            raise CardError("not_found", f"No such parent card: {parent!r}")
+        card_rules.validate_nest({"id": None, "kind": kind, "title": title, "parent_id": None}, parent_row, ())
+    from . import tags as _tags  # lazy: tags imports Result from here
+    batch_id = batch_id or changes.new_batch_id()
+    tag_created = False
+    with db.transaction(dry_run=dry_run):
+        if tag_id is None and link_tag:
+            with db.ImageLog(_tags.OP_CREATE, actor, batch_id) as log:
+                tag, tag_created = _tags.ensure(log, title, None)
+            tag_id = tag["id"]
+        project = db._create_project(title, description=description, cover_slug=cover_slug, tag_id=tag_id,
+                                     parent_id=parent_row["id"] if parent_row else None, with_writeup=with_writeup,
+                                     kind=kind, stage=stage, stop_reason=stop_reason, actor=actor, batch_id=batch_id)
+        flat = _changes_from_log(db.get_change_rows(batch_id=batch_id))
+    return Result(True, flat, [], batch_id, dry_run, {"card": project, "tag_created": tag_created})
+
+
+def _writeup_target(slug):
+    """Validates a write-up slug (the web form's and MCP's old checks, same messages)."""
+    from . import object_types  # lazy: the registry imports a lot
+    row = db.get_by_slug(slug)
     if row is None:
-        return None
-    with db.transaction():
+        raise InvalidInput("writeup slug not found")
+    if not object_types.can_be_writeup(row):
+        label = object_types.get_object_type(row.get("media_type")).label
+        raise InvalidInput(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
+    return row
+
+
+def update(card, *, title=None, description=None, cover_slug=None, cover_project_id=..., writeup_slug=...,
+           start=..., end=..., dry_run=False, actor=None, batch_id=None):
+    """A card's own fields as ONE imaged change-log row (op update_card; #541 phase D: was
+    db.update_project + set_project_date_overrides, unlogged, so undoing a Save restored the kind
+    and stage but not the title). Same semantics as before:
+      title / description / cover_slug: None = leave alone (cover_slug "" stores "").
+      cover_project_id (#356): ... = leave, None = clear, an id = borrow that CHILD card's cover.
+      writeup_slug (#156): ... = leave, None/"" = clear, a slug = that item (it must exist and its
+        type must declare a writeup body).
+      start / end: the timeline overrides; ... = leave, None = clear, unix seconds = set.
+    A non-empty cover_slug clears cover_project_id and vice versa (mutually exclusive). Every
+    call bumps updated_at, as the old Save did. Parent, kind and status have their own ops
+    (nest / unnest / set_kind / set_status). data: {card: the row after}."""
+    row = get_card(card)
+    if writeup_slug is not ... and writeup_slug:
+        _writeup_target(writeup_slug)
+    if cover_project_id is not ... and cover_project_id is not None:
+        child = db.get_project(cover_project_id)
+        if child is None:
+            raise InvalidInput("Child project not found")
+        if child.get("parent_id") != row["id"]:
+            raise InvalidInput("Project is not a child of this project")
+        cover_project_id = child["id"]
+    fields = {}
+    if title is not None:
+        fields["title"] = title
+    if description is not None:
+        fields["description"] = description
+    new_cover_slug = cover_slug if cover_slug is not None else row.get("cover_slug")
+    new_cover_project = cover_project_id if cover_project_id is not ... else row.get("cover_project_id")
+    if cover_slug not in (None, ""):
+        new_cover_project = None
+    if cover_project_id is not ... and cover_project_id is not None:
+        new_cover_slug = None
+    fields["cover_slug"], fields["cover_project_id"] = new_cover_slug, new_cover_project
+    if writeup_slug is not ...:
+        fields["writeup_slug"] = writeup_slug or None
+    if start is not ...:
+        fields["start_date_override"] = None if start is None else float(start)
+    if end is not ...:
+        fields["end_date_override"] = None if end is None else float(end)
+    fields["updated_at"] = time.time()
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_UPDATE_CARD, actor, batch_id, [row["slug"]]) as log:
+            log.update("projects", {"id": row["id"]}, fields)
+            muts = [{"op": OP_UPDATE_CARD, "affected_slugs": [row["slug"]], "mutations": list(log.muts)}]
         fresh = db.get_project(row["id"])
-        _clear_card_dependents(fresh, "convert_project_to_hobby", actor, changes.new_batch_id(), [], [], dissolving=True)
-        return db.convert_project_to_hobby(row["id"])
+    return Result(True, _changes_from_log(muts), [], batch_id, dry_run, {"card": fresh})
 
 
 # --- Computed needs added in piece 6 -------------------------------------------------

@@ -112,7 +112,7 @@ revisions.remove_from_chain("e")  # tidy: D, e independent again
 check("second successor rejected", raises("revision_conflict", revisions.mark_superseded, A, D))
 check("second predecessor rejected", raises("revision_conflict", revisions.mark_superseded, D, B))
 mk("r", "r.pdf")
-db.mark_redacted("r")
+db._mark_redacted("r")
 check("redacted item rejected (as new)", raises("bad_revision", revisions.mark_superseded, D, "r"))
 check("redacted item rejected (as old)", raises("bad_revision", revisions.mark_superseded, "r", D))
 check("failed validations wrote nothing", pairs() == {A: B, B: C}, pairs())
@@ -165,11 +165,11 @@ check("undo of mark removes the link", pairs() == snapshot, pairs())
 # --- delete cleans the chain ----------------------------------------------------
 x = mk("x", "x.pdf")
 revisions.mark_superseded(C, x)  # A -> B -> C -> x
-db.delete_upload(B)
+db._delete_upload(B)
 check("deleting a middle item closes the gap", pairs() == {A: C, C: x}, pairs())
-db.delete_upload(x)
+db._delete_upload(x)
 check("deleting the current item makes the previous current", pairs() == {A: C} and revisions.current_slug(A) == C, pairs())
-db.delete_upload(A)
+db._delete_upload(A)
 check("deleting down to one item leaves no chain", pairs() == {}, pairs())
 
 # --- upload-time question -------------------------------------------------------
@@ -215,8 +215,12 @@ n2 = mk("new2", "Riser Diagram_revD.pdf")
 did2 = revisions.queue_replace_question(n2)
 check("second upload asks too (candidate is the current rev)", did2 is not None)
 revisions.mark_superseded(old2, n2)
-check("hand-linking makes the question stale and resolves it away",
-      not [e for e in decisions.list_open() if e["id"] == did2] and db.get_pending_decision(did2)["resolved_at"] is not None)
+# #551 item 3: a read only leaves the stale question out; the explicit sweep resolves it.
+check("hand-linking makes the question stale: reads leave it out without resolving it",
+      not [e for e in decisions.list_open() if e["id"] == did2] and db.get_pending_decision(did2)["resolved_at"] is None)
+swept = decisions.sweep_stale()
+check("the sweep resolves it away (stale: no candidates left)",
+      [r["id"] for r in swept.data["resolved"]] == [did2] and db.get_pending_decision(did2)["resolved_at"] is not None)
 
 # candidate superseded meanwhile: resolving an old option is rejected, decision stays open
 n3 = mk("new3", "Floor Plan_rev2.pdf")

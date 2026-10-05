@@ -6,11 +6,20 @@ The "Needs your input" queue is a generic ask-don't-guess mechanism:
 - item_supersedes: a new file looks like another revision of an existing one (#477);
   answered with a candidate slug (creates the supersedes link) or "none"
 
-This module centralizes the list/cleanup and resolve logic so both the web
-API and the MCP server use the same decision workflow.
+This module centralizes the list and resolve logic so both the web API and the
+MCP server use the same decision workflow.
+
+#551 item 3 / #541 phase D: reads never write. list_open() leaves out a question that
+can't be answered any more (stale_reason); the explicit, logged, undoable
+sweep_stale() resolves those (the web worker runs it at startup and hourly; MCP
+constructicon_sweep_stale_decisions). Answering a question (resolve) is imaged in the
+same batch as whatever the answer applied.
 """
 
-from core import automatch, cards, changes, db, ingest, items, object_types, revisions
+import json
+import time
+
+from core import automatch, cards, changes, db, ingest, items, membership, object_types, revisions
 from core.errors import Conflict, InvalidInput, NotFound
 
 
@@ -35,12 +44,82 @@ class InvalidChoice(InvalidInput):
     default_code = "invalid_choice"
 
 
-def list_open():
-    """List all open pending decisions with automatic stale-cleanup.
+OP_SWEEP = "sweep_stale_decisions"
+OP_RESOLVE = "resolve_decision"
 
-    Resolves decisions as stale if:
-    - The object (post_slug) has been deleted.
-    - A project_match decision has fewer than 2 candidates left.
+# The web worker's sweep (web/app.py, _decision_sweep_loop): once at startup, after the
+# migrations, then every SWEEP_INTERVAL_SECONDS.
+SWEEP_INTERVAL_SECONDS = 3600
+
+STALE_CARD_DELETED = "card deleted"
+STALE_OBJECT_DELETED = "object deleted"
+STALE_FEW_CANDIDATES = "fewer than two candidates remain"
+STALE_NO_CANDIDATES = "no candidates left"
+
+
+def stale_reason(decision):
+    """Why an OPEN decision can no longer be answered, or None while it still can. A pure read
+    (#551 item 3): the exact rules list_open() used to apply while it wrote, unchanged:
+    - a card question (post_slug "card:<slug>") whose card is gone -> "card deleted"
+      (validated against `projects`, never capture_events: spec 4.3);
+    - a file question whose object is gone -> "object deleted";
+    - project_match with fewer than 2 of its candidate cards left;
+    - item_supersedes with no live candidate left (revisions.live_candidates).
+    retype questions only go stale with their object."""
+    if cards.is_card_decision_slug(decision["post_slug"]):
+        return STALE_CARD_DELETED if cards._decision_card(decision) is None else None
+    if db.get_by_slug(decision["post_slug"]) is None:
+        return STALE_OBJECT_DELETED
+    if decision["kind"] == automatch.KIND_PROJECT_MATCH:
+        live = [pid for pid in decision["payload"].get("candidate_project_ids", []) if db.get_project(pid) is not None]
+        return STALE_FEW_CANDIDATES if len(live) < 2 else None
+    if decision["kind"] == revisions.KIND_ITEM_SUPERSEDES:
+        return STALE_NO_CANDIDATES if not revisions.live_candidates(decision) else None
+    return None
+
+
+def sweep_stale(*, dry_run=False, actor=None, batch_id=None):
+    """Resolves every open decision that stale_reason() says can't be answered any more, with
+    {"stale": <reason>} as its resolution, exactly as list_open() used to on every read. Now an
+    explicit op (#551 item 3): one transaction, each resolution imaged (one change-log row, op
+    sweep_stale_decisions), so `cards.undo(batch_id)` re-opens them. Nothing stale = nothing
+    written and no change-log row. Run by the web worker (startup + hourly, as `system`) and by
+    MCP constructicon_sweep_stale_decisions. data: {resolved: [{id, kind, post_slug, reason}],
+    count, by_kind}."""
+    batch_id = batch_id or changes.new_batch_id()
+    resolved = []
+    with db.transaction(dry_run=dry_run):
+        stale = []
+        for d in db.list_pending_decisions():
+            reason = stale_reason(d)
+            if reason:
+                stale.append((d, reason))
+        if stale:
+            now = time.time()
+            with db.ImageLog(OP_SWEEP, actor, batch_id, [d["post_slug"] for d, _ in stale]) as log:
+                for d, reason in stale:
+                    # the same resolution shape db._resolve_pending_decision writes
+                    payload = {**(d["payload"] or {}), "resolution": {"stale": reason}}
+                    log.update("pending_decisions", {"id": d["id"]}, {"resolved_at": now, "payload": json.dumps(payload)})
+                    resolved.append({"id": d["id"], "kind": d["kind"], "post_slug": d["post_slug"], "reason": reason})
+        rows = db.get_change_rows(batch_id=batch_id) if stale else []
+    by_kind = {}
+    for r in resolved:
+        by_kind[r["kind"]] = by_kind.get(r["kind"], 0) + 1
+    return cards.Result(True, cards._changes_from_log(rows), [], batch_id, dry_run,
+                        {"resolved": resolved, "count": len(resolved), "by_kind": by_kind})
+
+
+def count_open():
+    """How many questions are open and answerable: what list_open() returns (stale-but-not-yet-
+    swept questions are left out, as list_open() leaves them out)."""
+    return len(list_open())
+
+
+def list_open():
+    """List all open pending decisions that can still be answered. A pure read: it never writes
+    (#551 item 3). A decision stale_reason() calls stale is left out (it used to be resolved here,
+    unlogged, on every GET); the explicit, logged sweep_stale() resolves it later.
 
     Returns a list of dicts, each with:
         {
@@ -58,15 +137,12 @@ def list_open():
     """
     items = []
     for decision in db.list_pending_decisions():
+        if stale_reason(decision):
+            continue  # left for the sweep (sweep_stale), never resolved by a read
         if cards.is_card_decision_slug(decision["post_slug"]):
-            # V2 card decision (post_slug = "card:<project slug>"): validate against
-            # `projects`, NOT capture_events -- there is no file row, and treating
-            # that as "object deleted" would silently resolve every card question
-            # on first page load (spec 4.3).
+            # V2 card decision (post_slug = "card:<project slug>"): validated against
+            # `projects`, NOT capture_events (stale_reason, spec 4.3).
             card_row = cards._decision_card(decision)
-            if card_row is None:
-                db.resolve_pending_decision(decision["id"], {"stale": "card deleted"})
-                continue
             payload = decision["payload"]
             items.append({
                 "id": decision["id"],
@@ -84,10 +160,6 @@ def list_open():
             })
             continue
         row = db.get_by_slug(decision["post_slug"])
-        if row is None:
-            # Object was deleted — mark stale
-            db.resolve_pending_decision(decision["id"], {"stale": "object deleted"})
-            continue
 
         entry = {
             "id": decision["id"],
@@ -106,13 +178,7 @@ def list_open():
                     candidates.append(
                         {"id": project["id"], "title": project["title"], "slug": project["slug"]}
                     )
-            if len(candidates) < 2:
-                # Not ambiguous anymore — fewer than 2 choices remain
-                db.resolve_pending_decision(
-                    decision["id"], {"stale": "fewer than two candidates remain"}
-                )
-                continue
-            entry["candidates"] = candidates
+            entry["candidates"] = candidates  # >= 2 (stale_reason)
 
         elif decision["kind"] == "retype":
             # Filter options to only include registered media types
@@ -125,10 +191,7 @@ def list_open():
         elif decision["kind"] == revisions.KIND_ITEM_SUPERSEDES:
             # #477: "does this replace ...?" -- drop candidates that have since been superseded
             # or removed; with none left (or the file already linked by hand) it's stale.
-            live = revisions.live_candidates(decision)
-            if not live:
-                db.resolve_pending_decision(decision["id"], {"stale": "no candidates left"})
-                continue
+            live = revisions.live_candidates(decision)  # non-empty (stale_reason)
             payload = decision["payload"]
             entry["options"] = [o for o in payload.get("options", []) if o["key"] in live or o["key"] == revisions.NONE_KEY]
             entry["question"] = payload.get("question", "")
@@ -173,6 +236,11 @@ def resolve(decision_id, choice="", project_ids=(), choices=(), actor=None):
     if cards.is_card_decision_slug(decision["post_slug"]):
         return cards.resolve_decision(decision_id, choice=choice or None, choices=list(choices or []), actor=actor)
 
+    # #541 phase D: what the answer applies and the resolution itself share ONE batch, and the
+    # resolution is imaged, so one undo re-opens the question and reverses what it did.
+    batch_id = changes.new_batch_id()
+    log = {"op": OP_RESOLVE, "actor": actor, "batch_id": batch_id}
+
     if decision["kind"] == automatch.KIND_PROJECT_MATCH:
         allowed = {int(pid) for pid in decision["payload"].get("candidate_project_ids", [])}
         chosen = []
@@ -182,9 +250,12 @@ def resolve(decision_id, choice="", project_ids=(), choices=(), actor=None):
                 chosen.append(int(raw))
         if db.get_by_slug(decision["post_slug"]) is not None:
             for pid in chosen:
-                ingest.attach_to_project(decision["post_slug"], pid)
+                if db.get_project(pid) is None:
+                    continue  # a candidate deleted meanwhile is skipped, as attach_to_project did
+                membership.add_files(pid, [decision["post_slug"]], batch_id=batch_id, actor=actor,
+                                     **membership.UI_EFFECTS)
                 applied.append(pid)
-        db.resolve_pending_decision(decision_id, {"project_ids": applied})
+        db._resolve_pending_decision(decision_id, {"project_ids": applied}, log=log)
 
     elif decision["kind"] == "retype":
         allowed_keys = {o["key"] for o in decision["payload"].get("options", [])}
@@ -195,15 +266,15 @@ def resolve(decision_id, choice="", project_ids=(), choices=(), actor=None):
             if choice in allowed_keys:
                 # Only call retype if the choice is different from the current type
                 if choice != row.get("media_type"):
-                    items.retype(decision["post_slug"], choice, ingest.run_in_thread)
+                    items.retype(decision["post_slug"], choice, ingest.run_in_thread, actor=actor, batch_id=batch_id)
                     applied.append(choice)
                 else:
                     # Choice matches current type — just resolve without retying
                     applied.append(choice)
-        db.resolve_pending_decision(decision_id, {
+        db._resolve_pending_decision(decision_id, {
             "choice": choice or None,
             "kept": bool(row and choice and choice == row.get("media_type")),
-        })
+        }, log=log)
 
     elif decision["kind"] == revisions.KIND_ITEM_SUPERSEDES:
         allowed_keys = {o["key"] for o in decision["payload"].get("options", [])}
@@ -215,4 +286,17 @@ def resolve(decision_id, choice="", project_ids=(), choices=(), actor=None):
     else:
         raise UnknownDecisionKind(f"Unknown decision kind: {decision['kind']}")
 
-    return {"ok": True, "applied": applied, "remaining": db.count_pending_decisions()}
+    return {"ok": True, "applied": applied, "batch_id": batch_id, "remaining": count_open()}
+
+
+def close_retype_questions(slug, new_type, *, actor=None, batch_id=None):
+    """The .exe Reclassify action answers any open "installer or app?" question about the file:
+    resolve them (imaged, in the caller's batch) with the type it chose."""
+    batch_id = batch_id or changes.new_batch_id()
+    closed = []
+    for decision in db.list_pending_decisions("retype"):
+        if decision["post_slug"] == slug:
+            db._resolve_pending_decision(decision["id"], {"choice": new_type, "via": "reclassify action"},
+                                         log={"op": OP_RESOLVE, "actor": actor, "batch_id": batch_id})
+            closed.append(decision["id"])
+    return closed

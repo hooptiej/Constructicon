@@ -408,7 +408,7 @@ def enqueue_caption(slug, start_step=0, cascade=True):
         spec = object_types.get_object_type(row.get("media_type"))
         if not (spec.caption_capable and not DISABLED):
             return
-        db.update_content_metadata(slug, type_metadata={STATUS_KEY: "pending"})
+        db._update_content_metadata(slug, type_metadata={STATUS_KEY: "pending"})
         db.enqueue_caption(slug, start_step, cascade)
         print(f"caption: queued {slug} for the web worker", flush=True)
     except Exception as e:
@@ -429,7 +429,7 @@ def _drain_one():
     if row is None or row["redacted"]:
         pass
     elif DISABLED or not spec.caption_capable:
-        db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
+        db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
     else:
         run_caption(slug, item["start_step"], bool(item["cascade"]))
     db.dequeue_caption(slug)
@@ -479,6 +479,12 @@ def _caption_source_path(row, spec):
     thumbnails.ensure_thumbnail(row)
     thumb = storage.thumb_path_for(row["slug"])
     return thumb if thumb.exists() else None
+
+
+def mark_pending(slug):
+    """Caption bookkeeping for a manual (re)generate click: the item shows "pending" until the run
+    lands. A pipeline write, deliberately not change-logged (#541: see core/items.py)."""
+    db._update_content_metadata(slug, type_metadata={STATUS_KEY: "pending"})
 
 
 def should_caption(spec):
@@ -543,11 +549,11 @@ def run_caption(slug, start_step=0, cascade=True):
             return
         # "pending" while queued behind the lock / running, so the detail
         # page can show progress and poll — same idea as ocr_status.
-        db.update_content_metadata(slug, type_metadata={STATUS_KEY: "pending"})
+        db._update_content_metadata(slug, type_metadata={STATUS_KEY: "pending"})
         image_path = _caption_source_path(row, spec)
         if image_path is None:
             print(f"caption: no source image for {slug} ({spec.key}) — skipping", flush=True)
-            db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
+            db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
             return
         step_index = start_step % len(STEPS)
         step_prompt, step_temperature = STEPS[step_index]
@@ -562,9 +568,9 @@ def run_caption(slug, start_step=0, cascade=True):
                 step_index = next_index
         if result["error"] or _is_garbage(result["caption"]):
             print(f"caption failed for {slug} at step {step_index}: {result['error'] or _bad_response_label(result['caption'])}", flush=True)
-            db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed", STEP_KEY: step_index})
+            db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed", STEP_KEY: step_index})
             return
-        db.update_content_metadata(slug, type_metadata={
+        db._update_content_metadata(slug, type_metadata={
             METADATA_KEY: result["caption"],
             STATUS_KEY: "done",
             STEP_KEY: step_index,
@@ -580,6 +586,6 @@ def run_caption(slug, start_step=0, cascade=True):
     except Exception as e:
         print(f"caption pipeline failed for {slug}: {e!r}", flush=True)
         try:
-            db.update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
+            db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
         except Exception as e2:
             print(f"could not mark {slug} caption-failed: {e2!r}", flush=True)

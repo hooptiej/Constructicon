@@ -111,7 +111,7 @@ except card_rules.CardError as e:
     check("error lists the active keys", "purchased" in e.message and e.details.get("active_keys") == keys("card"))
 
 # Cards: a retired key is refused for new writes but stays valid on the card holding it.
-card = db.create_project("Provenance probe card", kind="thing", with_writeup=False)
+card = db._create_project("Provenance probe card", kind="thing", with_writeup=False)
 cid = card["id"] if isinstance(card, dict) else card
 cards.set_provenance(cid, "purchased", actor="test")
 check("card accepts the new purchased key", db.get_project(cid)["provenance"] == "purchased")
@@ -122,7 +122,7 @@ check("retired key leaves the active list", "purchased" not in keys("card"))
 check("retired key is refused for a NEW write",
       raises("bad_provenance", card_rules.validate_provenance, "purchased"))
 check("retired key refused through cards.set_provenance on another card",
-      raises("bad_provenance", cards.set_provenance, db.create_project("Provenance probe card 2", kind="thing", with_writeup=False)["id"],
+      raises("bad_provenance", cards.set_provenance, db._create_project("Provenance probe card 2", kind="thing", with_writeup=False)["id"],
              "purchased", actor="test"))
 check("a card holding the retired key still validates it unchanged",
       card_rules.validate_provenance("purchased", current="purchased") == "purchased")
@@ -145,13 +145,13 @@ check("bad card key -> bad_provenance", raises("bad_provenance", cards.set_prove
 # --- file provenance ---------------------------------------------------------
 db.insert_upload("provprobe1", None, None, "tester", media_type="link", external_url="https://example.com/a", content_description="probe")
 db.insert_upload("provprobe2", None, None, "tester", media_type="link", external_url="https://example.com/b", content_description="probe")
-check("file accepts purchased", db.set_provenance("provprobe1", "purchased")["provenance"] == "purchased")
-check("file accepts an old key", db.set_provenance("provprobe2", "design")["provenance"] == "design")
-check("bad file key -> bad_provenance", raises("bad_provenance", db.set_provenance, "provprobe1", "bogus"))
-check("file clear with None", db.set_provenance("provprobe2", None)["provenance"] is None)
+check("file accepts purchased", db._set_provenance("provprobe1", "purchased")["provenance"] == "purchased")
+check("file accepts an old key", db._set_provenance("provprobe2", "design")["provenance"] == "design")
+check("bad file key -> bad_provenance", raises("bad_provenance", db._set_provenance, "provprobe1", "bogus"))
+check("file clear with None", db._set_provenance("provprobe2", None)["provenance"] is None)
 po.retire("file", "purchased")
-check("retired file key refused for a new write", raises("bad_provenance", db.set_provenance, "provprobe2", "purchased"))
-check("row already holding it can be re-saved", db.set_provenance("provprobe1", "purchased")["provenance"] == "purchased")
+check("retired file key refused for a new write", raises("bad_provenance", db._set_provenance, "provprobe2", "purchased"))
+check("row already holding it can be re-saved", db._set_provenance("provprobe1", "purchased")["provenance"] == "purchased")
 check("file label resolves for a retired key", po.label("file", "purchased") == "Purchased")
 check("asset-card label: legacy key keeps its card-vocabulary reading",
       card_rules.file_provenance_label("result") == "Created" and card_rules.file_provenance_label("reference") == "Referenced")

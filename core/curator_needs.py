@@ -244,8 +244,10 @@ def list_needs():
             })
 
     # Confirm automatch detector
-    pending_matches = db.list_pending_decisions(kind="project_match")
-    unresolved_count = len(pending_matches)  # Already filtered for unresolved by db.list_pending_decisions
+    # #551 item 3: the answerable ones only (decisions.list_open leaves out stale-but-unswept
+    # questions, as the old resolve-on-read did). Lazy: decisions imports half of core.
+    from core import decisions
+    unresolved_count = sum(1 for d in db.list_pending_decisions(kind="project_match") if not decisions.stale_reason(d))
     if unresolved_count > 0:
         kind = "confirm_automatch"
         nudge_key = _nudge_key_for_global(kind)

@@ -5,13 +5,15 @@ import io
 import zipfile
 from pathlib import Path
 
-from fastapi import Request, HTTPException, APIRouter
+from fastapi import Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from core import db, object_types, storage, thumbnails
 from web.common import DESKTOP_APP_BUILD_PATH, DESKTOP_APP_DIR
+from core import policy, roles
+from web.roles import RoleRouter, requires
 
-router = APIRouter()
+router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own label are viewer
 
 
 @router.get("/downloads/constructicon-uploader-source.zip")
@@ -53,7 +55,7 @@ def api_list_brand_assets(request: Request):
     """List all brand assets, grouped by role.
 
     Returns a list of brand asset dicts with slug, title, brand_role, and URLs."""
-    assets = db.list_brand_assets()
+    assets = policy.filter_visible(db.list_brand_assets())  # #557
     return JSONResponse([
         {
             "slug": asset["slug"],
@@ -70,7 +72,7 @@ def api_list_brand_assets(request: Request):
 def api_list_wallpapers(request: Request):
     """List all wallpaper objects (#422) — everything tagged wallpaper /
     Desktop Picture, newest first. The shape the /wallpaper page consumes."""
-    wallpapers = db.list_wallpapers()
+    wallpapers = policy.filter_visible(db.list_wallpapers())  # #557
     return JSONResponse([
         {
             "slug": w["slug"],
@@ -87,11 +89,12 @@ def api_list_wallpapers(request: Request):
 
 # --- Public hotlink (no auth — Hudu/Slack need to fetch this directly) ---
 
-@router.get("/f/{slug}")
+@router.get("/f/{slug}", dependencies=requires(roles.PUBLIC))
 def get_file(slug: str):
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    policy.require_view(row)  # #557: public route, but the item policy still decides
     if row["redacted"]:
         raise HTTPException(status_code=410, detail="file was redacted (sensitive content) — metadata is still on the image page")
     if not row.get("stored_filename"):
@@ -106,11 +109,12 @@ def get_file(slug: str):
     return FileResponse(path, filename=row["filename"])
 
 
-@router.get("/f/{slug}/thumb")
+@router.get("/f/{slug}/thumb", dependencies=requires(roles.PUBLIC))
 def get_thumbnail(slug: str):
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    policy.require_view(row)  # #557
     if row["redacted"]:
         raise HTTPException(status_code=410, detail="file was redacted (sensitive content)")
     if not storage.thumb_path_for(slug).exists() and not row.get("stored_filename"):

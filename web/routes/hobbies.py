@@ -1,17 +1,19 @@
 """Hobby routes (#547): /api/hobbies and /api/hobby/*."""
 
-from fastapi import Request, Form, HTTPException, APIRouter
+from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse
 
 from core import card_rules, cards, db, hobbies
 from web.shapes import _to_object_detail
+from core import policy, roles
+from web.roles import RoleRouter, requires
 
-router = APIRouter()
+router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
 
 # --- Hobbies (#360) ---
 
-@router.get("/api/hobbies")
+@router.get("/api/hobbies", dependencies=requires(roles.VIEWER))
 def api_list_hobbies(request: Request):
     """List all hobbies (tags marked is_hobby=1) with their project counts.
 
@@ -31,7 +33,7 @@ def api_create_hobby(request: Request, name: str = Form(...)):
     return JSONResponse({"id": hobby["id"], "slug": hobby["slug"], "batch_id": result.batch_id})
 
 
-@router.get("/api/hobby/{id_or_slug}")
+@router.get("/api/hobby/{id_or_slug}", dependencies=requires(roles.VIEWER))
 def api_get_hobby(request: Request, id_or_slug: str):
     """Get a hobby's full details: metadata, attached projects, and attached objects.
 
@@ -42,7 +44,7 @@ def api_get_hobby(request: Request, id_or_slug: str):
 
     projects = db.list_projects_for_hobby(hobby["id"])
     # Get all objects tagged with this hobby tag
-    items = db.list_posts_for_tag(hobby["id"], include_descendants=False)
+    items = policy.filter_visible(db.list_posts_for_tag(hobby["id"], include_descendants=False))  # #557
 
     return JSONResponse({
         **cards.hobby_fields(hobby),
@@ -149,7 +151,7 @@ def api_unmark_hobby(id_or_slug: str):
     return JSONResponse(hobbies.unmark(id_or_slug).to_dict())
 
 
-@router.post("/api/hobby/{id_or_slug}/convert-to-card")
+@router.post("/api/hobby/{id_or_slug}/convert-to-card", dependencies=requires(roles.ADMIN))
 def api_convert_hobby_to_card(id_or_slug: str, kind: str = Form(...), title: str = Form(""),
                               into_hobby: str = Form(""), dry_run: bool = Form(False)):
     """Hobby -> card (#541 phase D; the reverse of a project's "Convert to hobby"). `kind`:

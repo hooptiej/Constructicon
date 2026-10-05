@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from core import card_rules, db, markdown_render, storage, object_types
+from core import card_rules, db, markdown_render, policy, storage, object_types
 from core import version as version_info
 
 
@@ -121,8 +121,9 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         # #443: restricted items (keys/certs) can sit on a project in the
         # owner's reference, but never in the museum.
         # #477: only the current revision of a chain goes in the museum; no revisions, no change.
-        items = [i for i in db.list_project_items(project_id)
-                 if not object_types.is_restricted(i) and i["slug"] not in older_revisions]
+        # #557: what may leave the install is core/policy.py's call (filter_exportable).
+        items = [i for i in policy.filter_exportable(db.list_project_items(project_id))
+                 if i["slug"] not in older_revisions]
         project_items[project_id] = items
         if not items:
             warnings.append(f"Project '{project['slug']}' has no items")
@@ -154,7 +155,7 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     entry_items = {}  # entry_id -> list of items with sort_order and note
     for entry_id in blog_entries_dict:
         entry_projects[entry_id] = db.list_entry_projects(entry_id)
-        entry_items[entry_id] = [i for i in db.list_entry_items(entry_id) if not object_types.is_restricted(i)]  # #443
+        entry_items[entry_id] = policy.filter_exportable(db.list_entry_items(entry_id))  # #443, #557
         if not entry_items[entry_id]:
             warnings.append(f"Blog entry '{blog_entries_dict[entry_id]['slug']}' has no attachments")
 

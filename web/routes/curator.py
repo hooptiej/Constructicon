@@ -1,13 +1,15 @@
 """Curator routes (#547): /api/curator/* and /api/pending-decisions*."""
 
-from fastapi import Request, Form, HTTPException, APIRouter
+from fastapi import Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from core import automatch, cards, curation_queue, curator, curator_needs, db, decisions, revisions
 from web.common import templates
 from web.shapes import _friendly_datetime, _project_effective_cover_url, _to_card_face, _to_content_public
+from core import roles
+from web.roles import RoleRouter, requires
 
-router = APIRouter()
+router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own label are viewer
 
 
 @router.get("/api/pending-decisions")
@@ -75,7 +77,7 @@ def api_list_pending_decisions():
     return JSONResponse({"count": len(items), "items": items})
 
 
-@router.post("/api/pending-decisions/{decision_id}/resolve")
+@router.post("/api/pending-decisions/{decision_id}/resolve", dependencies=requires(roles.EDITOR))
 def api_resolve_pending_decision(decision_id: int, project_ids: list[str] = Form([]), choice: str = Form(""),
                                  choices: list[str] = Form([])):
     """#240/#446/#448: resolve a pending decision with the owner's choice.
@@ -145,7 +147,7 @@ def api_curator_list_needs(request: Request, kind: str | None = None, limit: int
     return JSONResponse(needs)
 
 
-@router.post("/api/curator/needs/dismiss")
+@router.post("/api/curator/needs/dismiss", dependencies=requires(roles.EDITOR))
 def api_curator_dismiss_need(nudge_key: str = Form(...), snooze_until: str | None = Form(None)):
     """Dismiss a nudge or need for good (#519: the timed snooze is gone; use Defer).
 
@@ -203,14 +205,14 @@ def _queue_action(fn, key):
     return JSONResponse(fn(key))
 
 
-@router.post("/api/curator/queue/defer")
+@router.post("/api/curator/queue/defer", dependencies=requires(roles.EDITOR))
 def api_curator_queue_defer(key: str = Form(...)):
     """Defer an item (any question, nudge or need): it moves to the Deferred section, with no
     timer, until it is answered or brought back."""
     return _queue_action(curation_queue.defer, key)
 
 
-@router.post("/api/curator/queue/bring-back")
+@router.post("/api/curator/queue/bring-back", dependencies=requires(roles.EDITOR))
 def api_curator_queue_bring_back(key: str = Form(...)):
     """Bring a deferred item back into the main queue."""
     return _queue_action(curation_queue.bring_back, key)

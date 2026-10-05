@@ -2,7 +2,7 @@
 into the dicts pages and the JSON API return, plus the small pure helpers they use.
 Moved verbatim from web/app.py."""
 
-from core import captions, card_payload, cards, db, object_types, revisions, storage, timeline
+from core import captions, card_payload, cards, db, object_types, policy, revisions, storage, timeline
 
 
 def _has_thumbnail(row, spec=None):
@@ -488,7 +488,7 @@ def _to_blog_entry_detail(entry):
     projects and items. Same structure as the db layer returns but with
     attached project and item details."""
     projects = db.list_entry_projects(entry["id"])
-    items = db.list_entry_items(entry["id"])
+    items = policy.filter_visible(db.list_entry_items(entry["id"]))  # #557
     return {
         "id": entry["id"],
         "slug": entry["slug"],

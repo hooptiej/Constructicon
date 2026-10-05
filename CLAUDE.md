@@ -34,7 +34,8 @@ exist yet.
     migrations, the stale-decision sweep, OCR self-heal + watchdog, caption queue
     worker, the trash purge and decision-sweep loops; runs as the `system` actor) and the
     `include_router` calls.
-  - `web/routes/` holds one plain `APIRouter()` per area, **no prefix** (each
+  - `web/routes/` holds one `RoleRouter` (an `APIRouter` whose routes all carry a role label,
+    see "Roles and policy" below) per area, **no prefix** (each
     route writes its full path): `pages.py` (HTML pages + legacy redirects),
     `items.py` (`/api/upload`, `/api/content`, `/api/image/*`, per-item
     captions, gallery, bulk, tags, search, multi-delete), `cards.py`
@@ -197,6 +198,57 @@ Don't map these by hand in routes or tools: the two front ends do it.
   text is that JSON. **Not found is an error**: a getter or setter whose target doesn't
   exist returns code `not_found`, never `None` or `False`. Successful returns are unchanged.
 - Check with `scripts/test_actor_errors.py` (throwaway DB, no server).
+
+## Roles and policy (#557, groundwork for auth #467)
+
+Two separate checks, and a request must pass **both**: the route's **role** (may this actor use
+this door at all?) and the item **policy** (may this actor see this item?). Today neither refuses
+anything; each has one switch that #467 flips.
+
+**Roles: `core/roles.py` + `web/roles.py`.** The ladder is `public < viewer < editor < admin`.
+- Every router in `web/routes/` is a `RoleRouter(default_role=roles.X)`. A route without its own
+  label gets the router default; a route that needs another role says so in its decorator:
+  `@router.post("/api/settings", dependencies=requires(roles.ADMIN))`. The route's label
+  **replaces** the default (never stacks), so every route has exactly one.
+- **Adding a route:** put it in its area's router as usual. If it needs a different role than the
+  router default, add `dependencies=requires(roles.X)`. Rule of thumb: pages and GET reads viewer,
+  curation writes editor, anything that runs the install (settings, secrets, backup, delete-all,
+  audit log, publish, binaries everyone downloads, option management, caption tuning, emptying
+  the trash, permanent deletes, whole-card/hobby conversions) admin; public only for what must work
+  with no login (`/f/<slug>` hotlinks, `/healthz`). A new non-APIRoute (a mount) goes in
+  `web.roles.NON_ROUTE_ROLES`.
+- `require_role(role)` (the dependency) only **records** the label today:
+  `request.state.required_role`, written by the audit middleware into the request log's
+  `audit_log.required_role` column. The refusal (403 `forbidden`, shared error shape) is already
+  written behind `roles.ENFORCE` (False) and `roles.role_of(actor)` (says every actor is admin).
+  #467: make `role_of` return the logged-in user's / install token's role, set `ENFORCE = True`.
+- `python scripts/check_routes_roles.py [--list]` (run in the container: it imports the app) fails
+  when a route has no label, two labels, or a mount isn't listed; it prints the count per role.
+
+**Item policy: `core/policy.py`.** "Can this actor see this item?" is decided there and nowhere else.
+- Direct doors (one item: `/object/<slug>`, `GET /api/image/<slug>` and its revisions/similar,
+  `/f/<slug>` and its thumbnail, MCP `get` / `download` / `get_related` / `list_revisions`) keep
+  their own "no such row" 404 and then call `policy.require_view(row)`: if `can_view` says no it
+  raises `NotFound` (404 `not_found`, the same answer as a missing item, so existence isn't leaked).
+- Lists of what a card/hobby/entry holds (project and hobby pages, MCP `get_project`, Related,
+  similar, blog entries, brand assets, wallpapers) call `policy.filter_visible(rows)`.
+- General browsing (search, gallery, home, unfiled, tag pages, uploader pages) filters in SQL with
+  `policy.sql_browse_clause(prefix)` inside `core/db.py` (formerly `db._not_restricted`), plus
+  `filter_visible` where the route holds the rows.
+- Exports (static site, project zip) call `policy.filter_exportable(rows)`: restricted items never
+  leave the install, whoever asks.
+- **Today** `can_view` is True for everything (restricted items are still served by their direct
+  link, card page and MCP get/download), browsing still hides restricted items, exports exclude
+  them: exactly the pre-#557 behaviour. **#467 flips one constant:** `RESTRICTED_VIEW_ROLE =
+  roles.ADMIN` ("restricted means locked, not just hidden"). Don't decide restriction anywhere else
+  (`object_types.is_restricted` / `restricted_types` outside the policy fail the check below).
+- **Adding a door** (anything that hands out an item or a list of items, web or MCP): call the
+  policy in it, and add it to `DOORS` in `scripts/check_policy_doors.py`. That script (AST, no
+  server) fails when a known door stops calling `policy.`, when a GET route or MCP read tool reads
+  items (`get_by_slug`, `search`, `list_project_items`, ...) without calling it (unless `EXEMPT`
+  with a reason), or when other code decides restriction itself. It can't tell whether the call is
+  on the right rows: `scripts/test_role_policy.py` (throwaway DB) proves the behaviour by flipping
+  the switch, then by denying everything, and checks every door refuses.
 
 ## Service layer (#541): one core module per domain
 
@@ -580,8 +632,9 @@ runs that app via uvicorn itself, same host/port).
 - **Rotate:** `python scripts/mcp_token.py generate <file> --force`, restart the MCP container,
   update every client's `headers`. Old token stops working at the restart.
 - **Identity:** one install token = one identity; the actor stays `mcp`. #467 will map tokens
-  to users (hook comment in `auth.py`). Restricted items via `constructicon_download` are not
-  gated yet: that belongs to the role work (#557).
+  to users (hook comment in `auth.py`). Restricted items via `constructicon_download` now go
+  through the item policy (`core/policy.py`, #557); it still serves them until #467 flips
+  `RESTRICTED_VIEW_ROLE`.
 
 ## Web owns background work; MCP enqueues (#549)
 

@@ -37,7 +37,7 @@ os.environ["CONSTRUCTICON_ROLE"] = "mcp"
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
-from core import actor as actor_ctx
+from core import actor as actor_ctx, policy
 from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
@@ -259,7 +259,7 @@ def _to_public_project(project):
 def _to_public_blog_entry(entry):
     """Full detail shape for a blog entry, including hydrated projects and items."""
     projects = db.list_entry_projects(entry["id"])
-    items = db.list_entry_items(entry["id"])
+    items = policy.filter_visible(db.list_entry_items(entry["id"]))  # #557
     return {
         "id": entry["id"],
         "slug": entry["slug"],
@@ -330,7 +330,8 @@ def constructicon_search(query: str | None = None, tags: list[str] | None = None
     (#282) -- use constructicon_list_redacted to see those.
     """
     # #477: old revisions are still found, marked with `superseded_by` (the current revision's slug) and `rev`.
-    return revisions.decorate([_to_public(r) for r in db.search(query=query, tags=tags, client=None)])
+    # #557: db.search applies the policy's browse clause; the per-item policy is checked here too.
+    return revisions.decorate([_to_public(r) for r in policy.filter_visible(db.search(query=query, tags=tags, client=None))])
 
 
 @mcp.tool()
@@ -343,6 +344,7 @@ def constructicon_get(slug: str) -> dict | None:
     row = db.get_by_slug(slug)
     if row is None:
         raise NotFound(f"No item {slug!r}.")
+    policy.require_view(row, message=f"No item {slug!r}.")  # #557
     return revisions.decorate([_to_public(row)])[0]
 
 
@@ -363,6 +365,7 @@ def constructicon_download(slug: str) -> dict | None:
     row = db.get_by_slug(slug)
     if row is None:
         raise NotFound(f"No item {slug!r}.")
+    policy.require_view(row, message=f"No item {slug!r}.")  # #557 (the #561 note: restricted downloads are the policy's call)
     if not row.get("stored_filename"):
         raise InvalidInput("This object has no uploaded file to download", code="no_file")
     path = storage.path_for(row["stored_filename"])
@@ -715,9 +718,11 @@ def constructicon_get_related(slug: str) -> list[dict]:
 
     Returns a list of related objects, both manually linked and auto-detected.
     """
-    if db.get_by_slug(slug) is None:
+    row = db.get_by_slug(slug)
+    if row is None:
         raise NotFound(f"No item {slug!r}.")
-    return [_to_public(r) for r in db.list_related(slug)]
+    policy.require_view(row, message=f"No item {slug!r}.")  # #557
+    return [_to_public(r) for r in policy.filter_visible(db.list_related(slug))]
 
 
 @mcp.tool()
@@ -907,8 +912,8 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
     if project is None:
         raise NotFound(f"No card {id_or_slug!r}.")
 
-    # Get the project items
-    items = db.list_project_items(project["id"])
+    # Get the project items (#557: the item policy decides what the card shows)
+    items = policy.filter_visible(db.list_project_items(project["id"]))
     items_public = []
     for item in items:
         item_dict = _to_public(item)
@@ -921,14 +926,14 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
     cover = None
     if project.get("cover_slug"):
         cover_row = db.get_by_slug(project["cover_slug"])
-        if cover_row:
+        if cover_row and policy.can_view(cover_row):  # #557
             cover = _to_public(cover_row)
 
     # Get the writeup object if it exists
     writeup = None
     if project.get("writeup_slug"):
         writeup_row = db.get_by_slug(project["writeup_slug"])
-        if writeup_row:
+        if writeup_row and policy.can_view(writeup_row):  # #557
             writeup = _to_public(writeup_row)
 
     return {
@@ -1288,8 +1293,8 @@ def constructicon_get_posts_for_tag(tag_name: str) -> list[dict]:
     tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
         raise NotFound(f"No such tag: {tag_name!r}")
-    rows = db.list_posts_for_tag(tag["id"], limit=10000)
-    return [_to_public(r) for r in rows]
+    rows = db.list_posts_for_tag(tag["id"], limit=10000)  # the policy's browse clause applies in db
+    return [_to_public(r) for r in policy.filter_visible(rows)]  # #557
 
 
 @mcp.tool()
@@ -1460,7 +1465,7 @@ def constructicon_list_brand_assets() -> list[dict]:
     Returns a list of brand asset dicts (the usual public shape plus
     "is_brand_asset" and "brand_role").
     """
-    assets = db.list_brand_assets()
+    assets = policy.filter_visible(db.list_brand_assets())  # #557
     return [
         {**_to_public(asset), "is_brand_asset": bool(asset.get("is_brand_asset")), "brand_role": asset.get("brand_role")}
         for asset in assets
@@ -2141,8 +2146,10 @@ def constructicon_list_revisions(slug: str) -> dict:
     """The revision chain a file belongs to (#477), oldest first: [{slug, title, filename, rev,
     is_current, is_this, redacted}], plus `current` (the newest revision), `superseded` (is this
     file an older one) and this file's `rev` of `of`. {"in_chain": false} for a file with no revisions."""
-    if db.get_by_slug(slug) is None:
+    row = db.get_by_slug(slug)
+    if row is None:
         raise NotFound(f"No item {slug!r}.")
+    policy.require_view(row, message=f"No item {slug!r}.")  # #557
     return {"ok": True, **revisions.revision_view(slug)}
 
 

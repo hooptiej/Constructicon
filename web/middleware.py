@@ -128,6 +128,9 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
         response = None
         status_code = 500
         error_detail = None
+        # #557: touch request.state now so scope["state"] exists before the route runs; the route's
+        # require_role dependency (web/roles.py) writes the route's role label into it.
+        state = request.state
         try:
             response = await call_next(request)
             status_code = response.status_code
@@ -175,6 +178,7 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                     error_detail=error_detail,
                     affected_slugs=affected_slugs,
                     actor=actor_ctx.current_actor(),  # #560
+                    required_role=getattr(state, "required_role", None),  # #557
                 )
 
         return response

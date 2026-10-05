@@ -13,7 +13,8 @@ from pathlib import Path
 
 # timeline is pure (no DB access — see its module docstring), so this
 # direction of import can't cycle; it's here for list_project_items' sort.
-from . import actor as actor_ctx, card_rules, timeline
+# #557: policy owns the restricted-items browse filter (imports nothing from db at module load).
+from . import actor as actor_ctx, card_rules, policy, timeline
 
 # #453: overridable so the DB can live in its own bind-mounted DIRECTORY.
 # WAL mode keeps -wal/-shm next to the DB file; with only the file
@@ -790,8 +791,9 @@ def init_db(migrate=True):
         # row images (before/after) for audit + undo. Direct HTTP callers keep getting
         # the old request-log row (these columns NULL there).
         existing_audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_log)")}
+        # #557: required_role = the role label of the route a request-log row is about (web/roles.py).
         for column, ddl_type in (("op", "TEXT"), ("actor", "TEXT"), ("batch_id", "TEXT"),
-                                 ("mutations", "TEXT"), ("undone_by", "INTEGER")):
+                                 ("mutations", "TEXT"), ("undone_by", "INTEGER"), ("required_role", "TEXT")):
             if column not in existing_audit_columns:
                 conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {ddl_type}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_batch ON audit_log(batch_id)")
@@ -1597,22 +1599,6 @@ def list_uploaders(query=None, client=None):
         conn.close()
 
 
-def _not_restricted(prefix=""):
-    """#443: SQL fragment (" AND <prefix>media_type NOT IN (...)", or "" when
-    no type is restricted) that keeps restricted types (private keys and
-    certificates) out of GENERAL BROWSING queries: search/gallery, home
-    lists, tag pages, unfiled. Deliberately NOT applied to project items,
-    related items or blog-entry items: the owner attaches keys to projects
-    on purpose, and exports filter them separately (object_types.is_restricted).
-    Type keys are registry identifiers, validated before being inlined."""
-    from core import object_types  # lazy: type modules import db
-    keys = object_types.restricted_types()
-    if not keys:
-        return ""
-    assert all(re.fullmatch(r"[a-z0-9_]+", k) for k in keys), keys
-    return f" AND {prefix}media_type NOT IN ({', '.join(repr(k) for k in keys)})"
-
-
 def list_restricted():
     """#443: every non-redacted row of a restricted type, newest first, for
     the admin pane's "Keys & certificates" list (and the MCP)."""
@@ -1665,7 +1651,7 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, inclu
         if not include_redacted:
             # #443: restricted types ride with redaction: the enumerate-
             # everything callers (include_redacted=True) still see them.
-            clauses.append("redacted = 0" + _not_restricted())
+            clauses.append("redacted = 0" + policy.sql_browse_clause())
         if not include_brand:
             clauses.append("is_brand_asset = 0")
         if not include_superseded:
@@ -2411,7 +2397,7 @@ def list_posts_for_tag(tag_id, include_descendants=True, limit=50):
     try:
         rows = conn.execute(
             f"SELECT DISTINCT ce.* FROM capture_events ce JOIN post_tags pt ON pt.post_slug = ce.slug "
-            f"WHERE pt.tag_id IN ({placeholders}) AND ce.redacted = 0{_not_restricted('ce.')} ORDER BY ce.timestamp DESC LIMIT ?",
+            f"WHERE pt.tag_id IN ({placeholders}) AND ce.redacted = 0{policy.sql_browse_clause('ce.')} ORDER BY ce.timestamp DESC LIMIT ?",
             tag_ids + [limit],
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
@@ -2425,7 +2411,7 @@ def list_recent_posts(limit=10):
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT * FROM capture_events WHERE redacted = 0" + _not_restricted() + " ORDER BY timestamp DESC LIMIT ?", (limit,)
+            "SELECT * FROM capture_events WHERE redacted = 0" + policy.sql_browse_clause() + " ORDER BY timestamp DESC LIMIT ?", (limit,)
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:
@@ -2885,7 +2871,7 @@ def list_unfiled_items(limit=10000, include_brand=False, include_superseded=Fals
             brand_clause += _not_superseded("ce.").lstrip() + " "
         rows = conn.execute(
             "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-            "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + _not_restricted("ce.") + " " + brand_clause +
+            "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + policy.sql_browse_clause("ce.") + " " + brand_clause +
             "ORDER BY ce.timestamp DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -2905,7 +2891,7 @@ def count_unfiled_items(include_brand=False, include_superseded=False):
             brand_clause += _not_superseded("ce.").lstrip() + " "
         return conn.execute(
             "SELECT COUNT(*) FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-            "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + _not_restricted("ce.") + " " + brand_clause
+            "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + policy.sql_browse_clause("ce.") + " " + brand_clause
         ).fetchone()[0]
     finally:
         conn.close()
@@ -2925,7 +2911,7 @@ def list_loose_reference_objects(limit=500):
     try:
         rows = conn.execute(
             "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
-            "WHERE ce.provenance = 'reference' AND ce.redacted = 0" + _not_restricted("ce.") + " AND pi.post_slug IS NULL "
+            "WHERE ce.provenance = 'reference' AND ce.redacted = 0" + policy.sql_browse_clause("ce.") + " AND pi.post_slug IS NULL "
             "ORDER BY ce.rowid DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -2958,7 +2944,7 @@ def list_recent_items_by_type(limit_per_type=10, include_brand=False, include_su
         # Fetch all distinct media_types that have at least one (non-redacted,
         # #282) row -- a type whose only rows are redacted gets no tab.
         media_type_rows = conn.execute(
-            "SELECT DISTINCT media_type FROM capture_events WHERE redacted = 0" + _not_restricted() + brand_clause
+            "SELECT DISTINCT media_type FROM capture_events WHERE redacted = 0" + policy.sql_browse_clause() + brand_clause
         ).fetchall()
 
         result = {}
@@ -2979,17 +2965,19 @@ def list_recent_items_by_type(limit_per_type=10, include_brand=False, include_su
 # --- Audit log ---
 # Captures mutating API requests for debugging/recovery after failures.
 
-def insert_audit_log(method, path, form_body, status_code, error_detail=None, affected_slugs=None, actor=None):
+def insert_audit_log(method, path, form_body, status_code, error_detail=None, affected_slugs=None, actor=None,
+                     required_role=None):
     """Insert a row into the audit_log table. form_body should be a dict (will be
     JSON-serialized). affected_slugs can be a list of slugs or None. Automatically
     records the current timestamp. #560: `actor` (default: the current actor context)
-    fills the request-log row's actor column."""
+    fills the request-log row's actor column. #557: `required_role` is the route's role
+    label (None when no route matched, e.g. a 404 or a request the guard refused)."""
     conn = get_conn()
     try:
         now = time.time()
         conn.execute(
-            "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, actor) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, actor, "
+            "required_role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 method,
                 path,
@@ -2999,6 +2987,7 @@ def insert_audit_log(method, path, form_body, status_code, error_detail=None, af
                 error_detail,
                 now,
                 actor_ctx.resolve(actor),
+                required_role,
             ),
         )
         conn.commit()

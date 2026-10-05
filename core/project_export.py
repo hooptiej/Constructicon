@@ -12,7 +12,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from core import card_rules, db, object_types, storage
+from core import card_rules, db, policy, storage
 
 
 def export_project(project_id_or_slug):
@@ -36,8 +36,9 @@ def export_project(project_id_or_slug):
     # reads this zip (it's meant for offline/agent analysis).
     # #477: current revisions only; superseded older revisions stay out of the zip.
     older = db.superseded_slugs()
-    items = [i for i in db.list_project_items(project["id"])
-             if not object_types.is_restricted(i) and i["slug"] not in older]
+    # #557: what may leave the install is core/policy.py's call (filter_exportable).
+    items = [i for i in policy.filter_exportable(db.list_project_items(project["id"]))
+             if i["slug"] not in older]
 
     # Fetch writeup body if writeup_slug is set
     writeup_body = None

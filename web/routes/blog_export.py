@@ -4,16 +4,18 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Request, Form, HTTPException, APIRouter
+from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse
 
 from core import blog, db, site_export
 from web.shapes import _to_blog_entry_detail
+from core import roles
+from web.roles import RoleRouter, requires
 
-router = APIRouter()
+router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
 
-@router.get("/api/blog-entries")
+@router.get("/api/blog-entries", dependencies=requires(roles.VIEWER))
 def api_list_blog_entries(request: Request, status: str = ""):
     """List all blog entries, optionally filtered by status (draft/published/etc).
     Returns a list of entry metadata without hydrated projects/items."""
@@ -34,7 +36,7 @@ def api_list_blog_entries(request: Request, status: str = ""):
     ])
 
 
-@router.get("/api/blog-entries/{slug}")
+@router.get("/api/blog-entries/{slug}", dependencies=requires(roles.VIEWER))
 def api_get_blog_entry(request: Request, slug: str):
     """Get a single blog entry by slug with full hydration: projects and items."""
     entry = db.get_blog_entry(slug)
@@ -192,7 +194,7 @@ async def api_set_blog_entry_items(
 
 # --- Site export (generate static site for deployment) ---
 
-@router.post("/api/export/build")
+@router.post("/api/export/build", dependencies=requires(roles.ADMIN))
 async def api_export_build(request: Request):
     """Build a static website from the selected projects and blog entries.
 
@@ -228,7 +230,7 @@ async def api_export_build(request: Request):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/api/export/config")
+@router.get("/api/export/config", dependencies=requires(roles.ADMIN))
 def api_export_config():
     """Retrieve the saved export configuration. Returns the last successfully
     built config, or an empty object {} if none has been saved yet.
@@ -242,7 +244,7 @@ def api_export_config():
         return JSONResponse({})
 
 
-@router.get("/api/export/targets")
+@router.get("/api/export/targets", dependencies=requires(roles.ADMIN))
 def api_export_targets():
     """Retrieve the configured GitHub Pages publish targets.
     Returns a dict mapping target names to {repo, branch}.
@@ -262,7 +264,7 @@ def api_export_targets():
         return JSONResponse(default_targets)
 
 
-@router.post("/api/export/publish")
+@router.post("/api/export/publish", dependencies=requires(roles.ADMIN))
 async def api_export_publish(request: Request):
     """Publish the current build to a GitHub Pages repository.
 

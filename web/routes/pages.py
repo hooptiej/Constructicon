@@ -1,7 +1,7 @@
 """HTML page routes (#547): home, project / object / hobby pages, unfiled, user gallery,
 brand, wallpaper, account, admin, curator, captions review, plus the legacy redirects."""
 
-from fastapi import Request, HTTPException, APIRouter
+from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from core import card_rules, cards, curation_queue, curator, db, object_types, revisions, timeline
@@ -9,8 +9,10 @@ from core import physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
 from web.common import _build_breadcrumbs, _rev_note, templates
 from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_object_detail, _to_public, _to_timeline_project
+from core import policy, roles
+from web.roles import RoleRouter, requires
 
-router = APIRouter()
+router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own label are viewer
 
 
 # --- Pages ---
@@ -58,7 +60,7 @@ def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
     # {slug, title, thumb_url}
     reference_objects = []
     if ref:
-        loose_ref_rows = db.list_loose_reference_objects()
+        loose_ref_rows = policy.filter_visible(db.list_loose_reference_objects())  # #557
         for row in loose_ref_rows:
             media_type = row.get("media_type") or "image"
             spec = object_types.get_object_type(media_type)
@@ -105,7 +107,7 @@ def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
     files_by_type = {}
     older_revs = 0
     for mt, rows in db.list_recent_items_by_type(limit_per_type=10000, include_superseded=True).items():
-        rows, n_sup = _split_revisions(rows, show_all_revs)
+        rows, n_sup = _split_revisions(policy.filter_visible(rows), show_all_revs)  # #557 (+ the browse clause in db)
         older_revs += n_sup
         if rows:
             files_by_type[mt] = _card_items(rows)
@@ -181,11 +183,16 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
     project = db.get_project(slug)
     if project is None:
         raise HTTPException(status_code=404, detail="not found")
+    # #557: a cover the actor may not see isn't named on the page either (today every cover is visible).
+    cover_row = db.get_by_slug(project["cover_slug"]) if project.get("cover_slug") else None
+    if cover_row is not None and not policy.can_view(cover_row):
+        project = {**project, "cover_slug": None}
     # raw_items feeds both the card grid (via _to_content_public below) and
     # the Timeline feature's span resolution (core/timeline.py), which needs
     # the raw capture_events fields _to_content_public's card shape drops.
     # #477: only the current revision of a chain is a card/stack member unless ?rev=all.
-    raw_items, n_sup = _split_revisions(db.list_project_items(project["id"]), rev == "all")
+    # #557: what this card shows is the item policy's call (today: every item, restricted too).
+    raw_items, n_sup = _split_revisions(policy.filter_visible(db.list_project_items(project["id"])), rev == "all")
     items = [_to_content_public(r, project_slug=slug) for r in raw_items]
     child_projects = db.list_child_projects(project["id"])
     ancestors = db.list_project_ancestors(project["id"])
@@ -240,7 +247,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             **public,
         })
     for child in child_projects:
-        child_items = db.list_project_items(child["id"])
+        child_items = policy.filter_visible(db.list_project_items(child["id"]))  # #557
         child_start, child_end = timeline.resolve_project_span(child, child_items)
         timeline_children.append({
             "id": child["id"],
@@ -357,7 +364,8 @@ def unfiled_page(request: Request, rev: str = ""):
     with bulk selection/filing tools the widget has no room for. Reuses the
     exact same db.list_unfiled_items()/_to_public() data shape the widget
     already uses, so the gallery-card markup is identical everywhere."""
-    rows, n_sup = _split_revisions(db.list_unfiled_items(include_superseded=True), rev == "all")  # #477
+    rows, n_sup = _split_revisions(policy.filter_visible(db.list_unfiled_items(include_superseded=True)),
+                                   rev == "all")  # #477, #557
     unfiled_items = _card_items(rows)
     return templates.TemplateResponse(
         request, "unfiled.html",
@@ -384,7 +392,7 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
 
     fields = cards.hobby_fields(hobby)
     projects = db.list_projects_for_hobby(hobby["id"])
-    items_by_project = {p["id"]: db.list_project_items(p["id"]) for p in projects}
+    items_by_project = {p["id"]: policy.filter_visible(db.list_project_items(p["id"])) for p in projects}  # #557
     queue = _card_queue_strip(hobby=hobby["slug"])
 
     def thumb_fn(r):
@@ -426,7 +434,8 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
                                        needs_input=bool(queue["items"]))
     hobby_face["cover_url"] = _project_cover_url(hobby_face["cover_slug"]) if hobby_face["cover_slug"] else None
 
-    loose_rows, n_sup = _split_revisions(db.list_loose_hobby_objects(hobby["id"], include_superseded=True), rev == "all")  # #477
+    loose_rows, n_sup = _split_revisions(policy.filter_visible(db.list_loose_hobby_objects(hobby["id"], include_superseded=True)),
+                                     rev == "all")  # #477, #557
     loose = _card_items(loose_rows)
     start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
@@ -465,7 +474,8 @@ def wallpaper_page(request: Request):
 def user_gallery_page(request: Request, uploader: str, rev: str = ""):
     # #563: no 1000-row cap (it made "1000 uploads" of 1,640). The page embeds the whole list and
     # the ItemCards pager (batches of 120) draws it lazily, so the count is the true total.
-    rows, n_sup = _split_revisions(db.search(uploaded_by=uploader, limit=10_000_000), rev == "all")  # #477
+    rows, n_sup = _split_revisions(policy.filter_visible(db.search(uploaded_by=uploader, limit=10_000_000)),
+                                   rev == "all")  # #477, #557
     items = _card_items(rows)
     return templates.TemplateResponse(
         request, "user_gallery.html",
@@ -486,6 +496,7 @@ def object_detail_page(request: Request, slug: str):
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    policy.require_view(row)  # #557: the item policy (today: served; #467: restricted needs admin)
     item = _to_object_detail(row)
     full_url = str(request.base_url).rstrip("/") + item["url"] if item["is_file"] else None
     full_object_url = str(request.base_url).rstrip("/") + f"/object/{slug}"
@@ -496,7 +507,7 @@ def object_detail_page(request: Request, slug: str):
     # existed (predating #15) that accidentally hid "Add related" for every
     # content-only row (youtube, document posts), not just non-file types.
     # Always computed now so every object type gets the same panel.
-    related = [_to_public(r) for r in db.list_related(slug)]
+    related = [_to_public(r) for r in policy.filter_visible(db.list_related(slug))]  # #557
     # #137: breadcrumb navigation — read the from param and build the breadcrumb list
     from_param = request.query_params.get("from")
     breadcrumbs = _build_breadcrumbs(from_param, item["display_name"])
@@ -538,7 +549,7 @@ def account_page(request: Request):
     return templates.TemplateResponse(request, "account.html", {})
 
 
-@router.get("/admin", response_class=HTMLResponse)
+@router.get("/admin", response_class=HTMLResponse, dependencies=requires(roles.ADMIN))
 def admin_page(request: Request, embed: int = 0):
     """#295: the admin surface as its own full page. It was a bottom-right
     pop-out (_admin_pane.html) included on every page until it outgrew a

@@ -3,17 +3,19 @@
 
 from datetime import datetime
 
-from fastapi import Request, Form, HTTPException, APIRouter
+from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse, Response
 
 from core import card_rules, cards, changes, db, hobbies, membership, timeline
 from core.errors import NotFound
 from web.shapes import _to_card_face, _to_project_option
+from core import roles
+from web.roles import RoleRouter, requires
 
-router = APIRouter()
+router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
 
-@router.get("/api/cards/{slug}")
+@router.get("/api/cards/{slug}", dependencies=requires(roles.VIEWER))
 def api_card(slug: str):
     """The card face for one card (V2 piece 7, 8.1): zone content as JSON, plus the cover URL."""
     project = db.get_project(slug)
@@ -22,7 +24,7 @@ def api_card(slug: str):
     return JSONResponse(_to_card_face(project))
 
 
-@router.get("/api/projects")
+@router.get("/api/projects", dependencies=requires(roles.VIEWER))
 def api_projects(request: Request):
     """Populates the upload drawer's Project dropdown (#1) — every project,
     most-recently-updated first, same ordering list_projects() already uses
@@ -318,7 +320,7 @@ def api_unnest_card(project_id: str):
     return JSONResponse(cards.unnest(project_id).to_dict())
 
 
-@router.get("/api/projects/{project_id}/explain")
+@router.get("/api/projects/{project_id}/explain", dependencies=requires(roles.VIEWER))
 def api_explain_card(project_id: str):
     """V2 cards 6: everything about a card in one JSON object (same as constructicon_explain_card)."""
     return JSONResponse(cards.explain_card(project_id))
@@ -384,7 +386,7 @@ def api_delete_project(project_id: str):
     return JSONResponse({**result.to_dict(), **result.data})
 
 
-@router.get("/api/projects/{project_id}/export.zip")
+@router.get("/api/projects/{project_id}/export.zip", dependencies=requires(roles.VIEWER))
 def api_export_project(project_id: str):
     """Export a project as a zip file containing the manifest and all uploaded
     files. The zip contains:
@@ -450,7 +452,7 @@ def api_remove_project_related(request: Request, slug: str, related_slug: str = 
 # --- Typed links (V2 cards 3.8). Rule violations are CardErrors: 422 bad_link,
 # 409 link_conflict, 404 not_found -- the same codes the MCP tools return. ---
 
-@router.get("/api/project/{slug}/links")
+@router.get("/api/project/{slug}/links", dependencies=requires(roles.VIEWER))
 def api_project_links(slug: str):
     """Every link on a card, both directions, with direction + label."""
     return JSONResponse(cards.list_links(slug))
@@ -478,7 +480,7 @@ def api_retype_link(a: str = Form(...), b: str = Form(...), from_type: str = For
     return JSONResponse({**result.to_dict(), "links": cards.list_links(a)})
 
 
-@router.post("/api/project/{slug}/convert-to-hobby")
+@router.post("/api/project/{slug}/convert-to-hobby", dependencies=requires(roles.ADMIN))
 def api_convert_project_to_hobby(request: Request, slug: str):
     """Convert an existing project into a hobby (DESTRUCTIVE, but undoable since #541 phase D).
 

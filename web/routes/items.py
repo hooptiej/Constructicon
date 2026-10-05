@@ -5,7 +5,7 @@ import json
 import time
 from datetime import datetime
 
-from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTasks, APIRouter
+from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -13,8 +13,10 @@ from core import captions, db, ingest, items, membership, object_types, ocr, rev
 from core import tags as tags_svc, timeline
 from web.common import DESKTOP_APP_CLIENT_HEADER, DESKTOP_APP_CLIENT_VALUE
 from web.shapes import _friendly_datetime, _to_project_option, _to_public
+from core import policy, roles
+from web.roles import RoleRouter, requires
 
-router = APIRouter()
+router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
 
 @router.post("/api/delete")
@@ -222,7 +224,7 @@ def _derive_processing_status(row):
     return {"stages": stages, "in_flight": in_flight, "overall": overall}
 
 
-@router.get("/api/processing")
+@router.get("/api/processing", dependencies=requires(roles.VIEWER))
 def api_processing(request: Request, session: str = ""):
     """#388: in-flight post-upload work (OCR/caption/embed) for the processing
     drawer. Returns everything still mid-pipeline across the whole box (however
@@ -256,11 +258,12 @@ def api_processing(request: Request, session: str = ""):
     return JSONResponse({"items": items, "count": in_flight_count})
 
 
-@router.get("/api/image/{slug}")
+@router.get("/api/image/{slug}", dependencies=requires(roles.VIEWER))
 def api_get_image(request: Request, slug: str):
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    policy.require_view(row)  # #557
     return JSONResponse(_to_public(row))
 
 
@@ -339,7 +342,7 @@ def api_mark_caption_used(slug: str):
     return JSONResponse({"step": step_index, "step_label": step_label})
 
 
-@router.get("/api/captions/unreviewed")
+@router.get("/api/captions/unreviewed", dependencies=requires(roles.VIEWER))
 def api_captions_unreviewed(request: Request):
     """#409: objects with an auto-caption suggestion awaiting review — feeds the
     bulk caption-review page. Accept reuses POST /api/image/{slug} (sets
@@ -478,7 +481,7 @@ def api_recover_redacted(slug: str):
     return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id})
 
 
-@router.post("/api/image/{slug}/delete-redacted-file")
+@router.post("/api/image/{slug}/delete-redacted-file", dependencies=requires(roles.ADMIN))
 def api_delete_redacted_file(slug: str, confirm: str = Form("")):
     """Permanently erases the held redacted file (confirm=true). The item stays redacted,
     metadata only. Not undoable."""
@@ -599,10 +602,12 @@ def api_remove_related(request: Request, slug: str, related_slug: str = Form(...
 # Core (core/revisions.py) validates and writes through the change log; a rule violation is a
 # CardError, which the app-wide handler turns into the shared 422/409/404 {error:{code,message}}.
 
-@router.get("/api/image/{slug}/revisions")
+@router.get("/api/image/{slug}/revisions", dependencies=requires(roles.VIEWER))
 def api_get_revisions(slug: str):
-    if db.get_by_slug(slug) is None:
+    row = db.get_by_slug(slug)
+    if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    policy.require_view(row)  # #557
     return JSONResponse(revisions.revision_view(slug))
 
 
@@ -659,20 +664,22 @@ def api_remove_object_from_project(request: Request, slug: str, project_id: str 
     return JSONResponse([_to_project_option(p) for p in db.list_projects_for_post(slug)])
 
 
-@router.get("/api/image/{slug}/similar")
+@router.get("/api/image/{slug}/similar", dependencies=requires(roles.VIEWER))
 def api_get_similar(request: Request, slug: str):
     """Auto-detected candidates — visual (perceptual hash) and/or semantic
     (text embedding) — distinct from the manually-curated Related panel.
     Each result carries similarity_reason ("visual"/"text"/"both") and
     similarity_score so the UI can label why it's suggested.
     """
-    if db.get_by_slug(slug) is None:
+    row = db.get_by_slug(slug)
+    if row is None:
         raise HTTPException(status_code=404, detail="not found")
+    policy.require_view(row)  # #557
     matches = similarity.find_similar(slug)
     results = []
     for m in matches:
         row = db.get_by_slug(m["slug"])
-        if row is None:
+        if row is None or not policy.can_view(row):  # #557
             continue
         item = _to_public(row)
         item["similarity_reason"] = m["reason"]
@@ -681,7 +688,7 @@ def api_get_similar(request: Request, slug: str):
     return JSONResponse(results)
 
 
-@router.get("/api/gallery")
+@router.get("/api/gallery", dependencies=requires(roles.VIEWER))
 def api_gallery(request: Request, query: str = "", client: str = "", per_user: int = 4):
     """Grouped-by-uploader gallery data: each uploader's most recent N items
     plus their real total, queried per-uploader so no single prolific
@@ -698,12 +705,12 @@ def api_gallery(request: Request, query: str = "", client: str = "", per_user: i
             "uploaded_by": u["uploaded_by"],
             "uploaded_by_display": u["uploaded_by"],
             "total": u["total"],
-            "items": [_to_public(r) for r in items],
+            "items": [_to_public(r) for r in policy.filter_visible(items)],  # #557 (+ the browse clause in db.search)
         })
     return JSONResponse(groups)
 
 
-@router.get("/api/clients")
+@router.get("/api/clients", dependencies=requires(roles.VIEWER))
 def api_clients(request: Request):
     return JSONResponse(db.list_clients())
 
@@ -744,7 +751,7 @@ def api_bulk_attach_tags(slugs: list[str] = Form(...), tag_names: list[str] = Fo
     return JSONResponse({"count": result.data["count"], "batch_id": result.batch_id})
 
 
-@router.get("/api/tags")
+@router.get("/api/tags", dependencies=requires(roles.VIEWER))
 def api_tags(request: Request):
     """Return the tag tree flattened with breadcrumb paths for autocomplete.
     Each tag includes its full path from root (e.g. "Parent > Child > Leaf")
@@ -772,9 +779,10 @@ def api_tags(request: Request):
     return JSONResponse(flat_tags)
 
 
-@router.get("/api/search")
+@router.get("/api/search", dependencies=requires(roles.VIEWER))
 def api_search(request: Request, query: str = "", tags: str = "", client: str = ""):
     tag_list = [t for t in tags.split(",") if t] or None
-    results = db.search(query=query or None, tags=tag_list, client=client or None)
+    # #557: db.search applies the policy's browse clause; the per-item policy is checked here too.
+    results = policy.filter_visible(db.search(query=query or None, tags=tag_list, client=client or None))
     # #477: search still finds old revisions, but marks them (superseded_by = the current one).
     return JSONResponse(revisions.decorate([_to_public(r) for r in results]))

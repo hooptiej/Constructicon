@@ -5,15 +5,17 @@ import io
 import zipfile
 from pathlib import Path
 
-from fastapi import Request, Form, UploadFile, File, HTTPException, APIRouter
+from fastapi import Request, Form, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 
 from core import backup, captions, db, items, object_types, reset, storage
 from core import provenance_options
 from web.common import DESKTOP_APP_BUILD_DIR, DESKTOP_APP_BUILD_PATH
 from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public
+from core import roles
+from web.roles import RoleRouter, requires
 
-router = APIRouter()
+router = RoleRouter(default_role=roles.ADMIN)  # #557: routes without their own label are admin
 
 
 DELETE_ALL_PHRASE = reset.CONFIRM_PHRASE
@@ -313,7 +315,7 @@ def api_captions_reset_breaker():
     return JSONResponse({"ok": True, "breaker": captions.breaker_status()})
 
 
-@router.get("/api/account/desktop-app-build")
+@router.get("/api/account/desktop-app-build", dependencies=requires(roles.VIEWER))
 def api_get_desktop_app_build(request: Request):
     if not DESKTOP_APP_BUILD_PATH.exists():
         return JSONResponse({"exists": False})
@@ -343,7 +345,7 @@ def _provenance_list_response(scope):
     return JSONResponse({"scope": scope, "options": provenance_options.list_options(scope, include_retired=True)})
 
 
-@router.get("/api/provenance-options")
+@router.get("/api/provenance-options", dependencies=requires(roles.VIEWER))
 def api_list_provenance_options(scope: str = "card", include_retired: int = 0):
     """#529: one editable provenance list ('card' or 'file'), in picker order."""
     return JSONResponse({"scope": scope,

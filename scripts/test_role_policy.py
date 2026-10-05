@@ -63,6 +63,10 @@ def pem_certificate():
     return cert.public_bytes(serialization.Encoding.PEM)
 
 
+# build_site always refreshes <EXPORTS_DIR>/current (the /preview mount) and prunes old builds:
+# keep that inside the throwaway dir, never the install's real exports/.
+site_export.EXPORTS_DIR = Path(TMP) / "exports"
+
 db.init_db()
 storage.STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 HOST = "testhost.local:8000"

@@ -1195,6 +1195,12 @@ def remove_from_hobby(card, hobby, *, dry_run=False, actor=None, batch_id=None):
 
 # --- Moving and copying files ----------------------------------------------------
 
+def _membership():
+    """core/membership.py owns project_items writes (#541 phase C). Lazy: it imports Result from here."""
+    from . import membership
+    return membership
+
+
 def _as_slug_list(slugs):
     if isinstance(slugs, str):
         slugs = [slugs]
@@ -1235,10 +1241,10 @@ def _transfer_files(slugs, from_card, to_card, move, dry_run, actor, batch_id):
     batch_id = batch_id or changes.new_batch_id()
     if not dry_run:
         with db.transaction():
-            db.write_card_items(dst["id"], slugs, [], "move_files" if move else "copy_files", actor, batch_id,
+            _membership().write(dst["id"], slugs, [], "move_files" if move else "copy_files", actor, batch_id,
                                 [src["slug"], dst["slug"]])
             if move:
-                db.write_card_items(src["id"], [], slugs, "move_files", actor, batch_id, [src["slug"], dst["slug"]])
+                _membership().write(src["id"], [], slugs, "move_files", actor, batch_id, [src["slug"], dst["slug"]])
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
@@ -1325,7 +1331,7 @@ def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None
                 set_highlight(new["id"], True, actor=actor, batch_id=batch_id)
             files = _as_slug_list(p["file_slugs"]) if p.get("file_slugs") else []
             if files:
-                db.write_card_items(new["id"], files, [], "split_card", actor, batch_id, [new["slug"], src["slug"]])
+                _membership().write(new["id"], files, [], "split_card", actor, batch_id, [new["slug"], src["slug"]])
                 if src.get("cover_slug") in files:
                     db.write_card_row(new["id"], {"cover_slug": src["cover_slug"]}, "split_card", actor, batch_id)
             hobby_spec = p.get("hobbies", "inherit" if relation == "sibling" else None)
@@ -1347,7 +1353,7 @@ def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None
             db.write_card_row(src["id"], {"description": ""}, "split_card", actor, batch_id)
             rows.append({"card": src["slug"], "field": "description", "before": src.get("description"), "after": ""})
         if moved_all and not keep_in_source:
-            db.write_card_items(src["id"], [], moved_all, "split_card", actor, batch_id, [src["slug"]])
+            _membership().write(src["id"], [], moved_all, "split_card", actor, batch_id, [src["slug"]])
             for s in moved_all:
                 rows.append({"card": src["slug"], "field": "file", "before": s, "after": None})
             if src.get("cover_slug") in moved_all:
@@ -1386,12 +1392,12 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
     file_slugs = [r["post_slug"] for r in item_rows]
     blank_writeup = a.get("writeup_slug") if a.get("writeup_slug") and db.blank_document_body(a["writeup_slug"]) else None
     moving = [s for s in file_slugs if s != blank_writeup]
-    added, _ = db.write_card_items(keep["id"], moving, [], op, actor, batch_id, slugs)
+    added, _ = _membership().write(keep["id"], moving, [], op, actor, batch_id, slugs)
     for s in added:
         rows.append({"card": keep["slug"], "field": "file", "before": None, "after": s})
     if a.get("writeup_slug") and not blank_writeup and a["writeup_slug"] in moving:
         warnings.append(f"'{a['title']}' had a write-up with text; it's now an ordinary file in '{keep['title']}'.")
-    db.write_card_items(a["id"], [], file_slugs, op, actor, batch_id, slugs)
+    _membership().write(a["id"], [], file_slugs, op, actor, batch_id, slugs)
     if blank_writeup:
         def _drop_doc(log):
             for r in db.list_post_tag_rows(blank_writeup):
@@ -1547,7 +1553,7 @@ def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolv
 
         def _drop_doc(log):
             if blank_ws in file_slugs:
-                log.delete("project_items", {"project_id": cid, "post_slug": blank_ws})
+                _membership().write_items(log, cid, (), [blank_ws])
             for r in db.list_post_tag_rows(blank_ws):
                 log.delete("post_tags", {"post_slug": blank_ws, "tag_id": r["tag_id"]})
             log.delete("capture_events", {"slug": blank_ws})
@@ -1559,7 +1565,7 @@ def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolv
         warnings.append(f"The write-up '{ws}' has text, so it was kept as an ordinary unfiled document.")
     if not dissolving:
         keep_files = [s for s in file_slugs if s != blank_ws]
-        db.write_card_items(cid, [], keep_files, op, actor, batch_id, slugs)
+        _membership().write(cid, [], keep_files, op, actor, batch_id, slugs)
         out["files"] = len(keep_files)
     for r in db.list_hobby_rows(cid):
         db.delete_card_hobby(cid, r["hobby_tag_id"], op, actor, batch_id, slugs)

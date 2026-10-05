@@ -18,6 +18,9 @@ constructicon_undo(batch_id); it calls back into this module for the file side o
                            caption / embedded metadata) re-runs through the caller's runner.
   delete(slugs)            files -> <storage>/.trash/<batch_id>/, rows (and everything that points
                            at them) deleted with row images, one `trash` row per item.
+  relate(a, b) / unrelate(a, b)   (phase C) the "related" link; relate also shares tags and
+                           card memberships both ways (#16), all imaged.
+  update(..., tags=[...])  (phase C) the free-text tags ride in the same batch (core/tags.py).
   purge_expired() / empty_trash(confirm) / trash_summary()
 
 Trash (owner decision on #541, 2026-10-04): a deleted file stays in the trash for TRASH_DAYS,
@@ -39,12 +42,15 @@ import os
 import time
 from datetime import datetime
 
-from . import changes, db, embedded_metadata, ingest, object_types, physical_piece, provenance_options, storage
-from . import thumbnails, timeline
+from . import changes, db, embedded_metadata, ingest, membership, object_types, physical_piece, provenance_options
+from . import storage, thumbnails, timeline
+from . import tags as tags_svc
 from .cards import Result
 from .errors import AppError, Conflict, InvalidInput, NotFound
 
 OP_UPDATE = "item_update"
+OP_RELATE = "item_relate"
+OP_UNRELATE = "item_unrelate"
 OP_REDACT = "item_redact"
 OP_UNREDACT = "item_unredact"
 OP_RETYPE = "item_retype"
@@ -188,9 +194,13 @@ def _plan_update(row, fields):
     return cols
 
 
-def update(slug, *, dry_run=False, actor=None, batch_id=None, **fields):
+def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **fields):
     """Edits any of UPDATE_FIELDS on one item as ONE change-log entry (so one Save is one undo).
-    Every field is validated before anything is written. A no-op edit logs nothing."""
+    Every field is validated before anything is written. A no-op edit logs nothing.
+    `tags` (#541 phase C): the free-text tag list, full replace, with its post_tags sync
+    (core/tags.py `write_free_text`; tags it creates are imaged too). None = leave tags alone."""
+    if tags is not None and (isinstance(tags, str) or not isinstance(tags, (list, tuple))):
+        raise InvalidInput("tags must be a list of names", code="bad_tags")
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         row = get_item(slug)
@@ -198,9 +208,56 @@ def update(slug, *, dry_run=False, actor=None, batch_id=None, **fields):
         with db.ImageLog(OP_UPDATE, actor, batch_id, [slug]) as log:
             if cols:
                 log.update("capture_events", {"slug": slug}, cols)
+            if tags is not None:
+                tags_svc.write_free_text(log, slug, [str(t) for t in tags])
             muts = list(log.muts)
         item = db.get_by_slug(slug)
     return _result(OP_UPDATE, muts, batch_id, dry_run, item, slug=slug)
+
+
+# --- related items (#16) -----------------------------------------------------------------
+
+def relate(slug, other, *, dry_run=False, actor=None, batch_id=None):
+    """Links two items as related (stored both directions) and, as #16 always did, shares their
+    categorization both ways: each picks up the other's tags (post_tags) and card memberships
+    (plain project_items rows, no linked-tag / cover side effects). It runs even when the pair
+    was already related, as before. Every row is imaged: one undo removes the link AND what it
+    shared. Relating an item to itself is a no-op."""
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        get_item(slug)
+        get_item(other)
+        with db.ImageLog(OP_RELATE, actor, batch_id, [slug, other]) as log:
+            if slug != other:
+                now = time.time()
+                for a, b in ((slug, other), (other, slug)):
+                    if log.get("capture_event_relations", {"slug_a": a, "slug_b": b}) is None:
+                        log.insert("capture_event_relations", {"slug_a": a, "slug_b": b}, {"created_at": now})
+                tags_a, tags_b = db.tag_ids_for_posts([slug]), db.tag_ids_for_posts([other])
+                for tid in sorted(tags_b - tags_a):
+                    tags_svc.link(log, slug, tid)
+                for tid in sorted(tags_a - tags_b):
+                    tags_svc.link(log, other, tid)
+                cards_a = {p["id"] for p in db.list_projects_for_post(slug)}
+                cards_b = {p["id"] for p in db.list_projects_for_post(other)}
+                for pid in sorted(cards_b - cards_a):
+                    membership.write_items(log, pid, [slug])
+                for pid in sorted(cards_a - cards_b):
+                    membership.write_items(log, pid, [other])
+            muts = list(log.muts)
+    return _result(OP_RELATE, muts, batch_id, dry_run, None, slug=slug, related=other)
+
+
+def unrelate(slug, other, *, dry_run=False, actor=None, batch_id=None):
+    """Removes the related link (both directions). Like before, the tags and cards the link
+    shared stay (only undoing the relate takes those back)."""
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_UNRELATE, actor, batch_id, [slug, other]) as log:
+            for a, b in ((slug, other), (other, slug)):
+                log.delete("capture_event_relations", {"slug_a": a, "slug_b": b})
+            muts = list(log.muts)
+    return _result(OP_UNRELATE, muts, batch_id, dry_run, None, slug=slug, related=other)
 
 
 # --- trash: files ----------------------------------------------------------------------

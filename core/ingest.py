@@ -73,21 +73,17 @@ def attach_to_project(slug, project_id):
 
     Also auto-sets the project's cover_slug to this item's slug if the
     project currently has no cover (issue #103) — fires only once per
-    project, on the first item it receives."""
+    project, on the first item it receives.
+
+    #541 phase C: the writes are core/membership.add_files with all three
+    side effects on (membership.UI_EFFECTS), imaged and undoable. Returns its
+    Result (None when project_id is empty or unknown)."""
     if not project_id:
-        return
-    project = db.get_project(project_id)
-    if project is None:
-        return
-    db.add_item_to_project(project["id"], slug)
-    if project.get("tag_id"):
-        db.attach_tags(slug, [project["tag_id"]])
-        tag = db.get_tag(project["tag_id"])
-        if tag:
-            db.add_tags(slug, [tag["name"]])
-    # Auto-set cover to first item if project has no cover yet
-    if not project.get("cover_slug"):
-        db.update_project(project["id"], cover_slug=slug)
+        return None
+    if db.get_project(project_id) is None:
+        return None
+    from . import membership  # lazy: membership -> tags -> cards, and cards' callers import ingest
+    return membership.add_files(project_id, [slug], **membership.UI_EFFECTS)
 
 
 def auto_match(slug, texts):

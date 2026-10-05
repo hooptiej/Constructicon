@@ -3117,18 +3117,20 @@ def list_recent_audit_logs(limit=100):
 # Core card operations write row images into the audit_log's extra columns so a
 # later piece can undo them. All SQL stays here; core/changes.py is the API.
 
-def insert_change_log(conn, op, actor, mutations, batch_id=None, affected_slugs=None):
+def insert_change_log(conn, op, actor, mutations, batch_id=None, affected_slugs=None, details=None):
     """Writes one change-log row on the caller's connection (the caller commits,
     so the log row lands in the same transaction as the write it describes).
     `mutations` is a list of {table, key, before, after} row images.
     `actor` None = the current actor context (core/actor.py, #560): every core write
-    passes through here, so this is where a defaulted actor is resolved."""
+    passes through here, so this is where a defaulted actor is resolved.
+    `details` (#541 phase C): an optional JSON-able summary kept in form_body, for a record
+    that has no row images (delete-all writes its per-table counts there)."""
     actor = actor_ctx.resolve(actor)
     cur = conn.execute(
         "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, "
-        "op, actor, batch_id, mutations) VALUES (?, ?, '{}', ?, 200, NULL, ?, ?, ?, ?, ?)",
-        ("CORE", f"core:{op}", json.dumps(affected_slugs or []), time.time(), op, actor, batch_id,
-         json.dumps(mutations or [])),
+        "op, actor, batch_id, mutations) VALUES (?, ?, ?, ?, 200, NULL, ?, ?, ?, ?, ?)",
+        ("CORE", f"core:{op}", json.dumps(details or {}), json.dumps(affected_slugs or []), time.time(), op,
+         actor, batch_id, json.dumps(mutations or [])),
     )
     return cur.lastrowid
 
@@ -3254,6 +3256,16 @@ class ImageLog:
         _image_insert_row(self.conn, table, key, values)
         self.muts.append({"table": table, "key": dict(key), "before": None, "after": image_get(self.conn, table, key)})
 
+    def insert_auto(self, table, values):
+        """INSERT into a table whose key is an `id` INTEGER PRIMARY KEY the DB assigns (#541
+        phase C: a new blog_tags row). Imaged like insert(); returns the new id."""
+        cols = list(values)
+        cur = self.conn.execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
+                                [values[c] for c in cols])
+        key = {"id": cur.lastrowid}
+        self.muts.append({"table": table, "key": key, "before": None, "after": image_get(self.conn, table, key)})
+        return cur.lastrowid
+
     def update(self, table, key, fields):
         before = image_get(self.conn, table, key)
         if before is None:
@@ -3326,6 +3338,17 @@ def invert_image(conn, mutation, force=False):
                     raise UndoConflict(
                         f"{table} {key} changed since: {col} is {current.get(col)!r}, was {want!r} when logged.",
                         {"table": table, "key": key, "field": col, "found": current.get(col), "expected": want})
+    if target is None and table == "blog_tags" and current is not None and not force:
+        # #541 phase C: undoing a tag's creation removes the tag. Refuse while something made
+        # since still uses it (another item's tag link, a card's linked tag, a hobby, a child tag).
+        n = conn.execute(
+            "SELECT (SELECT COUNT(*) FROM post_tags WHERE tag_id = ?) + (SELECT COUNT(*) FROM projects WHERE tag_id = ?)"
+            " + (SELECT COUNT(*) FROM project_hobbies WHERE hobby_tag_id = ?)"
+            " + (SELECT COUNT(*) FROM blog_tags WHERE parent_id = ?) AS n",
+            (key["id"],) * 4).fetchone()["n"]
+        if n:
+            raise UndoConflict(f"The tag {current.get('name')!r} is in use by {n} other row(s) now, so its creation "
+                               "can't be undone.", {"table": table, "key": key, "in_use": n})
     if target is None:
         if current is not None:
             if table == "capture_events":
@@ -3365,6 +3388,39 @@ def mark_change_rows_undone(row_ids, undone_by):
     try:
         conn.executemany("UPDATE audit_log SET undone_by = ? WHERE id = ?", [(undone_by, i) for i in row_ids])
         conn.commit()
+    finally:
+        conn.close()
+
+
+def list_tables():
+    """Every user table in the DB (sqlite_* internals excluded)."""
+    conn = get_conn()
+    try:
+        return sorted(r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"))
+    finally:
+        conn.close()
+
+
+def list_all_item_files():
+    """[{slug, stored_filename}] for EVERY item row (redacted and brand assets included)."""
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute("SELECT slug, stored_filename FROM capture_events ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def clear_tables(tables):
+    """DELETE every row of `tables` (in the order given) on the current connection; returns
+    {table: rows_deleted}. Only core/reset.py calls this, inside its transaction."""
+    conn = get_conn()
+    try:
+        counts = {}
+        for t in tables:
+            counts[t] = conn.execute(f"DELETE FROM {t}").rowcount
+        conn.commit()
+        return counts
     finally:
         conn.close()
 
@@ -3468,26 +3524,13 @@ def delete_card_hobby(project_id, tag_id, op, actor, batch_id=None, affected_slu
         return log.delete("project_hobbies", {"project_id": project_id, "hobby_tag_id": tag_id})
 
 
-def write_card_items(project_id, add_slugs, remove_slugs, op, actor, batch_id=None, affected_slugs=None):
-    """Adds and/or removes files on a card (project_items), imaging every row.
-    Added files go at the end; already-present ones are skipped. Returns
-    (added, removed) slug lists."""
-    removed, added = [], []
-    with ImageLog(op, actor, batch_id, affected_slugs) as log:
-        for slug in remove_slugs:
-            if log.delete("project_items", {"project_id": project_id, "post_slug": slug}):
-                removed.append(slug)
-        if add_slugs:
-            nxt = log.conn.execute(
-                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM project_items WHERE project_id = ?",
-                (project_id,)).fetchone()["n"]
-            for slug in add_slugs:
-                if log.get("project_items", {"project_id": project_id, "post_slug": slug}) is not None:
-                    continue
-                log.insert("project_items", {"project_id": project_id, "post_slug": slug}, {"sort_order": nxt})
-                nxt += 1
-                added.append(slug)
-    return added, removed
+# (#541 phase C) write_card_items moved to core/membership.py (`membership.write`), the one
+# writer of project_items rows.
+
+def next_item_sort_order(conn, project_id):
+    """The sort_order a file appended to the card gets (0 for an empty card)."""
+    return conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM project_items WHERE project_id = ?",
+                        (project_id,)).fetchone()["n"]
 
 
 def write_images(op, actor, batch_id, affected_slugs, fn):

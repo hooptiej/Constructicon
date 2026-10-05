@@ -6,7 +6,7 @@ from datetime import datetime
 from fastapi import Request, Form, HTTPException, APIRouter
 from fastapi.responses import JSONResponse, Response
 
-from core import card_rules, cards, db, ingest, object_types, timeline
+from core import card_rules, cards, db, membership, object_types, timeline
 from core.errors import NotFound
 from web.shapes import _to_card_face, _to_project_option
 
@@ -106,9 +106,8 @@ def api_create_project_from_selection(slugs: list[str] = Form(...), title: str =
         raise HTTPException(status_code=400, detail="Project name can't be empty")
     tag = db.get_or_create_tag(title, parent_id=None)
     project = db.create_project(title, tag_id=tag["id"])
-    for slug in slugs:
-        if db.get_by_slug(slug) is not None:
-            ingest.attach_to_project(slug, project["id"])
+    # #541 phase C: the files go on through membership (all side effects, as before), one batch.
+    membership.add_files(project["id"], slugs, missing_ok=True, **membership.UI_EFFECTS)
     return JSONResponse(_to_project_option(project))
 
 
@@ -124,9 +123,8 @@ def api_create_project_from_related(slug: str = Form(...), title: str = Form(...
         raise HTTPException(status_code=404, detail="not found")
     tag = db.get_or_create_tag(title, parent_id=None)
     project = db.create_project(title, tag_id=tag["id"])
-    ingest.attach_to_project(slug, project["id"])
-    for related in db.list_related(slug):
-        ingest.attach_to_project(related["slug"], project["id"])
+    membership.add_files(project["id"], [slug] + [r["slug"] for r in db.list_related(slug)],
+                         missing_ok=True, **membership.UI_EFFECTS)
     return JSONResponse(_to_project_option(project))
 
 
@@ -394,9 +392,10 @@ def api_family_remove_member(family_id: str, member: str = Form(...)):
 
 @router.post("/api/projects/{project_id}/remove-item")
 def api_remove_item_from_project(project_id: str, slug: str = Form(...)):
-    """Remove an object from a project.
+    """Remove an object from a project (the project page's x).
 
-    The object is detached but not deleted. Returns {success: true}."""
+    The object is detached but not deleted; its tags and the card's cover are left alone.
+    #541 phase C: membership.remove_files, undoable. Returns {success: true, batch_id}."""
     project = db.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -406,8 +405,8 @@ def api_remove_item_from_project(project_id: str, slug: str = Form(...)):
     if obj is None:
         raise HTTPException(status_code=404, detail="Object not found")
 
-    db.remove_item_from_project(project["id"], slug)
-    return JSONResponse({"success": True})
+    result = membership.remove_files(project["id"], [slug])
+    return JSONResponse({"success": True, "batch_id": result.batch_id})
 
 
 @router.post("/api/projects/{project_id}/delete")

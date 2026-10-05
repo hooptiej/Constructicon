@@ -41,6 +41,8 @@ from core import actor as actor_ctx
 from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
+from core import membership, reset
+from core import tags as tags_svc
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
@@ -502,9 +504,11 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
         fields["display_date_override"] = None
     elif display_date is not None:
         fields["display_date_override"] = display_date
-    if fields:
-        items.update(slug, **fields)
-    row = db.update_tags(slug, tags=tags) if tags is not None else db.get_by_slug(slug)  # tags: phase C
+    if fields or tags is not None:
+        # #541 phase C: free-text tags ride in the same call, so the whole update is ONE batch.
+        row = items.update(slug, tags=tags, **fields).item
+    else:
+        row = db.get_by_slug(slug)
     return _to_public(row) if row else None
 
 
@@ -625,29 +629,17 @@ def constructicon_empty_trash(confirm: str) -> dict:
 
 
 @mcp.tool()
-def constructicon_delete_all() -> dict:
-    """Wipe every object, tag, and project — a full reset. Irreversible.
+def constructicon_delete_all(confirm: str = "") -> dict:
+    """Wipe the whole archive: every object (and its files), card, tag, hobby, blog entry,
+    question and the trash. A full reset: permanent, NOT undoable, nothing goes to the trash.
 
-    Call constructicon_backup first if you want to preserve the current content.
+    Pass confirm="DELETE EVERYTHING" (the same typed phrase /admin asks for); anything else
+    returns confirm_required and changes nothing. Call constructicon_backup first if you want to
+    keep the current content. Settings, the client list, provenance lists and the change log are
+    kept. Returns {deleted, counts: {table: rows}, files_removed, trash_removed, batch_id}; one
+    change-log row (op delete_all) records the counts.
     """
-    # include_redacted (#282) / include_brand (#417): search() hides redacted
-    # rows and brand assets by default; a full reset has to take them too or
-    # they'd survive as orphaned rows + storage files.
-    rows = db.search(limit=100000, include_redacted=True, include_brand=True)
-    for row in rows:
-        if row.get("stored_filename"):
-            storage.delete_files(row["slug"], row["stored_filename"])
-        db.delete_upload(row["slug"])
-    conn = db.get_conn()
-    conn.execute("DELETE FROM post_tags")
-    conn.execute("DELETE FROM project_items")
-    for _t in ("project_relations", "family_members", "project_hobbies", "blog_entry_projects"):
-        conn.execute(f"DELETE FROM {_t}")
-    conn.execute("DELETE FROM projects")
-    conn.execute("DELETE FROM blog_tags")
-    conn.commit()
-    conn.close()
-    return {"deleted": len(rows)}
+    return reset.delete_everything(confirm)
 
 
 @mcp.tool()
@@ -702,17 +694,18 @@ def constructicon_add_related(slug: str, related_slug: str) -> list[dict]:
     """
     if db.get_by_slug(slug) is None or db.get_by_slug(related_slug) is None:
         raise NotFound(f"No item {slug!r}." if db.get_by_slug(slug) is None else f"No item {related_slug!r}.")
-    db.add_relation(slug, related_slug)
+    items.relate(slug, related_slug)  # #541 phase C: one undoable batch (link + what it shares)
     return [_to_public(r) for r in db.list_related(slug)]
 
 
 @mcp.tool()
 def constructicon_remove_related(slug: str, related_slug: str) -> list[dict]:
-    """Remove a related-object link.
+    """Remove a related-object link (both directions). The tags and projects the link shared
+    stay; undo the add (constructicon_undo) to take those back too.
 
     Returns the updated list of related objects.
     """
-    db.remove_relation(slug, related_slug)
+    items.unrelate(slug, related_slug)
     return [_to_public(r) for r in db.list_related(slug)]
 
 
@@ -829,19 +822,17 @@ def constructicon_update_project(project_id: str | int, title: str | None = None
 
 @mcp.tool()
 def constructicon_add_to_project(slug: str, project_id: str | int) -> list[dict]:
-    """Add an object to a project.
+    """Add an object to a project, exactly like the web app's item page.
 
-    If the project has a linked tag, the object is also tagged with it.
-    Returns the object's updated project list.
+    If the project has a linked tag, the object is tagged with it (and the tag name joins its
+    free-text tags), and a project with no cover takes this object as its cover. Undoable as
+    one batch (constructicon_undo). Returns the object's updated project list.
     """
     if db.get_by_slug(slug) is None:
         raise NotFound(f"No item {slug!r}.")
     if db.get_project(project_id) is None:
         raise NotFound(f"No card {project_id!r}.")
-    project = db.get_project(project_id)
-    db.add_item_to_project(project["id"], slug)
-    if project.get("tag_id"):
-        db.attach_tags(slug, [project["tag_id"]])
+    membership.add_files(project_id, [slug], **membership.UI_EFFECTS)  # #541 phase C: same flags as the web
     return [_to_public_project(p) for p in db.list_projects_for_post(slug)]
 
 
@@ -856,7 +847,7 @@ def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
-    db.remove_item_from_project(project["id"], slug)
+    membership.remove_files(project["id"], [slug])  # membership only: tags and cover stay
     return [_to_public_project(p) for p in db.list_projects_for_post(slug)]
 
 
@@ -864,24 +855,15 @@ def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[
 def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) -> list[dict]:
     """Add multiple objects to a project in a single call.
 
-    Convenience wrapper around constructicon_add_to_project for bulk operations.
-    If the project has a linked tag, objects are also tagged with it.
+    Same effects as constructicon_add_to_project (linked tag, free-text tag name, cover when the
+    project has none), as ONE undoable batch. Unknown slugs are skipped.
     Returns the list of added objects.
     """
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
-
-    added = []
-    for slug in slugs:
-        if db.get_by_slug(slug) is None:
-            continue
-        db.add_item_to_project(project["id"], slug)
-        if project.get("tag_id"):
-            db.attach_tags(slug, [project["tag_id"]])
-        added.append(_to_public(db.get_by_slug(slug)))
-
-    return added
+    result = membership.add_files(project["id"], slugs, missing_ok=True, **membership.UI_EFFECTS)
+    return [_to_public(db.get_by_slug(slug)) for slug in slugs if slug in result.data["slugs"]]
 
 
 @mcp.tool()
@@ -906,8 +888,8 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
         label = object_types.get_object_type(row.get("media_type")).label
         raise ValueError(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
 
-    # Add the writeup document to the project items if not already there
-    db.add_item_to_project(project["id"], slug)
+    # Add the writeup document to the project items if not already there (membership only, as before)
+    membership.add_files(project["id"], [slug], **membership.NO_EFFECTS)
     if owner_words is not None:
         items.update(slug, type_metadata={"owner_words": bool(owner_words)})
 
@@ -1295,12 +1277,8 @@ def constructicon_create_tag(name: str, parent_name: str | None = None) -> dict:
 
     Returns the tag metadata.
     """
-    parent_id = None
-    if parent_name:
-        parent = db.get_or_create_tag(parent_name, parent_id=None)
-        parent_id = parent["id"]
-    tag = db.get_or_create_tag(name, parent_id=parent_id)
-    return tag
+    # #541 phase C: a created tag (and parent) is imaged, so constructicon_undo removes it.
+    return tags_svc.create(name, parent_name).data["tag"]
 
 
 @mcp.tool()
@@ -1322,15 +1300,7 @@ def constructicon_attach_tags(slug: str, tag_names: list[str]) -> dict | None:
 
     Returns the updated object; a missing one returns the not_found error.
     """
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
-    tag_ids = []
-    for name in tag_names:
-        tag = db.get_or_create_tag(name, parent_id=None)
-        tag_ids.append(tag["id"])
-    if tag_ids:
-        db.attach_tags(slug, tag_ids)
+    tags_svc.attach(slug, tag_names)  # #541 phase C: one batch; tags it creates are imaged too
     return _to_public(db.get_by_slug(slug))
 
 
@@ -1346,7 +1316,7 @@ def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
     tag = db._find_tag_by_name(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
         raise NotFound(f"No such tag: {tag_name!r}")
-    db.detach_tag(slug, tag["id"])
+    tags_svc.detach(slug, tag["id"])
     return _to_public(db.get_by_slug(slug))
 
 

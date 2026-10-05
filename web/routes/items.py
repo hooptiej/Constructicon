@@ -9,7 +9,8 @@ from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTa
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from core import captions, db, ingest, items, object_types, ocr, revisions, similarity, storage, thumbnails, timeline
+from core import captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
+from core import tags as tags_svc, timeline
 from web.common import DESKTOP_APP_CLIENT_HEADER, DESKTOP_APP_CLIENT_VALUE
 from web.shapes import _friendly_datetime, _to_project_option, _to_public
 
@@ -389,7 +390,8 @@ async def api_update_image(
     # partial updates (e.g. rename-only) without inadvertently wiping tags.
     """#541 phase B: every field below is one items.update call, so one Save is ONE change-log
     batch (undo restores all of it). Validation (provenance key, physical-piece date, dates)
-    happens before anything is written. Free-text tags are still db.update_tags (phase C)."""
+    happens before anything is written. #541 phase C: free-text tags ride in the same call
+    (items.update(tags=...)), so tags + fields are still ONE batch."""
     if db.get_by_slug(slug) is None:
         raise HTTPException(status_code=404, detail="not found")
     tag_list = None
@@ -446,9 +448,10 @@ async def api_update_image(
     if "is_brand_asset" in form_data:
         fields["is_brand_asset"] = bool(form_data.get("is_brand_asset"))
         fields["brand_role"] = form_data.get("brand_role") or None
-    if fields:
-        items.update(slug, **fields)
-    row = db.update_tags(slug, tags=tag_list) if tag_list is not None else db.get_by_slug(slug)
+    if fields or tag_list is not None:
+        row = items.update(slug, tags=tag_list, **fields).item
+    else:
+        row = db.get_by_slug(slug)
     return JSONResponse(_to_public(row))
 
 
@@ -582,13 +585,13 @@ def api_add_related(request: Request, slug: str, related_slug: str = Form(...)):
         raise HTTPException(status_code=404, detail="not found")
     if db.get_by_slug(related_slug) is None:
         raise HTTPException(status_code=404, detail="related image not found")
-    db.add_relation(slug, related_slug)
+    items.relate(slug, related_slug)  # #541 phase C: the link and the tags/cards it shares, one undo
     return JSONResponse([_to_public(r) for r in db.list_related(slug)])
 
 
 @router.post("/api/image/{slug}/related/remove")
 def api_remove_related(request: Request, slug: str, related_slug: str = Form(...)):
-    db.remove_relation(slug, related_slug)
+    items.unrelate(slug, related_slug)
     return JSONResponse([_to_public(r) for r in db.list_related(slug)])
 
 
@@ -636,7 +639,7 @@ def api_add_object_to_project(request: Request, slug: str, project_id: str = For
         raise HTTPException(status_code=404, detail="not found")
     if db.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="project not found")
-    ingest.attach_to_project(slug, project_id)
+    membership.add_files(project_id, [slug], **membership.UI_EFFECTS)  # #541 phase C: undoable
     return JSONResponse([_to_project_option(p) for p in db.list_projects_for_post(slug)])
 
 
@@ -652,7 +655,7 @@ def api_remove_object_from_project(request: Request, slug: str, project_id: str 
     project = db.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
-    db.remove_item_from_project(project["id"], slug)
+    membership.remove_files(project["id"], [slug])
     return JSONResponse([_to_project_option(p) for p in db.list_projects_for_post(slug)])
 
 
@@ -712,13 +715,15 @@ def api_bulk_add_to_project(slugs: list[str] = Form(...), project_id: str = Form
     """Issue #98: the Unfiled page's bulk "add to project" action. Same
     per-slug primitive as a single upload's project pick (_attach_to_project)
     — a bad/stale project_id is silently a no-op for every slug, same as the
-    single-object path, rather than partially failing the batch."""
-    count = 0
-    for slug in slugs:
-        if db.get_by_slug(slug) is not None:
-            ingest.attach_to_project(slug, project_id)
-            count += 1
-    return JSONResponse({"count": count})
+    single-object path, rather than partially failing the batch.
+
+    #541 phase C: one membership.add_files call (all side effects, as before), so the whole
+    bulk add is one batch; the answer carries its batch_id for undo."""
+    count = sum(1 for slug in slugs if db.get_by_slug(slug) is not None)
+    if not project_id or db.get_project(project_id) is None:
+        return JSONResponse({"count": count})
+    result = membership.add_files(project_id, slugs, missing_ok=True, **membership.UI_EFFECTS)
+    return JSONResponse({"count": count, "batch_id": result.batch_id})
 
 
 @router.post("/api/bulk/attach-tags")
@@ -734,15 +739,9 @@ def api_bulk_attach_tags(slugs: list[str] = Form(...), tag_names: list[str] = Fo
     tag_names = [t.strip() for t in tag_names if t.strip()]
     if not tag_names:
         return JSONResponse({"count": 0})
-    count = 0
-    for slug in slugs:
-        row = db.get_by_slug(slug)
-        if row is None:
-            continue
-        merged_tags = sorted(set(row["tags"]) | set(tag_names))
-        db.update_tags(slug, description=row["description"], tags=merged_tags, client=row.get("client"))
-        count += 1
-    return JSONResponse({"count": count})
+    # #541 phase C: core/tags.py, one batch (tags it creates are imaged, so undo removes them).
+    result = tags_svc.merge_item_tags(slugs, tag_names)
+    return JSONResponse({"count": result.data["count"], "batch_id": result.batch_id})
 
 
 @router.get("/api/tags")

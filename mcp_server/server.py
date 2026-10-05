@@ -2247,4 +2247,24 @@ if __name__ == "__main__":
     # runs the idempotent schema DDL; a stuck OCR row is healed by web's startup pass and its
     # periodic watchdog (same shared DB), and captions are enqueued, never run, here.
     db.init_db(migrate=False)
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=8100, stateless_http=True)
+    # #561: bearer install-token auth. Fail BEFORE touching anything else if misconfigured.
+    import logging
+    import uvicorn
+    from mcp_server import auth as mcp_auth
+    try:
+        _token = mcp_auth.load_token()
+    except mcp_auth.TokenConfigError as exc:
+        sys.exit(f"constructicon-mcp: refusing to start: {exc}")
+    if _token:
+        print("constructicon-mcp: bearer token auth ENABLED", flush=True)
+    else:
+        logging.basicConfig(level=logging.WARNING)
+        logging.getLogger("constructicon-mcp").warning(
+            "MCP is running WITHOUT a token: anyone who can reach port 8100 can read, change and "
+            "delete the archive. Set CONSTRUCTICON_MCP_TOKEN or CONSTRUCTICON_MCP_TOKEN_FILE "
+            "(see scripts/mcp_token.py)."
+        )
+        print("constructicon-mcp: WARNING: MCP is running WITHOUT a token (open access)", flush=True)
+    _app = mcp_auth.wrap(
+        mcp.streamable_http_app(host="0.0.0.0", stateless_http=True), _token)
+    uvicorn.run(_app, host="0.0.0.0", port=8100, log_level="info")

@@ -561,6 +561,28 @@ configuration gap for that session, not evidence the server itself is gone.
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.
 
+## MCP auth (#561, part of #467)
+
+The MCP HTTP transport (port 8100) is guarded by one **install bearer token**
+(`mcp_server/auth.py`, an ASGI middleware around the streamable-HTTP app; the server now
+runs that app via uvicorn itself, same host/port).
+- **Where the token lives:** env `CONSTRUCTICON_MCP_TOKEN`, or (preferred) a file named by
+  `CONSTRUCTICON_MCP_TOKEN_FILE` (mounted read-only into the MCP container, see
+  `docker-compose.yml.example`). Create it with `python scripts/mcp_token.py generate <file>`
+  (mode 600, prints only the path, never the token); `... check [--url http://host:8100/mcp]`
+  reports whether a token is configured. Never put the token in git or in chat.
+- **Behaviour:** token set -> every request needs `Authorization: Bearer <token>`
+  (`hmac.compare_digest`), else 401 + `WWW-Authenticate: Bearer` + `{"ok":false,"error":
+  {"code":"unauthorized",...}}`; only `GET /healthz` is exempt. Token unset -> open, with a loud
+  startup warning (fresh installs, dev). Token under 32 chars -> the server refuses to start.
+- **Client config** (Claude Code `.mcp.json` / `~/.claude.json`):
+  `{"type":"http","url":"http://<host>:8100/mcp","headers":{"Authorization":"Bearer <token>"}}`
+- **Rotate:** `python scripts/mcp_token.py generate <file> --force`, restart the MCP container,
+  update every client's `headers`. Old token stops working at the restart.
+- **Identity:** one install token = one identity; the actor stays `mcp`. #467 will map tokens
+  to users (hook comment in `auth.py`). Restricted items via `constructicon_download` are not
+  gated yet: that belongs to the role work (#557).
+
 ## Web owns background work; MCP enqueues (#549)
 
 `constructicon-web` and `constructicon-mcp` are two processes on one SQLite DB, so

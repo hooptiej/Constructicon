@@ -10,6 +10,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import core.db as db
+from core import cards
 from core.timeline import resolve_item_date, resolve_project_span
 
 db.DB_PATH = tempfile.mktemp(suffix=".db")
@@ -33,7 +34,7 @@ def make_item(slug, timestamp, content_date=None, source_modified_at=None, displ
     conn.commit()
     conn.close()
     if display_date_override is not None:
-        db.set_display_date_override(slug, display_date_override)
+        db._set_display_date_override(slug, display_date_override)
     return db.get_by_slug(slug)
 
 
@@ -71,10 +72,10 @@ def test_project_span_from_items():
     make_item("t4a", timestamp=100.0)
     make_item("t4b", timestamp=300.0)
     make_item("t4c", timestamp=200.0)
-    project = db.create_project("Span Project")
-    db.add_item_to_project(project["id"], "t4a")
-    db.add_item_to_project(project["id"], "t4b")
-    db.add_item_to_project(project["id"], "t4c")
+    project = db._create_project("Span Project")
+    db._add_item_to_project(project["id"], "t4a")
+    db._add_item_to_project(project["id"], "t4b")
+    db._add_item_to_project(project["id"], "t4c")
     items = db.list_project_items(project["id"])
     start, end = resolve_project_span(project, items)
     assert start == 100.0, "start is earliest item date"
@@ -82,16 +83,16 @@ def test_project_span_from_items():
 
 
 def test_project_span_empty_falls_back_to_created_at():
-    project = db.create_project("Empty Project")
+    project = db._create_project("Empty Project")
     start, end = resolve_project_span(project, [])
     assert start == project["created_at"] == end, "empty project collapses to a point at created_at"
 
 
 def test_project_span_respects_overrides():
     make_item("t6a", timestamp=100.0)
-    project = db.create_project("Overridden Project")
-    db.add_item_to_project(project["id"], "t6a")
-    db.set_project_date_overrides(project["id"], start=50.0, end=999.0)
+    project = db._create_project("Overridden Project")
+    db._add_item_to_project(project["id"], "t6a")
+    cards.update(project["id"], start=50.0, end=999.0)
     project = db.get_project(project["id"])
     items = db.list_project_items(project["id"])
     start, end = resolve_project_span(project, items)
@@ -107,11 +108,14 @@ def test_project_span_excludes_writeup():
     make_item("t7a", timestamp=100.0)
     make_item("t7b", timestamp=200.0)
     make_item("t7-writeup", timestamp=99999.0)  # authored long after the real content
-    project = db.create_project("Writeup Project")
-    db.add_item_to_project(project["id"], "t7a")
-    db.add_item_to_project(project["id"], "t7b")
-    db.add_item_to_project(project["id"], "t7-writeup")
-    db.update_project(project["id"], writeup_slug="t7-writeup")
+    project = db._create_project("Writeup Project")
+    db._add_item_to_project(project["id"], "t7a")
+    db._add_item_to_project(project["id"], "t7b")
+    db._add_item_to_project(project["id"], "t7-writeup")
+    conn = db.get_conn()  # fixture: an image as the write-up (cards.update only accepts document types)
+    conn.execute("UPDATE projects SET writeup_slug = ? WHERE id = ?", ("t7-writeup", project["id"]))
+    conn.commit()
+    conn.close()
     project = db.get_project(project["id"])
     items = db.list_project_items(project["id"])
     start, end = resolve_project_span(project, items)

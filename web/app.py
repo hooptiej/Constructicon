@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core import actor as actor_ctx, captions, db, errors, ocr
+from core import actor as actor_ctx, captions, db, decisions, errors, ocr
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
 from web import request_guard
 from web.common import _STATIC_DIR
@@ -135,6 +135,28 @@ async def _trash_purge_loop():
         await asyncio.sleep(TRASH_PURGE_INTERVAL_SECONDS)
 
 
+def _sweep_stale_decisions():
+    """#551 item 3: questions that can't be answered any more (their object, card or candidates
+    are gone) are resolved by this explicit, logged, undoable sweep, never by a GET. Reads already
+    leave them out (decisions.list_open), so the sweep only tidies the table."""
+    try:
+        result = decisions.sweep_stale()
+        if result.data["count"]:
+            print(f"decision sweep: resolved {result.data['count']} stale question(s) {result.data['by_kind']} "
+                  f"(batch {result.batch_id})", flush=True)
+    except Exception as e:
+        print(f"decision sweep error: {e!r}", flush=True)
+
+
+async def _decision_sweep_loop():
+    """Web owns background work (#549): the stale-decision sweep every
+    decisions.SWEEP_INTERVAL_SECONDS (the startup pass runs in _startup_as_system). Runs as `system`
+    (asyncio.to_thread copies this task's context)."""
+    while True:
+        await asyncio.sleep(decisions.SWEEP_INTERVAL_SECONDS)
+        await asyncio.to_thread(_sweep_stale_decisions)
+
+
 @app.on_event("startup")
 async def startup():
     # #560: boot work (migrations, OCR self-heal, the watchdog task created below, which copies
@@ -146,6 +168,8 @@ async def startup():
 def _startup_as_system():
     db.init_db()
     db.ensure_special_clients()
+    # #551 item 3: once at startup, after the migrations; then hourly (_decision_sweep_loop).
+    _sweep_stale_decisions()
     # Self-heal: a redeploy/restart while OCR was still queued or running for
     # a row leaves it stuck at ocr_status="pending" forever otherwise, since
     # nothing else will ever retry it. Fired as background threads, not run
@@ -163,6 +187,7 @@ def _startup_as_system():
     # the MCP process), one at a time, through captions.run_caption (lock + breaker + cooldown).
     captions.start_queue_worker()
     asyncio.create_task(_trash_purge_loop())
+    asyncio.create_task(_decision_sweep_loop())
 
 
 # --- Routers (#547) ---

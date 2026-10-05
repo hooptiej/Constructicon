@@ -1012,7 +1012,7 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
         # #228: sync free-text tags to the real tag tree on insert, not just on update.
         # For a new row, previous_tags is empty since it just got created with no prior state.
         if tags:
-            sync_real_tags_for_post(slug, tags, previous_tags=[])
+            _sync_real_tags_for_post(slug, tags, previous_tags=[])
     finally:
         conn.close()
 
@@ -1038,7 +1038,7 @@ def insert_content(slug, uploaded_by, media_type, external_url=None, content_des
     )
 
 
-def set_type_metadata(slug, metadata):
+def _set_type_metadata(slug, metadata):
     """Replaces a row's type_metadata dict wholesale — callers that want to
     merge should read get_by_slug(slug)["type_metadata"] first."""
     conn = get_conn()
@@ -1049,7 +1049,7 @@ def set_type_metadata(slug, metadata):
         conn.close()
 
 
-def update_content_metadata(slug, content_description=None, type_metadata=None):
+def _update_content_metadata(slug, content_description=None, type_metadata=None):
     """Partial update for the two content-description-shaped fields that
     neither update_tags (description/tags/client — see
     api_update_image in web/app.py) nor rename_object (display_name/icon,
@@ -1158,7 +1158,7 @@ def set_ocr_status(slug, status):
         conn.close()
 
 
-def set_media_type(slug, media_type):
+def _set_media_type(slug, media_type):
     """#448: retype a row to a different media_type. Used by core/ingest.py's retype()."""
     conn = get_conn()
     try:
@@ -1246,7 +1246,7 @@ def find_duplicate(filename, file_size, source_modified_at):
         conn.close()
 
 
-def update_tags(slug, description=None, tags=None, client=None):
+def _update_tags(slug, description=None, tags=None, client=None):
     # #227: wrap read-modify-write in a transaction to prevent lost updates when
     # concurrent writers (OCR thread, user saves, MCP) race on the same row.
     conn = get_conn()
@@ -1277,11 +1277,11 @@ def update_tags(slug, description=None, tags=None, client=None):
         # #213 fix: pass the previous free-text tags so we can diff only against those,
         # not against the entire tag tree (which includes tags from projects/MCP/etc.).
         previous_tags = existing["tags"] if existing.get("tags") else []
-        sync_real_tags_for_post(slug, tags, previous_tags=previous_tags)
+        _sync_real_tags_for_post(slug, tags, previous_tags=previous_tags)
     return get_by_slug(slug)
 
 
-def sync_real_tags_for_post(post_slug, tag_names, previous_tags=None):
+def _sync_real_tags_for_post(post_slug, tag_names, previous_tags=None):
     """#165: the free-text `tags` column above is invisible to /api/tags
     (autocomplete) and the home page's tag-tree browsing/pills, which only
     ever read blog_tags/post_tags -- a typed tag that only lands in the
@@ -1303,7 +1303,7 @@ def sync_real_tags_for_post(post_slug, tag_names, previous_tags=None):
         name = name.strip()
         if not name:
             continue
-        tag = get_or_create_tag(name, parent_id=None)
+        tag = _get_or_create_tag(name, parent_id=None)
         desired_ids.add(tag["id"])
 
     # Build the set of previously attached free-text tag IDs
@@ -1328,17 +1328,17 @@ def sync_real_tags_for_post(post_slug, tag_names, previous_tags=None):
     current_ids = {t["id"] for t in list_tags_for_post(post_slug)}
     to_add = desired_ids - current_ids
     if to_add:
-        attach_tags(post_slug, list(to_add))
+        _attach_tags(post_slug, list(to_add))
 
     # Detach only tags that were in previous_ids but not in desired_ids
     # This means: tags the user explicitly removed from the free-text box,
     # while preserving tags that arrived through other paths (projects, MCP, etc.)
     to_remove = previous_ids - desired_ids
     for tag_id in to_remove:
-        detach_tag(post_slug, tag_id)
+        _detach_tag(post_slug, tag_id)
 
 
-def rename_object(slug, display_name=None, icon=None):
+def _rename_object(slug, display_name=None, icon=None):
     """Sets an object's display_name and/or icon override (#11). Partial
     update, same pattern as update_tags/update_project — pass only the
     field(s) you want to change. Passing an empty string clears the field
@@ -1365,25 +1365,7 @@ def rename_object(slug, display_name=None, icon=None):
         conn.close()
 
 
-def set_agent_notes(slug, notes):
-    """Sets or clears agent-authored working notes for an object (#206).
-
-    notes: the note text (a string), or None to clear existing notes.
-    Agent-only scratch space, never exposed through public HTTP API.
-    Returns the updated row, or None if not found."""
-    existing = get_by_slug(slug)
-    if existing is None:
-        return None
-    conn = get_conn()
-    try:
-        conn.execute("UPDATE capture_events SET agent_notes = ? WHERE slug = ?", (notes, slug))
-        conn.commit()
-        return get_by_slug(slug)
-    finally:
-        conn.close()
-
-
-def set_provenance(slug, provenance):
+def _set_provenance(slug, provenance):
     """Sets or clears an object's provenance classification (#341).
 
     provenance: an ACTIVE key of the editable file list (#529), the row's current value
@@ -1404,7 +1386,7 @@ def set_provenance(slug, provenance):
         conn.close()
 
 
-def set_highlight(slug, on: bool):
+def _set_highlight(slug, on: bool):
     """Sets or clears an object's highlight flag (#341).
 
     on: True to mark as highlighted, False to clear.
@@ -1421,7 +1403,7 @@ def set_highlight(slug, on: bool):
         conn.close()
 
 
-def set_brand_asset(slug, is_brand, brand_role=None):
+def _set_brand_asset(slug, is_brand, brand_role=None):
     """Sets or clears an object's brand asset status and role (#350).
 
     is_brand: True to flag as brand asset, False to clear.
@@ -1540,7 +1522,7 @@ def set_setting(key, value):
         conn.close()
 
 
-def add_tags(slug, new_tags):
+def _add_tags(slug, new_tags):
     """Merge new_tags into the row's existing tags (deduped) instead of
     replacing them — for auto-tagging, so it never clobbers tags a person
     already set by hand.
@@ -1735,7 +1717,7 @@ def set_extracted_text(slug, text):
         conn.close()
 
 
-def mark_redacted(slug):
+def _mark_redacted(slug):
     """File removed (sensitive content), metadata kept for future correlation.
 
     The caller (web/app.py's /api/image/{slug}/redact, the
@@ -1763,7 +1745,7 @@ def mark_redacted(slug):
         conn.close()
 
 
-def unmark_redacted(slug):
+def _unmark_redacted(slug):
     """Reverse of mark_redacted (#282): clears the flag so the row rejoins
     ordinary browsing/search. Deliberately does NOT touch stored_filename --
     it's already NULL (mark_redacted cleared it) and stays that way, since
@@ -1796,7 +1778,7 @@ def list_redacted():
         conn.close()
 
 
-def delete_upload(slug):
+def _delete_upload(slug):
     """Full delete — removes the metadata row entirely. Caller is responsible
     for deleting the actual file(s) from storage first.
 
@@ -1872,7 +1854,7 @@ def get_trash_row(batch_id, slug):
         conn.close()
 
 
-def set_trash_embedding(batch_id, slug, embedding):
+def _set_trash_embedding(batch_id, slug, embedding):
     conn = get_conn()
     try:
         conn.execute("UPDATE trash SET embedding = ? WHERE batch_id = ? AND slug = ?", (embedding, batch_id, slug))
@@ -1922,7 +1904,7 @@ def redact_hold_slugs():
         conn.close()
 
 
-def mark_trash_purged(batch_id, slug, when):
+def _mark_trash_purged(batch_id, slug, when):
     """The entry's files are gone for good; the row stays as a record (and makes undo refuse)."""
     conn = get_conn()
     try:
@@ -1933,7 +1915,7 @@ def mark_trash_purged(batch_id, slug, when):
         conn.close()
 
 
-def add_relation(slug_a, slug_b):
+def _add_relation(slug_a, slug_b):
     """Symmetric — stored both directions so listing either side's related
     items is a single indexed lookup, not an OR query.
 
@@ -1989,19 +1971,19 @@ def _sync_relation_categorization(slug_a, slug_b):
     missing_for_a = tags_b - tags_a
     missing_for_b = tags_a - tags_b
     if missing_for_a:
-        attach_tags(slug_a, list(missing_for_a))
+        _attach_tags(slug_a, list(missing_for_a))
     if missing_for_b:
-        attach_tags(slug_b, list(missing_for_b))
+        _attach_tags(slug_b, list(missing_for_b))
 
     projects_a = {p["id"] for p in list_projects_for_post(slug_a)}
     projects_b = {p["id"] for p in list_projects_for_post(slug_b)}
     for project_id in projects_b - projects_a:
-        add_item_to_project(project_id, slug_a)
+        _add_item_to_project(project_id, slug_a)
     for project_id in projects_a - projects_b:
-        add_item_to_project(project_id, slug_b)
+        _add_item_to_project(project_id, slug_b)
 
 
-def remove_relation(slug_a, slug_b):
+def _remove_relation(slug_a, slug_b):
     conn = get_conn()
     try:
         conn.execute("DELETE FROM capture_event_relations WHERE slug_a = ? AND slug_b = ?", (slug_a, slug_b))
@@ -2075,7 +2057,7 @@ def _not_superseded(prefix=""):
 # write_project_links (called only from core/cards.py, which validates and logs);
 # the old add_project_relation / remove_project_relation helpers are gone so
 # nothing can write a link around the rules.
-def write_project_links(deletes, inserts, op, actor, batch_id=None, affected_slugs=None):
+def _write_project_links(deletes, inserts, op, actor, batch_id=None, affected_slugs=None):
     """Applies link deletions then insertions in ONE transaction and logs their
     row images as one change-log row. `deletes`: [(slug_a, slug_b, type)];
     `inserts`: [{slug_a, slug_b, type, note?}]. Returns the change-log row id
@@ -2087,21 +2069,21 @@ def write_project_links(deletes, inserts, op, actor, batch_id=None, affected_slu
         conn.execute("BEGIN IMMEDIATE")
         muts = []
         for a, b, t in deletes:
-            row = conn.execute("SELECT note, created_at FROM project_relations WHERE slug_a = ? AND slug_b = ? AND type = ?",
-                               (a, b, t)).fetchone()
-            if row is None:
+            key = {"slug_a": a, "slug_b": b, "type": t}
+            before = image_get(conn, "project_relations", key)  # #541 phase D: full image incl. rowid
+            if before is None:
                 continue
             conn.execute("DELETE FROM project_relations WHERE slug_a = ? AND slug_b = ? AND type = ?", (a, b, t))
-            muts.append({"table": "project_relations", "key": {"slug_a": a, "slug_b": b, "type": t},
-                         "before": {"note": row["note"], "created_at": row["created_at"]}, "after": None})
+            muts.append({"table": "project_relations", "key": key, "before": before, "after": None})
         now = time.time()
         for ins in inserts:
             a, b, t = ins["slug_a"], ins["slug_b"], ins["type"]
             note = ins.get("note") or ""
             conn.execute("INSERT INTO project_relations (slug_a, slug_b, type, note, created_at) VALUES (?, ?, ?, ?, ?)",
                          (a, b, t, note, now))
-            muts.append({"table": "project_relations", "key": {"slug_a": a, "slug_b": b, "type": t},
-                         "before": None, "after": {"note": note, "created_at": now}})
+            key = {"slug_a": a, "slug_b": b, "type": t}
+            muts.append({"table": "project_relations", "key": key, "before": None,
+                         "after": image_get(conn, "project_relations", key)})
         row_id = insert_change_log(conn, op, actor, muts, batch_id=batch_id, affected_slugs=affected_slugs)
         conn.commit()
         return row_id
@@ -2287,7 +2269,7 @@ def _find_root_tag_by_name(name):
         conn.close()
 
 
-def get_or_create_tag(name, parent_id=None):
+def _get_or_create_tag(name, parent_id=None):
     """Looked up by (name, parent_id) so the same tag name can exist under
     different parents (e.g. a "Camera" tag under both "FPV" and "3D
     Printing") without colliding — only the slug has to be globally unique,
@@ -2328,7 +2310,7 @@ def get_or_create_tag(name, parent_id=None):
         conn.close()
 
 
-def attach_tags(post_slug, tag_ids):
+def _attach_tags(post_slug, tag_ids):
     conn = get_conn()
     try:
         conn.executemany(
@@ -2340,7 +2322,7 @@ def attach_tags(post_slug, tag_ids):
         conn.close()
 
 
-def detach_tag(post_slug, tag_id):
+def _detach_tag(post_slug, tag_id):
     conn = get_conn()
     try:
         conn.execute("DELETE FROM post_tags WHERE post_slug = ? AND tag_id = ?", (post_slug, tag_id))
@@ -2457,14 +2439,14 @@ def list_recent_posts(limit=10):
 # (title, description, optional cover image) and a hand-ordered set of
 # member posts, rather than being derived from tag membership.
 
-def create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None, with_writeup=True,
+def _create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None, with_writeup=True,
                    kind=None, stage=None, stop_reason=None, actor=None, batch_id=None):
     """Auto-generates a unique slug from title, same dedup-with-numeric-
     suffix pattern as get_or_create_tag.
 
     tag_id optionally links this project to a blog_tags row (see #1 —
     "tied to the site tags") — callers that want a project reachable via the
-    home page's tag filter should pass get_or_create_tag(title)["id"]
+    home page's tag filter should pass _get_or_create_tag(title)["id"]
     themselves rather than this function inventing the tag on its own, since
     not every project needs (or predates) a tag link.
 
@@ -2560,10 +2542,16 @@ def _make_project_writeup(project, actor=None, batch_id=None):
         content_description=f"{project['title']} — Write-up",
         type_metadata={"body": ""},
     )
-    add_item_to_project(project["id"], writeup_slug)
+    _add_item_to_project(project["id"], writeup_slug)
     if project.get("tag_id"):
-        attach_tags(writeup_slug, [project["tag_id"]])
-    update_project(project["id"], writeup_slug=writeup_slug)
+        _attach_tags(writeup_slug, [project["tag_id"]])
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE projects SET writeup_slug = ?, updated_at = ? WHERE id = ?",
+                     (writeup_slug, time.time(), project["id"]))
+        conn.commit()
+    finally:
+        conn.close()
     if batch_id:
         # Image the write-up's three rows (V2 cards 3.13) so undoing the card's creation
         # (or a split part) takes its auto-made blank write-up with it.
@@ -2581,6 +2569,12 @@ def _make_project_writeup(project, actor=None, batch_id=None):
                  "before": {"writeup_slug": before_card.get("writeup_slug"), "updated_at": before_card.get("updated_at")},
                  "after": {"writeup_slug": after_card["writeup_slug"], "updated_at": after_card["updated_at"]}},
             ]
+            if project.get("tag_id"):
+                # #541 phase D: the write-up's linked-tag row is imaged too, so a redo (undo of the
+                # undo) brings it back with the document.
+                key = {"post_slug": writeup_slug, "tag_id": project["tag_id"]}
+                muts.insert(1, {"table": "post_tags", "key": key, "before": None,
+                                "after": image_get(conn, "post_tags", key)})
             insert_change_log(conn, "create_writeup", actor, muts, batch_id=batch_id, affected_slugs=[project["slug"]])
             conn.commit()
         finally:
@@ -2679,66 +2673,7 @@ def check_nest(child, parent_id, replace=False):
     return parent_row
 
 
-def update_project(id_or_slug, title=None, description=None, cover_slug=None, status=None, parent_id=..., writeup_slug=..., cover_project_id=..., replace_parent=False):
-    """Partial update — only overwrites fields that were passed, same
-    pattern as update_tags() for capture_events. Bumps updated_at.
-
-    parent_id can be updated under the V2 "part of" rules (check_nest): no self
-    or cycle, neither end a family/collection, and a card that already has a
-    different parent is refused unless replace_parent=True (card_rules.CardError,
-    codes nest_*). Use parent_id=None to clear a parent.
-
-    cover_slug (#325) and cover_project_id (#356) are mutually exclusive:
-    a project's cover is either an object (cover_slug) or a child project proxy
-    (cover_project_id), never both. Setting one clears the other.
-
-    writeup_slug points to a document-type capture_event (#156), same pattern
-    as cover_slug. Use writeup_slug=None to clear it."""
-    existing = get_project(id_or_slug)
-    if existing is None:
-        return None
-
-    # Nest rules (V2 cards 3.7): cycle, self, group kinds, second parent.
-    new_parent_id = parent_id if parent_id is not ... else existing.get("parent_id")
-    if parent_id is not ... and new_parent_id is not None and new_parent_id != existing.get("parent_id"):
-        new_parent_id = check_nest(existing, new_parent_id, replace=replace_parent)["id"]
-
-    # Mutual exclusion: cover_slug and cover_project_id cannot both be set
-    new_cover_slug = cover_slug if cover_slug is not None else existing.get("cover_slug")
-    new_cover_project_id = cover_project_id if cover_project_id is not ... else existing.get("cover_project_id")
-
-    if cover_slug is not None and cover_slug != "":
-        # Setting cover_slug clears cover_project_id
-        new_cover_project_id = None
-    if cover_project_id is not ... and cover_project_id is not None:
-        # Setting cover_project_id clears cover_slug
-        new_cover_slug = None
-
-    conn = get_conn()
-    try:
-        now = time.time()
-        new_writeup_slug = writeup_slug if writeup_slug is not ... else existing.get("writeup_slug")
-        conn.execute(
-            "UPDATE projects SET title = ?, description = ?, cover_slug = ?, cover_project_id = ?, status = ?, parent_id = ?, writeup_slug = ?, updated_at = ? WHERE id = ?",
-            (
-                title if title is not None else existing["title"],
-                description if description is not None else existing["description"],
-                new_cover_slug,
-                new_cover_project_id,
-                status if status is not None else existing["status"],
-                new_parent_id,
-                new_writeup_slug,
-                now,
-                existing["id"],
-            ),
-        )
-        conn.commit()
-        return get_project(existing["id"])
-    finally:
-        conn.close()
-
-
-def set_display_date_override(slug, value):
+def _set_display_date_override(slug, value):
     """value=None clears the override, reverting to the computed default
     (content_date, falling back to timestamp — see core/timeline.py)."""
     conn = get_conn()
@@ -2749,7 +2684,7 @@ def set_display_date_override(slug, value):
         conn.close()
 
 
-def set_content_date(slug, value):
+def _set_content_date(slug, value):
     """Sets the content's own real-world date directly (distinct from
     display_date_override, which is a manual override of the *displayed*
     date on top of this — see core/timeline.py's resolve_item_date chain).
@@ -2763,28 +2698,6 @@ def set_content_date(slug, value):
     try:
         conn.execute("UPDATE capture_events SET content_date = ? WHERE slug = ?", (value, slug))
         conn.commit()
-    finally:
-        conn.close()
-
-
-def set_project_date_overrides(project_id, start=..., end=...):
-    """start/end=None clears that override; the ... sentinel (default) means
-    "leave this one alone" — same three-state convention as update_project's
-    writeup_slug param, needed because a plain None-means-unchanged
-    convention can't also express "clear it"."""
-    existing = get_project(project_id)
-    if existing is None:
-        return None
-    conn = get_conn()
-    try:
-        new_start = existing.get("start_date_override") if start is ... else start
-        new_end = existing.get("end_date_override") if end is ... else end
-        conn.execute(
-            "UPDATE projects SET start_date_override = ?, end_date_override = ? WHERE id = ?",
-            (new_start, new_end, existing["id"]),
-        )
-        conn.commit()
-        return get_project(existing["id"])
     finally:
         conn.close()
 
@@ -2851,7 +2764,7 @@ def list_project_ancestors(project_id):
         conn.close()
 
 
-def add_item_to_project(project_id, post_slug, sort_order=None):
+def _add_item_to_project(project_id, post_slug, sort_order=None):
     """If sort_order isn't given, appends at the end (max existing
     sort_order + 1, or 0 if the project has no items yet)."""
     conn = get_conn()
@@ -2870,7 +2783,7 @@ def add_item_to_project(project_id, post_slug, sort_order=None):
         conn.close()
 
 
-def remove_item_from_project(project_id, post_slug):
+def _remove_item_from_project(project_id, post_slug):
     conn = get_conn()
     try:
         conn.execute(
@@ -3183,6 +3096,8 @@ IMAGE_TABLE_KEYS = {
     "capture_event_relations": ("slug_a", "slug_b"),
     "blog_entry_items": ("entry_id", "post_slug"),
     "trash": ("batch_id", "slug"),
+    # #541 phase D (core/blog.py): the entry row itself.
+    "blog_entries": ("id",),
 }
 _IMAGE_ROWID_TABLES = ("project_items", "project_hobbies", "family_members", "project_relations",
                        "blog_entry_projects", "post_tags")
@@ -3411,7 +3326,7 @@ def list_all_item_files():
         conn.close()
 
 
-def clear_tables(tables):
+def _clear_tables(tables):
     """DELETE every row of `tables` (in the order given) on the current connection; returns
     {table: rows_deleted}. Only core/reset.py calls this, inside its transaction."""
     conn = get_conn()
@@ -3499,7 +3414,7 @@ def list_post_tag_rows(post_slug):
         conn.close()
 
 
-def write_card_row(card_id, fields, op, actor, batch_id=None):
+def _write_card_row(card_id, fields, op, actor, batch_id=None):
     """Non-card-column fields on a projects row (description, cover_slug, ...), imaged
     with updated_at. Returns True when something changed."""
     with ImageLog(op, actor, batch_id) as log:
@@ -3510,7 +3425,7 @@ def write_card_row(card_id, fields, op, actor, batch_id=None):
         return log.update("projects", {"id": card_id}, {**fields, "updated_at": time.time()})
 
 
-def insert_card_hobby(project_id, tag_id, op, actor, batch_id=None, affected_slugs=None):
+def _insert_card_hobby(project_id, tag_id, op, actor, batch_id=None, affected_slugs=None):
     """Adds a hobby membership (idempotent) and images it. True if a row was added."""
     with ImageLog(op, actor, batch_id, affected_slugs) as log:
         if log.get("project_hobbies", {"project_id": project_id, "hobby_tag_id": tag_id}) is not None:
@@ -3519,7 +3434,7 @@ def insert_card_hobby(project_id, tag_id, op, actor, batch_id=None, affected_slu
         return True
 
 
-def delete_card_hobby(project_id, tag_id, op, actor, batch_id=None, affected_slugs=None):
+def _delete_card_hobby(project_id, tag_id, op, actor, batch_id=None, affected_slugs=None):
     with ImageLog(op, actor, batch_id, affected_slugs) as log:
         return log.delete("project_hobbies", {"project_id": project_id, "hobby_tag_id": tag_id})
 
@@ -3564,7 +3479,7 @@ def count_family_members(family_id):
         conn.close()
 
 
-def clear_family_members(family_id, op="set_kind", actor=None, batch_id=None, affected_slugs=None):
+def _clear_family_members(family_id, op="set_kind", actor=None, batch_id=None, affected_slugs=None):
     """Drops a group card's membership rows (set_kind force=True), logging one
     row image per dropped membership so the drop is undoable. No-op before the
     family_members table exists."""
@@ -3629,7 +3544,7 @@ def is_family_member(family_id, member_id):
         conn.close()
 
 
-def add_family_member(family_id, member_id, op, actor, batch_id=None, affected_slugs=None):
+def _add_family_member(family_id, member_id, op, actor, batch_id=None, affected_slugs=None):
     """Idempotently adds a membership row and logs its row image in the same
     transaction. Returns True when a row was inserted, False when it already
     existed (nothing logged). Validation is the caller's (core/cards.py)."""
@@ -3659,7 +3574,7 @@ def add_family_member(family_id, member_id, op, actor, batch_id=None, affected_s
         conn.close()
 
 
-def remove_family_member(family_id, member_id, op, actor, batch_id=None, affected_slugs=None):
+def _remove_family_member(family_id, member_id, op, actor, batch_id=None, affected_slugs=None):
     """Removes a membership row (logging its image). True if a row was removed."""
     conn = get_conn()
     try:
@@ -3716,7 +3631,7 @@ def distinct_card_values(field, limit=50):
         conn.close()
 
 
-def update_card_columns(card_id, fields, op, actor, batch_id=None, bump_updated=True):
+def _update_card_columns(card_id, fields, op, actor, batch_id=None, bump_updated=True):
     """Atomically writes `fields` (a dict limited to CARD_WRITABLE_COLUMNS) onto
     one projects row and records a change-log row image in the same transaction.
     Returns (before, after): dicts of just the columns passed. No-ops (nothing
@@ -3902,7 +3817,7 @@ def media_type_counts():
         conn.close()
 
 
-def resolve_pending_decision(decision_id, resolution=None, log=None):
+def _resolve_pending_decision(decision_id, resolution=None, log=None):
     """Marks a decision resolved, recording what was chosen (any JSON-able
     value — for project_match, the list of project ids applied, possibly
     empty for "none of these") inside payload["resolution"]. Resolved rows
@@ -4003,41 +3918,6 @@ def list_active_curator_dismissals():
 # distinct from a project (which is a collection of objects) or a tag (which is an
 # automatic grouping).
 
-def create_blog_entry(title, subtitle="", body="", status="draft", cover_slug=None, content_date=None):
-    """Auto-generates a unique slug from title via _slugify with numeric-suffix
-    dedup; sets created_at/updated_at=now; returns the full dict."""
-    conn = get_conn()
-    try:
-        slug = _slugify(title)
-        base_slug = slug
-        n = 2
-        while conn.execute("SELECT 1 FROM blog_entries WHERE slug = ?", (slug,)).fetchone():
-            slug = f"{base_slug}-{n}"
-            n += 1
-        now = time.time()
-        cur = conn.execute(
-            "INSERT INTO blog_entries (slug, title, subtitle, body, status, cover_slug, content_date, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (slug, title, subtitle, body, status, cover_slug, content_date, now, now),
-        )
-        conn.commit()
-        entry_id = cur.lastrowid
-        return {
-            "id": entry_id,
-            "slug": slug,
-            "title": title,
-            "subtitle": subtitle,
-            "body": body,
-            "status": status,
-            "cover_slug": cover_slug,
-            "content_date": content_date,
-            "created_at": now,
-            "updated_at": now,
-        }
-    finally:
-        conn.close()
-
-
 def get_blog_entry(id_or_slug):
     """Look up by id (int) or slug (str); returns dict or None.
 
@@ -4069,55 +3949,6 @@ def list_blog_entries(status=None):
         else:
             rows = conn.execute("SELECT * FROM blog_entries ORDER BY updated_at DESC").fetchall()
         return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def update_blog_entry(id_or_slug, title=None, subtitle=None, body=None, status=None, cover_slug=..., content_date=...):
-    """Partial update — None means 'leave unchanged'. cover_slug and content_date
-    use the ... (Ellipsis) sentinel so passing None explicitly CLEARS them.
-    Bumps updated_at. Returns the updated entry dict or None if not found."""
-    existing = get_blog_entry(id_or_slug)
-    if existing is None:
-        return None
-
-    conn = get_conn()
-    try:
-        now = time.time()
-        new_cover_slug = cover_slug if cover_slug is not ... else existing.get("cover_slug")
-        new_content_date = content_date if content_date is not ... else existing.get("content_date")
-        conn.execute(
-            "UPDATE blog_entries SET title = ?, subtitle = ?, body = ?, status = ?, cover_slug = ?, content_date = ?, updated_at = ? WHERE id = ?",
-            (
-                title if title is not None else existing["title"],
-                subtitle if subtitle is not None else existing["subtitle"],
-                body if body is not None else existing["body"],
-                status if status is not None else existing["status"],
-                new_cover_slug,
-                new_content_date,
-                now,
-                existing["id"],
-            ),
-        )
-        conn.commit()
-        return get_blog_entry(existing["id"])
-    finally:
-        conn.close()
-
-
-def delete_blog_entry(id_or_slug):
-    """Resolve to id, then DELETE the entry's rows from blog_entry_projects
-    and blog_entry_items FIRST, then from blog_entries."""
-    entry = get_blog_entry(id_or_slug)
-    if entry is None:
-        return
-
-    conn = get_conn()
-    try:
-        conn.execute("DELETE FROM blog_entry_projects WHERE entry_id = ?", (entry["id"],))
-        conn.execute("DELETE FROM blog_entry_items WHERE entry_id = ?", (entry["id"],))
-        conn.execute("DELETE FROM blog_entries WHERE id = ?", (entry["id"],))
-        conn.commit()
     finally:
         conn.close()
 
@@ -4172,54 +4003,10 @@ def list_entry_items(entry_id):
         conn.close()
 
 
-def set_entry_projects(entry_id, items):
-    """items is a list of (project_id, note) tuples in desired display order.
-    In ONE transaction: DELETE all existing blog_entry_projects rows for entry_id,
-    then INSERT each with sort_order = its index in the list."""
-    conn = get_conn()
-    try:
-        conn.execute("DELETE FROM blog_entry_projects WHERE entry_id = ?", (entry_id,))
-        for sort_order, (project_id, note) in enumerate(items):
-            conn.execute(
-                "INSERT INTO blog_entry_projects (entry_id, project_id, sort_order, note) VALUES (?, ?, ?, ?)",
-                (entry_id, project_id, sort_order, note),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def set_entry_items(entry_id, items):
-    """items is a list of (post_slug, note) tuples in desired display order.
-    In ONE transaction: DELETE all existing blog_entry_items rows for entry_id,
-    then INSERT each with sort_order = its index in the list."""
-    conn = get_conn()
-    try:
-        conn.execute("DELETE FROM blog_entry_items WHERE entry_id = ?", (entry_id,))
-        for sort_order, (post_slug, note) in enumerate(items):
-            conn.execute(
-                "INSERT INTO blog_entry_items (entry_id, post_slug, sort_order, note) VALUES (?, ?, ?, ?)",
-                (entry_id, post_slug, sort_order, note),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
 # --- Hobbies (#360) ---
 # A hobby is a first-class organizing tier ABOVE projects. Mechanism: a hobby
 # is just a tag (blog_tags row) marked is_hobby=1 with an optional hobby_status.
 # Projects attach to hobbies many-to-many via project_hobbies.
-
-
-def _normalize_hobby_status(status):
-    """Maps the v1 aliases to 'inactive' and rejects anything else (ValueError, the
-    contract the older callers expect). The warning-carrying path is
-    card_rules.validate_hobby_activity / core.cards.set_hobby_activity."""
-    try:
-        return card_rules.validate_hobby_activity(status)[0]
-    except card_rules.CardError:
-        raise ValueError(f"Invalid hobby_status: {status}. Must be one of {HOBBY_STATUSES}")
 
 
 def hobby_codes_by_tag_name():
@@ -4247,61 +4034,11 @@ def all_group_codes(conn=None, exclude_tag_id=None):
             conn.close()
 
 
-def mark_tag_as_hobby(tag_id, status="active"):
-    """Mark a blog_tags row as a hobby with an optional status.
-
-    status: 'active' or 'inactive' (the v1 words 'dormant'/'abandoned' are still accepted
-    and stored as 'inactive'), defaults to 'active'. Fills group_code (3.9) when unset.
-    If status is invalid, raises ValueError."""
-    status = _normalize_hobby_status(status)
-    conn = get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT name, group_code FROM blog_tags WHERE id = ?", (tag_id,)).fetchone()
-        conn.execute("UPDATE blog_tags SET is_hobby = 1, hobby_status = ? WHERE id = ?", (status, tag_id))
-        if row is not None and not row["group_code"]:
-            code = card_rules.derive_group_code(row["name"], all_group_codes(conn))
-            conn.execute("UPDATE blog_tags SET group_code = ? WHERE id = ?", (code, tag_id))
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-def unmark_hobby(tag_id):
-    """Remove the hobby designation from a blog_tags row.
-
-    Sets is_hobby=0 and clears hobby_status and group_code."""
-    conn = get_conn()
-    try:
-        conn.execute("UPDATE blog_tags SET is_hobby = 0, hobby_status = NULL, group_code = NULL WHERE id = ?",
-                     (tag_id,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def set_hobby_status(tag_id, status):
-    """Update a hobby's activity (active/inactive; dormant/abandoned map to inactive).
-
-    Raw setter with no change log -- the V2 path is core.cards.set_hobby_activity.
-    Raises ValueError if status is invalid."""
-    status = _normalize_hobby_status(status)
-    conn = get_conn()
-    try:
-        conn.execute("UPDATE blog_tags SET hobby_status = ? WHERE id = ? AND is_hobby = 1", (status, tag_id))
-        conn.commit()
-    finally:
-        conn.close()
-
-
 # Columns a card operation may write on a hobby's blog_tags row.
 HOBBY_WRITABLE_COLUMNS = ("hobby_status", "group_code")
 
 
-def update_hobby_columns(tag_id, fields, op, actor, batch_id=None):
+def _update_hobby_columns(tag_id, fields, op, actor, batch_id=None):
     """Atomically writes `fields` (limited to HOBBY_WRITABLE_COLUMNS) onto one hobby's
     blog_tags row and records a change-log row image in the same transaction.
     Returns (before, after) of just the columns passed, or (None, None) when the hobby
@@ -4484,122 +4221,3 @@ def list_hobbies_for_project(project_id):
     finally:
         conn.close()
 
-
-def add_project_to_hobby(project_id, tag_id):
-    """Add a project to a hobby's many-to-many relation.
-
-    Idempotent via INSERT OR IGNORE."""
-    conn = get_conn()
-    try:
-        conn.execute(
-            "INSERT OR IGNORE INTO project_hobbies (project_id, hobby_tag_id) VALUES (?, ?)",
-            (project_id, tag_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def remove_project_from_hobby(project_id, tag_id):
-    """Remove a project from a hobby's many-to-many relation."""
-    conn = get_conn()
-    try:
-        conn.execute(
-            "DELETE FROM project_hobbies WHERE project_id = ? AND hobby_tag_id = ?",
-            (project_id, tag_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def delete_project(project_id):
-    """Delete a project. Thin compatibility wrapper: the real work lives in
-    core.cards.delete_card (#497), which runs in one transaction with change-log row
-    images (so it's undoable) and leaves no ghost rows: blank auto write-up, links in
-    either direction, family/hobby/file membership and blog-entry attachments all go;
-    children are orphaned, never deleted.
-
-    Returns {children_orphaned, items_detached, writeup, warnings, batch_id}, or None
-    if the project wasn't found."""
-    from . import cards  # lazy: cards imports db
-    project = get_project(project_id)
-    if project is None:
-        return None
-    res = cards.delete_card(project["id"])  # #560: actor from the caller's context
-    return {"children_orphaned": res.data["children_orphaned"], "items_detached": res.data["items_detached"],
-            "writeup": res.data["writeup"], "warnings": res.warnings, "batch_id": res.batch_id}
-
-
-def convert_project_to_hobby(project_id):
-    """Convert an existing project into a hobby.
-
-    DESTRUCTIVE. Steps, in one transaction:
-    1. Load the project; return None if not found.
-    2. Resolve its hobby tag: if project.tag_id is set, use that tag;
-       else create/reuse a root-level tag with the project's title.
-    3. Mark the tag as a hobby (is_hobby=1, status='active').
-    4. Re-hang child projects: for each child project, add it to the hobby
-       via project_hobbies and set its parent_id to NULL.
-    5. Move the project's directly-attached objects onto the hobby tag:
-       for each object in list_project_items, attach the hobby tag via post_tags.
-    6. Delete the project row (and its project_items rows).
-    7. Return the hobby tag dict.
-
-    Safe to call multiple times; guards against converting a project that
-    is already a hobby-linked tag."""
-
-    # Resolve EVERYTHING before opening the write transaction. get_or_create_tag,
-    # list_child_projects and list_project_items each open their own connection;
-    # if any of them ran while we held BEGIN IMMEDIATE, a nested write (tag
-    # creation) would deadlock on our own lock ("database is locked"). Sequence
-    # for stability, no racing: reads + tag resolution first, then a tight
-    # write-only transaction on a single connection.
-    project = get_project(project_id)
-    if project is None:
-        return None
-
-    if project.get("tag_id"):
-        tag_id = project["tag_id"]
-    else:
-        tag_id = get_or_create_tag(project["title"], parent_id=None)["id"]
-
-    child_ids = [c["id"] for c in list_child_projects(project_id)]
-    item_slugs = [it["slug"] for it in list_project_items(project_id)]
-
-    conn = get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        # Mark the tag as a hobby.
-        conn.execute(
-            "UPDATE blog_tags SET is_hobby = 1, hobby_status = ? WHERE id = ?",
-            ("active", tag_id),
-        )
-        tag_row = conn.execute("SELECT name, group_code FROM blog_tags WHERE id = ?", (tag_id,)).fetchone()
-        if tag_row is not None and not tag_row["group_code"]:
-            conn.execute("UPDATE blog_tags SET group_code = ? WHERE id = ?",
-                         (card_rules.derive_group_code(tag_row["name"], all_group_codes(conn)), tag_id))
-        # Re-hang child projects onto the hobby; clear their parent_id.
-        for cid in child_ids:
-            conn.execute(
-                "INSERT OR IGNORE INTO project_hobbies (project_id, hobby_tag_id) VALUES (?, ?)",
-                (cid, tag_id),
-            )
-            conn.execute("UPDATE projects SET parent_id = NULL WHERE id = ?", (cid,))
-        # Move the project's own directly-attached objects onto the hobby tag.
-        for slug in item_slugs:
-            conn.execute(
-                "INSERT OR IGNORE INTO post_tags (post_slug, tag_id) VALUES (?, ?)",
-                (slug, tag_id),
-            )
-        # Dissolve the (never-really-a-)project row and its membership rows.
-        conn.execute("DELETE FROM project_items WHERE project_id = ?", (project_id,))
-        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-    return get_tag(tag_id)

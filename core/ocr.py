@@ -262,7 +262,7 @@ def _run_ocr_pipeline(slug, row, spec):
     db.set_extracted_text(slug, text)
     matched_clients = _match_client_tags(text)
     if matched_clients:
-        db.add_tags(slug, matched_clients)
+        db._add_tags(slug, matched_clients)
         if len(matched_clients) == 1:
             # Only auto-select the client field on an unambiguous match — with
             # more than one, tagging both is useful, but picking one to assign

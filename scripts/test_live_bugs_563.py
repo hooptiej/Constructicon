@@ -49,9 +49,9 @@ client = TestClient(webapp.app)
 
 # ---- 1. remove-from-project x (db.get_post never existed) ----------------------------------
 check("no db.get_post call left in app.py", "db.get_post(" not in open(os.path.join(ROOT, "web", "app.py"), encoding="utf-8").read())
-proj = db.create_project("Remove test")
+proj = db._create_project("Remove test")
 make_item("rm1")
-db.add_item_to_project(proj["id"], "rm1")
+db._add_item_to_project(proj["id"], "rm1")
 r = client.post(f"/api/projects/{proj['slug']}/remove-item", data={"slug": "rm1"})
 check("remove-item 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
 check("item detached", all(i["slug"] != "rm1" for i in db.list_project_items(proj["id"])))
@@ -111,8 +111,8 @@ check("Reclassify no longer passes a no-op runner", "lambda f, *args: None" not 
 check("run_in_thread runs the function on a thread", (lambda ev: (ingest.run_in_thread(ev.set), ev.wait(5))[1])(__import__("threading").Event()))
 
 # ---- 7. POST /api/projects/{id}: validate before the first write ---------------------------
-parent = db.create_project("Parent card")
-child = db.create_project("Child card")
+parent = db._create_project("Parent card")
+child = db._create_project("Child card")
 before = db.get_project(child["id"])
 r = client.post(f"/api/projects/{child['slug']}", data={"parent_id": str(parent["id"]), "writeup_slug": "does-not-exist"})
 check("bad writeup_slug is 400", r.status_code == 400, f"{r.status_code} {r.text[:200]}")

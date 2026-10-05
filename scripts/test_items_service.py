@@ -36,7 +36,7 @@ except Exception:  # no libcairo here (e.g. Windows): object types import it
 
 from PIL import Image  # noqa: E402
 
-from core import actor, cards, changes, db, ingest, items, revisions, storage  # noqa: E402
+from core import actor, blog, cards, changes, db, ingest, items, revisions, storage  # noqa: E402
 from core.errors import AppError  # noqa: E402
 
 storage.STORAGE_DIR = Path(TMP) / "storage"
@@ -113,7 +113,7 @@ ctx.__enter__()
 
 # --- multi-field edit: one batch, one undo ------------------------------------------------
 E = mk("edit1")
-db.update_content_metadata(E, type_metadata={"auto_caption": "a red square"})  # pipeline data to keep
+db._update_content_metadata(E, type_metadata={"auto_caption": "a red square"})  # pipeline data to keep
 before = db.get_by_slug(E)
 n0 = audit_count()
 res = items.update(E, display_name="Red square", description="the owner's note", provenance="found",
@@ -260,15 +260,15 @@ A, B, C, X = mk("revA"), mk("revB", (1, 2, 3)), mk("revC"), mk("relX")
 revisions.mark_superseded(A, B)
 revisions.mark_superseded(B, C)
 check("chain A -> B -> C built", db.revision_pairs() == {A: B, B: C})
-proj = db.create_project("Delete Test Card", with_writeup=False)
-db.add_item_to_project(proj["id"], A)
-db.add_item_to_project(proj["id"], B)
-db.add_item_to_project(proj["id"], X)
-tag = db.get_or_create_tag("trash-test-tag")
-db.attach_tags(B, [tag["id"]])
-db.add_relation(B, X)
-entry = db.create_blog_entry("A post")
-db.set_entry_items(entry["id"], [(A, ""), (B, "middle one")])
+proj = db._create_project("Delete Test Card", with_writeup=False)
+db._add_item_to_project(proj["id"], A)
+db._add_item_to_project(proj["id"], B)
+db._add_item_to_project(proj["id"], X)
+tag = db._get_or_create_tag("trash-test-tag")
+db._attach_tags(B, [tag["id"]])
+db._add_relation(B, X)
+entry = blog.create("A post").data["entry"]
+blog.set_items(entry["id"], [(A, ""), (B, "middle one")])
 did = db.add_pending_decision("project_match", B, {"options": []})
 db.set_curator_state(f"decision:{did}", "defer")
 db.set_embedding(B, b"\x01\x02\x03\x04")

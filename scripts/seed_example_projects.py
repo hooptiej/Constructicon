@@ -9,7 +9,7 @@ AlienWhoop/TinyShark post") — not a real project, just the tag tree wearing
 a project card. A real project here is a specific build/effort (a specific
 quad, a specific KSP ship design, a specific robot) with only the handful of
 items that actually belong to that one thing, curated by hand via
-db.add_item_to_project rather than derived from tag membership.
+db._add_item_to_project rather than derived from tag membership.
 
 This is deliberately NOT wired into app startup or the backfill script —
 `projects`/`project_items` are curated by hand, not derived data, same as
@@ -175,13 +175,13 @@ def main():
         if not present:
             print(f"skip {project_def['title']!r}: none of its slugs exist yet — run scripts/backfill_from_hooptiej_site.py first")
             continue
-        project = db.create_project(
+        project = db._create_project(
             project_def["title"],
             description=project_def["description"],
             cover_slug=_pick_cover(present),
         )
         for slug in present:
-            db.add_item_to_project(project["id"], slug)
+            db._add_item_to_project(project["id"], slug)
         seeded += 1
         print(f"seeded project {project['slug']!r} ({project['title']}) with {len(present)} item(s)")
 

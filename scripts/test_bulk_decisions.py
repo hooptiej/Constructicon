@@ -51,7 +51,7 @@ def fingerprint():
 
 
 def card(title, **kw):
-    c = db.create_project(f"{TAG} {title}", stage="in_progress", **kw)
+    c = db._create_project(f"{TAG} {title}", stage="in_progress", **kw)
     MADE_SLUGS.append(c["slug"])
     return c
 

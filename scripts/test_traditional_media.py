@@ -21,7 +21,7 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 sys.modules.setdefault("cairosvg", types.ModuleType("cairosvg"))  # native cairo is not needed here
 
-from core import db, physical_piece, timeline  # noqa: E402
+from core import db, hobbies, physical_piece, timeline  # noqa: E402
 
 FAILS = []
 SECTION = 'aria-labelledby="dp-h-physical"'  # the rendered group (the page JS also mentions the name)
@@ -127,13 +127,11 @@ check("JS registers the group", "DP.register('physical'" in html)
 
 # ---- visibility via the Traditional Media hobby --------------------------------------------
 other = make_item("piece2", title="Empty piece")
-pid = db.create_project("Drawings")["id"]
-db.add_item_to_project(pid, other)
+pid = db._create_project("Drawings")["id"]
+db._add_item_to_project(pid, other)
 check("not shown for a project outside the hobby", SECTION not in client.get(f"/object/{other}").text)
-tag = db.get_or_create_tag("Traditional Media")
-tag_id = tag["id"] if isinstance(tag, dict) else tag
-db.mark_tag_as_hobby(tag_id)
-db.add_project_to_hobby(pid, tag_id)
+tag_id = hobbies.create("Traditional Media").data["hobby"]["id"]
+hobbies.add_card(tag_id, pid)
 html2 = client.get(f"/object/{other}").text
 check("shown for an item in a Traditional Media project, all four blank",
       SECTION in html2 and html2.count("&mdash;") >= 4)

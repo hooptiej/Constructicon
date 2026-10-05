@@ -29,6 +29,7 @@
         <div class="dp-menu" id="hobby-more-menu" role="menu" aria-labelledby="hobby-more-btn" hidden>
           <a role="menuitem" href="/curator">Open the Curator queue</a>
           <a role="menuitem" href="/hobbies">All hobbies</a>
+          <button type="button" role="menuitem" id="hobby-convert-btn" title="Turn this hobby into a family, collection or project card">Convert to card&hellip;</button>
           {% if hobby.name | lower == 'traditional media' %}<a role="menuitem" href="https://github.com/hooptiej/Constructicon/blob/main/docs/capture-traditional-media.md" target="_blank" rel="noopener">How to capture a physical piece</a>{% endif %}
         </div>
       </div>
@@ -163,6 +164,43 @@
   </section>
 </div>
 
+{# #541 phase D: hobby -> card (the reverse of a project's "Convert to hobby"). Preview = a dry run. #}
+<div class="modal-backdrop" id="hobby-convert-backdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="hobby-convert-title">
+    <div class="modal-header">
+      <h2 id="hobby-convert-title">Convert to a card</h2>
+      <button type="button" class="modal-close" id="hobby-convert-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0 0 12px;line-height:1.5">"{{ hobby.name }}" stops being a hobby and becomes a card that keeps its tag. Its cards move onto the new card (as members of a family or collection, or as parts of a project), its loose objects go onto it, and it can join another hobby. One undo reverses all of it.</p>
+      <div class="dp-field">
+        <label for="hobby-convert-kind">Kind</label>
+        <select id="hobby-convert-kind" class="input">
+          <option value="family">Family</option>
+          <option value="collection">Collection</option>
+          <option value="project">Project</option>
+        </select>
+      </div>
+      <div class="dp-field">
+        <label for="hobby-convert-title-input">Title</label>
+        <input id="hobby-convert-title-input" class="input" value="{{ hobby.name }}">
+      </div>
+      <div class="dp-field">
+        <label for="hobby-convert-into">Put it in hobby</label>
+        <select id="hobby-convert-into" class="input"><option value="">(none)</option></select>
+      </div>
+      <p id="hobby-convert-preview" style="margin:12px 0 0;line-height:1.5;display:none"></p>
+      <div style="display:flex;gap:12px;margin-top:16px">
+        <button type="button" class="btn-secondary" id="hobby-convert-dry">Preview</button>
+        <button type="button" class="btn-danger" id="hobby-convert-go">Convert</button>
+        <button type="button" class="btn-secondary" id="hobby-convert-cancel">Cancel</button>
+      </div>
+      <p class="error-text" id="hobby-convert-error" role="alert" style="display:none;margin-top:12px"></p>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
 <script>
 (function () {
@@ -272,6 +310,74 @@
   }
   if (looseSort) looseSort.addEventListener('change', renderLoose);
   renderLoose();
+
+  // Convert to card (#541 phase D): POST /api/hobby/{id}/convert-to-card; Preview sends dry_run.
+  const cv = {
+    backdrop: document.getElementById('hobby-convert-backdrop'),
+    kind: document.getElementById('hobby-convert-kind'),
+    title: document.getElementById('hobby-convert-title-input'),
+    into: document.getElementById('hobby-convert-into'),
+    preview: document.getElementById('hobby-convert-preview'),
+    error: document.getElementById('hobby-convert-error'),
+    dry: document.getElementById('hobby-convert-dry'),
+    go: document.getElementById('hobby-convert-go'),
+  };
+  let hobbiesLoaded = false;
+  function openConvert() {
+    cv.error.style.display = 'none';
+    cv.preview.style.display = 'none';
+    cv.backdrop.style.display = 'flex';
+    if (hobbiesLoaded) return;
+    hobbiesLoaded = true;
+    fetch('/api/hobbies').then(r => r.ok ? r.json() : []).then(list => {
+      list.filter(h => h.id !== HOBBY_ID).forEach(h => {
+        const o = document.createElement('option');
+        o.value = h.slug; o.textContent = h.name;   // textContent: a hostile name stays text
+        cv.into.appendChild(o);
+      });
+    }).catch(() => {});
+  }
+  function closeConvert() { cv.backdrop.style.display = 'none'; }
+  function convertFields(dry) {
+    return { kind: cv.kind.value, title: cv.title.value.trim(), into_hobby: cv.into.value, dry_run: dry ? 'true' : 'false' };
+  }
+  function describe(r) {
+    const how = {};
+    (r.members || []).forEach(m => { how[m.how] = (how[m.how] || 0) + 1; });
+    const parts = Object.keys(how).map(k => `${how[k]} card${how[k] === 1 ? '' : 's'} ${k === 'member' ? 'as members' : k === 'nested' ? 'nested as parts' : k}`);
+    return `New ${r.kind} "${r.title}"` + (r.into_hobby ? ` in ${r.into_hobby}` : '') + ': '
+      + (parts.length ? parts.join(', ') : 'no member cards') + `, ${r.loose_moved} loose object${r.loose_moved === 1 ? '' : 's'}`
+      + ` (${(r.changes || []).length} changes).`;
+  }
+  async function runConvert(dry) {
+    cv.error.style.display = 'none';
+    cv.dry.disabled = cv.go.disabled = true;
+    try {
+      const r = await post('convert-to-card', convertFields(dry));
+      if (dry) {
+        cv.preview.textContent = describe(r);
+        cv.preview.style.display = 'block';
+        return;
+      }
+      closeConvert();
+      const go = () => { window.location.href = `/project/${encodeURIComponent(r.card)}`; };
+      if (window.showUndoBar && r.batch_id) {
+        window.showUndoBar(`Converted to the ${r.kind} "${r.title}".`, r.batch_id, how => {
+          if (how === 'undone') window.location.reload(); else go();
+        });
+      } else { go(); }
+    } catch (e) {
+      cv.error.textContent = e.message;
+      cv.error.style.display = 'block';
+    } finally {
+      cv.dry.disabled = cv.go.disabled = false;
+    }
+  }
+  document.getElementById('hobby-convert-btn').addEventListener('click', openConvert);
+  document.getElementById('hobby-convert-close').addEventListener('click', closeConvert);
+  document.getElementById('hobby-convert-cancel').addEventListener('click', closeConvert);
+  cv.dry.addEventListener('click', () => runConvert(true));
+  cv.go.addEventListener('click', () => runConvert(false));
 })();
 </script>
 {% endblock %}

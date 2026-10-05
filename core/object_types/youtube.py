@@ -183,7 +183,7 @@ def _fetch_real_date(row):
     if published is None:
         raise RuntimeError("YouTube has no published date for this video (it may be deleted or private)")
 
-    db.set_content_date(row["slug"], published)
+    db._set_content_date(row["slug"], published)
     return {"content_date": published}
 
 

@@ -133,7 +133,7 @@ check("caption queue worker runs as system", seen.get("caption_worker") == actor
 actor._PROCESS_DEFAULT = saved_default
 
 # ---- 3. core writes record the context's actor ----------------------------------------------
-card = db.create_project("Actor card")
+card = db._create_project("Actor card")
 with actor.acting_as(actor.ACTOR_UI):
     cards.set_status(card["id"], "paused")
 check("core write under owner-ui context -> owner-ui", last_change_actor("set_status") == ("set_status", "owner-ui"),

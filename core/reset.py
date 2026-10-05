@@ -49,7 +49,7 @@ def delete_everything(confirm="", *, actor=None):
     batch_id = changes.new_batch_id()
     with db.transaction():
         files = db.list_all_item_files()
-        counts = db.clear_tables(tables)
+        counts = db._clear_tables(tables)
         changes.record(OP_DELETE_ALL, actor, [], batch_id=batch_id, conn=db.get_conn(),
                        details={"counts": counts, "files": sum(1 for f in files if f.get("stored_filename"))})
     # Files only after the rows are gone for good (a failed transaction leaves both in place).

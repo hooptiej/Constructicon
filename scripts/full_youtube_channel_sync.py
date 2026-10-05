@@ -83,7 +83,7 @@ the intended behavior per the issue's own instruction to avoid a redundant
 WRITE-PATH DECISION (per the issue's explicit "investigate, don't assume"
 instruction): before this script existed, there was NO way to set
 type_metadata or correct content_description through the HTTP API at all —
-db.set_type_metadata and content_description-on-creation both existed, but
+db._set_type_metadata and content_description-on-creation both existed, but
 nothing exposed either for an ALREADY-CREATED row. Rather than have this
 script reach into the database directly for that (the pattern #21/#51 use
 ONLY for tag_id/project_items, which the docstrings on those scripts are
@@ -100,7 +100,7 @@ the UI itself displays), this adds two small, focused HTTP surfaces instead
     if not given" partial update (matching update_tags/rename_object's
     existing convention on that endpoint), while type_metadata is MERGED
     into whatever the row already has rather than replacing it wholesale
-    (db.set_type_metadata's existing contract), so re-running this script's
+    (db._set_type_metadata's existing contract), so re-running this script's
     correction pass, or some future second writer of type_metadata, can't
     silently clobber a field it doesn't know about.
 This keeps the "write real content fields through the real API, same as a
@@ -270,7 +270,7 @@ def _parse_published(text):
 def build_type_metadata(meta, owner_channel_title):
     """See module docstring's "type_metadata schema" / "On 'author'"
     sections. Only ever includes keys that actually have a value — an
-    empty dict here means db.update_content_metadata's merge is a no-op
+    empty dict here means db._update_content_metadata's merge is a no-op
     for that call, never a wipe of the row's existing type_metadata."""
     md = {}
     if meta.get("view_count") is not None:
@@ -353,7 +353,7 @@ def correct_content_row(base_url, slug, current, content_description, type_metad
 
     content_date (#265 follow-up): the real publishedAt date was already
     being fetched from the API on every correction pass but had nowhere
-    to go -- api_update_image now accepts it directly (core.db.set_content_date).
+    to go -- api_update_image now accepts it directly (core.db._set_content_date).
     Passed unconditionally, same as the import path below always sets it;
     re-asserting the same real value on a re-run is the same safe-no-op
     idempotence this function's docstring already relies on for the other

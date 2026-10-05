@@ -27,7 +27,7 @@ human actually clicked "add" on.
 The `projects`/`project_items` tables and blog_tags/post_tags tag tree have
 no HTTP equivalent (no web route creates/attaches a tag) and are pure
 metadata bookkeeping with no thumbnail/OCR/dispatch behavior riding on
-them, so those two calls (db.get_or_create_tag / db.attach_tags) still go
+them, so those two calls (db._get_or_create_tag / db._attach_tags) still go
 straight to the database — the same database file the target instance
 itself reads and writes, so run this against the SAME instance/DB pair
 --base-url points at (see Usage below).
@@ -63,7 +63,7 @@ What it does:
      (media_type='youtube') -- created via POST /api/content.
   2. Reads projects/index.html for the five top-level categories (title +
      description) and creates one root blog_tag per category via
-     db.get_or_create_tag.
+     db._get_or_create_tag.
   3. Reads each projects/<category>.html page. Content is organized into
      <section class="card"> blocks, each optionally headed by an <h3> (a
      real named sub-topic the site author chose, e.g. "TinyShark", "The
@@ -166,7 +166,7 @@ def create_content_row(base_url, **fields):
     module's docstring for why that (not core.db.insert_content) is what
     actually gets thumbnail/OCR dispatch scheduled. Returns the created
     row's public JSON (as returned by web/app.py's _to_public), including
-    the server-minted `slug` callers need for any follow-up db.attach_tags
+    the server-minted `slug` callers need for any follow-up db._attach_tags
     call. None-valued fields are dropped rather than sent as the literal
     string "None", relying on api_create_content's own Form(...) defaults.
     """
@@ -255,7 +255,7 @@ def process_category_page(site_dir, filename, category_tag_id, blog_slug_to_real
         heading = HEADING_RE.search(section)
         tag_id = category_tag_id
         if heading and heading.group(1) == "3":
-            tag = db.get_or_create_tag(clean(heading.group(2)), parent_id=category_tag_id)
+            tag = db._get_or_create_tag(clean(heading.group(2)), parent_id=category_tag_id)
             tag_id = tag["id"]
             stats["subtags_created"].add((category_tag_id, tag["name"]))
 
@@ -275,7 +275,7 @@ def process_category_page(site_dir, filename, category_tag_id, blog_slug_to_real
                 )
                 video_id_to_real_slug[video_id] = row["slug"]
                 stats["videos_created"] += 1
-            db.attach_tags(video_id_to_real_slug[video_id], [tag_id])
+            db._attach_tags(video_id_to_real_slug[video_id], [tag_id])
             stats["tag_attachments"] += 1
 
         # Every <li> in the section -- either a link back to a blog post
@@ -298,12 +298,12 @@ def process_category_page(site_dir, filename, category_tag_id, blog_slug_to_real
                     )
                     video_id_to_real_slug[video_id] = row["slug"]
                     stats["videos_created"] += 1
-                db.attach_tags(video_id_to_real_slug[video_id], [tag_id])
+                db._attach_tags(video_id_to_real_slug[video_id], [tag_id])
                 stats["tag_attachments"] += 1
             elif "../blog/" in href:
                 post_slug = Path(href).stem
                 if post_slug in blog_slug_to_real_slug:
-                    db.attach_tags(blog_slug_to_real_slug[post_slug], [tag_id])
+                    db._attach_tags(blog_slug_to_real_slug[post_slug], [tag_id])
                     stats["tag_attachments"] += 1
             # else: a plain external reference link (Thingiverse, the raw
             # YouTube channel URL, etc.) -- not archived content, skip.
@@ -345,7 +345,7 @@ def main():
     category_tag_ids = {}
     for filename in CATEGORY_FILES:
         title = parse_category_title(site_dir, filename)
-        tag = db.get_or_create_tag(title, parent_id=None)
+        tag = db._get_or_create_tag(title, parent_id=None)
         category_tag_ids[filename] = tag["id"]
 
     # --- Per-category sub-tags, video rows, and tagging ---

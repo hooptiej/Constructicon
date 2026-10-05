@@ -61,7 +61,7 @@ def attach_to_project(slug, project_id):
     than failing the whole upload over a cosmetic mismatch.
 
     #274: also merges the tag's own name into the row's free-text `tags`
-    column (db.add_tags — same merge path a person typing a tag by hand
+    column (db._add_tags — same merge path a person typing a tag by hand
     goes through), not just post_tags. Before this, a project-linked tag
     surfaced the item in tag-tree browsing but never showed up as a chip
     in the item's own TAGS box on its detail page — an inconsistent, easy

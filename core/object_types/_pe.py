@@ -159,9 +159,8 @@ def is_exe_row(row):
 def reclassify(row, new_type):
     """Shared by both Reclassify actions: retype the row, and close any open
     "installer or app?" question about it, since this answers it."""
-    from .. import db, ingest, items  # lazy: ingest/items import the registry
-    items.retype(row["slug"], new_type, ingest.run_in_thread)
-    for decision in db.list_pending_decisions("retype"):
-        if decision["post_slug"] == row["slug"]:
-            db.resolve_pending_decision(decision["id"], {"choice": new_type, "via": "reclassify action"})
+    from .. import changes, decisions, ingest, items  # lazy: ingest/items import the registry
+    batch_id = changes.new_batch_id()  # #541 phase D: the retype and the answered question = one batch
+    items.retype(row["slug"], new_type, ingest.run_in_thread, batch_id=batch_id)
+    decisions.close_retype_questions(row["slug"], new_type, batch_id=batch_id)
     return {"message": f"Reclassified as {new_type}"}

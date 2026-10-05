@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import Request, Form, HTTPException, APIRouter
 from fastapi.responses import JSONResponse
 
-from core import db, site_export
+from core import blog, db, site_export
 from web.shapes import _to_blog_entry_detail
 
 router = APIRouter()
@@ -54,28 +54,11 @@ def api_create_blog_entry(
     content_date: str = Form(None),
 ):
     """Create a new blog entry. title is required; others are optional.
-    content_date, if provided, is parsed from a timestamp string."""
-    title = title.strip()
-    if not title:
-        raise HTTPException(status_code=400, detail="Title is required")
-
-    # Parse content_date if provided
-    parsed_content_date = None
-    if content_date:
-        try:
-            parsed_content_date = float(content_date)
-        except (ValueError, TypeError):
-            raise HTTPException(status_code=400, detail="Invalid content_date format")
-
-    entry = db.create_blog_entry(
-        title=title,
-        subtitle=subtitle,
-        body=body,
-        status=status,
-        cover_slug=cover_slug,
-        content_date=parsed_content_date,
-    )
-    return JSONResponse(_to_blog_entry_detail(entry))
+    content_date, if provided, is parsed from a timestamp string. #541 phase D: core/blog.py,
+    logged and undoable."""
+    result = blog.create(title, subtitle=subtitle, body=body, status=status, cover_slug=cover_slug,
+                         content_date=content_date or None)
+    return JSONResponse(_to_blog_entry_detail(result.data["entry"]))
 
 
 @router.post("/api/blog-entries/{slug}")
@@ -101,7 +84,7 @@ async def api_update_blog_entry(
 
     form_data = await request.form()
 
-    cover_slug = ...  # Ellipsis => leave unchanged (db.update_blog_entry's sentinel)
+    cover_slug = ...  # Ellipsis => leave unchanged (blog.update's sentinel)
     if "cover_slug" in form_data:
         raw_cover = form_data.get("cover_slug")
         cover_slug = raw_cover if raw_cover else None
@@ -109,39 +92,22 @@ async def api_update_blog_entry(
     content_date = ...
     if "content_date" in form_data:
         raw_date = form_data.get("content_date")
-        if raw_date:
-            try:
-                content_date = float(raw_date)
-            except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail="Invalid content_date format")
-        else:
-            content_date = None
+        content_date = raw_date or None  # blog.update refuses a non-number (400)
 
-    updated = db.update_blog_entry(
-        slug,
-        title=title,
-        subtitle=subtitle,
-        body=body,
-        status=status,
-        cover_slug=cover_slug,
-        content_date=content_date,
-    )
-
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Blog entry not found")
-
-    return JSONResponse(_to_blog_entry_detail(updated))
+    result = blog.update(slug, title=title, subtitle=subtitle, body=body, status=status,
+                         cover_slug=cover_slug, content_date=content_date)
+    return JSONResponse(_to_blog_entry_detail(result.data["entry"]))
 
 
 @router.delete("/api/blog-entries/{slug}")
 def api_delete_blog_entry(slug: str):
-    """Delete a blog entry and its attached projects/items."""
+    """Delete a blog entry and its attached projects/items (#541 phase D: undoable; the answer
+    carries batch_id)."""
     entry = db.get_blog_entry(slug)
     if entry is None:
         raise HTTPException(status_code=404, detail="Blog entry not found")
-
-    db.delete_blog_entry(slug)
-    return JSONResponse({"deleted": True})
+    result = blog.delete(entry["id"])
+    return JSONResponse({"deleted": True, "batch_id": result.batch_id})
 
 
 def _require_json_content_type(request: Request):
@@ -184,9 +150,9 @@ async def api_set_blog_entry_projects(
             raise HTTPException(status_code=400, detail="project_id is required")
         items.append((project_id, note))
 
-    db.set_entry_projects(entry["id"], items)
-    updated = db.get_blog_entry(slug)
-    return JSONResponse(_to_blog_entry_detail(updated))
+    # #541 phase D: logged + undoable; an unknown card is a 404 (it used to be stored as a row no page shows).
+    result = blog.set_projects(entry["id"], items)
+    return JSONResponse(_to_blog_entry_detail(result.data["entry"]))
 
 
 @router.put("/api/blog-entries/{slug}/items")
@@ -220,9 +186,8 @@ async def api_set_blog_entry_items(
             raise HTTPException(status_code=400, detail="slug is required")
         items.append((post_slug, note))
 
-    db.set_entry_items(entry["id"], items)
-    updated = db.get_blog_entry(slug)
-    return JSONResponse(_to_blog_entry_detail(updated))
+    result = blog.set_items(entry["id"], items)  # #541 phase D: logged + undoable; unknown file = 404
+    return JSONResponse(_to_blog_entry_detail(result.data["entry"]))
 
 
 # --- Site export (generate static site for deployment) ---

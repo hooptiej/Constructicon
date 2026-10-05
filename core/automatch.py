@@ -97,8 +97,8 @@ def apply_to_upload(slug, texts, exclude_project_ids=()):
         # Both halves of the tag system (see core/db.py's sync_real_tags_for_post
         # docstring): the free-text JSON column the edit form shows, and the
         # real post_tags link the tree browsing/pills read.
-        db.add_tags(slug, names)
-        db.attach_tags(slug, [t["id"] for t in tags])
+        db._add_tags(slug, names)
+        db._attach_tags(slug, [t["id"] for t in tags])
         result["tags"] = names
     excluded = set(exclude_project_ids)
     candidates = [p for p in projects if p["id"] not in excluded]

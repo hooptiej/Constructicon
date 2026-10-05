@@ -303,7 +303,7 @@ def api_retry_caption(request: Request, slug: str, background_tasks: BackgroundT
     spec = object_types.get_object_type(row.get("media_type"))
     if not captions.should_caption(spec):
         raise HTTPException(status_code=400, detail=f"Captioning isn't available for {spec.label} content")
-    db.update_content_metadata(slug, type_metadata={captions.STATUS_KEY: "pending"})
+    captions.mark_pending(slug)  # pipeline bookkeeping, owned by core/captions.py (#541 phase D)
     if advance:
         current_step = row["type_metadata"].get(captions.STEP_KEY, 0)
         next_step = (current_step + 1) % len(captions.STEPS)

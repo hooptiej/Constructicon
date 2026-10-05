@@ -31,13 +31,13 @@ def check(name, cond):
 
 credits = ["Printables", "Printables", "Printables", "Thingiverse", "Thingiverse", "alice", "<b>x</b>\"&'", "  Padded  ", "Padded"]
 for i, c in enumerate(credits):
-    pid = db.create_project(f"p{i}")["id"]
+    pid = db._create_project(f"p{i}")["id"]
     conn = db.get_conn()
     conn.execute("UPDATE projects SET provenance_credit = ? WHERE id = ?", (c, pid))
     conn.commit()
     conn.close()
 for i, c in enumerate([None, "", "   "]):
-    pid = db.create_project(f"empty{i}")["id"]
+    pid = db._create_project(f"empty{i}")["id"]
     conn = db.get_conn()
     conn.execute("UPDATE projects SET provenance_credit = ? WHERE id = ?", (c, pid))
     conn.commit()

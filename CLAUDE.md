@@ -31,8 +31,9 @@ exist yet.
     handlers (one shape, see "Actor and errors" below), the static mounts
     (`/static`, `/brand`, `/preview`), middleware (request guard outermost,
     then the actor context, then audit logging), the startup hook (`init_db`
-    migrations, OCR self-heal + watchdog, caption queue worker; runs as the
-    `system` actor) and the `include_router` calls.
+    migrations, the stale-decision sweep, OCR self-heal + watchdog, caption queue
+    worker, the trash purge and decision-sweep loops; runs as the `system` actor) and the
+    `include_router` calls.
   - `web/routes/` holds one plain `APIRouter()` per area, **no prefix** (each
     route writes its full path): `pages.py` (HTML pages + legacy redirects),
     `items.py` (`/api/upload`, `/api/content`, `/api/image/*`, per-item
@@ -199,23 +200,87 @@ Don't map these by hand in routes or tools: the two front ends do it.
 
 ## Service layer (#541): one core module per domain
 
+**The rule: all writes go through `core/{items,membership,tags,cards,hobbies,blog,decisions,reset}.py`
+(plus `core/revisions.py` for revision chains); the raw writers in `core/db.py` are private
+(`_`-prefixed); `scripts/check_layering.py` enforces it.** Run `python scripts/check_layering.py`
+(no server, no DB; `--list` prints every db.py writer and its class) before every PR that touches
+`core/`, `web/` or `mcp_server/`. It fails when:
+- a module outside the service modules calls (or imports) a private `db._*` function. The raw-write
+  allowlist, each with its reason in the script: `core/captions.py` (caption status/results),
+  `core/embedded_metadata.py` and `core/object_types/youtube.py` (upload-time file metadata, a
+  YouTube publish date), `core/automatch.py` (upload-time automatch tagging), `core/ocr.py` (OCR
+  client tags), `core/card_migration.py` (migrations), the one-off scripts
+  `scripts/{apply_project_groupings,seed_example_projects,backfill_from_hooptiej_site,link_lil_dragon_brand}.py`,
+  and `scripts/test_*.py` (throwaway-DB fixtures);
+- anything uses an old public writer name (`RETIRED_PUBLIC`: `db.create_project`, `update_project`,
+  `get_or_create_tag`, `attach_tags`, `add_item_to_project`, `mark_tag_as_hobby`,
+  `add_project_to_hobby`, `create_blog_entry`, `set_entry_items`, `resolve_pending_decision`, ...);
+- `core/db.py` gains a PUBLIC function that writes and isn't classified in `PUBLIC_WRITERS`. The
+  public writers left are pipeline/infra, not curation: item creation (`insert_upload`,
+  `insert_content`), OCR/similarity state, the caption queue, settings, the request log, the change
+  log + undo plumbing (`insert_change_log`, `invert_image`, `mark_change_rows_undone`,
+  `write_images`), asking a question (`add_pending_decision`, `queue_decision_once`; answering is
+  `core/decisions.py`), Curator snooze state (`core/curation_queue.py`), boot/migrations.
+A new write = a service op (or a private db writer called only from its service module). Read
+functions stay public.
+
 Every write follows `core/cards.py`'s contract: validate everything first, one
 `db.transaction()`, rows written through `db.ImageLog` (row images in `audit_log`), a
 `Result`, `dry_run` where it makes sense. Undo is the generic `cards.undo` (POST
 `/api/changes/{id or batch}/undo`, MCP `constructicon_undo`). Web routes and MCP tools are thin
-adapters. Every table an op images must be in `db.IMAGE_TABLE_KEYS`.
+adapters; a route that composes two ops passes one `batch_id` inside one `db.transaction()` so
+one undo reverses the request. Every table an op images must be in `db.IMAGE_TABLE_KEYS`.
 - **Cards** (`core/cards.py`, V2 pieces 1-7), **revisions** (`core/revisions.py`),
-  **provenance options** (`core/provenance_options.py`).
+  **provenance options** (`core/provenance_options.py`). Phase D added `cards.create(title, ...)`:
+  the linked root tag (reused if one exists, else created and imaged), the card row and its blank
+  write-up (added, tagged, set) as ONE batch, so undo leaves nothing behind (web create,
+  from-selection / from-related with their files in the same batch, MCP create_project); and
+  `cards.update(card, title, description, cover_slug, cover_project_id, writeup_slug, start, end)`:
+  the card's own fields as one imaged `update_card` row (was `db.update_project` +
+  `set_project_date_overrides`, unlogged). The web card Save runs update + nest + kind + status in
+  one batch (the answer carries `batch_id`).
+- **Hobbies (phase D): `core/hobbies.py`.** `create(name, status)` (tag reused or created, marked,
+  group code derived), `unmark(hobby)` (its card memberships and home overrides go; the tag stays),
+  `add_card` / `remove_card` (= `cards.add_to_hobby` / `remove_from_hobby`; the web add/remove
+  routes used to write unlogged), `set_activity` / `set_group_code` (= the cards ops),
+  `convert_from_card(card)` (project -> hobby, now fully imaged and undoable; dependents cleared
+  as delete_card clears them) and `convert_to_card(hobby, kind, title=None, into_hobby=None)`
+  (hobby -> card, the reverse; owner ask 2026-10-03, "GI Joe" -> a family under Collecting). The
+  hobby -> card rules: the new card (family | collection | project) reuses the hobby's tag, gets a
+  write-up, and its stage follows the hobby (active -> in_progress, inactive -> paused); top-level
+  member cards become family members (family/collection) or nested parts (project), a member nested
+  under another member stays under it; a group-kind member (bad_membership / nest_group_kind) or,
+  for project, a member already part of an outside card (nest_second_parent) refuses the whole
+  thing; loose objects go onto the card; home overrides naming the hobby now name the card; the
+  hobby is unmarked. One batch, `dry_run` previews. Web: the hobby page's More > "Convert to card"
+  (`POST /api/hobby/{id}/convert-to-card`), `POST /api/hobby/{id}/unmark`; MCP
+  `constructicon_convert_hobby_to_card`, `constructicon_unmark_hobby`.
+- **Blog (phase D): `core/blog.py`.** `create`, `update` (None = leave; `...` = leave for
+  cover_slug / content_date, None clears), `delete`, `set_projects(entry, [(card, note)])`,
+  `set_items(entry, [(slug, note)])`, all imaged (`blog_entries` is in `IMAGE_TABLE_KEYS`). Unknown
+  cards / files are refused (404 not_found) instead of being stored as rows no page can show; a card
+  can be given by id or slug.
+- **Decisions (phase D, #551 item 3): `core/decisions.py`. Reads never write.** `list_open()` (GET
+  `/api/pending-decisions`, the Curator queue, MCP list) leaves out a question `stale_reason()` calls
+  stale and resolves nothing; `count_open()` = what it shows. The rules are exactly the old
+  resolve-on-read ones, unchanged: a card question (`card:<slug>`) whose card is gone; a file
+  question whose object is gone; project_match with < 2 candidate cards left; item_supersedes with
+  no live candidate. `sweep_stale()` resolves those (`{"stale": reason}`) as ONE imaged change-log
+  row (op `sweep_stale_decisions`), undoable; nothing stale = nothing written. The web worker runs
+  it once at startup after the migrations and every `decisions.SWEEP_INTERVAL_SECONDS` (hourly) as
+  `system`; MCP `constructicon_sweep_stale_decisions(dry_run)`. Answering (`resolve`) images the
+  resolution in the same batch as what the answer applied (membership / retype), so one undo
+  re-opens the question.
 - **Items (phase B): item writes go through `core/items.py`; deletes are held 7 days, then
   purged; redacts are held until the owner clicks.** `items.update(slug, **fields)` covers display name/icon, description, client,
   content_description, type_metadata (merged, physical-piece keys cleaned), file provenance,
   highlight, brand asset/role, display-date override and content_date as ONE batch per call (one
   Save = one undo). `redact` / `recover_redacted` / `delete_redacted_file` / `unredact`, `retype` (the media_type change is imaged; the caller's
   runner re-runs OCR/thumbnail/caption; undoing a retype re-runs them for the old type) and
-  `delete`. Don't call `db.rename_object`, `update_content_metadata`, `set_type_metadata`,
-  `set_provenance`, `set_highlight`, `set_brand_asset`, `set_display_date_override`,
-  `set_content_date`, `set_media_type`, `mark_redacted`, `unmark_redacted` or `delete_upload` from
-  a route or tool. Deliberate raw exceptions: pipeline bookkeeping (caption status/results in
+  `delete`. Their raw writers (`db._rename_object`, `_update_content_metadata`, `_set_type_metadata`,
+  `_set_provenance`, `_set_highlight`, `_set_brand_asset`, `_set_display_date_override`,
+  `_set_content_date`, `_set_media_type`, `_mark_redacted`, `_unmark_redacted`, `_delete_upload`) are
+  private since phase D. The MCP's agent notes (#206) go through `items.update(agent_notes=...)`. Deliberate raw exceptions: pipeline bookkeeping (caption status/results in
   `core/captions.py`, upload-time `core/embedded_metadata.py`, a YouTube row's fetched publish
   date, OCR state). `items.relate` / `items.unrelate` (phase C) are the item <-> item "related"
   link: relate also shares tags and card memberships both ways (#16), all imaged, so one undo
@@ -238,12 +303,10 @@ adapters. Every table an op images must be in `db.IMAGE_TABLE_KEYS`.
   batch). The item Save passes `tags=` to `items.update`, so tags + fields are still ONE change-log
   row. Creating a tag is imaged (`blog_tags` insert via `ImageLog.insert_auto`), so undo removes a
   tag the op created; `db.invert_image` refuses that (undo_conflict) while anything made later uses
-  the tag. Lookups (`tags.find`, `find_root`) never create. The two tag stores (free-text column vs
-  `post_tags`) stay as they were; unifying them is #555. Don't call `db.attach_tags`, `detach_tag`,
-  `update_tags`, `add_tags`, `get_or_create_tag` or `add_relation` / `remove_relation` from a route
-  or tool. Remaining raw callers on purpose: card creation's tag minting (web/MCP create, from-selection,
-  from-related) and hobby creation (phase D), the upload-time automatch tagging and OCR client tags
-  (pipeline).
+  the tag. Lookups (`tags.find`, `find_root`, `find_any`) never create. The two tag stores (free-text column vs
+  `post_tags`) stay as they were; unifying them is #555. Card creation and hobby creation mint their
+  tags through `tags.ensure` too (phase D); the only raw tag writers left are the upload-time
+  automatch tagging and OCR client tags (pipeline, allowlisted).
 - **Delete-all (phase C): `core/reset.py` `delete_everything(confirm)`**, called by `POST
   /api/delete-all` and MCP `constructicon_delete_all(confirm)`; both need the phrase `DELETE
   EVERYTHING`. Permanent by design (no trash, no undo); one change-log row (op `delete_all`, actor
@@ -279,7 +342,9 @@ adapters. Every table an op images must be in `db.IMAGE_TABLE_KEYS`.
   /api/trash/empty`, confirm `EMPTY TRASH`); MCP `constructicon_list_trash` /
   `constructicon_empty_trash`. Delete and bulk delete answer with `batch_id`; the pages offer
   Undo (`web/static/js/undo-bar.js`). Check with `scripts/test_items_service.py` (throwaway DB).
-- Phase D: hobbies, blog, the stale-decision sweep, then the raw `db.*` writers go private.
+- Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),
+  `test_hobbies_blog.py` (phase D: hobbies, both conversions, card create/Save, blog, the sweep;
+  every write undone and the whole DB compared), `check_layering.py`. All run on a throwaway DB.
 
 ## Adding an object type
 
@@ -363,9 +428,9 @@ To add a new object type (issue #448 contract v2):
 - **`blog_tags`** — the tag tree: `{id, name, slug, parent_id}`, nestable
   to arbitrary depth via self-referencing `parent_id`. Not a fixed
   Section/Category/Tag split — a post can attach to any tag at any depth,
-  and to more than one branch at once. `get_or_create_tag(name, parent_id)`
-  dedupes per-parent (the same tag name can exist under different
-  parents).
+  and to more than one branch at once. A tag is looked up / created per
+  parent (`tags.find` / `tags.ensure`; the same tag name can exist under
+  different parents).
 - **`post_tags`** — many-to-many join, `(post_slug, tag_id)`, between
   `capture_events.slug` and `blog_tags.id`.
 - **`projects`** — hand-curated portfolio collections, deliberately
@@ -399,9 +464,12 @@ To add a new object type (issue #448 contract v2):
   case adds a new `kind` + payload shape, not a table.
   **V2 card decisions** (`card_status`, `card_built_for`, `card_kind`; spec
   `docs/design/v2-cards.md` 4.3) use `post_slug = "card:<project slug>"`, NOT a
-  `capture_events` slug — `decisions.list_open()` branches on that prefix
+  `capture_events` slug — `decisions.stale_reason()` branches on that prefix
   (validating against `projects`), because the file-row stale check would
-  otherwise resolve every card question on first page load.
+  otherwise call every card question stale. Since #551 item 3 no read
+  resolves anything: stale questions are left out of `list_open()` and
+  resolved only by the explicit, logged `decisions.sweep_stale()` (see
+  "Service layer").
 - **Card kind + status (V2, piece 1)** — `projects.kind` plus
   `activity`/`stage`/`stop_reason` are the *live* status; legacy
   `projects.status` is **frozen** (the static export still filters on it).
@@ -413,7 +481,7 @@ To add a new object type (issue #448 contract v2):
   is many-to-many membership for `kind=family|collection` cards (not nesting;
   no files move). `projects.parent_id` now means "part of" only:
   `card_rules.validate_nest` (no self/cycle/second parent, neither end a group
-  kind) guards `db.create_project`, `db.update_project` and `cards.nest`;
+  kind) guards `cards.create` (`db._create_project`) and `cards.nest`;
   `card_rules.validate_membership` guards `cards.add_to_family`. Violations are
   `CardError` codes (`nest_*` -> 409, `bad_membership` -> 422), same over HTTP
   and MCP. The AlienWhoop `card_family_members` decision is queued by
@@ -514,6 +582,9 @@ anything that must happen "only once" cannot live in process-local state.
   must be idempotent (so an existing DB can safely record it on first run).
 - **OCR self-heal:** the startup re-fire of `ocr_status='pending'` rows and the periodic
   watchdog live in web only (`web/app.py`), and cover OCR started by MCP too.
+- **Stale-decision sweep (#551 item 3):** web only, once at startup after the migrations, then
+  hourly (`_decision_sweep_loop`, `decisions.SWEEP_INTERVAL_SECONDS`). MCP can run it on demand
+  (`constructicon_sweep_stale_decisions`); no GET ever resolves a question.
 
 ## Build / test / run
 

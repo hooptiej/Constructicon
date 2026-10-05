@@ -29,9 +29,14 @@ services:
       - ./mcp_server:/app/mcp_server
       - ./storage:/app/storage
       - ./db:/app/data
+      - ./secrets/mcp_token:/run/secrets/mcp_token:ro
     environment:
       - CONSTRUCTICON_BASE_URL=http://constructicon-web:8000
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
+      # #561: bearer install token. Without one the MCP is OPEN (and logs a warning).
+      # Keep the token in a file, not in this compose file:
+      #   python scripts/mcp_token.py generate ./secrets/mcp_token   (mode 600)
+      - CONSTRUCTICON_MCP_TOKEN_FILE=/run/secrets/mcp_token
     command: python -m mcp_server.server
     depends_on:
       - constructicon-web

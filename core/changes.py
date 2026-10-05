@@ -26,16 +26,19 @@ def row_image(table, key, before, after):
     return {"table": table, "key": key, "before": before, "after": after}
 
 
-def record(op, actor, mutations, batch_id=None, affected_slugs=None, conn=None):
+def record(op, actor, mutations, batch_id=None, affected_slugs=None, conn=None, details=None):
     """Writes one change-log row. With `conn`, joins the caller's transaction
     (the caller commits); without, opens its own connection and commits.
-    `actor` None = the current actor context (core/actor.py). Returns the audit row id."""
+    `actor` None = the current actor context (core/actor.py). `details`: an optional summary
+    dict stored with the row (form_body), for records without row images. Returns the audit row id."""
     batch_id = batch_id or new_batch_id()
     if conn is not None:
-        return db.insert_change_log(conn, op, actor, mutations, batch_id=batch_id, affected_slugs=affected_slugs)
+        return db.insert_change_log(conn, op, actor, mutations, batch_id=batch_id, affected_slugs=affected_slugs,
+                                    details=details)
     own = db.get_conn()
     try:
-        row_id = db.insert_change_log(own, op, actor, mutations, batch_id=batch_id, affected_slugs=affected_slugs)
+        row_id = db.insert_change_log(own, op, actor, mutations, batch_id=batch_id, affected_slugs=affected_slugs,
+                                      details=details)
         own.commit()
         return row_id
     finally:

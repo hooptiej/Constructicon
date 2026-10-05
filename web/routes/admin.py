@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import Request, Form, UploadFile, File, HTTPException, APIRouter
 from fastapi.responses import JSONResponse
 
-from core import backup, captions, db, items, object_types, storage
+from core import backup, captions, db, items, object_types, reset, storage
 from core import provenance_options
 from web.common import DESKTOP_APP_BUILD_DIR, DESKTOP_APP_BUILD_PATH
 from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public
@@ -16,46 +16,19 @@ from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, 
 router = APIRouter()
 
 
-DELETE_ALL_PHRASE = "DELETE EVERYTHING"
+DELETE_ALL_PHRASE = reset.CONFIRM_PHRASE
 
 
 @router.post("/api/delete-all")
 def api_delete_all(confirm: str = Form("")):
-    """Wipe every capture_events row (and its files), plus tags and
-    projects — a full reset. Stands in for imagerepo's old per-user
-    'delete my uploads' button now that multi-user accounts are gone;
-    single-owner site, so 'my uploads' and 'everything' are the same set.
-    Development convenience while content/schema are still in flux, not a
-    feature meant to stick around once the site has real content worth
-    protecting.
+    """Wipe the archive: every item (and its files), card, tag, hobby, blog entry, question and
+    the trash. A full reset, permanent by design (no trash, no undo). Single-owner site, so
+    'my uploads' and 'everything' are the same set.
 
-    #558: requires the typed phrase (confirm=DELETE EVERYTHING), so a forged or
-    accidental bodiless POST can't wipe the archive. The audit middleware writes
-    the row for the request (with the confirm field).
-
-    #541: still the raw, unlogged path (phase C gives delete-all one core implementation).
-    It does NOT use the trash: files are erased on the spot, and it leaves the `trash` table
-    and <storage>/.trash alone. Phase C should run items.delete (or purge the trash too)."""
-    if confirm.strip() != DELETE_ALL_PHRASE:
-        raise HTTPException(status_code=400, detail=f"Type {DELETE_ALL_PHRASE!r} in the confirm field to delete everything")
-    # include_redacted (#282) / include_brand (#417): search() hides redacted
-    # rows and brand assets by default; a full reset has to take them too or
-    # they'd survive as orphaned rows + storage files.
-    rows = db.search(limit=100000, include_redacted=True, include_brand=True)
-    for row in rows:
-        if row.get("stored_filename"):
-            storage.delete_files(row["slug"], row["stored_filename"])
-        db.delete_upload(row["slug"])
-    conn = db.get_conn()
-    conn.execute("DELETE FROM post_tags")
-    conn.execute("DELETE FROM project_items")
-    for _t in ("project_relations", "family_members", "project_hobbies", "blog_entry_projects"):
-        conn.execute(f"DELETE FROM {_t}")
-    conn.execute("DELETE FROM projects")
-    conn.execute("DELETE FROM blog_tags")
-    conn.commit()
-    conn.close()
-    return JSONResponse({"deleted": len(rows)})
+    #558: requires the typed phrase (confirm=DELETE EVERYTHING). #541 phase C: one
+    implementation in core/reset.py, shared with MCP constructicon_delete_all; it writes one
+    change-log row (op delete_all) with the per-table counts."""
+    return JSONResponse(reset.delete_everything(confirm))
 
 
 @router.get("/api/trash")

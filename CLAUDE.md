@@ -217,7 +217,42 @@ adapters. Every table an op images must be in `db.IMAGE_TABLE_KEYS`.
   `set_content_date`, `set_media_type`, `mark_redacted`, `unmark_redacted` or `delete_upload` from
   a route or tool. Deliberate raw exceptions: pipeline bookkeeping (caption status/results in
   `core/captions.py`, upload-time `core/embedded_metadata.py`, a YouTube row's fetched publish
-  date, OCR state) and delete-all (phase C).
+  date, OCR state). `items.relate` / `items.unrelate` (phase C) are the item <-> item "related"
+  link: relate also shares tags and card memberships both ways (#16), all imaged, so one undo
+  removes the link AND what it shared; unrelate leaves the shared tags/cards (as before).
+- **Membership (phase C): `core/membership.py` is the one way files go on and off a card.**
+  `add_files(card, slugs, *, link_tag, merge_free_tags, auto_cover)` (flags keyword-only, no
+  defaults) and `remove_files(card, slugs)`. `link_tag` = the card's linked tag into `post_tags`;
+  `merge_free_tags` = that tag's name into the free-text `tags` column (#274); `auto_cover` = a card
+  with no `cover_slug` takes the first file (also clears `cover_project_id`, bumps `updated_at`).
+  `membership.UI_EFFECTS` (all three) is what upload / `ingest.attach_to_project`, the item page,
+  bulk add-to-project, from-selection / from-related, a resolved project-match question, AND (since
+  phase C) MCP `constructicon_add_to_project` / `add_items_to_project` pass. `NO_EFFECTS`: MCP
+  `set_project_writeup`. Removing never untags and never touches the cover, on any path. The card
+  reshaping ops (copy / move / split / merge / delete) call `membership.write(...)` / `write_items(log,
+  ...)`: rows only, logged under their own op (`db.write_card_items` is gone). Don't call
+  `db.add_item_to_project` / `remove_item_from_project` from a route or tool.
+- **Tags (phase C): `core/tags.py`.** `create(name, parent_name)` (MCP create_tag), `attach(slug,
+  names)` / `detach(slug, tag_id)` (MCP; `post_tags` only, as before), `set_item_tags` and
+  `merge_item_tags(slugs, names)` (bulk attach-tags: free-text column + its `post_tags` sync, one
+  batch). The item Save passes `tags=` to `items.update`, so tags + fields are still ONE change-log
+  row. Creating a tag is imaged (`blog_tags` insert via `ImageLog.insert_auto`), so undo removes a
+  tag the op created; `db.invert_image` refuses that (undo_conflict) while anything made later uses
+  the tag. Lookups (`tags.find`, `find_root`) never create. The two tag stores (free-text column vs
+  `post_tags`) stay as they were; unifying them is #555. Don't call `db.attach_tags`, `detach_tag`,
+  `update_tags`, `add_tags`, `get_or_create_tag` or `add_relation` / `remove_relation` from a route
+  or tool. Remaining raw callers on purpose: card creation's tag minting (web/MCP create, from-selection,
+  from-related) and hobby creation (phase D), the upload-time automatch tagging and OCR client tags
+  (pipeline).
+- **Delete-all (phase C): `core/reset.py` `delete_everything(confirm)`**, called by `POST
+  /api/delete-all` and MCP `constructicon_delete_all(confirm)`; both need the phrase `DELETE
+  EVERYTHING`. Permanent by design (no trash, no undo); one change-log row (op `delete_all`, actor
+  from context) with per-table counts in `form_body`. Clears `reset.CLEARED_TABLES` (items and
+  everything pointing at them, cards, tags and hobbies, blog entries, questions and their snoozes,
+  caption queue, trash) plus every item file and thumbnail and `<storage>/.trash`; keeps
+  `reset.KEPT_TABLES` (settings, clients, provenance options, migrations, the audit/change log). A
+  new table must be added to one of the two lists (`scripts/test_membership_tags.py` fails otherwise).
+  Check phase C with `scripts/test_membership_tags.py` (throwaway DB).
 - **Trash.** `items.delete` / `items.redact` move the file and its thumbnail to
   `<storage>/.trash/<batch_id>/` (same dataset, so ZFS snapshots cover it) and record a `trash`
   row. **Deletes are held 7 days, then purged** (`expires_at` = now + 7 days). **Redacts are held
@@ -244,8 +279,7 @@ adapters. Every table an op images must be in `db.IMAGE_TABLE_KEYS`.
   /api/trash/empty`, confirm `EMPTY TRASH`); MCP `constructicon_list_trash` /
   `constructicon_empty_trash`. Delete and bulk delete answer with `batch_id`; the pages offer
   Undo (`web/static/js/undo-bar.js`). Check with `scripts/test_items_service.py` (throwaway DB).
-- Phase C: membership, tags, relations and one delete-all; phase D: hobbies, blog, the
-  stale-decision sweep, then the raw `db.*` writers go private.
+- Phase D: hobbies, blog, the stale-decision sweep, then the raw `db.*` writers go private.
 
 ## Adding an object type
 
@@ -323,9 +357,9 @@ To add a new object type (issue #448 contract v2):
     `POST /api/image/{slug}/unredact` / `constructicon_unredact` flips it
     back — visibility only, for redactions whose file is already gone (refused while a
     file is still held: recover it or delete it permanently first).
-    `db.search(include_redacted=True)` is the one escape hatch, used only
-    by the two delete-all paths so a full reset doesn't orphan hidden
-    rows. There is no `redacted_at` column.
+    `db.search(include_redacted=True)` is the escape hatch for a caller that
+    must see hidden rows (delete-all now reads every row directly, in
+    `core/reset.py`). There is no `redacted_at` column.
 - **`blog_tags`** — the tag tree: `{id, name, slug, parent_id}`, nestable
   to arbitrary depth via self-referencing `parent_id`. Not a fixed
   Section/Category/Tag split — a post can attach to any tag at any depth,

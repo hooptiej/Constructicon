@@ -3,12 +3,15 @@ web/app.py). Added to the app in web/app.py, inside the request guard (web/reque
 which stays outermost: guard -> ActorMiddleware -> AuditLoggingMiddleware -> routes."""
 
 import json
+import logging
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from core import actor as actor_ctx, db
+from core import actor as actor_ctx, besteffort, db
 from web import request_guard
+
+log = logging.getLogger("constructicon.middleware")
 
 
 # --- Actor context (#560) ---
@@ -58,13 +61,51 @@ def _audit_body_skip_reason(request):
     length = request.headers.get("content-length")
     try:
         size = int(length) if length is not None else None
-    except ValueError:
+    except ValueError:  # silent-ok: a bad Content-Length header just means "size unknown", handled below
         size = None
     if size is None:
         return f"not logged: {content_type}, unknown size" if content_type == "multipart/form-data" else None
     if size > AUDIT_BODY_MAX_BYTES:
         return f"not logged: {content_type}, {size / (1024 * 1024):.1f} MB"
     return None
+
+
+def _unparsed_marker(content_type, size):
+    """What the audit log records for a body that couldn't be parsed (#551): that something was
+    sent, its type and size, and never any of its content."""
+    try:
+        size = int(size) if size is not None else None
+    except (TypeError, ValueError):  # silent-ok: an unusable size is recorded as null
+        size = None
+    return {"_unparsed": True, "content_type": content_type or "unknown", "bytes": size}
+
+
+async def _parse_audit_body(request, content_type, body_bytes):
+    """The request's fields as a dict for the audit log, or the `_unparsed` marker. Never raises.
+
+    A form body (urlencoded / multipart) is read as form data. Starlette's FormData is a
+    multi-dict: the bulk routes send `slugs=a&slugs=b&...` as repeated fields, and a plain
+    dict() would keep only the last value (#214), so a repeated key becomes a list and a
+    single one stays a scalar. Anything else is tried as a JSON object (#551: a JSON body
+    used to come back from request.form() as an empty form and was logged as {})."""
+    try:
+        if content_type in ("application/x-www-form-urlencoded", "multipart/form-data"):
+            form = await request.form()
+            data = {}
+            for key in form.keys():
+                values = form.getlist(key)
+                data[key] = values if len(values) > 1 else values[0]
+            return data
+        data = json.loads(body_bytes)
+        if isinstance(data, dict):
+            return data
+        reason = "the JSON body is not an object"
+    except Exception as e:
+        reason = repr(e)
+    besteffort.warn(log, "audit: parsing the request body", reason,
+                    method=request.method, path=request.url.path,
+                    content_type=content_type or None, bytes=len(body_bytes))
+    return _unparsed_marker(content_type, len(body_bytes))
 
 
 class AuditLoggingMiddleware(BaseHTTPMiddleware):
@@ -85,34 +126,20 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
         elif should_audit and request.method in {"POST", "PUT", "PATCH"}:
             # Read the request body so we can log it. Starlette automatically caches
             # the body after the first read, so the handler can read it again.
+            # #551: a body we can't make sense of is recorded as a marker
+            # ({"_unparsed": true, content_type, bytes}), never as {} (which would read as
+            # "nothing was sent") and never as the raw body (secrets). The request itself
+            # always goes through: an audit problem must not break the real request.
+            content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
             try:
                 body_bytes = await request.body()
-                # Try to parse as form data — FastAPI routes use Form(...) parameters
+            except Exception as e:
+                besteffort.warn(log, "audit: reading the request body", e,
+                                method=request.method, path=request.url.path)
+                form_data = _unparsed_marker(content_type, request.headers.get("content-length"))
+            else:
                 if body_bytes:
-                    try:
-                        # Starlette's FormData is a multi-dict — the bulk
-                        # routes send `slugs=a&slugs=b&...` as repeated
-                        # fields (`slugs: list[str] = Form(...)`), and a
-                        # plain dict() would keep only the last value
-                        # (#214). Keep every value: a repeated key becomes
-                        # a list, a single one stays a scalar.
-                        form = await request.form()
-                        form_data = {}
-                        for key in form.keys():
-                            values = form.getlist(key)
-                            form_data[key] = values if len(values) > 1 else values[0]
-                    except Exception:
-                        # If form parsing fails, try JSON (some endpoints might use JSON)
-                        try:
-                            form_data = json.loads(body_bytes)
-                        except Exception:
-                            # If both fail, leave form_data empty — don't break the request
-                            pass
-            except Exception:
-                # If anything goes wrong reading the body, just proceed without
-                # logging the request body — don't let an audit logging error
-                # break the actual request
-                pass
+                    form_data = await _parse_audit_body(request, content_type, body_bytes)
 
         # Call the actual route handler. A route can fail two ways: a caught
         # HTTPException/RequestValidationError, which Starlette's own
@@ -165,8 +192,8 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                             affected_slugs.extend(
                                 s for s in slugs if isinstance(s, str) and s
                             )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        besteffort.warn(log, "audit: extracting affected slugs", e, path=request.url.path)
                 # Deduplicate
                 affected_slugs = list(set(affected_slugs))
 

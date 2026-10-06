@@ -192,7 +192,7 @@ def get_properties(row):
                     props["Duration"] = f"{hours}:{minutes % 60:02d}:{seconds:02d}"
                 else:
                     props["Duration"] = f"{minutes}:{seconds:02d}"
-            except (ValueError, TypeError):
+            except (ValueError, TypeError):  # silent-ok: ffprobe duration like "N/A" = no Duration property
                 pass
 
         # Resolution + codec, both from the first video stream
@@ -214,7 +214,7 @@ def get_properties(row):
         if bit_rate:
             try:
                 props["Bitrate"] = f"{int(bit_rate) / 1_000_000:.1f} Mbps"
-            except (ValueError, TypeError):
+            except (ValueError, TypeError):  # silent-ok: ffprobe bit_rate like "N/A" = no Bitrate property
                 pass
 
         return props

@@ -1,16 +1,19 @@
 """Card routes (#547): /api/projects/*, /api/project/*, /api/cards/*, /api/links*,
 /api/families/*, /api/changes/*."""
 
+import logging
 from datetime import datetime
 
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse, Response
 
-from core import card_rules, cards, changes, db, hobbies, membership, timeline
+from core import besteffort, card_rules, cards, changes, db, hobbies, membership, timeline
 from core.errors import NotFound
 from web.shapes import _to_card_face, _to_project_option
 from core import roles
 from web.roles import RoleRouter, requires
+
+log = logging.getLogger("constructicon.web")
 
 router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
@@ -406,7 +409,9 @@ def api_export_project(project_id: str):
     try:
         project = db.get_project(project_id)
         filename = f"{project['slug']}-export.zip" if project else "project-export.zip"
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "project export: couldn't look up the card for the download filename", e,
+                        project_id=project_id)
         filename = "project-export.zip"
 
     return Response(

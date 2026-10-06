@@ -87,7 +87,7 @@ def _iso_date(b):
         offset = struct.unpack("b", b[16:17])[0] * 15  # minutes east of UTC
         dt = dt.replace(tzinfo=datetime.timezone(datetime.timedelta(minutes=offset)))
         return dt.timestamp()
-    except (ValueError, UnicodeDecodeError, struct.error):
+    except (ValueError, UnicodeDecodeError, struct.error):  # silent-ok: a malformed ISO date field = no date
         return None
 
 

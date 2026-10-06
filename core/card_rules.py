@@ -8,9 +8,13 @@ Whereabouts / provenance / membership / link validators arrive with the pieces
 that add those fields (spec section 9).
 """
 
+import logging
 import re
 
+from . import besteffort
 from .errors import AppError
+
+log = logging.getLogger("constructicon.card_rules")
 
 # --- Kinds (3.1) -------------------------------------------------------------
 KINDS = ("project", "thing", "action", "family", "collection", "event")
@@ -165,7 +169,8 @@ def card_provenance_label(value):
         return ""
     try:
         return _po().label("card", value, CARD_PROVENANCE_LABELS.get(value, value))
-    except Exception:  # no DB / table yet: the seed labels
+    except Exception as e:  # no DB / table yet: the seed labels
+        besteffort.warn(log, "card_rules: card provenance label lookup, using the seed label", e, value=value)
         return CARD_PROVENANCE_LABELS.get(value, value)
 
 
@@ -181,7 +186,8 @@ def file_provenance_label(value, card_provenance=None):
         return FILE_PROVENANCE_LABELS[value]
     try:
         return _po().label("file", value)
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "card_rules: file provenance label lookup, showing the raw key", e, value=value)
         return value
 
 

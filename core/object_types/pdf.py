@@ -142,7 +142,7 @@ def _parse_pdf_date(raw):
         return None
     try:
         return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).strftime("%b %-d, %Y")
-    except ValueError:
+    except ValueError:  # silent-ok: an impossible PDF date = no date, by contract
         return None
 
 

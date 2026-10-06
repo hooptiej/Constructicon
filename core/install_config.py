@@ -29,12 +29,15 @@ cards.undo (which clears this cache).
 """
 
 import json
+import logging
 import re
 import sqlite3
 import time
 
-from . import changes, db
+from . import besteffort, changes, db
 from .errors import InvalidInput
+
+log = logging.getLogger("constructicon.install_config")
 
 TABLE = "install_config"
 OP_UPDATE = "install_config_update"
@@ -85,7 +88,7 @@ def _read_all():
     conn = db.get_conn()
     try:
         rows = conn.execute(f"SELECT key, value FROM {TABLE}").fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError:  # silent-ok: documented: the table doesn't exist before init_db
         rows = []
     finally:
         conn.close()
@@ -95,7 +98,8 @@ def _read_all():
         if key == "publish_targets":
             try:
                 value = json.loads(value) if value else {}
-            except ValueError:
+            except ValueError as e:
+                besteffort.warn(log, "install_config: publish_targets is not valid JSON, treated as empty", e)
                 value = {}
         out[key] = value
     return out
@@ -277,8 +281,9 @@ def seed_existing_install(conn):
             saved = clean_targets(row[0])
             if saved:
                 seed["publish_targets"] = saved
-        except InvalidInput:
-            pass  # the old code fell back to the defaults on an unreadable value too
+        except InvalidInput as e:
+            # the old code fell back to the defaults on an unreadable value too
+            besteffort.warn(log, "install_config: old pages_publish_targets is unreadable, seeding the defaults", e)
     now = time.time()
     muts = []
     for key, value in seed.items():

@@ -134,7 +134,7 @@ def parse_date(value, name="date"):
     s = str(value).strip()
     try:
         return float(s)
-    except ValueError:
+    except ValueError:  # silent-ok: not a bare number; tried as an ISO date next, then refused
         pass
     try:
         dt = datetime.fromisoformat(s)
@@ -302,7 +302,7 @@ def _rmdir_empty(batch_id):
     try:
         trash_dir(batch_id).rmdir()
     except OSError:
-        pass  # not empty (another item of the batch) or already gone
+        pass  # silent-ok: not empty (another item of the batch) or already gone
 
 
 def _trash_insert(log, batch_id, row, reason, embedding=None):

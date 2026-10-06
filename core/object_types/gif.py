@@ -10,9 +10,13 @@ OCR is enabled for tutorial/reaction/text-overlay GIFs (see issue #93),
 which can contain readable text that's worth extracting.
 """
 
+import logging
+
 from PIL import Image
 
-from .. import storage
+from .. import besteffort, storage
+
+log = logging.getLogger("constructicon.gif")
 
 
 def _stored_path(row):
@@ -40,8 +44,10 @@ def get_properties(row):
             n_frames = img.n_frames
             if n_frames > 1:
                 props["Frames"] = str(n_frames)
-        except (AttributeError, Exception):
+        except AttributeError:  # silent-ok: a non-animated GIF has no n_frames
             pass
+        except Exception as e:
+            besteffort.warn(log, "gif: counting frames failed (no Frames property)", e, path=str(path))
         return props
     except Exception as e:
         print(f"GIF properties extraction failed for {path}: {e!r}")

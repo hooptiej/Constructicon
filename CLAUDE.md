@@ -199,6 +199,25 @@ Don't map these by hand in routes or tools: the two front ends do it.
   exist returns code `not_found`, never `None` or `False`. Successful returns are unchanged.
 - Check with `scripts/test_actor_errors.py` (throwaway DB, no server).
 
+**No silent excepts (#551 item 5).** An `except` must never swallow a failure with no trace.
+- **Hides a real failure** (a malformed `tags` field, a garbled JSON body): raise `AppError` /
+  `HTTPException` (clean 400) or let it propagate, so the shared handlers shape it.
+- **Legitimately best-effort** (an optional metadata extractor, a probe of a service that may be
+  down): keep it non-fatal but log it with context: `besteffort.warn(log, "what failed", exc,
+  slug=...)` from `core/besteffort.py`, with `log = logging.getLogger("constructicon.<module>")`.
+  It logs at warning level and is rate limited per site (one full line per minute, with a count of
+  the suppressed repeats), so a hot path can't spam the log. Narrow the exception type where you can.
+- **Pure control flow or input validation** (a sentinel exception that unwinds a transaction, a
+  parse that returns None for a malformed value, a cleanup race): a `# silent-ok: <reason>` comment
+  on the `except` line, with a real reason.
+- The audit middleware (`web/middleware.py`) records a body it can't parse as
+  `{"_unparsed": true, "content_type": ..., "bytes": n}`, never `{}` and never the raw body.
+- `python scripts/check_no_silent_except.py` (AST, no server) enforces it: it fails on an `except`
+  in `core/`, `web/` or `mcp_server/` whose body is only `pass` / `continue` / `break` / `return
+  <constant>` / a constant assignment with no logging call and no `raise`, unless it carries a
+  `# silent-ok:` reason or sits in the checker's commented `ALLOW` list. Check the behaviour with
+  `scripts/test_swallowed_errors.py` (throwaway DB).
+
 ## Roles and policy (#557, groundwork for auth #467)
 
 Two separate checks, and a request must pass **both**: the route's **role** (may this actor use

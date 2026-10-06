@@ -16,10 +16,14 @@ correct. Everything is pure except `medium_suggestions` and `in_physical_piece_h
 """
 
 import json
+import logging
 import re
 from datetime import datetime
 
+from . import besteffort
 from .errors import InvalidInput
+
+log = logging.getLogger("constructicon.physical_piece")
 
 KEYS = ("medium", "dimensions", "date_made", "original_location")
 LABELS = {
@@ -53,7 +57,7 @@ def parse_date_made(value):
     day = int(d) if d else (15 if mo else 1)
     try:
         datetime(y, month, day)
-    except ValueError:
+    except ValueError:  # silent-ok: an impossible date is "no date", by contract
         return None
     return (y, month, day)
 
@@ -64,7 +68,8 @@ def date_made_epoch(type_metadata):
     if isinstance(type_metadata, str):
         try:
             type_metadata = json.loads(type_metadata)
-        except ValueError:
+        except ValueError as e:
+            besteffort.warn(log, "physical_piece: unreadable type_metadata JSON (no date_made)", e)
             return None
     if not isinstance(type_metadata, dict):
         return None
@@ -127,7 +132,8 @@ def in_physical_piece_hobby(db, slug, tag_names=()):
             if any(h["id"] in ids for h in db.list_hobbies_for_project(p["id"])):
                 return True
         return False
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "physical_piece: hobby lookup (treated as not a physical piece)", e, slug=slug)
         return False
 
 
@@ -147,7 +153,8 @@ def medium_suggestions(db, limit=50):
     for r in raw:
         try:
             v = (json.loads(r[0]) or {}).get("medium")
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
+            besteffort.warn(log, "physical_piece: unreadable type_metadata JSON, skipped in medium suggestions", e)
             continue
         if isinstance(v, str) and v.strip():
             v = " ".join(v.split())

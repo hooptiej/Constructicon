@@ -46,7 +46,7 @@ def _host_of(origin_or_url):
     """host[:port] of an Origin/Referer value, lowercased, default port stripped; None if unparseable."""
     try:
         netloc = urlsplit(origin_or_url).netloc
-    except ValueError:
+    except ValueError:  # silent-ok: unparseable = None, and the guard refuses a mutating request with no usable host
         return None
     return _strip_default_port(netloc.lower()) or None
 

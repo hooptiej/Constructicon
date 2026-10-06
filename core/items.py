@@ -43,7 +43,7 @@ import time
 from datetime import datetime
 
 from . import changes, db, embedded_metadata, ingest, membership, object_types, physical_piece, provenance_options
-from . import storage, thumbnails, timeline
+from . import paths, storage, thumbnails, timeline
 from . import tags as tags_svc
 from .cards import Result
 from .errors import AppError, Conflict, InvalidInput, NotFound
@@ -60,7 +60,7 @@ OP_RECOVER = "item_recover_redacted"
 OP_ERASE = "item_redact_erase"
 REASON_REDACT = "redact"
 
-TRASH_DIR_NAME = ".trash"
+TRASH_DIR_NAME = paths.TRASH_DIR_NAME
 TRASH_DAYS = 7
 TRASH_TTL_SECONDS = TRASH_DAYS * 24 * 3600
 EMPTY_TRASH_PHRASE = "EMPTY TRASH"
@@ -265,8 +265,7 @@ def unrelate(slug, other, *, dry_run=False, actor=None, batch_id=None):
 # --- trash: files ----------------------------------------------------------------------
 
 def trash_dir(batch_id=None):
-    root = storage.STORAGE_DIR / TRASH_DIR_NAME
-    return root / batch_id if batch_id else root
+    return paths.trash_dir(batch_id)
 
 
 def _file_pairs(entry):
@@ -274,7 +273,7 @@ def _file_pairs(entry):
     d = trash_dir(entry["batch_id"])
     pairs = []
     if entry.get("has_original") and entry.get("stored_filename"):
-        pairs.append((storage.STORAGE_DIR / entry["stored_filename"], d / entry["stored_filename"]))
+        pairs.append((paths.storage_dir() / entry["stored_filename"], d / entry["stored_filename"]))
     if entry.get("has_thumb"):
         pairs.append((storage.thumb_path_for(entry["slug"]), d / f"{entry['slug']}_thumb.jpg"))
     return pairs
@@ -309,7 +308,7 @@ def _trash_insert(log, batch_id, row, reason, embedding=None):
     """Images a trash row for `row`'s files (original and/or thumbnail, whichever exist on disk).
     Returns the entry to move, or None when the item has no files at all."""
     slug, sf = row["slug"], row.get("stored_filename")
-    orig = storage.STORAGE_DIR / sf if sf else None
+    orig = paths.storage_dir() / sf if sf else None
     has_orig = bool(orig is not None and orig.is_file())
     thumb = storage.thumb_path_for(slug)
     has_thumb = thumb.is_file()

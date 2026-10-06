@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live regression check for bulk-accepting card decisions (#506).
+"""Regression check for bulk-accepting card decisions (#506).
 
 `cards.resolve_decisions(accept_suggested=True)` used to crash with
 `TypeError: unhashable type: 'list'` whenever a card_family_members decision was in
@@ -7,7 +7,8 @@ the batch, because that decision's `suggested` is a LIST of member keys. This bu
 its own throwaway cards and decisions (unique per run), exercises the bulk path in
 dry-run and real mode, and removes everything it made.
 
-It calls core directly (no HTTP), so run it inside the test container, never production:
+It calls core directly (no HTTP) on a throwaway DB (scripts/_testenv.py, #578): it used to run
+against the container's real DB and leave change-log rows there. Run it anywhere:
 
     docker exec constructicon-test python3 scripts/test_bulk_decisions.py
 
@@ -20,9 +21,13 @@ import os
 import sys
 import uuid
 
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("bulkdecisions-")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from core import card_migration, cards, db  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
+db.init_db()
 
 TAG = "zqbulk" + uuid.uuid4().hex[:6]
 FAILS = []

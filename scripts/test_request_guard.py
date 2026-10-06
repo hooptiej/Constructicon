@@ -15,14 +15,14 @@ import sqlite3
 import sys
 import tempfile
 
-TMP = tempfile.mkdtemp(prefix="reqguard-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
-os.environ.setdefault("CONSTRUCTICON_STORAGE_DIR", os.path.join(TMP, "storage"))
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("reqguard-")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from starlette.testclient import TestClient  # noqa: E402
 
 from core import db  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 from web import app as webapp  # noqa: E402
 
 FAILS = []

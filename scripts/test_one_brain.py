@@ -19,8 +19,8 @@ import sys
 import tempfile
 import time
 
-TMP = tempfile.mkdtemp(prefix="onebrain-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("onebrain-")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 try:
@@ -30,6 +30,7 @@ except Exception:
     sys.modules["cairosvg"] = types.ModuleType("cairosvg")
 
 from core import captions, db  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 
 FAILS = []
 

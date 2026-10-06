@@ -18,13 +18,14 @@ import tempfile
 import threading
 import types
 
-TMP = tempfile.mkdtemp(prefix="actorerrors-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("actorerrors-")
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, ROOT)
 sys.modules.setdefault("cairosvg", types.ModuleType("cairosvg"))  # no libcairo needed here
 
 from core import actor, captions, cards, changes, db, errors, ingest  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 
 FAILS = []
 

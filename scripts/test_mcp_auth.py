@@ -45,7 +45,23 @@ check("right token -> inner app", call([(b"authorization", b"Bearer " + TOKEN.en
 check("lowercase scheme ok", call([(b"authorization", b"bearer " + TOKEN.encode())])[0]["status"] == 200)
 check("/healthz open", call([], "/healthz", "GET")[0]["status"] == 200)
 check("POST /healthz not exempt", call([], "/healthz", "POST")[0]["status"] == 401)
-check("wrap with no token is a no-op", wrap(inner, "") is inner)
+open_mw = wrap(inner, "")
+check("wrap with no token still wraps (#574)", isinstance(open_mw, BearerTokenMiddleware))
+
+
+def call_open(path, method="GET"):
+    out = []
+
+    async def send(m):
+        out.append(m)
+    asyncio.run(open_mw({"type": "http", "method": method, "path": path, "headers": []}, None, send))
+    return out
+
+
+r = call_open("/healthz")
+check("open mode: GET /healthz -> 200 {ok: true}", r[0]["status"] == 200 and r[1]["body"] == b'{"ok": true}')
+check("open mode: /mcp passes through unauthenticated", call_open("/mcp", "POST")[1]["body"] == b"inner")
+check("open mode: POST /healthz is not the health check", call_open("/healthz", "POST")[1]["body"] == b"inner")
 
 check("unset -> ''", load_token({}) == "")
 check("env token", load_token({"CONSTRUCTICON_MCP_TOKEN": TOKEN}) == TOKEN)

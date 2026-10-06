@@ -2,7 +2,7 @@
 """Self-contained check for the item service (#541 phase B, core/items.py).
 
 Builds a throwaway SQLite DB with the real `db.init_db()` (CONSTRUCTICON_DB_PATH points at a temp
-file before core is imported) and a throwaway storage dir (storage.STORAGE_DIR is repointed), then
+file before core is imported) and a throwaway storage dir (paths.storage_dir() is repointed), then
 exercises: a multi-field edit as one undoable batch, validation-before-write, dry runs, redact +
 undo (file back from the trash), unredact, retype + undo, delete of an item that is in a project,
 tagged, related, in a blog entry, asked about and in the MIDDLE of a revision chain (A -> B -> C
@@ -24,8 +24,8 @@ import tempfile
 import time
 from pathlib import Path
 
-TMP = tempfile.mkdtemp(prefix="items-service-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("items-service-")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 try:
@@ -36,11 +36,10 @@ except Exception:  # no libcairo here (e.g. Windows): object types import it
 
 from PIL import Image  # noqa: E402
 
-from core import actor, blog, cards, changes, db, ingest, items, revisions, storage  # noqa: E402
+from core import actor, blog, cards, changes, db, ingest, items, paths, revisions, storage  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 from core.errors import AppError  # noqa: E402
 
-storage.STORAGE_DIR = Path(TMP) / "storage"
-storage.STORAGE_DIR.mkdir()
 ingest.run_in_thread = lambda fn, *a: None  # no background OCR/thumbnail threads in a unit check
 NOOP = lambda fn, *a: None  # noqa: E731
 
@@ -70,7 +69,7 @@ def png_bytes(color):
 def mk(slug, color=(200, 10, 10)):
     """An image item with a real file and a thumbnail on disk."""
     sf = f"{slug}.png"
-    (storage.STORAGE_DIR / sf).write_bytes(png_bytes(color))
+    (paths.storage_dir() / sf).write_bytes(png_bytes(color))
     storage.thumb_path_for(slug).write_bytes(b"thumb-" + slug.encode())
     db.insert_upload(slug, f"{slug}.png", sf, "tester", media_type="image")
     return slug
@@ -94,7 +93,7 @@ def audit_count():
 
 
 def storage_files():
-    return sorted(p.name for p in storage.STORAGE_DIR.iterdir() if p.is_file())
+    return sorted(p.name for p in paths.storage_dir().iterdir() if p.is_file())
 
 
 def trash_files():
@@ -157,7 +156,7 @@ check("parse_date: naive ISO is Mountain Time", items.parse_date("2017-07-31") =
 
 # --- redact / unredact ---------------------------------------------------------------------
 R = mk("redact1", (10, 200, 10))
-orig_hash = sha(storage.STORAGE_DIR / "redact1.png")
+orig_hash = sha(paths.storage_dir() / "redact1.png")
 check("unredact of a visible item -> not_redacted", code_of(items.unredact, R) == "not_redacted")
 res = items.redact(R)
 row = db.get_by_slug(R)
@@ -171,7 +170,7 @@ cards.undo(res.batch_id)
 row = db.get_by_slug(R)
 check("undoing the redact brings the row AND the file back",
       row["redacted"] == 0 and row["stored_filename"] == "redact1.png"
-      and sha(storage.STORAGE_DIR / "redact1.png") == orig_hash and storage.thumb_path_for(R).exists())
+      and sha(paths.storage_dir() / "redact1.png") == orig_hash and storage.thumb_path_for(R).exists())
 check("...and the trash is empty again", trash_files() == [] and q("SELECT * FROM trash WHERE slug = ?", R) == [])
 
 # --- redact holds (owner decision 2026-10-04): held until the owner clicks -------------------
@@ -211,7 +210,7 @@ rec = items.recover_redacted(R)
 row = db.get_by_slug(R)
 check("recover restores file, stored_filename and visibility",
       row["redacted"] == 0 and row["stored_filename"] == "redact1.png"
-      and sha(storage.STORAGE_DIR / "redact1.png") == orig_hash and storage.thumb_path_for(R).exists()
+      and sha(paths.storage_dir() / "redact1.png") == orig_hash and storage.thumb_path_for(R).exists()
       and rec.item["redacted"] == 0)
 check("...and the hold is gone from the trash", db.get_redact_hold(R) is None and trash_files() == []
       and q("SELECT * FROM trash WHERE slug = ?", R) == [])
@@ -222,7 +221,7 @@ check("undo of a recover re-holds the file (no expiry)", db.get_by_slug(R)["reda
       and db.get_redact_hold(R) is not None and "redact1.png" not in storage_files())
 items.recover_redacted(R)
 check("...and it can be recovered again", db.get_by_slug(R)["stored_filename"] == "redact1.png"
-      and sha(storage.STORAGE_DIR / "redact1.png") == orig_hash)
+      and sha(paths.storage_dir() / "redact1.png") == orig_hash)
 
 # delete the held file permanently
 R2 = mk("redact2", (30, 30, 200))
@@ -272,7 +271,7 @@ blog.set_items(entry["id"], [(A, ""), (B, "middle one")])
 did = db.add_pending_decision("project_match", B, {"options": []})
 db.set_curator_state(f"decision:{did}", "defer")
 db.set_embedding(B, b"\x01\x02\x03\x04")
-b_hash = sha(storage.STORAGE_DIR / "revB.png")
+b_hash = sha(paths.storage_dir() / "revB.png")
 snap = {
     "items": q("SELECT rowid, * FROM project_items WHERE post_slug = ?", B),
     "tags": q("SELECT * FROM post_tags WHERE post_slug = ?", B),
@@ -323,7 +322,7 @@ check("...membership (same rowid / sort order), tag, relation, blog link, decisi
       and q("SELECT * FROM pending_decisions WHERE id = ?", did) == snap["dec"]
       and q("SELECT * FROM curator_dismissals WHERE nudge_key = ?", f"decision:{did}") == snap["cur"])
 check("...the whole capture_events row incl. id and embedding", q("SELECT * FROM capture_events WHERE slug = ?", B) == snap["row"])
-check("...and the original bytes + thumbnail", sha(storage.STORAGE_DIR / "revB.png") == b_hash
+check("...and the original bytes + thumbnail", sha(paths.storage_dir() / "revB.png") == b_hash
       and storage.thumb_path_for(B).exists() and not (items.trash_dir(DEL_B)).exists())
 check("undo summary is slim (no OCR text echoed)",
       all("extracted_text" not in (c.get("before") or {}) for c in undone.changes if c["table"] == "capture_events"))
@@ -336,7 +335,7 @@ check("undoing the undo deletes again and re-trashes the file",
 check("...keeping the embedding with the trash entry", db.get_trash_row(DEL_B, B)["embedding"] == b"\x01\x02\x03\x04")
 cards.undo(redo.batch_id)
 check("...and undoing that restores it all again", db.get_by_slug(B) is not None and db.revision_pairs() == {A: B, B: C}
-      and sha(storage.STORAGE_DIR / "revB.png") == b_hash and db.get_embedding(B) == b"\x01\x02\x03\x04")
+      and sha(paths.storage_dir() / "revB.png") == b_hash and db.get_embedding(B) == b"\x01\x02\x03\x04")
 
 # --- bulk delete --------------------------------------------------------------------------
 bulk = [mk("bulk1"), mk("bulk2"), mk("bulk3")]

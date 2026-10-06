@@ -16,8 +16,8 @@ import os
 import sys
 import tempfile
 
-TMP = tempfile.mkdtemp(prefix="revisions-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("revisions-")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 try:
@@ -27,6 +27,7 @@ except Exception:  # no libcairo on this machine (e.g. Windows): core.decisions 
     sys.modules["cairosvg"] = types.ModuleType("cairosvg")
 
 from core import card_rules, cards, changes, db, decisions, revisions  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 
 FAILS = []
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import Request, Form, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 
-from core import backup, captions, db, install_config, items, object_types, reset, storage
+from core import backup, captions, db, install_config, items, object_types, paths, reset, storage
 from core import provenance_options
 from web.common import DESKTOP_APP_BUILD_DIR, DESKTOP_APP_BUILD_PATH
 from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public
@@ -201,7 +201,8 @@ def api_storage_stats():
     # Per-type bytes and storage total: walk storage directory and stat files
     storage_total = 0
     type_bytes = {}
-    if storage.STORAGE_DIR.is_dir():
+    store = paths.storage_dir()
+    if store.is_dir():
         # Get all non-redacted items to map stored_filename -> media_type
         conn = db.get_conn()
         try:
@@ -220,13 +221,13 @@ def api_storage_stats():
             for media_type, filenames in stored_by_type.items():
                 type_bytes[media_type] = 0
                 for filename in filenames:
-                    fpath = storage.STORAGE_DIR / filename
+                    fpath = store / filename
                     if fpath.exists():
                         type_bytes[media_type] += fpath.stat().st_size
                         storage_total += fpath.stat().st_size
 
             # Also add thumbnail files to the total (they belong to all types)
-            for thumb_path in storage.STORAGE_DIR.glob("*_thumb.jpg"):
+            for thumb_path in store.glob("*_thumb.jpg"):
                 storage_total += thumb_path.stat().st_size
         finally:
             conn.close()
@@ -238,7 +239,7 @@ def api_storage_stats():
 
     # Exports size
     exports_bytes = 0
-    exports_dir = Path(__file__).resolve().parent.parent.parent / "exports"
+    exports_dir = paths.exports_dir()
     if exports_dir.is_dir():
         for fpath in exports_dir.rglob("*"):
             if fpath.is_file():

@@ -6,6 +6,12 @@ standard library, Excel with openpyxl, which the app image already has),
 uploads them to a running instance over HTTP, checks each type, its
 properties, previews and search, then deletes everything it uploaded.
 
+LIVE-SERVER TEST (#578): unlike the in-process scripts (which use scripts/_testenv.py and a
+throwaway DB/storage/exports), this one talks to a RUNNING instance over HTTP and so writes to that
+instance's real storage. It only ever uploads its own uniquely tagged fixtures and deletes those
+one by one (they sit in the instance's trash for 7 days, like any delete). It never calls
+delete-all or empty-trash, and must never be changed to.
+
 Run it against constructicon-test, never production:
 
     docker exec constructicon-test python3 scripts/test_office.py

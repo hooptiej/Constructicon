@@ -29,6 +29,18 @@
     <p class="page-subtitle">Decisions waiting on you, hidden items, integration keys, caption tuning, recent activity and maintenance.</p>
   </div>
 
+  {#- #562: shown until the install has an owner name (core/install_config.setup_needed). #467's
+      first-run setup (the first admin account) will take this over; until then it points at
+      Admin > Install below. Dismissing it hides it in this browser only. -#}
+  {% if install_setup_needed %}
+  <div class="admin-panel" id="install-setup-banner" role="status"
+       style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 16px;border-color:var(--hazard-yellow)">
+    <span><strong>Finish setting up this install.</strong> Give it an owner name, a site title and its publish targets in
+      <a href="#admin-install-section">Install</a>.</span>
+    <button type="button" class="btn-ms" id="install-setup-dismiss" style="width:auto" aria-label="Dismiss this notice">Dismiss</button>
+  </div>
+  {% endif %}
+
   <!-- Grid order + grid-auto-flow: dense (see style.css .admin-grid): the
        four single-track panels come first, then the two full-row ones, with
        Maintenance last in DOM so dense packing can pull it back up into a
@@ -140,6 +152,30 @@
         </div>
       </div>
       <div id="prov-status" class="backup-status" role="status" aria-live="polite"></div>
+    </section>
+
+    <!-- Install (#562): who this install belongs to and where it publishes. Was hard-wired to the
+         owner's name, domain and GitHub repositories; per-install data now (core/install_config.py,
+         GET/POST /api/install-config). No secrets here: the publish token is an API key below. -->
+    <section class="admin-panel admin-panel-wide" id="admin-install-section" aria-labelledby="admin-install-heading">
+      <div class="admin-panel-header">
+        <div>
+          <h2 id="admin-install-heading">Install</h2>
+          <div class="admin-row-hint">This install's owner and where its site export is published. Every save can be undone.</div>
+        </div>
+      </div>
+      <div id="admin-install-fields"></div>
+      <div class="admin-divider"></div>
+      <div class="admin-row">
+        <div class="admin-row-label">Publish targets</div>
+        <div class="admin-row-hint">GitHub repositories (owner/repository) the export can be published to. None = publishing is off.</div>
+        <div id="admin-install-targets" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>
+        <button type="button" class="btn-ms" id="admin-install-add-target" style="width:auto;margin-top:6px">+ Add target</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+        <button type="button" class="btn-ms" id="admin-install-save" style="width:auto">Save</button>
+        <span id="admin-install-msg" class="backup-status" role="status"></span>
+      </div>
     </section>
 
     <!-- API Keys (#55) — general secrets store for the app itself, starting
@@ -408,6 +444,7 @@
 }
 </style>
 
+<script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 <script>
 (function () {
   function escapeHtml(s) {
@@ -565,6 +602,111 @@
       alert('Delete failed.');
     }
   });
+
+  // Install (#562): GET/POST /api/install-config. Text fields + publish target rows; one Save = one
+  // undoable change (the undo bar offers it). Everything is built with textContent/value, never HTML.
+  (function () {
+    const fieldsEl = document.getElementById('admin-install-fields');
+    const targetsEl = document.getElementById('admin-install-targets');
+    const msg = document.getElementById('admin-install-msg');
+    const saveBtn = document.getElementById('admin-install-save');
+    if (!fieldsEl) return;
+    let saved = null;
+
+    function setMsg(text, ok) {
+      msg.textContent = text || '';
+      msg.className = 'backup-status' + (ok === true ? ' backup-status-ok' : ok === false ? ' backup-status-error' : '');
+    }
+    function input(value, placeholder, width) {
+      const i = document.createElement('input');
+      i.className = 'input'; i.value = value || ''; i.placeholder = placeholder || ''; i.autocomplete = 'off';
+      if (width) i.style.width = width;
+      return i;
+    }
+    function addTarget(name, repo, branch) {
+      const row = document.createElement('div');
+      row.className = 'admin-install-target';
+      row.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap';
+      const n = input(name, 'name (e.g. live)', '120px'); n.dataset.f = 'name';
+      const r = input(repo, 'owner/repository', '240px'); r.dataset.f = 'repo';
+      const b = input(branch || 'main', 'branch', '110px'); b.dataset.f = 'branch';
+      const x = document.createElement('button');
+      x.type = 'button'; x.className = 'btn-ms'; x.style.width = 'auto'; x.textContent = 'Remove';
+      x.addEventListener('click', () => row.remove());
+      row.append(n, r, b, x);
+      targetsEl.appendChild(row);
+    }
+    function render(cfg) {
+      saved = cfg;
+      fieldsEl.textContent = '';
+      cfg.fields.filter(f => f.key !== 'publish_targets').forEach(f => {
+        const row = document.createElement('div');
+        row.className = 'admin-row';
+        const lab = document.createElement('label');
+        lab.className = 'admin-row-label'; lab.htmlFor = 'admin-install-' + f.key; lab.textContent = f.label;
+        const hint = document.createElement('div');
+        hint.className = 'admin-row-hint'; hint.textContent = f.hint;
+        const i = input(cfg.values[f.key], cfg.fallbacks[f.key] ? 'not set (shows "' + cfg.fallbacks[f.key] + '")' : 'not set');
+        i.id = 'admin-install-' + f.key; i.dataset.key = f.key; i.style.marginTop = '4px';
+        row.append(lab, hint, i);
+        fieldsEl.appendChild(row);
+      });
+      targetsEl.textContent = '';
+      Object.entries(cfg.values.publish_targets || {}).forEach(([name, t]) => addTarget(name, t.repo, t.branch));
+    }
+    async function load() {
+      try {
+        const res = await fetch('/api/install-config');
+        if (res.ok) render(await res.json());
+      } catch (e) { setMsg("Couldn't load the install settings", false); }
+    }
+    function collect() {
+      const out = {};
+      fieldsEl.querySelectorAll('input[data-key]').forEach(i => {
+        if (i.value.trim() !== (saved.values[i.dataset.key] || '')) out[i.dataset.key] = i.value.trim();
+      });
+      const targets = {};
+      targetsEl.querySelectorAll('.admin-install-target').forEach(row => {
+        const v = {};
+        row.querySelectorAll('input').forEach(i => { v[i.dataset.f] = i.value.trim(); });
+        if (v.name || v.repo) targets[v.name] = { repo: v.repo, branch: v.branch };
+      });
+      if (JSON.stringify(targets) !== JSON.stringify(saved.values.publish_targets || {})) out.publish_targets = targets;
+      return out;
+    }
+    document.getElementById('admin-install-add-target').addEventListener('click', () => addTarget('', '', 'main'));
+    saveBtn.addEventListener('click', async () => {
+      const body = collect();
+      if (!Object.keys(body).length) { setMsg('Nothing changed'); return; }
+      saveBtn.disabled = true; setMsg('Saving\u2026');
+      try {
+        const res = await fetch('/api/install-config', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((r.error && r.error.message) || r.detail || `Save failed (${res.status})`);
+        render(r.config);
+        setMsg('Saved', true);
+        const banner = document.getElementById('install-setup-banner');
+        if (banner && !r.config.setup_needed) banner.remove();
+        if (window.showUndoBar && r.batch_id) {
+          window.showUndoBar('Install settings saved.', r.batch_id, how => { if (how === 'undone') load(); });
+        }
+      } catch (e) { setMsg(e.message, false); }
+      finally { saveBtn.disabled = false; }
+    });
+    load();
+
+    const dismiss = document.getElementById('install-setup-dismiss');
+    const banner = document.getElementById('install-setup-banner');
+    if (banner && dismiss) {
+      try { if (localStorage.getItem('install-setup-banner-dismissed') === '1') banner.remove(); } catch (e) {}
+      dismiss.addEventListener('click', () => {
+        try { localStorage.setItem('install-setup-banner-dismissed', '1'); } catch (e) {}
+        banner.remove();
+      });
+    }
+  })();
 
   // API Keys (#55) — presence-only status, and a save that never echoes the
   // real value back. KNOWN_SETTINGS is web/app.py's allowlist; this array is

@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import Request, Form, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 
-from core import backup, captions, db, items, object_types, reset, storage
+from core import backup, captions, db, install_config, items, object_types, reset, storage
 from core import provenance_options
 from web.common import DESKTOP_APP_BUILD_DIR, DESKTOP_APP_BUILD_PATH
 from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public
@@ -80,7 +80,7 @@ KNOWN_SETTINGS = {
     "youtube_data_api_key": "YouTube Data API Key",
     "thingiverse_app_token": "Thingiverse App Token",
     "pages_publish_token": "GitHub Pages Publish Token",
-    "pages_publish_targets": "GitHub Pages Publish Targets",
+    # #562: "pages_publish_targets" moved to the install config (Admin > Install).
 }
 
 
@@ -107,6 +107,33 @@ def api_set_setting(key: str = Form(...), value: str = Form("")):
         raise HTTPException(status_code=400, detail=f"Unknown setting key: {key!r}")
     db.set_setting(key, value)
     return JSONResponse({key: db.has_setting(key)})
+
+
+# --- Install config (#562): owner identity, export site title, publish targets ---
+
+@router.get("/api/install-config")
+def api_get_install_config():
+    """Admin > Install: every install setting with its label, hint and current value, plus
+    `setup_needed` (owner name unset). No secrets live here (the publish token stays a
+    write-only API key above)."""
+    return JSONResponse(install_config.public())
+
+
+@router.post("/api/install-config")
+async def api_set_install_config(request: Request):
+    """Saves install settings. JSON body {key: value, ...} with keys from GET's `fields`;
+    "" (or null) clears one; `publish_targets` is {name: {repo: "owner/repo", branch}}.
+    Validated (400 bad_install_config / bad_install_key / bad_publish_target), one undoable
+    change-log row; answers {ok, changes, batch_id, config}."""
+    # #558: JSON-body routes only accept Content-Type: application/json (415 otherwise).
+    ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype != "application/json":
+        raise HTTPException(status_code=415, detail="Content-Type must be application/json")
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Body must be JSON")
+    return JSONResponse(install_config.update(body).to_dict())
 
 
 @router.get("/api/audit-log")

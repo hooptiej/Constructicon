@@ -54,7 +54,7 @@ async def api_upload(
     # its absence is what marks a deliberate one-off drag-drop through the
     # browser UI.
     is_desktop_app = request.headers.get(DESKTOP_APP_CLIENT_HEADER) == DESKTOP_APP_CLIENT_VALUE
-    user = db.SOURCE_AUTOMATED_UPLOAD if is_desktop_app else db.SOURCE_MANUAL_UPLOAD
+    user = db.source_automated_upload() if is_desktop_app else db.source_manual_upload()  # #562
 
     # #433: get file size early for duplicate check; use file.size if available,
     # otherwise measure via seek/tell
@@ -150,7 +150,7 @@ async def api_create_content(
     it just posts the URL and lets the server figure out what it is.
     """
     is_desktop_app = request.headers.get(DESKTOP_APP_CLIENT_HEADER) == DESKTOP_APP_CLIENT_VALUE
-    user = db.SOURCE_AUTOMATED_UPLOAD if is_desktop_app else db.SOURCE_MANUAL_UPLOAD
+    user = db.source_automated_upload() if is_desktop_app else db.source_manual_upload()  # #562
     try:
         tag_list = json.loads(tags) if tags else []
     except json.JSONDecodeError:

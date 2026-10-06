@@ -1,8 +1,8 @@
-# Capturing a traditional-media piece
+# Capturing a physical piece
 
 How to get a drawing, painting, print or any other made-by-hand object into Constructicon so the
-digital copy is a faithful, findable record of the physical original (#425). Worked example: the
-"lil dragon" ink drawing that became the hooptieJ logo.
+digital copy is a faithful, findable record of the physical original. Worked example: an ink
+drawing of a dragon that later became a logo.
 
 ## 1. Photograph or scan it
 
@@ -25,15 +25,16 @@ A scanner beats a camera for flat work; a camera is fine for anything bigger tha
 
 ## 2. Name it
 
-Name the file before uploading, plainly and for a stranger: `lil-dragon-original-drawing.jpg`.
+Name the file before uploading, plainly and for a stranger: `dragon-original-drawing.jpg`.
 Lowercase words and hyphens, no dates in the name (the date goes in the field below), and
 `-scan`/`-photo` only if you keep both. Then give the item a real title (click the name on the
-item page): "The 'lil dragon' - original ink drawing".
+item page): "Dragon - original ink drawing".
 
 ## 3. Fill in the fields
 
-On the item page, the **PHYSICAL PIECE** group appears for anything in the Traditional Media hobby
-(and for any item that already has one of these set). Press Edit:
+On the item page, the **PHYSICAL PIECE** group appears for anything in a hobby whose
+**Physical-piece fields** setting is on (the hobby page's SETTINGS group), and for any item that
+already has one of these set. Press Edit:
 
 | Field | What goes in it | Example |
 | --- | --- | --- |
@@ -54,8 +55,9 @@ tags if useful.
 
 - **Provenance: `created`.** In the ORIGIN group set Provenance to *Created* (you made it). For
   something you collected rather than made, pick the option that fits and say so in the description.
-- **Hobby: Traditional Media.** Put the item in a project that belongs to the Traditional Media
-  hobby. That is what makes the PHYSICAL PIECE group show up for new items.
+- **Hobby.** Put the item in a project that belongs to a hobby with **Physical-piece fields** switched
+  on (for example a "Traditional Media" hobby). That is what makes the PHYSICAL PIECE group show up
+  for new items.
 - **Project.** Use the matching project (for drawings, **Drawings**). In WHERE IT LIVES, press
   Edit and add the project. Start a new project only for a series or a piece with its own story;
   a project is a shelf, not a single drawing.
@@ -73,13 +75,10 @@ header), connect them so the story is walkable in both directions:
 - Say what happened in the description: "Scanned from the original, traced into the vector logo
   in 2017".
 
-The lil dragon's links to its logo files can be proposed in bulk with
-`scripts/link_lil_dragon_brand.py` (dry run by default; read its header before using `--execute`).
-
 ## Quick checklist
 
 1. Flat, square, whole sheet, even light, 600 dpi (or best camera).
 2. Plain file name, then a real title.
 3. Medium, dimensions, date made (and where the original is).
-4. Provenance Created; in a Traditional Media project; cover set.
+4. Provenance Created; in a project of a hobby with physical-piece fields on; cover set.
 5. Related to anything it became; description tells the story.

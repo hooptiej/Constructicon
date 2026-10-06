@@ -2402,6 +2402,9 @@ def undo(target, *, force=False, dry_run=False, actor=None):
     except BaseException:
         _items.rollback_moves(moved)
         raise
+    if not dry_run and any(m.get("table") == "install_config" for m in applied):
+        from . import install_config  # #562: its per-process read cache
+        install_config.clear_cache()
     if file_plan and not dry_run:
         _items.after_undo(rows, file_plan)
     elif not dry_run and any(r.get("op") == _items.OP_RETYPE for r in rows):

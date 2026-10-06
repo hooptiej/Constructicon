@@ -57,7 +57,7 @@ templates.env.globals["upload_accept"] = ",".join(object_types.accepted_extensio
 templates.env.globals["upload_max_mb"] = storage.MAX_MB
 
 # Source (capture_events.tech): who or what actually added a row, and how —
-# see core/db.py's SOURCE_* constants/source_group() for the full vocabulary
+# see core/db.py's source_*() / SOURCE_* and source_group() for the full vocabulary
 # and grouping logic. The web upload drawer and the desktop uploader app both
 # POST to /api/upload with no client-supplied identity (this is a
 # single-owner site, not a multi-tech tool) — the server tells them apart by

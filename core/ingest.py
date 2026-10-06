@@ -197,7 +197,7 @@ def ingest_file(
         fileobj: File-like object (file.file from UploadFile, or io.BytesIO, or open file)
         filename: Original filename (used for media_type detection and duplicate check)
         size: File size in bytes
-        source: Source string (db.SOURCE_MANUAL_UPLOAD, db.SOURCE_AUTOMATED_UPLOAD, etc.)
+        source: Source string (db.source_manual_upload(), db.source_automated_upload(), etc.)
         run_background: Callable to schedule background work
         description: Metadata description
         tags: List of tag names (or None)
@@ -403,7 +403,7 @@ def ingest_content(
     plain URLs, and other content that lives outside local storage.
 
     Args:
-        source: Source string (db.SOURCE_MANUAL_UPLOAD, db.SOURCE_AUTOMATED_UPLOAD, etc.)
+        source: Source string (db.source_manual_upload(), db.source_automated_upload(), etc.)
         run_background: Callable to schedule background work
         media_type: Content media type (required unless external_url provided for auto-classify)
         external_url: External URL (for YouTube, web pages, etc.)

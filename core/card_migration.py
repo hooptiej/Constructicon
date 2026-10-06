@@ -1,7 +1,9 @@
 """V2 card migrations (docs/design/v2-cards.md section 4).
 
 Piece 1: `v2c_1` -- maps v1 `projects.status` onto kind / activity / stage /
-stop_reason (4.2), and queues owner decisions for the judgment calls.
+stop_reason (4.2), and queues owner decisions for the judgment calls. `v2c_2` (hobby
+vocabulary + group codes) and `v2c_5` (reference-only cards -> provenance 'referenced') are
+generic too. The owner-specific v2c_3 / v2c_4 moved to scripts/archive/ (#562).
 
 Run once each, web process only, via core.db.MIGRATIONS / schema_migrations (#549). Still
 idempotent by construction, which is what lets an existing DB record them safely:
@@ -304,177 +306,10 @@ def run_v2c_2():
     return {"hobbies_changed": changed, "batch_id": batch_id}
 
 
-# --- v2c_3_alienwhoop: the fake family (4.5) ---------------------------------------------
-
-# The family's own card. The spec says a card titled exactly "AlienWhoop"; the real
-# archive calls it "AlienWhoop and TinyWhoop" (the owner: "that's really a family"),
-# so both titles qualify. Matched by title, never by id.
-FAMILY_CARD_TITLES = ("alienwhoop", "alienwhoop and tinywhoop")
-# Named in #428 as candidates the owner should confirm; only offered if they exist.
-FAMILY_SIBLING_TITLES = ("tinywhoop", "alienwhoop v2 f4", "alienwhoop zer0")
-
-
-def plan_alienwhoop_family(all_cards=None):
-    """Read-only. Returns None, or (family_card, payload) for the one
-    card_family_members decision that should exist for the AlienWhoop family."""
-    all_cards = all_cards if all_cards is not None else db.list_projects()
-    fam = None
-    for want in FAMILY_CARD_TITLES:  # prefer the exact "AlienWhoop" title
-        fam = next((c for c in all_cards if (c["title"] or "").strip().lower() == want), None)
-        if fam:
-            break
-    if fam is None:
-        return None
-    member_ids = {m["id"] for m in db.list_family_members(fam["id"])}
-    seen = set()
-    candidates = []
-
-    def eligible(c):
-        return (c["id"] != fam["id"] and c["id"] not in member_ids and c["id"] not in seen
-                and (c.get("kind") or "project") not in card_rules.GROUP_KINDS)
-
-    for c in sorted(db.list_child_projects(fam["id"]), key=lambda c: (c["title"] or "").lower()):
-        if eligible(c):
-            seen.add(c["id"])
-            candidates.append((c, "currently nested under it", "medium", True))
-    for c in all_cards:
-        if (c["title"] or "").strip().lower() in FAMILY_SIBLING_TITLES and eligible(c):
-            seen.add(c["id"])
-            candidates.append((c, "named like a sibling; the archive suggests separate builds", "low", True))
-    if not candidates:
-        return None
-    options = []
-    for c, reason, conf, yes in candidates:
-        patch = []
-        if c.get("parent_id") == fam["id"]:
-            patch.append({"op": "unnest", "card": c["slug"]})
-        patch.append({"op": "add_to_family", "family": fam["slug"], "member": c["slug"]})
-        options.append({"key": c["slug"], "label": c["title"], "reason": reason, "confidence": conf,
-                        "suggested": yes, "patch": patch})
-    options.append({"key": "none", "label": "None of these (leave it as it is)", "patch": []})
-    nested = [c for c, _r, _cf, _y in candidates if c.get("parent_id") == fam["id"]]
-    payload = _envelope(
-        fam, "family_members",
-        f"'{fam['title']}' holds separate builds by nesting them. Is it really a family, and which of these "
-        "belong in it? (Members stay their own cards; the ones nested under it are taken out of the nesting.)",
-        fam.get("status"), None,
-        [c["slug"] for c, _r, _cf, yes in candidates if yes],
-        "Currently nested children, plus any card named like a sibling"
-        if len(candidates) > len(nested) else "Currently nested children",
-        "medium" if len(candidates) == len(nested) else "low", options)
-    return fam, payload
-
-
-def run_v2c_3():
-    """Queues the one AlienWhoop card_family_members decision (spec 4.5, piece 3).
-    Never moves anything: the owner answers, resolving then does the work through
-    core.cards. No-op while no AlienWhoop family card exists. Idempotent: the
-    decision is queued with queue_decision_once, which skips if ANY row of that
-    kind + card exists (open or resolved), so an answered question is never re-asked.
-    Returns {"queued": n}."""
-    from . import cards as _cards
-    plan = plan_alienwhoop_family()
-    if plan is None:
-        return {"queued": 0}
-    fam, payload = plan
-    conn = db.get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        did = db.queue_decision_once(_cards.KIND_CARD_FAMILY_MEMBERS, f"card:{fam['slug']}", payload, conn=conn)
-        if did is not None:
-            db.insert_change_log(
-                conn, "migration_v2c_3_alienwhoop", changes.ACTOR_MIGRATION,
-                [changes.row_image("pending_decisions", {"id": did}, None,
-                                   {"kind": _cards.KIND_CARD_FAMILY_MEMBERS, "post_slug": f"card:{fam['slug']}"})],
-                batch_id=changes.new_batch_id(), affected_slugs=[fam["slug"]])
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-    return {"queued": 1 if did is not None else 0}
-
-
-# --- v2c_4: the canopy's built_for question (4.5, deferred from piece 3) --------------------
-
-# The card the spec names ("AW canopy*"), and the quad it was almost certainly built
-# for. Matched by TITLE, never by id; the Queen is only ever a suggested candidate.
-CANOPY_TITLE_PREFIX = "aw canopy"
-CANOPY_LIKELY_TARGET_TITLES = ("the queen",)  # substring of the target's title
-
-
-def plan_canopy_built_for(all_cards=None):
-    """Read-only. Returns None, or (canopy_card, payload) for the one
-    card_built_for decision the 'AW canopy' card should have. The payload has the
-    same shape as the piece-1 means-to-an-end decisions (4.3), with candidates
-    ranked by the usual heuristic plus the card the spec names, then `none`."""
-    all_cards = all_cards if all_cards is not None else db.list_projects()
-    canopy = next((c for c in all_cards if (c["title"] or "").strip().lower().startswith(CANOPY_TITLE_PREFIX)), None)
-    if canopy is None:
-        return None
-    children_by_parent = {}
-    for c in all_cards:
-        c["legacy_status_for_plan"] = c.get("status")
-        if c.get("parent_id") is not None:
-            children_by_parent.setdefault(c["parent_id"], []).append(c)
-    hobby_ids_by_card = {c["id"]: {h["id"] for h in db.list_hobbies_for_project(c["id"])} for c in all_cards}
-    import time as _time
-    facts = _gather(canopy, all_cards, hobby_ids_by_card, children_by_parent, _time.time())
-    cands, seen = [], {canopy["slug"]}
-    for c in all_cards:  # the quad the spec names goes first
-        t = (c["title"] or "").lower()
-        if c["slug"] not in seen and any(w in t for w in CANOPY_LIKELY_TARGET_TITLES) and "alienwhoop" in t:
-            seen.add(c["slug"])
-            cands.append({"slug": c["slug"], "title": c["title"],
-                          "reason": "named in the V2 spec as what the canopy was built for"})
-    for c in rank_built_for_candidates(canopy, facts, all_cards):
-        if c["slug"] not in seen:
-            seen.add(c["slug"])
-            cands.append(c)
-    cands = cands[:8]
-    options = [{"key": c["slug"], "label": c["title"], "reason": c["reason"],
-                "patch": [{"op": "link", "a": canopy["slug"], "b": c["slug"], "type": "built_for"}]} for c in cands]
-    options.append({"key": "none", "label": "None of these", "patch": []})
-    if cands:
-        sug, why = cands[0]["slug"], f"Top candidate: {cands[0]['reason']}"
-    else:
-        sug, why = "none", "No candidate cards found"
-    payload = _envelope(
-        canopy, "built_for", "Which card was this canopy built for? (Pick every quad it fits.)",
-        canopy.get("status"), None, sug, why, "medium" if cands and "spec" in cands[0]["reason"] else "low", options)
-    return canopy, payload
-
-
-def run_v2c_4():
-    """Queues the one 'AW canopy' card_built_for decision (spec 4.5, deferred from
-    piece 3). Never links anything: the owner answers, and resolving creates the
-    built_for link through core.cards. No-op while no such card exists. Idempotent:
-    queue_decision_once skips if ANY row of that kind + card exists (open or
-    resolved), so an answered question is never re-asked, and the four piece-1
-    means-to-an-end decisions are left alone. Returns {"queued": n}."""
-    from . import cards as _cards
-    plan = plan_canopy_built_for()
-    if plan is None:
-        return {"queued": 0}
-    canopy, payload = plan
-    conn = db.get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        did = db.queue_decision_once(_cards.KIND_CARD_BUILT_FOR, f"card:{canopy['slug']}", payload, conn=conn)
-        if did is not None:
-            db.insert_change_log(
-                conn, "migration_v2c_4_canopy", changes.ACTOR_MIGRATION,
-                [changes.row_image("pending_decisions", {"id": did}, None,
-                                   {"kind": _cards.KIND_CARD_BUILT_FOR, "post_slug": f"card:{canopy['slug']}"})],
-                batch_id=changes.new_batch_id(), affected_slugs=[canopy["slug"]])
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-    return {"queued": 1 if did is not None else 0}
+# --- v2c_3 / v2c_4: moved out (#562) --------------------------------------------------------
+# The AlienWhoop family question (v2c_3) and the AW canopy built_for question (v2c_4) were about
+# the owner's own cards. They live in scripts/archive/v2c_owner_questions.py now, out of init_db:
+# already applied on the owner's installs, never run on a fresh one.
 
 
 def run_v2c_5():

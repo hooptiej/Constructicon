@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from core import card_rules, db, markdown_render, policy, storage, object_types
+from core import card_rules, db, install_config, markdown_render, policy, storage, object_types
 from core import version as version_info
 
 
@@ -68,7 +68,7 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
             - project_slugs: List of project slugs to include (default: all active projects)
             - blog_entry_slugs: List of blog entry slugs to include (default: all "ready" entries)
             - site: Dict with:
-                - title: Site title (default: "hooptiej.com")
+                - title: Site title (default: the install's site_title, #562)
                 - tagline: Site tagline (default: "")
         out_dir: Output directory (if None, uses EXPORTS_DIR/<timestamp>/)
 
@@ -91,7 +91,8 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     project_slugs = config.get("project_slugs")
     blog_entry_slugs = config.get("blog_entry_slugs")
     site_config = config.get("site", {})
-    site_title = site_config.get("title", "hooptiej.com")
+    # #562: the default title is install config (Admin > Install), not the owner's domain.
+    site_title = site_config.get("title", install_config.site_title())
     site_tagline = site_config.get("tagline", "")
 
     warnings = []
@@ -202,6 +203,8 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     env.filters["markdown"] = markdown_render.render
     # #508: "Built with Constructicon <version>" footer line.
     env.globals["constructicon_version"] = version_info.get_version()
+    # #562: the footer's "(c) <holder>." is install config; nothing when unset.
+    env.globals["copyright_holder"] = install_config.copyright_holder()
 
     # Render pages
     # 1. Home page (index.html)

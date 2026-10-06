@@ -429,6 +429,7 @@ fam = db._create_project("Fam", kind="family", with_writeup=False)
 cards.add_to_family(fam["id"], P["id"])
 hob = hobbies.create("A Hobby").data["hobby"]
 cards.add_to_hobby(P["id"], hob["id"])
+hobbies.set_physical_piece(hob["id"], True)  # #562: a hobby_settings row
 items.delete([W])  # a trash row and a file in .trash
 db.set_setting("some_key", "kept")
 empty = [t for t in reset.CLEARED_TABLES if q(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] == 0]

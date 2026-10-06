@@ -36,6 +36,7 @@ SERVICE_MODULES = {
     "core/decisions.py": "answering questions + the explicit stale sweep (phase D)",
     "core/reset.py": "the one delete-all (phase C)",
     "core/revisions.py": "revision chains (#477) and their questions",
+    "core/install_config.py": "install identity: owner, site title, publish targets (#562)",
 }
 
 # Raw writes kept on purpose, outside the service layer. Each needs a reason.
@@ -84,7 +85,7 @@ RETIRED_PUBLIC = {
 PUBLIC_WRITERS = {
     "init_db": "schema DDL + run-once migrations (web process at boot)",
     "run_pending_migrations": "migrations",
-    "ensure_special_clients": "vestigial imagerepo client list, seeded at boot",
+    "ensure_special_clients": "vestigial imagerepo client list, seeded by sync_clients.py (no longer at boot, #562)",
     "sync_hudu_clients": "vestigial imagerepo client sync (sync_clients.py)",
     "add_test_client": "vestigial imagerepo client fixture",
     "insert_upload": "ingest pipeline: a new item row (upload / MCP upload / import)",

@@ -88,6 +88,14 @@ def api_set_hobby_group_code(request: Request, id_or_slug: str, group_code: str 
     return JSONResponse({**updated, **cards.hobby_fields(updated)})
 
 
+@router.post("/api/hobby/{id_or_slug}/physical-piece")
+def api_set_hobby_physical_piece(id_or_slug: str, enabled: bool = Form(...)):
+    """#562: the hobby's "shows physical-piece fields" setting (was a name match on "Traditional
+    Media"): items in its cards get the PHYSICAL PIECE group and the hobby page links the capture
+    guide. Editor (curation, like the other hobby details). One undoable change-log row."""
+    return JSONResponse(hobbies.set_physical_piece(id_or_slug, enabled).to_dict())
+
+
 @router.post("/api/hobby/{id_or_slug}/add-project")
 def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str = Form(...)):
     """Add a project to a hobby.

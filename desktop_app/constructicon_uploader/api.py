@@ -14,7 +14,7 @@ REQUEST_TIMEOUT_SECONDS = 30
 # automated/unattended upload, as opposed to a deliberate one-off drag-drop
 # through the web UI's own upload drawer. The server (web/app.py's
 # api_upload) uses this to pick the right Source string for capture_events.tech
-# — see core/db.py's SOURCE_AUTOMATED_UPLOAD/SOURCE_MANUAL_UPLOAD.
+# — see core/db.py's source_automated_upload()/source_manual_upload().
 CLIENT_IDENTITY_HEADERS = {"X-Constructicon-Client": "desktop-app"}
 
 

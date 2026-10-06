@@ -128,6 +128,19 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+-- #562: per-install identity (owner name/label, export site title, publish targets).
+-- core/install_config.py owns reads (cached) and writes (imaged, undoable). Never secrets.
+CREATE TABLE IF NOT EXISTS install_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at REAL
+);
+-- #562: per-hobby settings. shows_physical_piece = items in this hobby's cards get the
+-- PHYSICAL PIECE fields (core/physical_piece.py); was a name match on "Traditional Media".
+CREATE TABLE IF NOT EXISTS hobby_settings (
+    hobby_tag_id INTEGER PRIMARY KEY REFERENCES blog_tags(id),
+    shows_physical_piece INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     method TEXT NOT NULL,
@@ -244,10 +257,23 @@ HOBBY_STATUSES = list(card_rules.HOBBY_ACTIVITIES)
 # (the original project), when it was a real multi-tech tool gated behind auth.
 # Auth is gone (Phase 1) and this is a single-owner site now, so the column has
 # been repurposed as a "Source" label: who or what actually added the row, and
-# how. Every value written into `tech` should be one of these four exact
-# strings (SOURCE_MIGRATED is a template — fill in `<source>`):
-SOURCE_MANUAL_UPLOAD = "Hooptie J (me) — manual upload"
-SOURCE_AUTOMATED_UPLOAD = "Hooptie J (me) — automated upload"
+# how. Every value written into `tech` should be one of these four shapes
+# (SOURCE_MIGRATED is a template — fill in `<source>`). The owner's two come from
+# the install's own config (#562, core/install_config.py owner_label): on the
+# owner's installs exactly "Hooptie J (me) — manual upload" as before; on a fresh
+# install "Owner — manual upload" until an owner is set. Splitting `tech` into user +
+# channel is #467's job.
+def source_manual_upload():
+    from . import install_config  # lazy: install_config imports this module
+    return f"{install_config.owner_label()} — manual upload"
+
+
+def source_automated_upload():
+    from . import install_config
+    return f"{install_config.owner_label()} — automated upload"
+
+
+SOURCE_CLAUDE = "Claude"
 SOURCE_AUTHORED = "Claude — authored"  # Not written by anything yet — reserved for a
 # future script that generates original content (e.g. a write-up) rather than
 # migrating existing content from somewhere else. See SOURCE_MIGRATED for that case.
@@ -265,17 +291,25 @@ def source_migrated_from(source):
 # grouping key instead of showing/URL-encoding the full sentence-length
 # Source string in a narrow layout. The full string is still stored as-is in
 # `tech` and always shown in full on the object detail page.
-SOURCE_GROUPS = ["Hooptie J (me)", "Claude"]
+def source_groups():
+    """The owner's label (install config, #562) first, then "Claude". The neutral fallback
+    ("Owner") is kept as a group too once a real label is set, so uploads made before the
+    owner was configured still group."""
+    from . import install_config
+    groups = [install_config.owner_label(), SOURCE_CLAUDE]
+    if install_config.FALLBACK_OWNER not in groups:
+        groups.append(install_config.FALLBACK_OWNER)
+    return groups
 
 
 def source_group(tech):
-    """Short grouping key for a Source string, e.g. "Hooptie J (me) — manual
-    upload" groups under "Hooptie J (me)". Falls back to the value unchanged
+    """Short grouping key for a Source string, e.g. "<owner label> — manual
+    upload" groups under "<owner label>". Falls back to the value unchanged
     if it doesn't start with a known prefix (covers legacy rows from before
-    this repurposing, e.g. the literal old default "hooptiej")."""
+    this repurposing)."""
     if not tech:
         return tech
-    for group in SOURCE_GROUPS:
+    for group in source_groups():
         if tech == group or tech.startswith(group + " —") or tech.startswith(group + " -"):
             return group
     return tech
@@ -884,7 +918,34 @@ def _mig_v2c(n):
     return run
 
 
+def _mig_install_config_seed_562():
+    # #562: an install that already has content gets today's hard-wired owner values, so it sees
+    # no change; a fresh (empty) install gets nothing owner-specific. See core/install_config.py.
+    from . import install_config
+    install_config.seed_existing_install(get_conn())
+
+
+def _mig_hobby_physical_piece_562():
+    # #562: the PHYSICAL PIECE fields used to show for the hobby NAMED "Traditional Media". It's a
+    # per-hobby flag now; the hobby of that name (if this install has one) keeps it switched on.
+    from . import changes, physical_piece
+    conn = get_conn()
+    rows = conn.execute("SELECT id, slug FROM blog_tags WHERE is_hobby = 1 AND lower(trim(name)) = ?",
+                        (physical_piece.LEGACY_HOBBY_NAME,)).fetchall()
+    for r in rows:
+        if conn.execute("INSERT OR IGNORE INTO hobby_settings (hobby_tag_id, shows_physical_piece) VALUES (?, 1)",
+                        (r["id"],)).rowcount:
+            insert_change_log(conn, "migration_hobby_physical_piece_562", changes.ACTOR_MIGRATION,
+                              [changes.row_image("hobby_settings", {"hobby_tag_id": r["id"]}, None,
+                                                 {"hobby_tag_id": r["id"], "shows_physical_piece": 1})],
+                              batch_id=changes.new_batch_id(), affected_slugs=[r["slug"]])
+
+
 # Order matters (v2c_1 first: later steps read the kind/stage it assigns).
+# #562: v2c_3 (the AlienWhoop family question) and v2c_4 (the AW canopy question) were about the
+# owner's own cards; they moved to scripts/archive/ (already recorded in schema_migrations on the
+# owner's installs, so dropping them from this list changes nothing there; fresh installs never
+# run them). v2c_1/2/5 are generic (legacy status, hobby vocabulary, reference-only cards).
 MIGRATIONS = [
     ("drop_legacy_uploads", _mig_drop_legacy_uploads),
     ("curator_snooze_519", _mig_curator_snooze_519),
@@ -892,9 +953,9 @@ MIGRATIONS = [
     ("provenance_options_seed_529", _mig_provenance_options_seed_529),
     ("v2c_1_kind_status", _mig_v2c(1)),
     ("v2c_2_hobbies", _mig_v2c(2)),
-    ("v2c_3_alienwhoop_family", _mig_v2c(3)),
-    ("v2c_4_canopy_built_for", _mig_v2c(4)),
     ("v2c_5_referenced_provenance", _mig_v2c(5)),
+    ("install_config_seed_562", _mig_install_config_seed_562),
+    ("hobby_physical_piece_562", _mig_hobby_physical_piece_562),
 ]
 
 
@@ -3087,6 +3148,9 @@ IMAGE_TABLE_KEYS = {
     "trash": ("batch_id", "slug"),
     # #541 phase D (core/blog.py): the entry row itself.
     "blog_entries": ("id",),
+    # #562: install identity (core/install_config.py) and per-hobby settings (core/hobbies.py).
+    "install_config": ("key",),
+    "hobby_settings": ("hobby_tag_id",),
 }
 _IMAGE_ROWID_TABLES = ("project_items", "project_hobbies", "family_members", "project_relations",
                        "blog_entry_projects", "post_tags")
@@ -4207,6 +4271,28 @@ def list_hobbies_for_project(project_id):
             (project_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def physical_piece_hobbies():
+    """#562: the hobbies whose "shows physical-piece fields" setting is on: [{id, name, slug}]."""
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT bt.id, bt.name, bt.slug FROM blog_tags bt JOIN hobby_settings hs ON hs.hobby_tag_id = bt.id "
+            "WHERE bt.is_hobby = 1 AND hs.shows_physical_piece = 1 ORDER BY bt.id").fetchall()]
+    finally:
+        conn.close()
+
+
+def hobby_shows_physical_piece(hobby_id):
+    """#562: True when this hobby's items get the PHYSICAL PIECE fields."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT shows_physical_piece FROM hobby_settings WHERE hobby_tag_id = ?",
+                           (hobby_id,)).fetchone()
+        return bool(row and row[0])
     finally:
         conn.close()
 

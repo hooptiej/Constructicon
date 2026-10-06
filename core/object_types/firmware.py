@@ -23,13 +23,14 @@ pic16f877, stm32f103, avr, ...), and is labelled as one.
 Best-effort like every other type: never raises, {} at worst.
 """
 
+import logging
 import re
 import struct
 from pathlib import Path
 
 from markupsafe import Markup, escape
 
-from .. import storage
+from .. import besteffort, storage
 from . import _preview, register, ObjectTypeSpec, ThumbnailSource
 
 STATS_KEY = "firmware_stats"
@@ -106,7 +107,7 @@ def _elf_header(path):
             info["entry"] = struct.unpack(endian + "I", h[24:28])[0]
         elif h[4] == 2 and len(h) >= 32:
             info["entry"] = struct.unpack(endian + "Q", h[24:32])[0]
-    except struct.error:
+    except struct.error:  # silent-ok: a truncated ELF header = no entry point
         pass
     return info
 
@@ -300,7 +301,8 @@ def extract_text_for_row(row):
         if stats.get("kind") == "elf":
             parts.append(stats.get("machine", ""))
         return " ".join(p for p in parts if p)
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "firmware: extract_text_for_row failed (no searchable text)", e, slug=row.get("slug"))
         return ""
 
 

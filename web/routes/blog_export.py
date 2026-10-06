@@ -1,17 +1,31 @@
 """Blog-entry and site-export routes (#547): /api/blog-entries* and /api/export/*."""
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse
 
-from core import blog, db, install_config, paths, site_export
+from core import besteffort, blog, db, install_config, paths, site_export
 from core.errors import AppError
 from web.shapes import _to_blog_entry_detail
 from core import roles
 from web.roles import RoleRouter, requires
+
+log = logging.getLogger("constructicon.web")
+
+
+async def _json_body_or_400(request):
+    """The request's JSON body: {} when it has none, a clean 400 when it isn't valid JSON (#551: it
+    used to be silently treated as {}, so a garbled config built the site with the defaults)."""
+    if not await request.body():
+        return {}
+    try:
+        return await request.json()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"request body is not valid JSON: {e}")
 
 router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
@@ -213,10 +227,7 @@ async def api_export_build(request: Request):
     Saves the submitted config to app settings for next time.
     """
     _require_json_content_type(request)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _json_body_or_400(request)
 
     try:
         report = site_export.build_site(body)
@@ -241,7 +252,8 @@ def api_export_config():
         if saved_json:
             return JSONResponse(json.loads(saved_json))
         return JSONResponse({})
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "export config: the saved config is unreadable, returning {}", e)
         return JSONResponse({})
 
 
@@ -275,10 +287,7 @@ async def api_export_publish(request: Request):
     }
     """
     _require_json_content_type(request)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _json_body_or_400(request)
 
     target = body.get("target")
 

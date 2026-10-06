@@ -99,7 +99,7 @@ def _scan(path, keep=21):
         sample = f.read(64 * 1024)
         try:
             delimiter = csv.Sniffer().sniff(sample).delimiter
-        except csv.Error:
+        except csv.Error:  # silent-ok: the sniffer can't tell; comma is the documented default
             delimiter = ","
         f.seek(0)
         # f.tell() raises while a text file is being iterated, so track the

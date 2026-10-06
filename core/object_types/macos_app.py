@@ -57,7 +57,7 @@ def sniff(path, filename):
     try:
         with zipfile.ZipFile(path) as z:
             return _app_root(z.namelist()) is not None
-    except zipfile.BadZipFile:
+    except zipfile.BadZipFile:  # silent-ok: not a zip = not a macOS app; this is a sniff, False is the answer
         return False
 
 

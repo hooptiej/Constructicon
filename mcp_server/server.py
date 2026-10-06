@@ -137,7 +137,7 @@ def _resolve_import_path(rel):
     # Ensure the resolved path stays within IMPORT_DIR bounds
     try:
         candidate.relative_to(IMPORT_DIR.resolve())
-    except ValueError:
+    except ValueError:  # silent-ok: outside IMPORT_DIR = None; both callers refuse or skip it
         # candidate is outside IMPORT_DIR
         return None
     # Verify it's a file and exists

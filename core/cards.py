@@ -2186,7 +2186,7 @@ def bulk(op, items, *, dry_run=True, partial_ok=False, actor=None, batch_id=None
                 results.append(entry)
             if failed and not partial_ok:
                 raise _BulkAbort()
-    except _BulkAbort:
+    except _BulkAbort:  # silent-ok: sentinel that unwinds the transaction; every failure is in `results`
         pass
     wrote = not dry_run and (not failed or partial_ok)
     for entry in results:
@@ -2220,7 +2220,7 @@ def _changes_from_log(rows):
                         return "open"
                     try:
                         res = (json.loads(img["payload"]).get("resolution") or {}) if img.get("payload") else {}
-                    except ValueError:
+                    except ValueError:  # silent-ok: display summary only; an unreadable payload shows as "?"
                         res = {}
                     return f"resolved ({res.get('choice') or res.get('stale') or '?'})"
                 slug = None
@@ -2322,7 +2322,7 @@ def resolve_decisions(items, *, accept_suggested=False, dry_run=True, partial_ok
                     entry.update(status="failed", error=e.to_dict())
             if failed and not partial_ok:
                 raise _BulkAbort()
-    except _BulkAbort:
+    except _BulkAbort:  # silent-ok: sentinel that unwinds the transaction; every failure is in `results`
         pass
     wrote = not dry_run and (not failed or partial_ok)
     if failed and not partial_ok and not dry_run:

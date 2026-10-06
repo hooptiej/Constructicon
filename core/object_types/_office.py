@@ -39,7 +39,7 @@ def is_ooxml(path, part):
     try:
         with zipfile.ZipFile(path) as z:
             names = set(z.namelist())
-    except zipfile.BadZipFile:
+    except zipfile.BadZipFile:  # silent-ok: not a zip = not OOXML; this is a sniff, False is the answer
         return False
     return "[Content_Types].xml" in names and part in names
 
@@ -71,7 +71,7 @@ def _w3c_date(text):
         return None
     try:
         return datetime.datetime.fromisoformat(text.strip().replace("Z", "+00:00")).timestamp()
-    except ValueError:
+    except ValueError:  # silent-ok: a malformed docProps date = no date, by contract
         return None
 
 

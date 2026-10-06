@@ -8,11 +8,15 @@ other metadata).
 """
 
 import json
+import logging
 import re
 from datetime import datetime
 from markupsafe import Markup, escape
 
+from .. import besteffort
 from . import register, ObjectTypeSpec, ThumbnailSource, MetadataField, TypeAction
+
+log = logging.getLogger("constructicon.youtube")
 from . import _preview
 
 
@@ -91,7 +95,8 @@ def fetch_published_date(video_id, api_key):
         return None
     try:
         return datetime.fromisoformat(published_at.replace("Z", "+00:00")).timestamp()
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError) as e:
+        besteffort.warn(log, "youtube: the API's publishedAt isn't a date (no publish date)", e, value=published_at)
         return None
 
 

@@ -44,6 +44,7 @@ see the PR for #239 for the runs that picked them.
 import base64
 import http.client
 import json
+import logging
 import os
 import socket
 import threading
@@ -51,7 +52,9 @@ import time
 import urllib.error
 import urllib.request
 
-from . import actor as actor_ctx, db, object_types, storage, thumbnails
+from . import actor as actor_ctx, besteffort, db, object_types, storage, thumbnails
+
+log = logging.getLogger("constructicon.captions")
 
 OLLAMA_URL = os.environ.get("CAPTION_OLLAMA_URL", "http://ollama:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("CAPTION_OLLAMA_MODEL", "moondream")
@@ -68,7 +71,9 @@ def _parse_env_int(var, default):
     """Safely parse an env var to int, fall back to default on garbage."""
     try:
         return int(os.environ.get(var, default))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        besteffort.warn(log, f"captions: env {var} is not an integer, using the default", e,
+                        value=os.environ.get(var), default=default)
         return default
 
 CAPTION_OLLAMA_MAX_MEM_MB = _parse_env_int("CAPTION_OLLAMA_MAX_MEM_MB", 3072)  # #454
@@ -177,7 +182,8 @@ def is_ollama_up(timeout=3):
     try:
         status, _ = _ollama_get("/api/tags", timeout=timeout)
         return status == 200
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "captions: Ollama health probe (treated as down)", e)
         return False
 
 
@@ -252,7 +258,8 @@ def _ollama_mem_mb():
             return int(net_usage / (1024 * 1024))
         finally:
             conn.close()
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "captions: reading Ollama memory usage from the Docker socket", e)
         return None
 
 

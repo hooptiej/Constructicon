@@ -88,7 +88,7 @@ def plausible_content_date(value):
         return None
     try:
         epoch = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError):  # silent-ok: not a number = no usable date, by contract
         return None
     if epoch < EARLIEST_PLAUSIBLE_CONTENT_DATE or epoch > time.time() + FUTURE_SLACK_SECONDS:
         return None

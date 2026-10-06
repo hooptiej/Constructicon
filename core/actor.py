@@ -28,6 +28,8 @@ import os
 import sys
 import threading
 
+from . import besteffort
+
 ACTOR_UI = "owner-ui"
 ACTOR_MCP = "mcp"
 ACTOR_SYSTEM = "system"      # boot, migrations' surrounding work, OCR/caption workers
@@ -48,7 +50,8 @@ def _process_default():
     """ACTOR_SCRIPT when this process was started as a script from scripts/, else None."""
     try:
         main = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
-    except Exception:
+    except Exception as e:
+        besteffort.warn(_log, "actor: reading sys.argv[0]", e)
         return None
     if main and os.path.dirname(main) == os.path.join(_REPO_DIR, "scripts"):
         return ACTOR_SCRIPT

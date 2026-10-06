@@ -90,7 +90,7 @@ def sniff(path, filename):
         try:
             with zipfile.ZipFile(path) as z:
                 names = set(z.namelist())
-        except zipfile.BadZipFile:
+        except zipfile.BadZipFile:  # silent-ok: not a zip = not an APPX; this is a sniff, False is the answer
             return False
         return _APPX_MANIFEST in names or _APPX_BUNDLE_MANIFEST in names
     return False
@@ -131,7 +131,7 @@ def _msi_strings(pool_data, str_data):
     encoding = "utf-8" if codepage == 65001 else ("cp1252" if codepage == 0 else f"cp{codepage}")
     try:
         "".encode(encoding)
-    except LookupError:
+    except LookupError:  # silent-ok: unknown codepage, documented fallback to cp1252
         encoding = "cp1252"
 
     strings, sid, off, i = {}, 1, 0, 1

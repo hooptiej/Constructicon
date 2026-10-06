@@ -135,7 +135,7 @@ def _parse_eps_dsc(text):
                     llx, lly, urx, ury = map(int, parts[:4])
                     w, h = urx - llx, ury - lly
                     props["Size"] = f"{w:g} × {h:g} pt ({w/72:.2f} × {h/72:.2f} in)"
-                except (ValueError, ZeroDivisionError):
+                except (ValueError, ZeroDivisionError):  # silent-ok: a malformed BoundingBox = no Size property
                     pass
         elif line.startswith("%%Title:"):
             title = line.split(":", 1)[1].strip()

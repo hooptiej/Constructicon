@@ -116,7 +116,7 @@ def _sheets_xls(path):
                         if cell.ctype == xlrd.XL_CELL_DATE:
                             try:
                                 v = xlrd.xldate.xldate_as_datetime(v, book.datemode)
-                            except Exception:
+                            except (ValueError, OverflowError):  # silent-ok: an out-of-range date cell shows its raw number
                                 pass
                         row.append(_cell(v))
                     grid.append(row)

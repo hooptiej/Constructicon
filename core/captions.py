@@ -52,7 +52,8 @@ import time
 import urllib.error
 import urllib.request
 
-from . import actor as actor_ctx, besteffort, db, object_types, storage, thumbnails
+from . import actor as actor_ctx, besteffort, db, object_types, policy, storage, thumbnails
+from .errors import Conflict
 
 log = logging.getLogger("constructicon.captions")
 
@@ -501,6 +502,51 @@ def should_caption(spec):
     if _breaker_reason:
         return False
     return bool(spec.caption_capable) and not DISABLED
+
+
+# --- Items that still need a caption (#585, #588) ---
+
+AGENT_MODEL = "mcp-agent"  # auto_caption_model for a caption an MCP agent wrote (#588)
+QUEUE_SKIPPED_MAX = 1000   # one Admin click queues at most this many; the click can be repeated
+
+
+def caption_capable_types():
+    """Registry keys of the types that can be captioned (STL and friends are explicitly not)."""
+    return sorted(k for k, spec in object_types.OBJECT_TYPES.items() if spec.caption_capable)
+
+
+def needs_caption(limit=50, include_failed=True):
+    """(#588) Caption-capable items with no done caption and no accepted description, newest
+    first: the status is absent or, with include_failed, failed/skipped (what a captions-off
+    install leaves behind, #585). Redacted items and anything the item policy hides are left out.
+    Works with captions disabled: that is exactly the install that needs an agent."""
+    limit = max(1, min(int(limit), 500))
+    rows = db.list_needs_caption(caption_capable_types(), include_failed=include_failed, limit=limit)
+    return policy.filter_visible(rows)[:limit]
+
+
+def count_needs_caption(include_failed=True):
+    """How many items needs_caption would list with no limit (Admin shows this)."""
+    return db.list_needs_caption(caption_capable_types(), include_failed=include_failed, count_only=True)
+
+
+def queue_skipped(limit=QUEUE_SKIPPED_MAX):
+    """(#585) Admin's "Caption skipped items": queue every caption-capable item whose caption was
+    never done or was marked failed/skipped and that has no description yet, for the web worker
+    (one at a time, behind the lock and breaker like any upload). Refuses with `captions_disabled`
+    when this install has captioning off. Returns {"queued", "remaining"}; at most QUEUE_SKIPPED_MAX
+    per call (`limit` can lower that, newest items first). Pipeline bookkeeping like the rest of this module: not change-logged."""
+    if DISABLED:
+        raise Conflict("Captions are off on this install (CAPTION_DISABLED), so there is nothing to run. "
+                       "Turn captioning on and restart, or caption items through the MCP tools.",
+                       code="captions_disabled")
+    rows = db.list_needs_caption(caption_capable_types(), include_failed=True,
+                                 limit=max(1, min(int(limit), QUEUE_SKIPPED_MAX)))
+    queued = 0
+    for row in policy.filter_visible(rows):
+        enqueue_caption(row["slug"])
+        queued += 1
+    return {"queued": queued, "remaining": count_needs_caption()}
 
 
 def _is_garbage(caption):

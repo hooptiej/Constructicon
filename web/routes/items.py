@@ -221,7 +221,15 @@ def _derive_processing_status(row):
         stages.append({"stage": "OCR", "state": "done" if s == "done" else "failed" if s == "failed" else "pending"})
     if spec and spec.caption_capable:
         cs = tm.get("auto_caption_status")
-        stages.append({"stage": "Caption", "state": "done" if cs == "done" else "failed" if cs == "failed" else "pending"})
+        if cs == "done":
+            state = "done"
+        elif captions.DISABLED:
+            # #585: captioning is switched off, so nothing will ever queue this item. "off" is
+            # settled (not in flight, not a failure); a caption an agent wrote still reads "done".
+            state = "off"
+        else:
+            state = "failed" if cs == "failed" else "pending"
+        stages.append({"stage": "Caption", "state": state})
     in_flight = any(st["state"] == "pending" for st in stages)
     if not stages:
         overall = "done"
@@ -265,7 +273,7 @@ def api_processing(request: Request, session: str = ""):
     # In-flight first, then settled; within each, session items ahead of the rest.
     order = {"processing": 0, "failed": 1, "done": 2}
     items.sort(key=lambda x: (order.get(x["overall"], 3), not x["is_session"]))
-    return JSONResponse({"items": items, "count": in_flight_count})
+    return JSONResponse({"items": items, "count": in_flight_count, "captions_disabled": captions.DISABLED})
 
 
 @router.get("/api/image/{slug}", dependencies=requires(roles.VIEWER))

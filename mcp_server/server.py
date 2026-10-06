@@ -34,11 +34,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # role and enqueues (caption_queue table) instead of calling the GPU; the web process drains it.
 os.environ["CONSTRUCTICON_ROLE"] = "mcp"
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Image as McpImage, MCPServer
 from mcp.types import CallToolResult, TextContent
 
 from core import actor as actor_ctx, policy
-from core import backup, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
+from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
 from core import blog, changes, hobbies, membership, reset
@@ -200,6 +200,7 @@ def _to_public(row):
         "icon": row.get("icon") or spec.badge_icon,
         "media_type": row.get("media_type") or "image",
         "description": row["description"],
+        "content_description": row.get("content_description"),  # #588: the item's own title/caption
         "tags": row["tags"],
         "client": row["client"],
         "redacted": bool(row["redacted"]),
@@ -473,14 +474,15 @@ def constructicon_list_import() -> dict:
 def constructicon_update(slug: str, description: str | None = None, tags: list[str] | None = None,
                    display_name: str | None = None, icon: str | None = None,
                    type_metadata: dict | None = None, display_date: float | None = None,
-                   reset_display_date: bool = False) -> dict | None:
+                   reset_display_date: bool = False, content_description: str | None = None) -> dict | None:
     """Update an object's metadata: description, tags, display name, icon, type-specific fields,
-    and/or its timeline display date.
+    its content description, and/or its timeline display date.
 
     Pass None for any field you don't want to change. type_metadata is MERGED by top-level key
     (same as the web app's POST /api/image/{slug}); set a key to "" to clear it.
-    content_description (e.g. a YouTube video's title) isn't exposed through this tool yet —
-    POST /api/image/{slug} can change it, this tool just doesn't take that parameter.
+    content_description (#587/#588) is the item's own description or caption (a YouTube video's
+    title, an accepted image caption): set it to correct or fill one in; "" clears it. It goes
+    through the same items.update as the web route.
 
     display_date sets a manual override for this object's position on the Constructicon
     timeline (unix timestamp, e.g. what time.time() or a datetime's .timestamp() returns).
@@ -500,6 +502,8 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
         fields["display_name"] = display_name
     if icon is not None:
         fields["icon"] = icon
+    if content_description is not None:
+        fields["content_description"] = content_description
     if type_metadata is not None:
         # #563: merge (top-level keys), same as the web route; #425 keys cleaned in core.
         fields["type_metadata"] = dict(type_metadata)
@@ -513,6 +517,119 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
     else:
         row = db.get_by_slug(slug)
     return _to_public(row) if row else None
+
+
+# --- Captioning by an agent (#588): list what needs a caption, look at it, write one ---
+
+VIEW_OCR_CHARS = 1500  # how much OCR text constructicon_view echoes next to the picture
+
+
+def _caption_context(row):
+    """The cards (and their hobbies) an item sits in, so an agent captions with context."""
+    cards_in, hobbies_in = [], []
+    for p in db.list_projects_for_post(row["slug"]):
+        cards_in.append({"slug": p.get("slug"), "title": p.get("title"), "kind": p.get("kind")})
+        for h in db.list_hobbies_for_project(p["id"]):
+            if h["name"] not in hobbies_in:
+                hobbies_in.append(h["name"])
+    return cards_in, hobbies_in
+
+
+@mcp.tool()
+def constructicon_list_needs_caption(limit: int = 50, include_failed: bool = True) -> dict:
+    """List caption-capable items (images, GIFs, PSD/SVG/EPS, video frames) that have no caption yet,
+    newest first, so an agent can caption them (#588). Needs no Ollama: it works with captions
+    switched off (CAPTION_DISABLED), the install that needs it most.
+
+    An item is listed when it has no accepted description AND its caption status is absent or, with
+    include_failed=True, "failed"/"skipped" (what a captions-off install leaves behind). Items already
+    captioned (waiting in /captions/review or accepted) and ones still queued are not listed.
+    Redacted and restricted items never appear (the item policy decides). limit is 1 to 500.
+
+    Returns {"items": [{slug, name, type, filename, caption_status, projects: [{slug, title, kind}],
+    hobbies: [names]}], "total": how many match in all}. Next:
+    constructicon_view(slug) to look, then constructicon_set_caption(slug, text).
+    """
+    rows = captions.needs_caption(limit=limit, include_failed=include_failed)
+    out = []
+    for row in rows:
+        cards_in, hobbies_in = _caption_context(row)
+        out.append({
+            "slug": row["slug"],
+            "name": items.title_of(row),
+            "type": row.get("media_type") or "image",
+            "filename": row.get("filename"),
+            "caption_status": (row.get("type_metadata") or {}).get("auto_caption_status"),
+            "projects": cards_in,
+            "hobbies": hobbies_in,
+        })
+    return {"items": out, "total": captions.count_needs_caption(include_failed=include_failed)}
+
+
+@mcp.tool()
+def constructicon_view(slug: str, size: str = "preview") -> list[McpImage | str]:
+    """Look at an item: returns its picture as MCP IMAGE content (PNG or JPEG the model can see)
+    plus a short text block (name, type, description, OCR text truncated) (#588).
+
+    size="preview" (default) is up to 1024 px on the long edge (the uploaded image itself, downscaled,
+    for image types); size="thumb" is the 400 px stored thumbnail. Non-image types are shown through
+    their own renderer: a PDF's first page, an STL render, a video frame, a PSD composite, wherever
+    the type has a thumbnail. The encoded picture is capped at about 1.5 MB.
+
+    Errors: not_found (no such item, or the item policy hides it), bad_size, not_viewable (redacted,
+    or the item has no visual, e.g. a certificate, an archive, a spreadsheet).
+    """
+    if size not in thumbnails.VIEW_SIZES:
+        raise InvalidInput(f"size must be one of: {', '.join(thumbnails.VIEW_SIZES)}", code="bad_size")
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise NotFound(f"No item {slug!r}.")
+    policy.require_view(row, message=f"No item {slug!r}.")  # #557
+    if row["redacted"]:
+        raise InvalidInput("This item was redacted: its file was removed, so there is nothing to look at.",
+                           code="not_viewable")
+    rendered = thumbnails.render_view(row, size)
+    if rendered is None:
+        raise InvalidInput(f"{object_types.get_object_type(row.get('media_type')).label} items have no picture to view.",
+                           code="not_viewable")
+    data, mime, (width, height) = rendered
+    tm = row.get("type_metadata") or {}
+    lines = [f"{items.title_of(row)} [{slug}]",
+             f"type: {row.get('media_type') or 'image'}; shown as {mime} {width}x{height}, {len(data) // 1024} KB ({size})"]
+    if row.get("content_description"):
+        lines.append(f"description: {row['content_description']}")
+    if tm.get(captions.METADATA_KEY):
+        lines.append(f"suggested caption ({tm.get(captions.STATUS_KEY) or 'unknown'}): {tm[captions.METADATA_KEY]}")
+    ocr_text = (row.get("extracted_text") or "").strip()
+    if ocr_text:
+        shown = ocr_text[:VIEW_OCR_CHARS]
+        lines.append("OCR text" + (f" (first {VIEW_OCR_CHARS} of {len(ocr_text)} characters)" if len(ocr_text) > VIEW_OCR_CHARS else "") + ":\n" + shown)
+    else:
+        lines.append("OCR text: none")
+    return [McpImage(data=data, format=mime.split("/")[1]), "\n".join(lines)]
+
+
+@mcp.tool()
+def constructicon_set_caption(slug: str, text: str, accept: bool = False) -> dict:
+    """Write a caption for an item (#588), for an agent that has looked at it (constructicon_view).
+    Works with CAPTION_DISABLED: no model runs.
+
+    The text is stored as the item's caption SUGGESTION (type_metadata.auto_caption, status "done",
+    model "mcp-agent"; change log actor "mcp"), so it shows up in the caption-review queue
+    (/captions/review) for the owner to approve, and the processing view reads it as done.
+    accept=True ALSO sets content_description to the text, exactly like "Use this caption" in that
+    review page (replaces the description, records which caption was used), so it is accepted in
+    one call. One change-log batch: constructicon_undo(batch_id) reverts all of it.
+
+    text: 1 to 2000 characters after trimming. Errors: not_found, bad_caption (empty or too long),
+    redacted. Returns the updated object plus "batch_id", "accepted" and "in_review_queue" (false
+    when the item already has a description, since the review queue only lists undescribed items).
+    """
+    row = items.get_item(slug)
+    policy.require_view(row, message=f"No item {slug!r}.")  # #557
+    result = items.set_caption(slug, text, accept=accept)
+    return {**_to_public(result.item), "batch_id": result.batch_id, "accepted": bool(accept),
+            "in_review_queue": not (result.item.get("content_description") or "").strip()}
 
 
 @mcp.tool()

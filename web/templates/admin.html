@@ -266,6 +266,10 @@
         </div>
         <span id="admin-caption-ollama-status" class="apikey-status">…</span>
       </div>
+      <div class="admin-apikey-input-row" id="admin-caption-skipped-row">
+        <span id="admin-caption-skipped-msg" class="backup-status">…</span>
+        <button type="button" class="btn-ms admin-apikey-save" id="admin-caption-skipped-run">Caption skipped items</button>
+      </div>
       <div class="admin-caption-layout">
         <div class="admin-caption-controls">
           <div class="admin-apikey-input-row">
@@ -801,6 +805,25 @@
   capTemp.addEventListener('input', () => { capTempVal.textContent = Number(capTemp.value).toFixed(2); });
   capTokens.addEventListener('input', () => { capTokensVal.textContent = capTokens.value; });
 
+  // #585: "Caption skipped items": queue everything never captioned (or failed/skipped).
+  // With captions off the server answers 409 captions_disabled and the reason is shown.
+  const capSkippedMsg = document.getElementById('admin-caption-skipped-msg');
+  const capSkippedRun = document.getElementById('admin-caption-skipped-run');
+  capSkippedRun.addEventListener('click', async () => {
+    capSkippedRun.disabled = true;
+    try {
+      const res = await fetch('/api/captions/queue-skipped', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        capSkippedMsg.textContent = `Queued ${body.queued} item(s) for captioning; ${body.remaining} still without one.`;
+      } else {
+        capSkippedMsg.textContent = (body.error && body.error.message) || body.detail || 'Could not queue captions.';
+      }
+    } catch (err) {
+      capSkippedMsg.textContent = 'Could not reach the server.';
+    } finally { capSkippedRun.disabled = false; }
+  });
+
   (async function loadCaptionDefaults() {
     try {
       const res = await fetch('/api/captions/defaults');
@@ -811,6 +834,10 @@
       capPrompt.value = d.prompt;
       capOllamaStatus.textContent = d.ollama_up ? `${d.model} up` + (d.docker_socket ? '' : ' (no restart)') : 'Ollama unreachable';
       capOllamaStatus.className = 'apikey-status' + (d.ollama_up ? ' apikey-status-set' : '');
+      if (d.disabled) { capOllamaStatus.textContent = 'Captions are off'; capOllamaStatus.className = 'apikey-status'; }
+      capSkippedMsg.textContent = d.disabled
+        ? `Captions are off on this install (CAPTION_DISABLED). ${d.needs_caption} item(s) have no caption; an agent can caption them through the MCP tools.`
+        : `${d.needs_caption} item(s) never got a caption, or it failed or was skipped.`;
     } catch (err) { /* leave the placeholder */ }
   })();
 

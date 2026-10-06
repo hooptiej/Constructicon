@@ -13,9 +13,15 @@ For UPLOADED_FILE types, ensure_thumbnail is called synchronously by the
 ingest pipeline so the upload response's thumb_url is ready immediately.
 """
 
-import httpx
+import io
+import logging
 
-from . import object_types, storage
+import httpx
+from PIL import Image
+
+from . import besteffort, object_types, storage
+
+log = logging.getLogger("constructicon.thumbnails")
 
 FETCH_TIMEOUT_SECONDS = 10
 
@@ -104,3 +110,74 @@ def _from_capture(row, spec):
         return False
     storage.save_thumbnail_from_bytes(row["slug"], image_bytes)
     return storage.thumb_path_for(row["slug"]).exists()
+
+
+# --- A picture for an agent to look at (#588) -------------------------------------------------
+
+VIEW_MAX_EDGE = 1024          # long edge of a "preview" picture
+VIEW_MAX_BYTES = 1_500_000    # encoded size cap, so one view never floods a model's context
+VIEW_SIZES = {"thumb": storage.THUMB_MAX_DIM, "preview": VIEW_MAX_EDGE}
+
+
+def _view_source(row, size):
+    """The best picture of the item to show: for "preview", the uploaded image itself when the
+    type's thumbnail IS the file (images, GIF, PSD, ...); otherwise (and for "thumb") the
+    type's generated thumbnail (PDF page, STL render, video frame, ...). None when it has none."""
+    spec = object_types.get_object_type(row.get("media_type"))
+    if size == "preview" and spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE and row.get("stored_filename"):
+        path = storage.path_for(row["stored_filename"])
+        if path.exists():
+            return path
+    ensure_thumbnail(row)
+    thumb = storage.thumb_path_for(row["slug"])
+    return thumb if thumb.exists() else None
+
+
+def _encode_view(img, edge, has_alpha, prefer_png=False):
+    """PNG for PNG sources and alpha/greyscale images (screenshots keep readable text) when it fits the byte cap, else
+    JPEG stepped down in quality, then in size, until it does. Returns (bytes, mime, (w, h))."""
+    img.thumbnail((edge, edge))
+    if prefer_png or has_alpha or img.mode in ("L", "1"):
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        if buf.tell() <= VIEW_MAX_BYTES:
+            return buf.getvalue(), "image/png", img.size
+    if has_alpha:
+        rgba = img.convert("RGBA")
+        flat = Image.new("RGB", img.size, (255, 255, 255))
+        flat.paste(rgba, mask=rgba.split()[-1])
+    else:
+        flat = img.convert("RGB")
+    while True:
+        for q in (85, 70, 55):
+            buf = io.BytesIO()
+            flat.save(buf, "JPEG", quality=q)
+            if buf.tell() <= VIEW_MAX_BYTES:
+                return buf.getvalue(), "image/jpeg", flat.size
+        if max(flat.size) <= 128:  # cannot happen in practice; return the smallest rather than loop
+            return buf.getvalue(), "image/jpeg", flat.size
+        flat = flat.resize((max(1, int(flat.width * 0.75)), max(1, int(flat.height * 0.75))))
+
+
+def render_view(row, size="preview"):
+    """(image bytes, mime type, (width, height)) of a picture of this item sized for an agent to
+    look at (long edge <= VIEW_MAX_EDGE, encoded <= VIEW_MAX_BYTES), or None when the item has no
+    visual (a certificate, an archive, a type with no renderer). `size` is "thumb" or "preview".
+    Reuses the types' own renderers via ensure_thumbnail. Never raises: an unreadable file is
+    "no visual"."""
+    edge = VIEW_SIZES[size]
+    path = _view_source(row, size)
+    if path is None:
+        return None
+    try:
+        with Image.open(path) as img:
+            source_is_png = img.format == "PNG"
+            img = storage.exif_upright(img)
+            img.load()
+            has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+            if img.mode not in ("RGB", "RGBA", "L", "LA", "1"):
+                img = img.convert("RGBA" if has_alpha else "RGB")
+            return _encode_view(img.copy(), edge, has_alpha, prefer_png=source_is_png)
+    except Exception as e:  # not an image Pillow can read: treated as "no visual"
+        besteffort.warn(log, "thumbnails: couldn't render a view picture", e, slug=row["slug"])
+        return None

@@ -42,13 +42,14 @@ import os
 import time
 from datetime import datetime
 
-from . import changes, db, embedded_metadata, ingest, membership, object_types, physical_piece, provenance_options
+from . import captions, changes, db, embedded_metadata, ingest, membership, object_types, physical_piece, provenance_options
 from . import paths, storage, thumbnails, timeline
 from . import tags as tags_svc
 from .cards import Result
 from .errors import AppError, Conflict, InvalidInput, NotFound
 
 OP_UPDATE = "item_update"
+OP_SET_CAPTION = "item_set_caption"
 OP_RELATE = "item_relate"
 OP_UNRELATE = "item_unrelate"
 OP_REDACT = "item_redact"
@@ -215,6 +216,48 @@ def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **field
             muts = list(log.muts)
         item = db.get_by_slug(slug)
     return _result(OP_UPDATE, muts, batch_id, dry_run, item, slug=slug)
+
+
+CAPTION_MAX_CHARS = 2000
+
+
+def set_caption(slug, text, *, accept=False, dry_run=False, actor=None, batch_id=None):
+    """(#588) Writes `text` as the item's caption SUGGESTION, the way the vision model's result
+    lands (type_metadata.auto_caption, status "done", model "mcp-agent"), so it shows up in the
+    caption-review queue (/captions/review) and the processing view reads it as done. With
+    accept=True it is also copied into content_description exactly like "Use this caption" in
+    the review page (replaces the description, records which caption was used). ONE imaged batch
+    through update(), so one undo reverts all of it; works with CAPTION_DISABLED, since no model runs.
+    A new suggestion re-opens a previously skipped one (auto_caption_dismissed cleared)."""
+    text = (text or "").strip()
+    if not text:
+        raise InvalidInput("The caption text is empty.", code="bad_caption")
+    if len(text) > CAPTION_MAX_CHARS:
+        raise InvalidInput(f"The caption is {len(text)} characters; the limit is {CAPTION_MAX_CHARS}.", code="bad_caption")
+    row = get_item(slug)
+    if row.get("redacted"):
+        raise InvalidInput("File was redacted: there's no image left to caption.", code="redacted")
+    existing = row.get("type_metadata") or {}
+    tm = {
+        captions.METADATA_KEY: text,
+        captions.STATUS_KEY: "done",
+        "auto_caption_model": captions.AGENT_MODEL,
+        "auto_caption_dismissed": None,  # null = not dismissed (the review query tests IS NULL)
+    }
+    if "auto_caption_failed_reason" in existing:
+        tm["auto_caption_failed_reason"] = None
+    fields = {"type_metadata": tm}
+    if accept:
+        fields["content_description"] = text
+        tm.update({
+            captions.DESCRIPTION_STEP_KEY: None,
+            captions.DESCRIPTION_STEP_LABEL_KEY: "written by an agent (MCP)",
+            captions.DESCRIPTION_MODEL_KEY: captions.AGENT_MODEL,
+            captions.DESCRIPTION_USED_AT_KEY: time.time(),
+        })
+    res = update(slug, dry_run=dry_run, actor=actor, batch_id=batch_id, **fields)
+    res.data.update(accepted=bool(accept))
+    return res
 
 
 # --- related items (#16) -----------------------------------------------------------------

@@ -2250,6 +2250,36 @@ def list_unaccepted_captions(limit=500):
         conn.close()
 
 
+def list_needs_caption(media_types, include_failed=True, limit=50, count_only=False):
+    """#585/#588: caption-capable rows that have no caption yet and no accepted description: the
+    caption status is absent, or (include_failed) "failed"/"skipped". Pending rows are in flight,
+    done rows have their caption (waiting in review or accepted), so neither is listed. Redacted
+    rows and restricted types never appear (policy.sql_browse_clause). `media_types` is the set of
+    caption-capable type keys; a NULL media_type reads as "image", as everywhere else.
+    count_only returns just the number of matches (limit ignored)."""
+    types = sorted(set(media_types))
+    if not types:
+        return 0 if count_only else []
+    status = "json_extract(type_metadata, '$.auto_caption_status')"
+    status_ok = f"({status} IS NULL OR {status} = ''" + (f" OR {status} IN ('failed', 'skipped')" if include_failed else "") + ")"
+    type_ok = f"(media_type IN ({', '.join('?' * len(types))})" + (" OR media_type IS NULL OR media_type = ''" if "image" in types else "") + ")"
+    where = ("WHERE redacted = 0" + policy.sql_browse_clause() + f" AND {type_ok} "
+             "AND (content_description IS NULL OR content_description = '') "
+             f"AND {status_ok}")
+    conn = get_conn()
+    try:
+        if count_only:
+            return conn.execute(f"SELECT COUNT(*) FROM capture_events {where}", types).fetchone()[0]
+        rows = conn.execute(
+            "SELECT slug, display_name, filename, content_description, media_type, type_metadata, tags, "
+            f"extracted_text, timestamp FROM capture_events {where} ORDER BY timestamp DESC LIMIT ?",
+            (*types, int(limit)),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 # --- Blog tags ---
 # A loose, nestable tag tree (Section > Category > ... as deep as someone
 # wants to go) separate from capture_events' own flat `tags` JSON column,

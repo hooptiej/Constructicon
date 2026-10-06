@@ -285,9 +285,11 @@ def api_caption_defaults():
         "prompt": captions.DEFAULT_PROMPT,
         "temperature": captions.DEFAULT_TEMPERATURE,
         "num_predict": captions.DEFAULT_NUM_PREDICT,
-        "ollama_up": captions.is_ollama_up(),
+        "ollama_up": False if captions.DISABLED else captions.is_ollama_up(),
         "docker_socket": captions.docker_socket_available(),
         "breaker": captions.breaker_status(),
+        "disabled": captions.DISABLED,  # #585: CAPTION_DISABLED=1 on this install
+        "needs_caption": captions.count_needs_caption(),
     })
 
 
@@ -332,6 +334,15 @@ def api_caption_test(
         "thumb_url": f"/f/{row['slug']}/thumb" if _has_thumbnail(row, spec) else None,
         "settings": {"temperature": temperature, "num_predict": num_predict, "prompt": prompt.strip() or captions.DEFAULT_PROMPT},
     })
+
+
+@router.post("/api/captions/queue-skipped", dependencies=requires(roles.ADMIN))
+def api_captions_queue_skipped(limit: int = Form(captions.QUEUE_SKIPPED_MAX)):
+    """#585: Admin's "Caption skipped items". Queues every caption-capable item whose caption was
+    never done or was marked failed/skipped (and that has no description yet) for the web worker.
+    409 captions_disabled, with the reason, when this install has captioning off. The optional
+    `limit` form field lowers the per-click cap (newest items first), for a cautious run."""
+    return JSONResponse({"ok": True, **captions.queue_skipped(limit)})
 
 
 @router.post("/api/captions/reset-breaker")

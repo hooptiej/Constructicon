@@ -638,6 +638,29 @@ configuration gap for that session, not evidence the server itself is gone.
   `db.search()`'s row-limit-before-filter bug, whether there's a tool for
   setting a project's cover/write-up) — check it before assuming a
   capability needs building from scratch.
+- **Captioning through MCP (#588, #585, #587 item 5).** On an install with no Ollama
+  (`CAPTION_DISABLED=1`) an agent that can see images does the captioning:
+  1. `constructicon_list_needs_caption(limit=50, include_failed=True)`: caption-capable items with no
+     accepted description and a caption status that is absent (or failed/skipped), with project and
+     hobby context and `total`. Redacted and restricted items never appear.
+  2. `constructicon_view(slug, size="preview")`: the picture as MCP **image content** (PNG/JPEG,
+     long edge 1024 px, at most about 1.5 MB; `size="thumb"` is the 400 px thumbnail) plus a text
+     block (name, type, description, OCR text truncated). It uses the types' own thumbnail renderers
+     (`thumbnails.render_view`), so a PDF page, an STL render or a video frame work wherever the type
+     has a thumbnail; `not_viewable` when there is no picture (or the item is redacted).
+  3. `constructicon_set_caption(slug, text, accept=False)` (`items.set_caption`): stores the text as
+     `type_metadata.auto_caption`, status `done`, model `mcp-agent`, in ONE imaged batch (actor
+     `mcp`, undoable). `accept=False` leaves it in `/captions/review` for the owner to approve;
+     `accept=True` also sets `content_description`, like "Use this caption" there. No model runs, so
+     it works with captions off.
+  4. `constructicon_update(..., content_description=...)` corrects a description or caption (same
+     `items.update` merge and validation as the web route).
+  With captions off, the processing drawer shows the Caption stage as `off` (settled, not pending),
+  with a one-line note, and Admin > Caption tuning explains it and disables nothing else. When
+  captions are on, Admin's "Caption skipped items" (`POST /api/captions/queue-skipped`, admin;
+  `captions.queue_skipped()`) queues every caption-capable item that never got a caption (or whose
+  caption failed or was skipped) and has no description; with captions off it answers 409
+  `captions_disabled`. Check with `scripts/test_captions_mcp.py` (throwaway DB).
 - `mcp_server/server.py` still carries some stale-vocabulary rough edges
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.

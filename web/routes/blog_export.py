@@ -7,7 +7,8 @@ from pathlib import Path
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse
 
-from core import blog, db, site_export
+from core import blog, db, install_config, site_export
+from core.errors import AppError
 from web.shapes import _to_blog_entry_detail
 from core import roles
 from web.roles import RoleRouter, requires
@@ -247,21 +248,11 @@ def api_export_config():
 @router.get("/api/export/targets", dependencies=requires(roles.ADMIN))
 def api_export_targets():
     """Retrieve the configured GitHub Pages publish targets.
-    Returns a dict mapping target names to {repo, branch}.
-    Never returns the token.
+    Returns a dict mapping target names to {repo, branch}; {} when none is configured.
+    Never returns the token. #562: they are install config (Admin > Install), no longer
+    hard-wired defaults pointing at the owner's own repositories.
     """
-    default_targets = {
-        "test": {"repo": "hooptiej/constructicon-export-test", "branch": "master"},
-        "live": {"repo": "hooptiej/hooptiej.github.io", "branch": "master"}
-    }
-    try:
-        targets_json = db.get_setting("pages_publish_targets")
-        if targets_json:
-            targets = json.loads(targets_json)
-            return JSONResponse(targets)
-        return JSONResponse(default_targets)
-    except Exception:
-        return JSONResponse(default_targets)
+    return JSONResponse(install_config.publish_targets())
 
 
 @router.post("/api/export/publish", dependencies=requires(roles.ADMIN))
@@ -291,6 +282,13 @@ async def api_export_publish(request: Request):
 
     target = body.get("target")
 
+    # #562: the targets are install config (Admin > Install). None configured = refuse; never a
+    # fallback to anyone else's repository.
+    targets = install_config.publish_targets()
+    if not targets:
+        raise AppError("no_publish_target",
+                       "No publish target configured. Set one in Admin → Install.", status=400)
+
     # Guard: token required
     token = db.get_setting("pages_publish_token")
     if not token:
@@ -300,21 +298,6 @@ async def api_export_publish(request: Request):
         )
 
     # Guard: target must be known
-    try:
-        targets_json = db.get_setting("pages_publish_targets")
-        if targets_json:
-            targets = json.loads(targets_json)
-        else:
-            targets = {
-                "test": {"repo": "hooptiej/constructicon-export-test", "branch": "master"},
-                "live": {"repo": "hooptiej/hooptiej.github.io", "branch": "master"}
-            }
-    except Exception:
-        targets = {
-            "test": {"repo": "hooptiej/constructicon-export-test", "branch": "master"},
-            "live": {"repo": "hooptiej/hooptiej.github.io", "branch": "master"}
-        }
-
     if target not in targets:
         raise HTTPException(
             status_code=400,

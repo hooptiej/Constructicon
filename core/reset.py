@@ -10,11 +10,12 @@ MCP constructicon_backup).
 Requires the typed phrase CONFIRM_PHRASE ("DELETE EVERYTHING", #558) on every path.
 
 What it clears (CLEARED_TABLES): every item and everything that hangs off items, cards, tags and
-hobbies (hobbies are blog_tags rows, so they go with the tags: both old copies did this), blog
+hobbies (hobbies are blog_tags rows, so they go with the tags: both old copies did this, and so do
+their hobby_settings, #562), blog
 entries, card/item questions and their snoozes, the caption queue and the trash. On disk: each
 item's file and thumbnail, and the whole <storage>/.trash directory (held redacted files too).
 
-What it keeps (KEPT_TABLES): settings, the client list, the editable provenance lists, the
+What it keeps (KEPT_TABLES): settings, the install config (#562), the client list, the editable provenance lists, the
 migration record and the audit/change log (the reset's own record lives there). A table in
 neither list fails scripts/test_membership_tags.py, so a new table has to be classified.
 """
@@ -32,10 +33,11 @@ CLEARED_TABLES = (
     "post_tags", "project_items", "capture_event_relations", "item_revisions", "caption_queue",
     "blog_entry_items", "blog_entry_projects", "blog_entries",
     "project_relations", "family_members", "project_hobbies",
-    "curator_dismissals", "pending_decisions", "trash",
+    "curator_dismissals", "pending_decisions", "trash", "hobby_settings",
     "capture_events", "projects", "blog_tags",
 )
-KEPT_TABLES = ("app_settings", "audit_log", "clients", "client_domains", "provenance_options", "schema_migrations")
+KEPT_TABLES = ("app_settings", "audit_log", "clients", "client_domains", "install_config", "provenance_options",
+               "schema_migrations")
 
 
 def delete_everything(confirm="", *, actor=None):

@@ -8,7 +8,8 @@ the real FastAPI app through TestClient, no server and no network:
 
 Covers: the fields save through POST /api/image/{slug} and render in the PHYSICAL PIECE group,
 escaping of hostile values, validation of date made, medium suggestions (most used first),
-the group's visibility rule, and the date-made effect on the item's effective date.
+the group's visibility rule (a per-hobby setting since #562, with undo), the in-app capture
+guide, and the date-made effect on the item's effective date.
 """
 import os
 import sys
@@ -125,21 +126,42 @@ check("page's edit form has all four inputs",
       all(f'id="physical-{k}"' in html for k in ("medium", "dimensions", "date_made", "original_location")))
 check("JS registers the group", "DP.register('physical'" in html)
 
-# ---- visibility via the Traditional Media hobby --------------------------------------------
+# ---- visibility via a hobby's "shows physical-piece fields" setting (#562) -----------------
 other = make_item("piece2", title="Empty piece")
 pid = db._create_project("Drawings")["id"]
 db._add_item_to_project(pid, other)
 check("not shown for a project outside the hobby", SECTION not in client.get(f"/object/{other}").text)
 tag_id = hobbies.create("Traditional Media").data["hobby"]["id"]
 hobbies.add_card(tag_id, pid)
+check("#562: the hobby's NAME no longer switches it on", SECTION not in client.get(f"/object/{other}").text)
+r = client.post(f"/api/hobby/{tag_id}/physical-piece", data={"enabled": "true"})
+check("the setting saves (editor route)", r.status_code == 200 and r.json()["shows_physical_piece"] is True
+      and r.json()["batch_id"], (r.status_code, r.text[:200]))
 html2 = client.get(f"/object/{other}").text
-check("shown for an item in a Traditional Media project, all four blank",
+check("shown for an item in a flagged hobby's project, all four blank",
       SECTION in html2 and html2.count("&mdash;") >= 4)
+again = client.post(f"/api/hobby/{tag_id}/physical-piece", data={"enabled": "true"})
+check("setting it again writes nothing", again.status_code == 200 and again.json()["batch_id"] is None)
 
-# ---- the hobby page link -------------------------------------------------------------------
+# ---- the hobby page: SETTINGS group + the in-app capture guide link -------------------------
 hp = client.get("/hobby/traditional-media")
 check("hobby page renders", hp.status_code == 200, hp.status_code)
-check("hobby page links the capture recipe", "docs/capture-traditional-media.md" in hp.text)
+check("hobby page links the in-app capture guide", 'href="/guides/capture-physical-piece"' in hp.text
+      and "github.com" not in hp.text)
+check("hobby page shows the setting", 'id="hobby-physical-piece-input"' in hp.text and "Shown on its items" in hp.text)
+guide = client.get("/guides/capture-physical-piece")
+check("the guide is served by the app", guide.status_code == 200 and "<h1>Capturing a physical piece</h1>" in guide.text,
+      guide.status_code)
+check("an unknown guide is a 404", client.get("/guides/nope").status_code == 404)
+other_hobby = hobbies.create("Model Railways").data["hobby"]
+hp2 = client.get(f"/hobby/{other_hobby['slug']}").text
+check("an unflagged hobby has no guide link", "/guides/capture-physical-piece" not in hp2 and "Not shown" in hp2)
+
+# ---- undo switches it back off ---------------------------------------------------------------
+from core import cards  # noqa: E402
+cards.undo(r.json()["batch_id"])
+check("undo turns the setting off again", not hobbies.shows_physical_piece(tag_id)
+      and SECTION not in client.get(f"/object/{other}").text)
 
 print("FAILED: %s" % FAILS if FAILS else "all passed")
 sys.exit(1 if FAILS else 0)

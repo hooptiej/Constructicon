@@ -14,6 +14,7 @@ group_code; cards join it through `project_hobbies` (#360, V2 cards 3.3 / 3.9).
                                        and cards that named it as their home lose that override
   add_card(hobby, card) / remove_card  = cards.add_to_hobby / remove_from_hobby (already logged)
   set_activity / set_group_code        = cards.set_hobby_activity / set_group_code (already logged)
+  set_physical_piece(hobby, enabled)   #562: the "shows physical-piece fields" setting (hobby_settings)
   convert_from_card(card)              project -> hobby (was db.convert_project_to_hobby, not
                                        undoable); now fully imaged
   convert_to_card(hobby, kind, title, into_hobby)   hobby -> card, the reverse (see below)
@@ -52,6 +53,7 @@ OP_CREATE = "hobby_create"
 OP_UNMARK = "hobby_unmark"
 OP_FROM_CARD = "convert_project_to_hobby"
 OP_TO_CARD = "convert_hobby_to_card"
+OP_PHYSICAL_PIECE = "hobby_physical_piece"  # #562
 
 CONVERT_KINDS = ("family", "collection", "project")
 
@@ -158,6 +160,33 @@ def add_card(hobby, card, *, dry_run=False, actor=None, batch_id=None):
 def remove_card(hobby, card, *, dry_run=False, actor=None, batch_id=None):
     """Takes a card out of a hobby (logged; a no-op if it wasn't in it)."""
     return cards.remove_from_hobby(card, hobby, dry_run=dry_run, actor=actor, batch_id=batch_id)
+
+
+def shows_physical_piece(hobby):
+    """#562: is this hobby's "shows physical-piece fields" setting on?"""
+    return db.hobby_shows_physical_piece(get_hobby(hobby)["id"])
+
+
+def set_physical_piece(hobby, enabled, *, dry_run=False, actor=None, batch_id=None):
+    """#562: switches the hobby's "shows physical-piece fields" setting (hobby_settings): items
+    in its cards get the PHYSICAL PIECE group (medium, dimensions, date made, original) and the
+    hobby page links the capture guide. Was a name match on "Traditional Media". One imaged row,
+    undoable; setting it to what it already is writes nothing. data: {hobby, shows_physical_piece}."""
+    hob = get_hobby(hobby)
+    want = 1 if enabled else 0
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_PHYSICAL_PIECE, actor, batch_id, [hob["slug"]]) as log:
+            key = {"hobby_tag_id": hob["id"]}
+            cur = log.get("hobby_settings", key)
+            if cur is None:
+                if want:
+                    log.insert("hobby_settings", key, {"shows_physical_piece": 1})
+            else:
+                log.update("hobby_settings", key, {"shows_physical_piece": want})
+        rows = db.get_change_rows(batch_id=batch_id)
+    return Result(True, _flat(rows), [] if rows else ["Nothing changed."], batch_id if rows else None, dry_run,
+                  {"hobby": hob["slug"], "shows_physical_piece": bool(want)})
 
 
 

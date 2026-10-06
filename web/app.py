@@ -167,7 +167,9 @@ async def startup():
 
 def _startup_as_system():
     db.init_db()
-    db.ensure_special_clients()
+    # #562: the imagerepo IT-client seed ("Unknown", "Not Business", "Internal Infrastructure")
+    # is no longer inserted on every boot: nothing in Constructicon reads those rows (only
+    # /api/clients lists them, and no page calls it). sync_clients.py still seeds them.
     # #551 item 3: once at startup, after the migrations; then hourly (_decision_sweep_loop).
     _sweep_stale_decisions()
     # Self-heal: a redeploy/restart while OCR was still queued or running for

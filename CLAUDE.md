@@ -19,9 +19,9 @@ the owner first.
 
 Long-term goal (see `README.md` for the full writeup): this is the dynamic
 backend for a future blog-driven personal site. A future static-export step
-will freeze content out of here and publish it to
-`hooptiej/hooptiej.github.io` (GitHub Pages). That export step doesn't
-exist yet.
+will freeze content out of here and publish it to GitHub Pages (the owner's
+`hooptiej/hooptiej.github.io`; the targets are per-install config since #562, see
+"Install config" below).
 
 ## Architecture at a glance
 
@@ -434,7 +434,8 @@ To add a new object type (issue #448 contract v2):
     `'external'`), distinct from `tech`.
   - `tech` — repurposed. Originally "which technician uploaded this" in
     imagerepo's multi-user days; now a free-text **Source** label ("who or
-    what added this row, and how"). See `SOURCE_*` constants and
+    what added this row, and how"). See `source_manual_upload()` /
+    `source_automated_upload()` (the owner label is install config, #562), `SOURCE_AUTHORED`,
     `source_migrated_from()`/`source_group()` for the fixed vocabulary
     (manual web upload, automated desktop-uploader upload, migrated by
     Claude from a named source, or authored by Claude directly).
@@ -497,7 +498,7 @@ To add a new object type (issue #448 contract v2):
 - **`clients`, `client_domains`** — vestigial imagerepo IT-client list
   (Hudu-synced company names, used for OCR auto-tagging). Not part of
   Constructicon's actual personal-gallery use case; present because it
-  rode along with the fork.
+  rode along with the fork. The three 'special' rows are no longer seeded at boot (#562).
 - **`app_settings`** — generic key/value store for app-level secrets (e.g.
   the YouTube Data API key), so new integrations don't need a
   docker-compose env var wired in from outside. `GET /api/settings` only
@@ -536,8 +537,8 @@ To add a new object type (issue #448 contract v2):
   kind) guards `cards.create` (`db._create_project`) and `cards.nest`;
   `card_rules.validate_membership` guards `cards.add_to_family`. Violations are
   `CardError` codes (`nest_*` -> 409, `bad_membership` -> 422), same over HTTP
-  and MCP. The AlienWhoop `card_family_members` decision is queued by
-  `card_migration.run_v2c_3` (never moves anything); resolving it runs
+  and MCP. The AlienWhoop `card_family_members` decision was queued by the
+  one-time v2c_3 step, now `scripts/archive/v2c_owner_questions.py` (#562; never moves anything); resolving it runs
   unnest -> set_kind family -> add_to_family in one change-log batch.
 
 - **Provenance options (#529)** — the card list (`projects.provenance`) and the
@@ -635,6 +636,51 @@ runs that app via uvicorn itself, same host/port).
   to users (hook comment in `auth.py`). Restricted items via `constructicon_download` now go
   through the item policy (`core/policy.py`, #557); it still serves them until #467 flips
   `RESTRICTED_VIEW_ROLE`.
+
+## Install config (#562, groundwork for #467)
+
+One install per customer, so **nothing owner-specific lives in code**. Who the install belongs to
+and where it publishes is data: the `install_config` key/value table, owned by
+`core/install_config.py`, edited in **Admin > Install** (`GET/POST /api/install-config`, admin role,
+JSON body). No secrets there: the publish token stays a write-only API key (`app_settings`).
+- **Keys:** `owner_name` (home page gallery tab + its initials), `owner_label` (the "who" prefix of
+  every upload's Source label, defaults to `owner_name`), `site_title` (static export title),
+  `copyright_holder` (export footer "(c) <holder>.", nothing when unset), `publish_targets`
+  (`{name: {repo: "owner/repo", branch}}`). Owner's installs, seeded: "Hooptie J", "Hooptie J (me)",
+  "hooptiej.com", "hooptiej", test = `hooptiej/constructicon-export-test`, live =
+  `hooptiej/hooptiej.github.io` (both `master`).
+- **Reads** are cached per process (`CACHE_SECONDS`, cleared on write and by `cards.undo`):
+  `owner_label()`, `display_owner_name()`, `owner_initials()`, `site_title()`, `copyright_holder()`,
+  `publish_targets()`, `setup_needed()`. Upload labels come from `db.source_manual_upload()` /
+  `db.source_automated_upload()` / `db.source_groups()` (were the `SOURCE_*` constants): on the
+  owner's installs byte-identical to before ("Hooptie J (me) — manual upload").
+- **Writes:** `install_config.update({key: value})` ("" clears): validated (`bad_install_key`,
+  `bad_install_config`, `bad_publish_target`), one imaged change-log row (op
+  `install_config_update`), undoable with the generic undo.
+- **Fresh install** (empty DB): no rows. Neutral fallbacks ("Owner", "Owner — manual upload",
+  site title "Constructicon", no footer holder); publishing refuses with `no_publish_target` ("Set one
+  in Admin → Install"), never a fallback to someone else's repo; the admin page shows a
+  dismissible "Finish setting up this install" banner until `owner_name` is set. #467's first-run
+  setup (first admin account) builds on `setup_needed()`.
+- **Existing installs** were seeded once by the `install_config_seed_562` migration (only when the
+  DB already holds items or cards) with exactly the values the code used to hard-wire
+  (`install_config.LEGACY_VALUES`; publish targets from the old `pages_publish_targets` app setting
+  when it was set). Note: that includes the owner's work install, which got the owner's publish
+  targets too (as before); change them there in Admin > Install.
+- **Per-hobby settings** (`hobby_settings`, `core/hobbies.py` `set_physical_piece`, `POST
+  /api/hobby/{id}/physical-piece`, editor, undoable): "shows physical-piece fields" puts the
+  PHYSICAL PIECE group on items in that hobby's cards (`physical_piece.in_physical_piece_hobby`)
+  and links the in-app capture guide (`GET /guides/capture-physical-piece`, from
+  `web/guides/capture-physical-piece.md`). Was a name match on "Traditional Media"; the
+  `hobby_physical_piece_562` migration switched it on for that hobby on the owner's installs.
+  Toggle it on the hobby page's SETTINGS group.
+- **Owner-archive migrations** live in `scripts/archive/` (`v2c_owner_questions.py`: the
+  AlienWhoop family and AW canopy questions, formerly `v2c_3` / `v2c_4` in `db.MIGRATIONS`), not in
+  `init_db`. A data migration about specific archive content goes there, never into `MIGRATIONS`.
+- **IT-client seed:** the "Unknown" / "Not Business" / "Internal Infrastructure" rows are no
+  longer inserted on every boot (nothing reads them; only `/api/clients` lists them, and no page
+  calls it). `sync_clients.py` still seeds them.
+- Check with `scripts/test_install_config.py` (throwaway DBs: a fresh install and a legacy one).
 
 ## Web owns background work; MCP enqueues (#549)
 

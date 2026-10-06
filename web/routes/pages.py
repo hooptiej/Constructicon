@@ -4,7 +4,9 @@ brand, wallpaper, account, admin, curator, captions review, plus the legacy redi
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from core import card_rules, cards, curation_queue, curator, db, object_types, revisions, timeline
+from pathlib import Path
+
+from core import card_rules, cards, curation_queue, curator, db, install_config, markdown_render, object_types, revisions, timeline
 from core import physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
 from web.common import _build_breadcrumbs, _rev_note, templates
@@ -82,12 +84,11 @@ def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
                     "show_level": False, "stats": [], "facts": [], "codes": [],
                 },
             })
-    # Owner name/initials for the combined gallery+upload pop-out's tab
-    # (#17) — SOURCE_GROUPS[0] is the site's single-owner display label
-    # (e.g. "Hooptie J (me)"); strip the "(me)" qualifier for the tab's
-    # name text and derive initials from what's left ("Hooptie J" -> "HJ").
-    _owner_label = db.SOURCE_GROUPS[0].split(" (")[0]
-    _owner_initials = "".join(w[0] for w in _owner_label.split()[:2]).upper()
+    # Owner name/initials for the combined gallery+upload pop-out's tab (#17): the install's
+    # owner name (#562, core/install_config.py; "Owner" until one is set), initials derived from
+    # it ("Hooptie J" -> "HJ").
+    _owner_label = install_config.display_owner_name()
+    _owner_initials = install_config.owner_initials()
     # #256: Unfiled and Files used to be two separate right-column widgets
     # (#41 and #107) — merged into one "Files" widget covering every upload,
     # type-tabbed, with unfiled items marked inline (see the lamp next to
@@ -453,6 +454,8 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
             "dates_label": hobby_face["dates"],
             "dates_start": _friendly_date(start) if start else None,
             "dates_end": _friendly_date(end) if end else None,
+            # #562: the per-hobby "shows physical-piece fields" setting (was a name match).
+            "shows_physical_piece": db.hobby_shows_physical_piece(hobby["id"]),
         },
     )
 
@@ -523,11 +526,12 @@ def object_detail_page(request: Request, slug: str):
         trail.append({"label": home["title"], "href": f"/project/{home['slug']}"})
         trail.append({"label": item["display_name"], "href": None})
         breadcrumbs = trail
-    # #425: the PHYSICAL PIECE group shows when any field is set or the item is in Traditional Media.
+    # #425: the PHYSICAL PIECE group shows when any field is set or the item is in a hobby whose
+    # "shows physical-piece fields" setting is on (#562; was the hobby named Traditional Media).
     physical = {
         "rows": physical_piece.rows(item["type_metadata"]),
         "show": physical_piece.has_any(item["type_metadata"])
-                or physical_piece.in_traditional_media(db, slug, item.get("tags")),
+                or physical_piece.in_physical_piece_hobby(db, slug, item.get("tags")),
         "medium_suggestions": physical_piece.medium_suggestions(db),
     }
     redact_hold = db.get_redact_hold(slug) if row.get("redacted") else None
@@ -561,7 +565,29 @@ def admin_page(request: Request, embed: int = 0):
     #345: ?embed=1 renders a chrome-less version (no header, no nav rail,
     no other drawers) so it can be loaded inside the Admin nav-rail drawer's
     iframe without nested chrome. The panels/JS are identical either way."""
-    return templates.TemplateResponse(request, "admin.html", {"embed": bool(embed)})
+    # #562: "Finish setting up this install" banner until the owner name is set (Admin > Install).
+    return templates.TemplateResponse(request, "admin.html", {"embed": bool(embed),
+                                                              "install_setup_needed": install_config.setup_needed()})
+
+
+# #562: in-app guides (served from the app, not the owner's GitHub). slug -> (file, title).
+GUIDES_DIR = Path(__file__).resolve().parent.parent / "guides"
+GUIDES = {
+    "capture-physical-piece": ("capture-physical-piece.md", "Capturing a physical piece"),
+}
+
+
+@router.get("/guides/{guide}", response_class=HTMLResponse)
+def guide_page(request: Request, guide: str):
+    """#562: a how-to guide shipped with the app (web/guides/*.md), rendered as safe Markdown.
+    Only the guides listed in GUIDES exist; anything else is a 404. The hobby page links the
+    physical-piece capture guide when its "shows physical-piece fields" setting is on."""
+    entry = GUIDES.get(guide)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="guide not found")
+    text = (GUIDES_DIR / entry[0]).read_text(encoding="utf-8")
+    return templates.TemplateResponse(request, "guide.html", {
+        "title": entry[1], "body": markdown_render.render(text, breaks=False)})
 
 
 @router.get("/curator", response_class=HTMLResponse)

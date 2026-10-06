@@ -30,7 +30,7 @@
           <a role="menuitem" href="/curator">Open the Curator queue</a>
           <a role="menuitem" href="/hobbies">All hobbies</a>
           <button type="button" role="menuitem" id="hobby-convert-btn" title="Turn this hobby into a family, collection or project card">Convert to card&hellip;</button>
-          {% if hobby.name | lower == 'traditional media' %}<a role="menuitem" href="https://github.com/hooptiej/Constructicon/blob/main/docs/capture-traditional-media.md" target="_blank" rel="noopener">How to capture a physical piece</a>{% endif %}
+          {% if shows_physical_piece %}<a role="menuitem" href="/guides/capture-physical-piece">How to capture a physical piece</a>{% endif %}
         </div>
       </div>
     </div>
@@ -83,6 +83,19 @@
       </div>
       {% endset %}
 
+      {# ---- SETTINGS (#562): per-hobby switches. Physical-piece fields = items in this hobby's cards get
+           the PHYSICAL PIECE group (medium, dimensions, date made, original); was a name match. ---- #}
+      {% set settings_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Physical-piece fields</dt><dd>{% if shows_physical_piece %}Shown on its items{% else %}<span class="dp-muted">Not shown</span>{% endif %}</dd></div>
+      </dl>
+      {% endset %}
+      {% set settings_edit %}
+      <div class="dp-field">
+        <label><input type="checkbox" id="hobby-physical-piece-input" {% if shows_physical_piece %}checked{% endif %}> Show physical-piece fields (medium, dimensions, date made) on its items</label>
+      </div>
+      {% endset %}
+
       {# ---- DATES: computed from the member projects, nothing to edit ---- #}
       {% set dates_view %}
       <dl class="dp-rows">
@@ -96,6 +109,7 @@
       <div class="dp-panel">
         {{ dp_group("status", "STATUS", status_view, status_edit) }}
         {{ dp_group("identity", "IDENTITY", identity_view, identity_edit) }}
+        {{ dp_group("settings", "SETTINGS", settings_view, settings_edit) }}
         {{ dp_group("dates", "DATES", dates_view, editable=false) }}
       </div>
     </div>
@@ -231,6 +245,12 @@
   });
   DP.register('identity', {
     save: async () => { if (codeInput.value.trim() !== savedCode) await post('group-code', { group_code: codeInput.value.trim() }); },
+  });
+  // SETTINGS (#562): the per-hobby physical-piece switch (POST /api/hobby/{id}/physical-piece, undoable).
+  const ppInput = document.getElementById('hobby-physical-piece-input');
+  const savedPP = {{ shows_physical_piece | tojson }};
+  DP.register('settings', {
+    save: async () => { if (ppInput.checked !== savedPP) await post('physical-piece', { enabled: ppInput.checked ? 'true' : 'false' }); },
   });
 
   // Add / remove a project: the page is server-rendered, so a change reloads it.

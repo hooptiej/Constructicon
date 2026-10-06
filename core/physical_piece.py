@@ -12,7 +12,7 @@ place `medium` already lived for the first piece):
 Date made feeds the item's effective date (core/timeline.py resolve_item_date): it ranks below
 a hand-set timeline date (display_date_override) and above content_date, because content_date
 for a scan is the scan's EXIF/creation time, which is exactly the date this field exists to
-correct. Everything is pure except `medium_suggestions` and `in_traditional_media`.
+correct. Everything is pure except `medium_suggestions` and `in_physical_piece_hobby`.
 """
 
 import json
@@ -29,7 +29,10 @@ LABELS = {
     "original_location": "Original is",
 }
 MAX_LEN = 200
-HOBBY_NAME = "traditional media"
+# #562: which hobbies show these fields is a per-hobby setting now (hobby_settings, toggled on the
+# hobby page). This name is ONLY used by the one-time `hobby_physical_piece_562` migration, which
+# switches the setting on for an existing hobby of that name so the owner's installs don't change.
+LEGACY_HOBBY_NAME = "traditional media"
 
 _DATE_RE = re.compile(r"^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$")
 
@@ -107,16 +110,21 @@ def rows(type_metadata):
     return [(k, LABELS[k], str(tm.get(k) or "").strip()) for k in KEYS]
 
 
-def in_traditional_media(db, slug, tag_names=()):
-    """True when the item sits in a project that is (or whose home chain reaches) the
-    Traditional Media hobby, or carries a tag of that name. Best-effort: a lookup failure
-    means 'no' (the group still shows when any field is set)."""
+def in_physical_piece_hobby(db, slug, tag_names=()):
+    """True when the item sits in a project that belongs to a hobby whose "shows physical-piece
+    fields" setting is on (#562; was: the hobby named Traditional Media), or carries a tag named
+    like such a hobby. Best-effort: a lookup failure means 'no' (the group still shows when any
+    field is set)."""
     try:
-        if any(str(t).strip().lower() == HOBBY_NAME for t in (tag_names or ())):
+        flagged = db.physical_piece_hobbies()
+        if not flagged:
+            return False
+        names = {(h.get("name") or "").strip().lower() for h in flagged}
+        ids = {h["id"] for h in flagged}
+        if any(str(t).strip().lower() in names for t in (tag_names or ())):
             return True
         for p in db.list_projects_for_post(slug):
-            if any((h.get("name") or "").strip().lower() == HOBBY_NAME
-                   for h in db.list_hobbies_for_project(p["id"])):
+            if any(h["id"] in ids for h in db.list_hobbies_for_project(p["id"])):
                 return True
         return False
     except Exception:

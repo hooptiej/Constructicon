@@ -13,8 +13,8 @@ writing to) and every file under storage/ — a files-only or DB-only backup
 isn't restorable on its own, since the DB rows point at filenames on disk
 and the files are meaningless without the rows describing them.
 
-Destination: BACKUP_DIR is derived from storage.STORAGE_DIR the same way
-STORAGE_DIR itself is derived (sibling of storage/, alongside imagerepo.db)
+Destination: paths.backup_dir() is derived from paths.storage_dir() the same way
+the storage dir itself is derived (sibling of storage/, alongside imagerepo.db)
 so it naturally lands at .../constructicon/backups/ wherever the app is
 deployed, without hardcoding any particular environment's path.
 """
@@ -25,9 +25,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from core import db, storage
-
-BACKUP_DIR = storage.STORAGE_DIR.parent / "backups"
+from core import db, paths
 
 # Simple retention: keep only the N most recent backups, deleting older ones
 # on every new backup. Not a config knob — just a constant, per the issue's
@@ -72,10 +70,11 @@ def _integrity(db_path):
 
 
 def _existing_backups():
-    """All backup zips currently in BACKUP_DIR, oldest first."""
-    if not BACKUP_DIR.is_dir():
+    """All backup zips currently in the backup dir, oldest first."""
+    backup_dir = paths.backup_dir()
+    if not backup_dir.is_dir():
         return []
-    return sorted(BACKUP_DIR.glob("constructicon-backup-*.zip"), key=lambda p: p.name)
+    return sorted(backup_dir.glob("constructicon-backup-*.zip"), key=lambda p: p.name)
 
 
 def _enforce_retention():
@@ -87,13 +86,14 @@ def _enforce_retention():
 
 def create_backup():
     """Create a new timestamped backup zip containing the DB snapshot and
-    every file in storage/, write it to BACKUP_DIR, enforce retention, and
+    every file in storage/, write it to the backup dir, enforce retention, and
     return metadata about the archive. Read-only with respect to the live
     DB and storage/ — nothing in either is modified or deleted by this."""
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    backup_dir = paths.backup_dir()
+    backup_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     filename = f"constructicon-backup-{timestamp}.zip"
-    dest = BACKUP_DIR / filename
+    dest = backup_dir / filename
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_db = Path(tmp_dir) / "imagerepo.db"
@@ -108,11 +108,12 @@ def create_backup():
         tmp_zip = dest.with_suffix(".zip.part")
         with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(tmp_db, arcname=DB_ARCNAME)
-            if storage.STORAGE_DIR.is_dir():
-                for path in sorted(storage.STORAGE_DIR.rglob("*")):
+            store = paths.storage_dir()
+            if store.is_dir():
+                for path in sorted(store.rglob("*")):
                     if not path.is_file():
                         continue
-                    arcname = f"{STORAGE_ARCPREFIX}/{path.relative_to(storage.STORAGE_DIR)}"
+                    arcname = f"{STORAGE_ARCPREFIX}/{path.relative_to(store)}"
                     zf.write(path, arcname=arcname)
         tmp_zip.replace(dest)
 

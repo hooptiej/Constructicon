@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from core import card_rules, db, install_config, markdown_render, policy, storage, object_types
+from core import card_rules, db, install_config, markdown_render, paths, policy, storage, object_types
 from core import version as version_info
 
 
@@ -56,7 +56,6 @@ def _bundle_item_media(item, media_dir, copied_slugs, warnings):
     return n
 
 
-EXPORTS_DIR = Path(__file__).resolve().parent.parent / "exports"
 EXPORT_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "web" / "export_templates"
 
 
@@ -70,7 +69,9 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
             - site: Dict with:
                 - title: Site title (default: the install's site_title, #562)
                 - tagline: Site tagline (default: "")
-        out_dir: Output directory (if None, uses EXPORTS_DIR/<timestamp>/)
+        out_dir: Output directory (if None, uses <exports dir>/<timestamp>/ and the build also
+            becomes exports/current and old builds are pruned). A custom out_dir is written
+            and nothing else is touched: no `current` refresh, no pruning (#576).
 
     Returns:
         Dict with keys:
@@ -81,9 +82,11 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     """
     if out_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_dir = EXPORTS_DIR / timestamp
+        out_dir = paths.exports_dir() / timestamp
+        is_default_out = True
     else:
         out_dir = Path(out_dir)
+        is_default_out = False
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -286,8 +289,9 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         "warnings": warnings,
     }
 
-    # Update current pointer and prune old builds
-    _update_current_pointer(out_dir)
+    # Update current pointer and prune old builds: only for the install's own builds (#576)
+    if is_default_out:
+        _update_current_pointer(out_dir)
 
     return report
 
@@ -298,11 +302,12 @@ def _update_current_pointer(build_dir: Path) -> None:
     Uses a 'current' symlink on Unix-like systems (or a current/ directory on Windows)
     that the StaticFiles mount can follow.
     """
-    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    exports = paths.exports_dir()
+    exports.mkdir(parents=True, exist_ok=True)
 
     # Strategy: Use a 'current' directory that we re-populate on each build.
     # This is more portable than symlinks and works on Windows.
-    current_dir = EXPORTS_DIR / "current"
+    current_dir = exports / "current"
 
     # Remove old current directory if it exists
     if current_dir.exists():
@@ -524,14 +529,15 @@ def _strip_token_from_error(error_msg: str) -> str:
 
 def _prune_old_builds(keep: int = 2) -> None:
     """Remove old timestamped builds, keeping only the most recent `keep` builds."""
-    if not EXPORTS_DIR.exists():
+    exports = paths.exports_dir()
+    if not exports.exists():
         return
 
     # List all timestamped directories (matching YYYYMMDD_HHMMSS pattern)
     import re
 
     builds = []
-    for item in EXPORTS_DIR.iterdir():
+    for item in exports.iterdir():
         if item.is_dir() and item.name != "current" and re.match(r"^\d{8}_\d{6}$", item.name):
             builds.append(item)
 

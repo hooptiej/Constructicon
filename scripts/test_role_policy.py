@@ -27,16 +27,16 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-TMP = tempfile.mkdtemp(prefix="rolepolicy-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
-os.environ["CONSTRUCTICON_STORAGE_DIR"] = os.path.join(TMP, "storage")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("rolepolicy-")
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, HERE)
 
 from starlette.testclient import TestClient  # noqa: E402
 
-from core import actor, blog, cards, db, items, membership, policy, roles, site_export, storage  # noqa: E402
+from core import actor, blog, cards, db, items, membership, paths, policy, roles, site_export, storage  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 from web import app as webapp  # noqa: E402
 
 FAILS = []
@@ -63,18 +63,14 @@ def pem_certificate():
     return cert.public_bytes(serialization.Encoding.PEM)
 
 
-# build_site always refreshes <EXPORTS_DIR>/current (the /preview mount) and prunes old builds:
-# keep that inside the throwaway dir, never the install's real exports/.
-site_export.EXPORTS_DIR = Path(TMP) / "exports"
 
 db.init_db()
-storage.STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 HOST = "testhost.local:8000"
 client = TestClient(webapp.app, base_url=f"http://{HOST}")
 
 CERT, PLAIN = "rp-cert-1", "rp-plain-1"
-(storage.STORAGE_DIR / f"{CERT}.pem").write_bytes(pem_certificate())
-(storage.STORAGE_DIR / f"{PLAIN}.txt").write_text("an ordinary file about the role-policy card\n")
+(paths.storage_dir() / f"{CERT}.pem").write_bytes(pem_certificate())
+(paths.storage_dir() / f"{PLAIN}.txt").write_text("an ordinary file about the role-policy card\n")
 db.insert_upload(CERT, "role-policy-push.pem", f"{CERT}.pem", "tester", media_type="certkey",
                  description="role-policy restricted fixture")
 db.insert_upload(PLAIN, "role-policy-notes.txt", f"{PLAIN}.txt", "tester", media_type="document",

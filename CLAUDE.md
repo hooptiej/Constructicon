@@ -79,6 +79,15 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
 - **`core/storage.py`** — file storage on local disk under `storage/`
   (gitignored; not baked into the Docker image). Random unguessable slugs
   (`secrets.token_urlsafe`), not sequential IDs.
+- **`core/paths.py`** (#578, #576) — every on-disk location (storage, `<storage>/.trash`,
+  `<storage>/../backups`, `exports/` with its `current` and `.publish`) comes from here and is
+  **resolved on each call** from `CONSTRUCTICON_STORAGE_DIR` / `CONSTRUCTICON_EXPORTS_DIR` (defaults =
+  `<repo>/storage`, `<repo>/exports`). Never compute one of these at import time or from `__file__`.
+  `build_site(config, out_dir=X)` writes only `X`: the `exports/current` refresh and the prune of old
+  builds happen only for the default (no `out_dir`) build. **Tests:** every in-process `scripts/test_*.py`
+  starts with `import _testenv; TMP = _testenv.isolate("name-")` (temp DB + storage + exports, then
+  asserts the resolved paths are in a temp dir and outside the repo, exiting otherwise); a test that
+  talks to a live server (`test_office.py`) says so at the top and never calls delete-all/empty-trash.
 - **`core/ocr.py`, `core/similarity.py`** — text extraction
   (tesseract via `pytesseract`) and "related items" (perceptual hash +
   sentence-transformers embedding similarity, `all-MiniLM-L6-v2`, baked

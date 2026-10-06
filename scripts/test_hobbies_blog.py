@@ -39,8 +39,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-TMP = tempfile.mkdtemp(prefix="hobbies-blog-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("hobbies-blog-")
 os.environ.setdefault("CAPTION_DISABLED", "1")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -52,11 +52,10 @@ except Exception:  # no libcairo here (e.g. Windows): object types import it
 
 from PIL import Image  # noqa: E402
 
-from core import actor, blog, cards, db, decisions, hobbies, ingest, membership, revisions, storage  # noqa: E402
+from core import actor, blog, cards, db, decisions, hobbies, ingest, membership, paths, revisions, storage  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 from core.errors import AppError  # noqa: E402
 
-storage.STORAGE_DIR = Path(TMP) / "storage"
-storage.STORAGE_DIR.mkdir()
 ingest.run_in_thread = lambda fn, *a: None  # no background threads in a unit check
 
 FAILS = []
@@ -130,7 +129,7 @@ def mk(slug):
     sf = f"{slug}.png"
     buf = io.BytesIO()
     Image.new("RGB", (8, 8), (10, 200, 10)).save(buf, "PNG")
-    (storage.STORAGE_DIR / sf).write_bytes(buf.getvalue())
+    (paths.storage_dir() / sf).write_bytes(buf.getvalue())
     db.insert_upload(slug, f"{slug}.png", sf, "tester", media_type="image")
     return slug
 

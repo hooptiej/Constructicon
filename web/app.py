@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core import actor as actor_ctx, captions, db, decisions, errors, ocr
+from core import actor as actor_ctx, captions, db, decisions, errors, ocr, paths
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
 from web import request_guard
 from web.common import _STATIC_DIR
@@ -80,9 +80,17 @@ if _BRAND_DIR.is_dir():
 
 # Preview mount for exported sites — points to the current build directory.
 # Ensure the directory exists (even if empty) so the mount doesn't fail at startup.
-_PREVIEW_DIR = Path(__file__).resolve().parent.parent / "exports" / "current"
-_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/preview", StaticFiles(directory=_PREVIEW_DIR, html=True), name="preview")
+class _CurrentExportFiles(StaticFiles):
+    """#578: serves paths.current_export_dir(), resolved per request (not frozen at import), so a
+    test that repoints CONSTRUCTICON_EXPORTS_DIR after importing the app serves its own build."""
+
+    async def get_response(self, path, scope):
+        self.all_directories = self.get_directories(paths.current_export_dir(), None)
+        return await super().get_response(path, scope)
+
+
+paths.current_export_dir().mkdir(parents=True, exist_ok=True)
+app.mount("/preview", _CurrentExportFiles(directory=paths.current_export_dir(), html=True), name="preview")
 
 app.add_middleware(AuditLoggingMiddleware)
 # #560: sets the request's actor (owner-ui) around the audit logger and the route.

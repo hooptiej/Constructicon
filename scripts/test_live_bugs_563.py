@@ -16,13 +16,14 @@ import sys
 import tempfile
 import types
 
-TMP = tempfile.mkdtemp(prefix="livebugs563-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("livebugs563-")
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, ROOT)
 sys.modules.setdefault("cairosvg", types.ModuleType("cairosvg"))  # no libcairo needed here
 
 from core import captions, db, decisions, ingest  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 
 FAILS = []
 

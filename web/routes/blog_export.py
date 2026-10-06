@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse
 
-from core import blog, db, install_config, site_export
+from core import blog, db, install_config, paths, site_export
 from core.errors import AppError
 from web.shapes import _to_blog_entry_detail
 from core import roles
@@ -309,7 +309,7 @@ async def api_export_publish(request: Request):
     branch = target_config["branch"]
 
     # Guard: current build must exist
-    current_build = Path(__file__).resolve().parent.parent.parent / "exports" / "current"
+    current_build = paths.current_export_dir()
     if not current_build.exists() or not list(current_build.iterdir()):
         raise HTTPException(
             status_code=400,
@@ -320,7 +320,7 @@ async def api_export_publish(request: Request):
     # for the actual network fetch/push (never persisted). See publish_build.
     clean_url = f"https://github.com/{repo}.git"
     auth_url = f"https://x-access-token:{token}@github.com/{repo}.git"
-    work_dir = Path(__file__).resolve().parent.parent.parent / "exports" / ".publish" / target
+    work_dir = paths.publish_work_dir(target)
 
     try:
         report = site_export.publish_build(

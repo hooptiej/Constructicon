@@ -14,11 +14,12 @@ import os
 import sys
 import tempfile
 
-TMP = tempfile.mkdtemp(prefix="provopts-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("provopts-")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from core import card_rules, cards, changes, db, provenance_options as po  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 
 FAILS = []
 

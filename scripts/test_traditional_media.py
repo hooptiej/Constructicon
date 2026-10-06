@@ -16,13 +16,14 @@ import sys
 import tempfile
 import types
 
-TMP = tempfile.mkdtemp(prefix="tradmedia-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("tradmedia-")
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 sys.modules.setdefault("cairosvg", types.ModuleType("cairosvg"))  # native cairo is not needed here
 
 from core import db, hobbies, physical_piece, timeline  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 
 FAILS = []
 SECTION = 'aria-labelledby="dp-h-physical"'  # the rendered group (the page JS also mentions the name)

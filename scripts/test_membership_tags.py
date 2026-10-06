@@ -30,8 +30,8 @@ import tempfile
 import time
 from pathlib import Path
 
-TMP = tempfile.mkdtemp(prefix="membership-tags-")
-os.environ["CONSTRUCTICON_DB_PATH"] = os.path.join(TMP, "test.db")
+import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
+TMP = _testenv.isolate("membership-tags-")
 os.environ.setdefault("CAPTION_DISABLED", "1")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -43,12 +43,11 @@ except Exception:  # no libcairo here (e.g. Windows): object types import it
 
 from PIL import Image  # noqa: E402
 
-from core import actor, blog, cards, db, hobbies, ingest, items, membership, reset, revisions, storage  # noqa: E402
+from core import actor, blog, cards, db, hobbies, ingest, items, membership, paths, reset, revisions, storage  # noqa: E402
+_testenv.assert_isolated()  # now as core actually resolved the paths
 from core import tags as tags_svc  # noqa: E402
 from core.errors import AppError  # noqa: E402
 
-storage.STORAGE_DIR = Path(TMP) / "storage"
-storage.STORAGE_DIR.mkdir()
 ingest.run_in_thread = lambda fn, *a: None  # no background threads in a unit check
 
 FAILS = []
@@ -82,7 +81,7 @@ def mk(slug):
     sf = f"{slug}.png"
     buf = io.BytesIO()
     Image.new("RGB", (8, 8), (200, 10, 10)).save(buf, "PNG")
-    (storage.STORAGE_DIR / sf).write_bytes(buf.getvalue())
+    (paths.storage_dir() / sf).write_bytes(buf.getvalue())
     storage.thumb_path_for(slug).write_bytes(b"thumb-" + slug.encode())
     db.insert_upload(slug, f"{slug}.png", sf, "tester", media_type="image")
     return slug
@@ -434,7 +433,7 @@ items.delete([W])  # a trash row and a file in .trash
 db.set_setting("some_key", "kept")
 empty = [t for t in reset.CLEARED_TABLES if q(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] == 0]
 check("delete-all fixture: every cleared table has rows", empty == [], empty)
-check("storage and .trash hold files", any(storage.STORAGE_DIR.glob("*.png")) and any(items.trash_dir().rglob("*.png")))
+check("storage and .trash hold files", any(paths.storage_dir().glob("*.png")) and any(items.trash_dir().rglob("*.png")))
 r = client.post("/api/delete-all", data={"confirm": "yes"})
 check("web delete-all wrong phrase -> 400 confirm_required, nothing cleared",
       r.status_code == 400 and r.json()["error"]["code"] == "confirm_required"
@@ -449,7 +448,7 @@ with actor.acting_as(actor.ACTOR_MCP):
 left = {t: q(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] for t in reset.CLEARED_TABLES}
 check("delete-all clears every cleared table", all(v == 0 for v in left.values()), left)
 check("delete-all reports the item count", out.get("deleted") == n_items, out)
-files_left = [p for p in storage.STORAGE_DIR.rglob("*") if p.is_file()]
+files_left = [p for p in paths.storage_dir().rglob("*") if p.is_file()]
 check("storage files and thumbnails removed, .trash gone", files_left == [] and not items.trash_dir().exists(), files_left)
 kept_after = {t: q(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] for t in reset.KEPT_TABLES}
 check("kept tables keep their rows (audit_log grows by the reset's record)",

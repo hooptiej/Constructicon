@@ -14,7 +14,9 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
+from . import paths
+
+# #578: the storage directory is resolved when used (core/paths.py), not frozen at import.
 
 # #433: make file size limit configurable via environment variable
 # so large PDFs/videos can be allowed without a code change
@@ -61,7 +63,7 @@ def exif_upright(img):
 
 
 def thumb_path_for(slug):
-    return STORAGE_DIR / f"{slug}_thumb.jpg"
+    return paths.storage_dir() / f"{slug}_thumb.jpg"
 
 
 def save_thumbnail_from_bytes(slug, image_bytes):
@@ -103,9 +105,10 @@ def save_stream(filename, fileobj, chunk_size=1024*1024):
     # still says what it is. Lazy import: object_types imports this module.
     from . import object_types
     ext = object_types.file_extension(filename)
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    store = paths.storage_dir()
+    store.mkdir(parents=True, exist_ok=True)
     slug = make_slug()
-    dest = STORAGE_DIR / f"{slug}{ext}"
+    dest = store / f"{slug}{ext}"
 
     bytes_written = 0
     try:
@@ -138,7 +141,7 @@ def save_file(filename, content):
 
 
 def path_for(stored_filename):
-    return STORAGE_DIR / stored_filename
+    return paths.storage_dir() / stored_filename
 
 
 def thumb_path_or_original(slug, stored_filename):
@@ -149,7 +152,7 @@ def thumb_path_or_original(slug, stored_filename):
     thumb = thumb_path_for(slug)
     if thumb.exists():
         return thumb
-    return STORAGE_DIR / stored_filename if stored_filename else thumb
+    return paths.storage_dir() / stored_filename if stored_filename else thumb
 
 
 AVATAR_SIZE = 256
@@ -174,7 +177,7 @@ def normalize_avatar(content):
 def delete_files(slug, stored_filename):
     """Remove the original and its thumbnail (if any) from disk. Used by both
     a full delete and a redact-file-keep-metadata action."""
-    original = STORAGE_DIR / stored_filename
+    original = paths.storage_dir() / stored_filename
     if original.exists():
         original.unlink()
     thumb = thumb_path_for(slug)

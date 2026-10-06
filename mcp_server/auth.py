@@ -12,6 +12,8 @@ Token source (first hit wins):
                   otherwise 401 + `WWW-Authenticate: Bearer` + the shared error shape.
                   Only `GET /healthz` is exempt (it reveals nothing).
   * token unset:  open, as before (fresh installs, dev); main() logs a loud warning.
+                  `GET /healthz` still answers {"ok": true} (#574): the wrapper is mounted in
+                  both modes, so a deploy check or monitor can rely on it.
   * token < 32 chars: refuse to start.
 
 Identity: one install token = one identity, and the actor stays the literal "mcp".
@@ -64,7 +66,7 @@ def _json_response(status, payload, extra_headers=()):
 class BearerTokenMiddleware:
     def __init__(self, app, token):
         self.app = app
-        self._token = token.encode()
+        self._token = token.encode() if token else b""  # empty = open mode (health check only)
 
     async def _send(self, send, status, headers, body):
         await send({"type": "http.response.start", "status": status, "headers": headers})
@@ -75,6 +77,8 @@ class BearerTokenMiddleware:
             return await self.app(scope, receive, send)
         if scope.get("method") == "GET" and scope.get("path") == HEALTH_PATH:
             return await self._send(send, *_json_response(200, {"ok": True}))
+        if not self._token:  # open mode: nothing else is guarded
+            return await self.app(scope, receive, send)
         presented = b""
         for k, v in scope.get("headers", ()):
             if k == b"authorization":
@@ -93,5 +97,6 @@ class BearerTokenMiddleware:
 
 
 def wrap(app, token):
-    """Wrap `app` with auth when a token is configured; otherwise return it unchanged."""
-    return BearerTokenMiddleware(app, token) if token else app
+    """Always wrap `app` (#574): with a token it enforces auth; without one it passes everything
+    through but still serves GET /healthz, so the health check exists in both modes."""
+    return BearerTokenMiddleware(app, token)

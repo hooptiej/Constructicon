@@ -521,7 +521,7 @@ def transaction(dry_run=False):
                 yield outer
                 if dry_run:
                     raise _DryRunRollback()
-        except _DryRunRollback:
+        except _DryRunRollback:  # silent-ok: the dry run's own sentinel; the rollback is the point
             pass
         return
     real = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False, isolation_level=None)
@@ -892,7 +892,7 @@ def _mig_audit_scrub_559():
     for row in conn.execute("SELECT id, form_body FROM audit_log WHERE path = '/api/settings'").fetchall():
         try:
             body = json.loads(row["form_body"]) if row["form_body"] else {}
-        except (ValueError, TypeError):
+        except (ValueError, TypeError):  # silent-ok: an unreadable row is scrubbed whole by the else below
             body = None
         if isinstance(body, dict):
             if "value" not in body or body["value"] == "[REDACTED]":

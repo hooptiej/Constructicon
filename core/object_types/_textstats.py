@@ -37,7 +37,7 @@ def text_file_stats(path, limit):
         is_utf8 = True
         try:
             text = data.decode("utf-8")
-        except UnicodeDecodeError:
+        except UnicodeDecodeError:  # silent-ok: not UTF-8 is reported as is_utf8=False below
             text = data.decode("utf-8", errors="replace")
             is_utf8 = False
 

@@ -23,7 +23,7 @@ from markupsafe import Markup, escape
 
 try:
     import py7zr
-except ImportError:
+except ImportError:  # silent-ok: optional dependency; 7z is simply unsupported without it
     py7zr = None
 
 from .. import storage

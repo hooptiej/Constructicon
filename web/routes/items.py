@@ -2,6 +2,7 @@
 gallery, clients, bulk edits, tags, search, multi-delete."""
 
 import json
+import logging
 import time
 from datetime import datetime
 
@@ -9,12 +10,25 @@ from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTa
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from core import captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
+from core import besteffort, captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
 from core import tags as tags_svc, timeline
 from web.common import DESKTOP_APP_CLIENT_HEADER, DESKTOP_APP_CLIENT_VALUE
 from web.shapes import _friendly_datetime, _to_project_option, _to_public
 from core import policy, roles
 from web.roles import RoleRouter, requires
+
+log = logging.getLogger("constructicon.web")
+
+
+def _parse_tags_form(tags):
+    """The `tags` form field: a JSON list of tag names, or empty. A value that isn't valid JSON is a
+    clean 400 (#551: it used to be silently treated as "no tags", so the tags a client sent were lost)."""
+    if not tags:
+        return []
+    try:
+        return json.loads(tags)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="tags must be a JSON list of tag names")
 
 router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
@@ -71,10 +85,7 @@ async def api_upload(
         # Same clean-400 contract type_metadata gets in /api/content (#221),
         # rather than a 500 traceback on a garbage timestamp.
         raise HTTPException(status_code=400, detail="modified_at must be a unix-milliseconds number")
-    try:
-        tag_list = json.loads(tags) if tags else []
-    except json.JSONDecodeError:
-        tag_list = []
+    tag_list = _parse_tags_form(tags)
 
     result = await run_in_threadpool(
         lambda: ingest.ingest_file(
@@ -151,10 +162,7 @@ async def api_create_content(
     """
     is_desktop_app = request.headers.get(DESKTOP_APP_CLIENT_HEADER) == DESKTOP_APP_CLIENT_VALUE
     user = db.source_automated_upload() if is_desktop_app else db.source_manual_upload()  # #562
-    try:
-        tag_list = json.loads(tags) if tags else []
-    except json.JSONDecodeError:
-        tag_list = []
+    tag_list = _parse_tags_form(tags)
     try:
         parsed_type_metadata = json.loads(type_metadata) if type_metadata else None
     except json.JSONDecodeError:
@@ -199,7 +207,9 @@ def _derive_processing_status(row):
     spec = object_types.get_object_type(row.get("media_type"))
     try:
         tm = json.loads(row.get("type_metadata") or "{}")
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "items: unreadable type_metadata JSON in the processing status", e,
+                        slug=row.get("slug"))
         tm = {}
     # Embedding is deliberately NOT a stage: it's computed inside the OCR slot
     # (see core/ocr.py), so it has already settled by the time OCR reads "done".
@@ -399,10 +409,7 @@ async def api_update_image(
         raise HTTPException(status_code=404, detail="not found")
     tag_list = None
     if tags is not None:
-        try:
-            tag_list = json.loads(tags) if tags else []
-        except json.JSONDecodeError:
-            tag_list = []
+        tag_list = _parse_tags_form(tags)
 
     # #244: distinguish "field not provided" (None) from "field provided empty"
     # ("") so we can clear overrides -- FastAPI's Form(None) collapses BOTH

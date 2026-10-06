@@ -75,7 +75,7 @@ def _sans(obj):
     from cryptography import x509
     try:
         ext = obj.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    except x509.ExtensionNotFound:
+    except x509.ExtensionNotFound:  # silent-ok: no SAN extension = no names
         return []
     names = [str(v) for v in ext.get_values_for_type(x509.DNSName)]
     names += [str(v) for v in ext.get_values_for_type(x509.IPAddress)]
@@ -88,7 +88,7 @@ def _cert_facts(cert):
     from cryptography.hazmat.primitives import hashes
     try:
         is_ca = cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
-    except x509.ExtensionNotFound:
+    except x509.ExtensionNotFound:  # silent-ok: no BasicConstraints = not a CA
         is_ca = False
     pub = cert.public_key()
     return {
@@ -128,7 +128,7 @@ def _load_private(data, der=False):
     loader = serialization.load_der_private_key if der else serialization.load_pem_private_key
     try:
         return loader(data, password=None), False
-    except TypeError:  # "Password was not given but private key is encrypted"
+    except TypeError:  # silent-ok: "Password was not given but private key is encrypted"; reported as encrypted
         return None, True
 
 
@@ -145,7 +145,7 @@ def _parse_pem_block(label, block):
     if label == b"OPENSSH PRIVATE KEY":
         try:
             return _private_facts(serialization.load_ssh_private_key(block, password=None), False, "OpenSSH")
-        except TypeError:
+        except TypeError:  # silent-ok: an encrypted OpenSSH key; reported as encrypted
             return _private_facts(None, True, "OpenSSH")
     if label.endswith(b"PRIVATE KEY"):
         fmt = {b"ENCRYPTED PRIVATE KEY": "PKCS#8", b"PRIVATE KEY": "PKCS#8"}.get(label, "PEM (traditional)")
@@ -166,17 +166,17 @@ def _parse_der(data):
     ):
         try:
             return [attempt()]
-        except ValueError:
+        except ValueError:  # silent-ok: trying each DER format in turn
             pass
     try:
         key, encrypted = _load_private(data, der=True)
         return [_private_facts(key, encrypted, "DER")]
-    except ValueError:
+    except ValueError:  # silent-ok: trying each DER format in turn
         pass
     try:
         pub = serialization.load_der_public_key(data)
         return [{"kind": "public_key", "key": _key_desc(pub), "pub_fp": _pub_fingerprint(pub)}]
-    except ValueError:
+    except ValueError:  # silent-ok: not any known DER format = no facts
         return []
 
 

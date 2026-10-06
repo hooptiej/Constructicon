@@ -13,8 +13,13 @@ image, which is where installer frameworks keep their payloads).
 """
 
 import datetime
+import logging
 import re
 from pathlib import Path
+
+from .. import besteffort
+
+log = logging.getLogger("constructicon.pe")
 
 HEAD_SCAN = 8 * 1024 * 1024
 OVERLAY_SCAN = 1024 * 1024
@@ -48,7 +53,7 @@ def _decode(b):
     rather than U+FFFD soup for the odd resource that isn't valid UTF-8."""
     try:
         return b.decode("utf-8")
-    except UnicodeDecodeError:
+    except UnicodeDecodeError:  # silent-ok: documented fallback decode
         return b.decode("cp1252", errors="replace")
 
 
@@ -147,7 +152,8 @@ def name_hint(path, filename):
             return bool(_NAME_HINT.search(" ".join(_version_strings(pe).values())))
         finally:
             pe.close()
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "pe: name_hint couldn't parse the executable (no hint)", e, path=str(path))
         return False
 
 

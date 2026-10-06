@@ -14,7 +14,7 @@ def _rotation_style(item):
     only the four real rotations are emitted, as integers."""
     try:
         deg = int((item.get("type_metadata") or {}).get("rotation") or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError):  # silent-ok: an unusable rotation is "no rotation"; the value is never echoed
         return ""
     return f' style="transform:rotate({deg}deg)"' if deg in (90, 180, 270) else ""
 

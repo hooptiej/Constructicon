@@ -15,13 +15,16 @@ while scoping this: 66 of 361 undated image rows carried a real capture
 timestamp.
 """
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
 from PIL.ExifTags import TAGS
 
-from .. import storage, timeline
+from .. import besteffort, storage, timeline
+
+log = logging.getLogger("constructicon.image")
 
 # EXIF tag ids. The capture-time tags live in the Exif SubIFD (0x8769 in
 # the main IFD, same place _exif_properties reads exposure/aperture/ISO
@@ -87,26 +90,28 @@ def _exif_properties(img):
         # 0x8769 in the main IFD), not the top-level tags dict above.
         try:
             exif_ifd = exif.get_ifd(0x8769)
-        except Exception:
+        except Exception as e:
+            besteffort.warn(log, "image: EXIF sub-IFD unreadable (no exposure/aperture/ISO)", e)
             exif_ifd = {}
         exposure = exif_ifd.get(33434)  # ExposureTime
         if exposure:
             try:
                 exposure = float(exposure)
                 props["Exposure"] = f"1/{round(1 / exposure)}s" if exposure < 1 else f"{exposure:g}s"
-            except (TypeError, ValueError, ZeroDivisionError):
+            except (TypeError, ValueError, ZeroDivisionError):  # silent-ok: a malformed ExposureTime = no property
                 pass
         fnumber = exif_ifd.get(33437)  # FNumber
         if fnumber:
             try:
                 props["Aperture"] = f"f/{float(fnumber):.1f}"
-            except (TypeError, ValueError):
+            except (TypeError, ValueError):  # silent-ok: a malformed FNumber = no property
                 pass
         iso = exif_ifd.get(34855)  # ISOSpeedRatings
         if iso:
             props["ISO"] = str(iso)
         return props
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "image: EXIF properties unreadable (no EXIF block shown)", e)
         return {}
 
 
@@ -125,7 +130,8 @@ def read_capture_datetime(img):
         return None
     try:
         ifd = exif.get_ifd(_EXIF_IFD)
-    except Exception:
+    except Exception as e:
+        besteffort.warn(log, "image: EXIF IFD unreadable (no capture date)", e)
         return None
     for date_tag, offset_tag in _DATE_TAGS:
         raw = ifd.get(date_tag)
@@ -139,11 +145,11 @@ def read_capture_datetime(img):
             # costing the date entirely.
             try:
                 return datetime.strptime(f"{raw} {str(offset).strip()}", f"{_EXIF_DATETIME_FORMAT} %z")
-            except ValueError:
+            except ValueError:  # silent-ok: a malformed offset falls through to the naive parse below
                 pass
         try:
             return datetime.strptime(raw, _EXIF_DATETIME_FORMAT)
-        except ValueError:
+        except ValueError:  # silent-ok: not EXIF's date shape = treated as absent (see the docstring)
             continue
     return None
 

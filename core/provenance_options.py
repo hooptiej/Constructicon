@@ -20,12 +20,15 @@ immediately and there is no cache to invalidate. Validation errors use the same
 own, so it is untouched.
 """
 
+import logging
 import re
 import sqlite3
 import time
 
-from . import changes, db
+from . import besteffort, changes, db
 from .card_rules import CardError
+
+log = logging.getLogger("constructicon.provenance_options")
 
 SCOPES = ("card", "file")
 
@@ -123,7 +126,8 @@ def label(scope, key, default=None):
         return default if default is not None else ""
     try:
         o = get_option(scope, key)
-    except sqlite3.Error:  # table absent (a minimal schema): fall back to the raw key
+    except sqlite3.Error as e:  # table absent (a minimal schema): fall back to the raw key
+        besteffort.warn(log, "provenance_options: label lookup, falling back to the raw key", e, scope=scope, key=key)
         o = None
     return o["label"] if o else (default if default is not None else key)
 

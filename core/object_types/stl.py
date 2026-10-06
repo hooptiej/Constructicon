@@ -114,7 +114,7 @@ def render_preview(path):
         print(f"STL render failed for {path}: {e!r}")
         try:
             plt.close(fig)
-        except Exception:
+        except Exception:  # silent-ok: closing the figure after the render failure that was logged above
             pass
         return None
 

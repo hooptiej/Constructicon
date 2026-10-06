@@ -2,14 +2,17 @@
 globals, the desktop-uploader constants, and the breadcrumb / revision-note helpers.
 Moved verbatim from web/app.py."""
 
+import logging
 import os
 from pathlib import Path
 from urllib.parse import unquote, quote
 
 from fastapi.templating import Jinja2Templates
 
-from core import db, markdown_render, object_types, storage
+from core import besteffort, db, markdown_render, object_types, storage
 from core import version as version_info
+
+log = logging.getLogger("constructicon.web")
 
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -30,7 +33,9 @@ def static_version(relative_path):
     """
     try:
         return str(int((_STATIC_DIR / relative_path).stat().st_mtime))
-    except OSError:
+    except OSError as e:
+        besteffort.warn(log, "static_version: a template references a static file that can't be read", e,
+                        path=relative_path)
         return "0"
 
 

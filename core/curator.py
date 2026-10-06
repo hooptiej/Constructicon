@@ -6,9 +6,12 @@ the scoring model is intentionally declarative and separated from policy.
 """
 
 import json
+import logging
 
-from core import cards, db, timeline
+from core import besteffort, cards, db, timeline
 from core.object_types import get_object_type
+
+log = logging.getLogger("constructicon.curator")
 
 # Status mapping: legacy active/archived -> wip/complete
 _LEGACY_STATUS_MAP = {
@@ -75,7 +78,9 @@ def _auto_caption(item):
     if isinstance(tm, str):
         try:
             tm = json.loads(tm)
-        except ValueError:
+        except ValueError as e:
+            besteffort.warn(log, "curator: unreadable type_metadata JSON (treated as no caption)", e,
+                            slug=item.get("slug"))
             return False
     return bool(((tm or {}).get("auto_caption") or "").strip())
 

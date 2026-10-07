@@ -143,11 +143,13 @@ def suggest_kind(card, facts):
     if total and digital * 2 > total:
         conf = "medium" if digital * 5 >= total * 4 else "low"
         return "project", _mix_text(counts, digital_keys, total) + ", not photos or 3D files", conf
-    if total and physical == total:
+    if total and physical * 2 > total:  # mostly photos / video / 3D files
         what = _mix_text(counts, physical_keys, total)
         if signals:
             return "thing", what + "; " + " and ".join(signals), "medium"
-        return "thing", what + " (photos / 3D files only, no software files)", "low"
+        if physical == total:
+            return "thing", what + " (photos / 3D files only, no software files)", "low"
+        return "thing", what + " (mostly photos / 3D files, little else)", "low"
     if signals:
         mix = f"{physical} of {total} files are photos or 3D files; " if total else "no files yet; "
         return "thing", mix + " and ".join(signals), "low"

@@ -108,6 +108,61 @@ async def _parse_audit_body(request, content_type, body_bytes):
     return _unparsed_marker(content_type, len(body_bytes))
 
 
+# #583: an error response's body is read for the audit reason only when it is a small, already
+# complete JSON body (the shared error shape or a plain HTTPException detail). A response with no
+# known length (a stream) or a non-JSON type (a file) is never touched (#438).
+ERROR_BODY_MAX_BYTES = 16 * 1024
+ERROR_DETAIL_MAX_CHARS = 500
+
+
+def reason_from_error_body(data):
+    """The audit reason for a parsed JSON error body: "<code>: <message>" for the shared error
+    shape (#548), else the plain `detail` string; None when it has neither."""
+    if not isinstance(data, dict):
+        return None
+    err = data.get("error")
+    if isinstance(err, dict) and err.get("message"):
+        code = err.get("code")
+        return f"{code}: {err['message']}" if code else str(err["message"])
+    detail = data.get("detail")
+    if isinstance(detail, str) and detail:
+        return detail
+    return None
+
+
+async def _error_reason(response):
+    """Reads the reason out of a >= 400 response without ever buffering a stream or a file, and
+    leaves the response intact for the client. Never raises; None when there is nothing to record."""
+    if response.status_code < 400:
+        return None
+    ctype = response.headers.get("content-type", "").split(";")[0].strip().lower()
+    length = response.headers.get("content-length")
+    iterator = getattr(response, "body_iterator", None)
+    if ctype != "application/json" or iterator is None:
+        return None
+    try:
+        size = int(length)
+    except (TypeError, ValueError):  # silent-ok: no usable Content-Length means a stream: left alone (#438)
+        return None
+    if size > ERROR_BODY_MAX_BYTES:
+        return None
+    chunks = []
+    async for chunk in iterator:
+        chunks.append(chunk)
+
+    async def replay():
+        for c in chunks:
+            yield c
+
+    response.body_iterator = replay()
+    try:
+        data = json.loads(b"".join(c if isinstance(c, bytes) else c.encode() for c in chunks))
+    except ValueError as e:
+        besteffort.warn(log, "audit: reading an error response's reason", e)
+        return None
+    return reason_from_error_body(data)
+
+
 class AuditLoggingMiddleware(BaseHTTPMiddleware):
     """Middleware to capture mutating /api/* requests (POST/PUT/DELETE) into
     the audit_log table. Reads the form body, scrubs secrets, logs the request
@@ -161,6 +216,11 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             status_code = response.status_code
+            if should_audit:
+                # #583: a refusal the app made on purpose is a normal response, so say why.
+                reason = await _error_reason(response)
+                if reason:
+                    error_detail = request_guard.redact_audit_error(request.url.path, reason)[:ERROR_DETAIL_MAX_CHARS]
         except Exception as e:
             error_detail = str(e)
             raise

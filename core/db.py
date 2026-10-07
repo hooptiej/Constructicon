@@ -941,6 +941,25 @@ def _mig_hobby_physical_piece_562():
                               batch_id=changes.new_batch_id(), affected_slugs=[r["slug"]])
 
 
+def _mig_empty_file_ocr_done_587():
+    # #587 item 1: a zero-byte file has nothing to read, so OCR settles it as done with empty text
+    # (core/ocr.py does that for new uploads). Re-settle the rows that an earlier version marked
+    # failed: only rows whose stored file is really zero bytes on disk. Idempotent.
+    from . import storage
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug, stored_filename FROM capture_events "
+        "WHERE ocr_status = 'failed' AND stored_filename IS NOT NULL AND file_size = 0").fetchall()
+    for r in rows:
+        try:
+            empty = storage.path_for(r["stored_filename"]).stat().st_size == 0
+        except OSError:  # silent-ok: file missing or unreadable: not provably empty, leave the row failed
+            empty = False
+        if empty:
+            conn.execute("UPDATE capture_events SET ocr_status = 'done', extracted_text = '' WHERE slug = ?",
+                         (r["slug"],))
+
+
 # Order matters (v2c_1 first: later steps read the kind/stage it assigns).
 # #562: v2c_3 (the AlienWhoop family question) and v2c_4 (the AW canopy question) were about the
 # owner's own cards; they moved to scripts/archive/ (already recorded in schema_migrations on the
@@ -956,6 +975,7 @@ MIGRATIONS = [
     ("v2c_5_referenced_provenance", _mig_v2c(5)),
     ("install_config_seed_562", _mig_install_config_seed_562),
     ("hobby_physical_piece_562", _mig_hobby_physical_piece_562),
+    ("empty_file_ocr_done_587", _mig_empty_file_ocr_done_587),
 ]
 
 

@@ -117,6 +117,16 @@ AUDIT_PLAIN_FIELDS = (
 _SECRET_KEYWORDS = ("key", "secret", "token", "password", "api", "auth")
 
 
+def redact_audit_error(path, reason):
+    """#583: the same redaction for the reason text of a refused request. A route whose body is
+    logged as redacted ("none" / "name_only", #559) may echo what was sent in its message, so only
+    the error code (the part before ": ") is kept; elsewhere the text is stored as is."""
+    if AUDIT_ROUTE_RULES.get(path) in ("none", "name_only"):
+        code, sep, _ = reason.partition(": ")
+        return code if sep else REDACTED
+    return reason
+
+
 def redact_audit_body(path, form_data):
     """Return a copy of form_data that is safe to write to audit_log."""
     if not form_data:

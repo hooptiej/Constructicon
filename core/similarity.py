@@ -18,7 +18,7 @@ import threading
 
 import imagehash
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageStat
 from sentence_transformers import SentenceTransformer
 
 from . import db
@@ -46,8 +46,40 @@ def _get_model():
     return _model
 
 
+# #587 item 2: a nearly uniform image hashes to a degenerate value (all zeros, or one lone bit such
+# as 8000000000000000, the DC term), and every blank-ish image then "matches" every other. Such a
+# hash carries no information, so it is treated as "no hash": never stored for a new image, and
+# ignored when comparing rows that already hold one.
+MIN_HASH_BITS = 3                # a 64-bit hash with fewer (or, mirrored, more) set bits is degenerate
+MIN_IMAGE_STDDEV = 3.0           # grey-level standard deviation (0-255) below which an image is "blank"
+
+
+def is_degenerate_hash(hex_hash):
+    """True for a missing/unparseable hash or one with near-zero entropy: at most
+    MIN_HASH_BITS - 1 bits set, or at most as many clear (all ones, one lone zero bit)."""
+    if not hex_hash:
+        return True
+    try:
+        bits = bin(int(hex_hash, 16)).count("1")
+    except ValueError:  # silent-ok: an unparseable hash is "no hash", the documented meaning here
+        return True
+    return bits < MIN_HASH_BITS or (64 - bits) < MIN_HASH_BITS
+
+
+def _is_low_variance(img):
+    grey = img.convert("L")
+    grey.thumbnail((256, 256))
+    return ImageStat.Stat(grey).stddev[0] < MIN_IMAGE_STDDEV
+
+
 def compute_perceptual_hash(path):
-    return str(imagehash.phash(Image.open(path)))
+    """The image's perceptual hash as hex, or None when the image is too uniform (or the hash too
+    degenerate) to say anything about similarity."""
+    img = Image.open(path)
+    if _is_low_variance(img):
+        return None
+    h = str(imagehash.phash(img))
+    return None if is_degenerate_hash(h) else h
 
 
 def compute_embedding(text):
@@ -90,7 +122,7 @@ def find_similar(slug):
         if c["slug"] in already_related:
             continue
         visual_score = None
-        if row["perceptual_hash"] and c["perceptual_hash"]:
+        if not is_degenerate_hash(row["perceptual_hash"]) and not is_degenerate_hash(c["perceptual_hash"]):
             dist = _phash_distance(row["perceptual_hash"], c["perceptual_hash"])
             if dist <= PHASH_MATCH_THRESHOLD:
                 visual_score = 1 - (dist / 64)

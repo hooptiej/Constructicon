@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Admin — Constructicon{% endblock %}
+{% block title %}Admin — {{ app_name() }}{% endblock %}
 {% block body %}
 {% if not embed %}
 {% include "_header.html" %}
@@ -339,12 +339,6 @@
           <div class="admin-row-hint">Backups and the whole-library reset</div>
         </div>
       </div>
-      <div class="admin-row admin-row-stub" title="Not built yet — see issue #11">
-        <div>
-          <div class="admin-row-label">Display name &amp; icon</div>
-          <div class="admin-row-hint">Coming soon (#11)</div>
-        </div>
-      </div>
       <div class="admin-divider"></div>
       <button type="button" class="btn-ms admin-full-btn" id="admin-backup-btn"
               title="Zips the current DB and storage files to a timestamped archive on the share. Independent of any delete action.">
@@ -650,7 +644,31 @@
         lab.className = 'admin-row-label'; lab.htmlFor = 'admin-install-' + f.key; lab.textContent = f.label;
         const hint = document.createElement('div');
         hint.className = 'admin-row-hint'; hint.textContent = f.hint;
-        const i = input(cfg.values[f.key], cfg.fallbacks[f.key] ? 'not set (shows "' + cfg.fallbacks[f.key] + '")' : 'not set');
+        let i;
+        if (f.kind === 'brand_asset') {
+          // #581: pick the logo from the brand assets (the Brand drawer is where an image is uploaded and marked).
+          i = document.createElement('select');
+          i.className = 'input'; i.style.marginTop = '4px';
+          const none = document.createElement('option');
+          none.value = ''; none.textContent = 'Bundled logo (default)';
+          i.appendChild(none);
+          const cur = cfg.values[f.key] || '';
+          if (cur) {
+            const o = document.createElement('option');
+            o.value = cur; o.textContent = cur; i.appendChild(o);
+          }
+          i.value = cur;
+          fetch('/api/brand-assets').then(r => r.ok ? r.json() : []).then(list => {
+            (list || []).forEach(a => {
+              if (a.slug === cur) { i.querySelector('option[value="' + cur + '"]').textContent = a.title || a.slug; return; }
+              const o = document.createElement('option');
+              o.value = a.slug; o.textContent = (a.brand_role ? a.brand_role + ': ' : '') + (a.title || a.slug);
+              i.appendChild(o);
+            });
+          }).catch(() => {});
+        } else {
+          i = input(cfg.values[f.key], cfg.fallbacks[f.key] ? 'not set (shows "' + cfg.fallbacks[f.key] + '")' : 'not set');
+        }
         i.id = 'admin-install-' + f.key; i.dataset.key = f.key; i.style.marginTop = '4px';
         row.append(lab, hint, i);
         fieldsEl.appendChild(row);
@@ -666,7 +684,7 @@
     }
     function collect() {
       const out = {};
-      fieldsEl.querySelectorAll('input[data-key]').forEach(i => {
+      fieldsEl.querySelectorAll('[data-key]').forEach(i => {
         if (i.value.trim() !== (saved.values[i.dataset.key] || '')) out[i.dataset.key] = i.value.trim();
       });
       const targets = {};
@@ -1047,7 +1065,9 @@
       let html = '<div class="audit-log-list">';
       for (const row of rows) {
         const statusClass = row.status_code >= 200 && row.status_code < 300 ? 'success' : row.status_code >= 400 ? 'error' : 'other';
-        const errorDetail = row.error_detail ? ` (${escapeHtml(row.error_detail)})` : '';
+        // #583: the reason ("bad_request: Unsupported file type: .xyz") gets its own line under the path.
+        const errorDetail = row.error_detail
+          ? `<div class="audit-log-reason" title="${escapeHtml(row.error_detail)}">${escapeHtml(row.error_detail)}</div>` : '';
         const slugs = row.affected_slugs && row.affected_slugs.length > 0
           ? escapeHtml(row.affected_slugs.join(', '))
           : '-';
@@ -1055,7 +1075,8 @@
           <div class="audit-log-entry">
             <div class="audit-log-method">${escapeHtml(row.method)}</div>
             <div class="audit-log-path" title="${escapeHtml(row.path)}">${escapeHtml(row.path)}</div>
-            <div class="audit-log-status audit-log-status-${statusClass}">${row.status_code}${errorDetail}</div>
+            <div class="audit-log-status audit-log-status-${statusClass}">${row.status_code}</div>
+            ${errorDetail}
             <div class="audit-log-slugs" title="${slugs}">${slugs}</div>
             <div class="audit-log-time">${escapeHtml(row.timestamp_friendly || '-')}</div>
           </div>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ hobby.name }} — Hobby — Constructicon{% endblock %}
+{% block title %}{{ hobby.name }} — Hobby — {{ app_name() }}{% endblock %}
 {% block body %}
 {% from "_card.html" import card %}
 {% from "_details_group.html" import dp_group %}

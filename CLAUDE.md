@@ -694,6 +694,14 @@ One install per customer, so **nothing owner-specific lives in code**. Who the i
 and where it publishes is data: the `install_config` key/value table, owned by
 `core/install_config.py`, edited in **Admin > Install** (`GET/POST /api/install-config`, admin role,
 JSON body). No secrets there: the publish token stays a write-only API key (`app_settings`).
+- **App name and logo (#581):** `app_name` (header, home title, every tab title via the `app_name()` Jinja
+  global; the `DEV-` prefix is still added by `base.html`) and `app_logo` (slug of a brand-asset image,
+  served at `/f/<slug>`; `app_logo_url()`). Unset = "Constructicon" and `/brand/logo.png`. `/brand` serves
+  `assets/brand/` first, then `web/static/brand-fallback/` (logo, favicons, touch icon), so an install
+  without the `./assets` mount still has a logo.
+- **Audit reason (#583):** `web/middleware.py` fills `audit_log.error_detail` for any >= 400 response from a
+  small, already-complete JSON body (`"<code>: <message>"` or a plain `detail`); streams and files are never
+  read; redacted routes keep only the code.
 - **Keys:** `owner_name` (home page gallery tab + its initials), `owner_label` (the "who" prefix of
   every upload's Source label, defaults to `owner_name`), `site_title` (static export title),
   `copyright_holder` (export footer "(c) <holder>.", nothing when unset), `publish_targets`

@@ -75,8 +75,19 @@ app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 # assets" section. Mounted separately rather than copied into web/static so
 # there's a single source of truth for them.
 _BRAND_DIR = Path(__file__).resolve().parent.parent / "assets" / "brand"
-if _BRAND_DIR.is_dir():
-    app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
+# #581: the image doesn't copy code, so an install whose compose file doesn't mount ./assets has
+# no assets/brand. /brand then falls back to the handful of files shipped inside web/static
+# (logo, favicons, touch icon) instead of 404ing on every page. The mounted directory wins.
+_BRAND_FALLBACK_DIR = _STATIC_DIR / "brand-fallback"
+
+
+class _BrandFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        self.all_directories = [d for d in (_BRAND_DIR, _BRAND_FALLBACK_DIR) if d.is_dir()]
+        return await super().get_response(path, scope)
+
+
+app.mount("/brand", _BrandFiles(directory=_BRAND_FALLBACK_DIR), name="brand")
 
 # Preview mount for exported sites — points to the current build directory.
 # Ensure the directory exists (even if empty) so the mount doesn't fail at startup.

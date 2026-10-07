@@ -9,7 +9,7 @@ from urllib.parse import unquote, quote
 
 from fastapi.templating import Jinja2Templates
 
-from core import besteffort, db, markdown_render, object_types, storage
+from core import besteffort, db, install_config, markdown_render, object_types, storage
 from core import version as version_info
 
 log = logging.getLogger("constructicon.web")
@@ -54,6 +54,12 @@ templates.env.globals["is_dev"] = _IS_DEV
 # #508: build version, shown subtly on every page via base.html. A callable
 # global so each render re-reads core/VERSION.json (written by deploy.sh).
 templates.env.globals["app_version"] = version_info.get_version
+
+# #581: the install's own name and logo (install config, cached per process). Callables so each
+# render sees a saved change; "Constructicon" and the bundled logo when unset. The tab title keeps
+# its DEV- prefix: base.html puts is_dev in front of whatever name the page's title block makes.
+templates.env.globals["app_name"] = install_config.app_name
+templates.env.globals["app_logo_url"] = install_config.app_logo_url
 
 # #431: derive the file upload accept list from the object_types registry
 # rather than hardcoding it in templates. This ensures web/templates/_upload_drawer.html

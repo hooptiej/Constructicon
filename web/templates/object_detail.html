@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ item.display_name }} — Constructicon{% endblock %}
+{% block title %}{{ item.display_name }} — {{ app_name() }}{% endblock %}
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
@@ -1164,7 +1164,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     currentName = name;
     textEl.textContent = name;
     if (breadcrumbEl) breadcrumbEl.textContent = name;
-    document.title = `${name} — Constructicon`;
+    document.title = `${name} — ` + {{ app_name() | tojson }};
   }
 
   function startEdit() {

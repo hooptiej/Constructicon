@@ -217,7 +217,33 @@ def run_ocr(slug):
             print(f"could not mark {slug} failed after OCR pipeline error: {e2!r}")
 
 
+BLANK_FILE_MAX_BYTES = 1024 * 1024
+
+
+def is_blank_file(row):
+    """#587 item 1: True when the item's stored file is zero bytes or only whitespace. There is
+    nothing to read, so that is not an OCR failure. Only small files are read (a file that is all
+    whitespace but over 1 MB isn't worth special-casing)."""
+    stored = row.get("stored_filename")
+    if not stored:
+        return False
+    try:
+        path = storage.path_for(stored)
+        size = path.stat().st_size
+        if size == 0:
+            return True
+        if size > BLANK_FILE_MAX_BYTES:
+            return False
+        return not path.read_bytes().strip()
+    except OSError:  # silent-ok: an unreadable or missing file is not provably blank; the normal path decides
+        return False
+
+
 def _run_ocr_pipeline(slug, row, spec):
+    if is_blank_file(row):
+        db.set_extracted_text(slug, "")
+        db.set_ocr_status(slug, "done")
+        return
     # A type with its own embedded text layer (a text-layer PDF today — see
     # core/pdf.py — any future document-ish type tomorrow) gets its text
     # straight from that layer, no tesseract involved: cheaper, and more

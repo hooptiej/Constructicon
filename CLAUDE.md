@@ -148,7 +148,10 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
   web app over the same `/api/upload`/`/api/content` HTTP API. It sends the
   install token (`Authorization: Bearer`, menu "Set Install Token…", #467 step 2);
   its `X-Constructicon-Client: desktop-app` header only picks the upload's Source
-  label and grants nothing.
+  label and grants nothing. The source zip is built from `/app/desktop_app` at request time (#601):
+  compose mounts `./desktop_app:/app/desktop_app:ro` into the web service (the Dockerfile also bakes
+  a fallback copy), and a tree without `constructicon_uploader/api.py` answers 503
+  `uploader_source_missing` instead of an empty zip. Check with `scripts/test_types_602.py`.
 - **`mcp_server/server.py`** — the live `constructicon-mcp` sidecar (see
   "MCP server: `constructicon-mcp`" below for the tool surface and how it
   runs alongside `constructicon-web`). Tool names are `constructicon_*`;
@@ -680,6 +683,11 @@ To add a new object type (issue #448 contract v2):
 4. **Preview guidance**: previews must escape all data (no raw HTML from untrusted sources; build with `_preview.py` helpers or `markupsafe.escape`) and handle `ctx.mode`: `"live"` (object page) and `"export"` (static site; most types render export markup via the helpers, some deliberately return the download link or `None` to keep the export as it was). A preview that needs its own file reads `ctx.file_path`; never guess at item-dict keys. **Anything expensive goes in `embedded_metadata_fn` (computed once at upload, stored in `type_metadata`), never in `preview_fn`/`properties_fn`, which run on every page view.** Measured lesson: per-view STL mesh parsing took 7.9 s on a real 22 MB file.
 
 5. **Verify BEFORE deploying**: run `docker exec <container> python3 scripts/check_object_types.py` in `constructicon-test` first. It renders every type live + export against hostile synthetic data, flags unescaped output, and exits 1 on any failure. Registration enforcement means **an incomplete type file stops the app from booting at all** (verified: restart loop with `ObjectTypeContractError`), so a bad type deployed to prod = the site is down. Then snapshot real object pages + the static export before/after the change and diff them.
+
+   A type whose `sniff_fn` can refuse a supported extension should set `content_noun` (a string, or
+   `{ext: noun}`), so the refusal reads "This .msi file isn't a valid Windows Installer package"
+   (`object_types.mismatch_reason`, #602) rather than "Unsupported file type". `vpptoken.py` (#602) is
+   the model for a restricted credential type that stores facts only (never the secret).
 
 6. **No other changes needed**: All dispatch (thumbnails, OCR, type lists, etc.) works off the registry. No per-media-type branches in templates, no `if media_type == "..."` conditionals in app code — the registry is the single source of truth.
 

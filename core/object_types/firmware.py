@@ -33,6 +33,8 @@ from markupsafe import Markup, escape
 from .. import besteffort, storage
 from . import _preview, register, ObjectTypeSpec, ThumbnailSource
 
+log = logging.getLogger("constructicon.firmware")  # #600: extract_text_for_row's best-effort warning
+
 STATS_KEY = "firmware_stats"
 HEAD_RECORDS = 40          # records kept for the preview
 MAX_RANGES = 8             # address ranges kept (total count is still recorded)

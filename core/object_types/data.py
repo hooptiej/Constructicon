@@ -36,8 +36,7 @@ def extract_text(path):
     if not path:
         return ""
     try:
-        with path.open(encoding="utf-8", errors="replace") as f:
-            return f.read(storage.MAX_EXTRACTED_TEXT_CHARS).strip()
+        return _textstats.read_text(path, storage.MAX_EXTRACTED_TEXT_CHARS).strip()  # #607: BOM / UTF-16 aware
     except Exception as e:
         print(f"Data text extraction failed for {path}: {e!r}")
         return ""
@@ -95,7 +94,7 @@ _COUNT_BUDGET = 16 * 1024 * 1024
 def _scan(path, keep=21):
     """One streaming pass: (delimiter, first `keep` rows, rows counted,
     complete?) or None for an empty file. Never loads the whole file."""
-    with path.open(encoding="utf-8", errors="replace", newline="") as f:
+    with _textstats.open_text(path, newline="") as f:  # #607: BOM / UTF-16 aware
         sample = f.read(64 * 1024)
         try:
             delimiter = csv.Sniffer().sniff(sample).delimiter
@@ -122,6 +121,14 @@ def _scan(path, keep=21):
     return (delimiter, head, counted, complete) if head else None
 
 
+CELL_CHARS = 400  # a cell's text in the page: the table cuts it to one line anyway, a click shows this much
+
+
+def _cell(tag, value):
+    value = value if len(value) <= CELL_CHARS else value[:CELL_CHARS - 1] + "…"
+    return f'<{tag} title="{escape(value)}">{escape(value)}</{tag}>'
+
+
 def preview(ctx):
     """#449 preview_fn: CSV table preview (header + first 20 data rows).
     Reads the stored file via ctx.file_path; export keeps the download link."""
@@ -137,27 +144,28 @@ def preview(ctx):
             return None
         _delimiter, head, counted, complete = scan
 
-        # Build HTML table (header + first 20 data rows)
+        # Build HTML table (header + first 20 data rows). #606: every cell carries its full value as
+        # its title (the CSS cuts the visible text to one line; a click opens it).
         headers = head[0]
         data_rows = head[1:21]
         total_rows = counted - 1
 
         html = '<div class="data-preview"><table><thead><tr>'
         for header in headers:
-            html += f'<th>{escape(header)}</th>'
+            html += _cell("th", header)
         html += '</tr></thead><tbody>'
 
         for row in data_rows:
             html += '<tr>'
             for cell in row:
-                html += f'<td>{escape(cell)}</td>'
+                html += _cell("td", cell)
             html += '</tr>'
 
         html += '</tbody></table></div>'
 
         if total_rows > 20:
             of = f"{total_rows:,}" if complete else f"{total_rows:,}+"
-            html += f'<p class="muted">Showing the first 20 of {of} rows</p>'
+            html += f'<p class="muted data-preview-note">Showing the first 20 of {of} rows</p>'
 
         return Markup(html)
     except Exception as e:
@@ -178,6 +186,7 @@ register(ObjectTypeSpec(
     properties_fn=get_properties,
     preview_fn=preview,
     preview_assets=("datatable",),
+    preview_layout="table",  # #606: the table gets the page width
     badge_icon="📊",
     badge_text="DATA",
 ))

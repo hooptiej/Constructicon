@@ -1007,6 +1007,46 @@ def _mig_writeup_lead_596():
                      (cards.writeup_lead(r["writeup_slug"]), r["id"]))
 
 
+def _mig_reextract_utf16_text_607():
+    # #607 part 3: text files in UTF-16 / UTF-32 (what Windows writes for `gpresult /h`, `powercfg
+    # /batteryreport`, `msinfo32`) were read as UTF-8 and stopped almost at once, so their extracted
+    # text was a few characters (150 KB report -> 3 characters) and they were unsearchable. The readers
+    # now detect the encoding; this re-extracts the rows already stored wrong, once. A row qualifies
+    # when its text is far shorter than its file (under 1/8 of the bytes), the file itself reads as
+    # UTF-16/32 (BOM, or the NUL heuristic) and its type has a text reader; the new text replaces the
+    # old when that is NUL-ridden (the signature of UTF-16 read as UTF-8) or shorter. Note SQLite's
+    # length() stops at the first NUL, which is why a 233 KB report reads as "3 characters" in SQL.
+    # Idempotent (a second run finds nothing to fix).
+    from . import object_types, storage
+    from .object_types import _textstats
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug, media_type, stored_filename, file_size, extracted_text FROM capture_events "
+        "WHERE stored_filename IS NOT NULL AND file_size >= 64 "
+        "AND length(COALESCE(extracted_text, '')) * 8 < file_size").fetchall()
+    checked = fixed = 0
+    for r in rows:
+        spec = object_types.get_object_type(r["media_type"])
+        if spec is None or spec.text_extract_fn is None:
+            continue
+        checked += 1
+        try:
+            path = storage.path_for(r["stored_filename"])
+            codec, _label = _textstats.sniff_encoding(path)
+        except OSError:  # silent-ok: file missing or unreadable: nothing to re-read, leave the row as it is
+            continue
+        if not codec.startswith(("utf-16", "utf-32")):
+            continue
+        new_text = (spec.text_extract_fn(dict(r)) or "").strip()
+        old_text = r["extracted_text"] or ""
+        # The old reader's output for a UTF-16 file is full of NUL characters (SQLite's length() stops at the
+        # first one, which is how these rows look "short"); that, or simply being shorter, means replace.
+        if "\x00" in old_text or len(new_text) > len(old_text):
+            conn.execute("UPDATE capture_events SET extracted_text = ? WHERE slug = ?", (new_text, r["slug"]))
+            fixed += 1
+    print(f"reextract_utf16_text_607: {len(rows)} short-text rows, {checked} with a text reader, {fixed} re-extracted", flush=True)
+
+
 # Order matters (v2c_1 first: later steps read the kind/stage it assigns).
 # #562: v2c_3 (the AlienWhoop family question) and v2c_4 (the AW canopy question) were about the
 # owner's own cards; they moved to scripts/archive/ (already recorded in schema_migrations on the
@@ -1024,6 +1064,7 @@ MIGRATIONS = [
     ("hobby_physical_piece_562", _mig_hobby_physical_piece_562),
     ("empty_file_ocr_done_587", _mig_empty_file_ocr_done_587),
     ("writeup_lead_596", _mig_writeup_lead_596),
+    ("reextract_utf16_text_607", _mig_reextract_utf16_text_607),
 ]
 
 

@@ -41,8 +41,7 @@ def extract_text(path):
     if not path:
         return ""
     try:
-        with path.open(encoding="utf-8", errors="replace") as f:
-            return f.read(storage.MAX_EXTRACTED_TEXT_CHARS).strip()
+        return _textstats.read_text(path, storage.MAX_EXTRACTED_TEXT_CHARS).strip()  # #607: BOM / UTF-16 aware
     except Exception as e:
         print(f"Text extraction failed for {path}: {e!r}")
         return ""

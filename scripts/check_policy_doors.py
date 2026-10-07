@@ -35,6 +35,8 @@ DOORS = {
     ("web/routes/pages.py", "unfiled_page"): "/unfiled",
     ("web/routes/pages.py", "user_gallery_page"): "/gallery/user/{uploader}",
     ("web/routes/items.py", "api_get_image"): "GET /api/image/{slug}",
+    ("web/routes/items.py", "api_get_item_text"): "GET /api/image/{slug}/text (#607)",
+    ("web/routes/items.py", "api_rendered_html"): "GET /api/image/{slug}/rendered (#607)",
     ("web/routes/items.py", "api_get_revisions"): "GET /api/image/{slug}/revisions",
     ("web/routes/items.py", "api_get_similar"): "GET /api/image/{slug}/similar",
     ("web/routes/items.py", "api_gallery"): "GET /api/gallery",

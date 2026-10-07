@@ -544,7 +544,7 @@ def object_detail_page(request: Request, slug: str):
     my_role = roles.role_of(actor_ctx.current_actor())
     sensitive_ctl = {
         "can_mark": roles.at_least(my_role, roles.EDITOR),
-        "can_unmark": policy.can_unmark_sensitive(),
+        "can_unmark": policy.can_unmark_sensitive(item=row),
         "access_log": ([{**e, "who": actor_label(e["actor"]), "at_display": _friendly_datetime(e["at"])}
                         for e in access_log.for_item(slug, limit=50)]
                        if item["sensitive"] and roles.at_least(my_role, roles.ADMIN) else None),

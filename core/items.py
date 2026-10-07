@@ -287,8 +287,6 @@ def set_sensitive(slugs, sensitive, *, dry_run=False, actor=None, batch_id=None)
         raise InvalidInput("Give at least one item.", code="no_items")
     want = bool(sensitive)
     who = actor_ctx.resolve(actor)
-    if not want and not policy.can_unmark_sensitive(who):
-        raise _forbidden("Only an admin can clear the sensitive flag.")
     if want and not roles.at_least(roles.role_of(who), roles.EDITOR):
         raise _forbidden("Marking an item sensitive needs an editor or an admin.")
     rows = []
@@ -296,6 +294,8 @@ def set_sensitive(slugs, sensitive, *, dry_run=False, actor=None, batch_id=None)
         row = db.get_by_slug(slug)
         if row is None or not policy.can_view(row, who):
             raise NotFound(f"No item {slug!r}.")
+        if not want and row.get("sensitive") and not policy.can_unmark_sensitive(who, row):
+            raise _forbidden("Only the uploader or an admin can clear the sensitive flag.")
         rows.append(row)
     batch_id = batch_id or changes.new_batch_id()
     now = time.time()
@@ -324,8 +324,9 @@ def check_undo_allowed(rows, actor=None):
             if m.get("table") != "capture_events" or before is None or after is None:
                 continue
             if after.get("sensitive") and "sensitive" in before and not before.get("sensitive"):
-                if not policy.can_unmark_sensitive(actor):
-                    raise _forbidden("Undoing this would clear an item's sensitive flag, which only an admin can do.")
+                if not policy.can_unmark_sensitive(actor, after):
+                    raise _forbidden("Undoing this would clear an item's sensitive flag, which only its "
+                                     "uploader or an admin can do.")
 
 
 # --- related items (#16) -----------------------------------------------------------------

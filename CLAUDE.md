@@ -496,8 +496,9 @@ username, name}, or None).
 **The sensitive flag (step 2, #603).** `capture_events.sensitive` (0/1) + `sensitive_by` (the actor
 string) + `sensitive_at`. Written only by `items.set_sensitive(slugs, on)`: ONE imaged change-log row
 (op `item_sensitive`), undoable with the generic undo.
-- **Mark: editor or above. Clear: admin only** (403 `forbidden`, checked before the items are looked
-  up). An undo that would clear a flag is an unmark, so it is admin-only too
+- **Mark: editor or above. Clear: the item's uploader or an admin** (owner decision on #603,
+  2026-10-07; `policy.can_unmark_sensitive(actor, item)`, checked per item, else 403 `forbidden`).
+  An undo that would clear a flag is an unmark, so the same rule applies
   (`items.check_undo_allowed`, called by `cards.undo`); undoing an unmark (re-locking) is open.
 - **Where:** the item page's ORIGIN group ("This is sensitive" / "Clear sensitive", `POST
   /api/image/{slug}/sensitive`, `sensitive=true|false`); the Unfiled and uploader-gallery selection bars

@@ -261,8 +261,13 @@ check("an ordinary item is untouched for V (page 200)", C["V"].get(f"/object/{TO
 print("--- 3. flipping, undo, bulk ---")
 r = C["E2"].post(f"/api/image/{E1_ITEM}/sensitive", data={"sensitive": "false"}, headers=H["E2"])
 check("E2 clearing -> 403 forbidden", r.status_code == 403 and err_code(r) == "forbidden", f"{r.status_code} {r.text[:120]}")
+check("can_unmark: the uploader E1 and an admin yes; E2 and V no (owner decision on #603)",
+      [policy.can_unmark_sensitive(a, row(E1_ITEM)) for a in ("user:os_ed1", "user:os_admin", "user:os_ed2", "user:os_view")]
+      == [True, True, False, False])
 r = C["E1"].post(f"/api/image/{E1_ITEM}/sensitive", data={"sensitive": "false"}, headers=H["E1"])
-check("E1 (the uploader, an editor) clearing -> 403 (admin only)", r.status_code == 403, r.status_code)
+check("E1 (the uploader) clearing -> 200", r.status_code == 200 and row(E1_ITEM)["sensitive"] == 0, f"{r.status_code} {r.text[:120]}")
+r = C["E1"].post(f"/api/changes/{r.json()['batch_id']}/undo", headers=H["E1"])
+check("E1 undoes their own clear (re-locks) -> 200", r.status_code == 200 and row(E1_ITEM)["sensitive"] == 1, f"{r.status_code} {r.text[:120]}")
 r = C["V"].post(f"/api/image/{TOKEN_ITEM}/sensitive", data={"sensitive": "true"}, headers=H["V"])
 check("V marking -> 403 (editor route)", r.status_code == 403, r.status_code)
 r = C["E2"].post(f"/api/changes/{MARK_BATCH}/undo", headers=H["E2"])

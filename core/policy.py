@@ -202,6 +202,11 @@ def note_access(item, how, actor=None):
         access_log.record(item["slug"], how, actor)
 
 
-def can_unmark_sensitive(actor=None):
-    """Clearing the #603 flag is admin-only (marking is any editor: locking is the safe direction)."""
-    return roles.at_least(roles.role_of(actor_ctx.resolve(actor)), roles.ADMIN)
+def can_unmark_sensitive(actor=None, item=None):
+    """Clearing the #603 flag: an admin, or the item's own uploader (owner decision on #603,
+    2026-10-07: "unmark is the uploader or an admin"). Marking is any editor: locking is the
+    safe direction. Without an item only an admin qualifies."""
+    who = actor_ctx.resolve(actor)
+    if roles.at_least(roles.role_of(who), roles.ADMIN):
+        return True
+    return item is not None and is_uploader(item, who)

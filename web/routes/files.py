@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from core import db, object_types, storage, thumbnails
 from web.common import DESKTOP_APP_BUILD_PATH, DESKTOP_APP_DIR
 from core import policy, roles
+from core.errors import AppError
 from web.roles import RoleRouter, requires
 
 router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own label are viewer
@@ -22,12 +23,24 @@ def download_desktop_app_source(request: Request):
     which this server can't do (it's the same Linux/Docker box everything
     else runs on). Zipped fresh from disk on every request rather than a
     pre-built artifact, so it's never out of sync with what's actually in
-    the repo."""
+    the repo.
+
+    #601: the app image must carry desktop_app/ (mounted read-only by compose, or the copy baked
+    into the image). Before this, a container without it served a valid but EMPTY zip. Now a
+    source tree that doesn't hold the uploader package is a 503 with the reason, never an empty
+    download."""
+    files = [p for p in sorted(DESKTOP_APP_DIR.rglob("*"))
+             if p.is_file() and "__pycache__" not in p.parts] if DESKTOP_APP_DIR.is_dir() else []
+    if not any(p.relative_to(DESKTOP_APP_DIR).as_posix() == "constructicon_uploader/api.py" for p in files):
+        raise AppError(
+            "uploader_source_missing",
+            "The uploader source isn't installed on this server (desktop_app/ is missing from the app "
+            "container). Ask the administrator to mount ./desktop_app into the web service.",
+            status=503,
+        )
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(DESKTOP_APP_DIR.rglob("*")):
-            if not path.is_file() or "__pycache__" in path.parts:
-                continue
+        for path in files:
             arcname = Path("constructicon-uploader-source") / path.relative_to(DESKTOP_APP_DIR)
             zf.write(path, arcname=str(arcname))
     return Response(

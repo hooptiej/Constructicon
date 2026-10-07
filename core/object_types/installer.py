@@ -558,6 +558,14 @@ register(ObjectTypeSpec(
     extensions=EXTENSIONS,
     sniff_fn=sniff,
     sniff_priority=10,  # #446: for .exe, runs before the application type's plain-PE sniffer
+    content_noun={  # #602: the refusal when a file's contents don't match its extension
+        ".msi": "Windows Installer package",
+        ".pkg": "macOS installer package", ".mpkg": "macOS installer package", ".xip": "Apple signed archive",
+        ".deb": "Debian package", ".rpm": "RPM package",
+        ".msix": "MSIX/AppX package", ".appx": "MSIX/AppX package",
+        ".msixbundle": "MSIX/AppX bundle", ".appxbundle": "MSIX/AppX bundle",
+        ".exe": "Windows executable",
+    },
     properties_fn=get_properties,
     embedded_metadata_fn=get_embedded_metadata,  # parsed once, at upload
     preview_fn=preview,

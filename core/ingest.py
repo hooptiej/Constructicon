@@ -25,7 +25,7 @@ class IngestResult:
     - row: The created/found row dict, or None if error/duplicate (check duplicate flag).
     - duplicate: True if this is an existing row (file already uploaded).
     - error: Human-readable error message, or None if successful.
-    - error_kind: Category of error — one of "too_large", "unsupported", "invalid", "rejected", or None.
+    - error_kind: Category of error — one of "too_large", "unsupported", "content_mismatch", "invalid", "rejected", or None.
     - pending_decision_id: #448: if action is "needs_decision", the id of the pending_decisions row queued.
     """
     row: dict | None = None
@@ -246,12 +246,13 @@ def ingest_file(
     path = storage.path_for(stored_filename)
     media_type_sniffed = object_types.detect_media_type(filename, path)
 
-    # If sniffing failed to find a type, the file isn't supported
+    # If sniffing failed to find a type, the contents don't match the extension (#602: the
+    # extension itself is supported, so say what actually went wrong)
     if media_type_sniffed is None:
         path.unlink(missing_ok=True)
         return IngestResult(
-            error=f"Unsupported file type: {Path(filename).suffix}",
-            error_kind="unsupported"
+            error=object_types.mismatch_reason(filename),
+            error_kind="content_mismatch"
         )
 
     # Use sniffed type if different

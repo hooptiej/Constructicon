@@ -16,6 +16,7 @@ timestamp.
 """
 
 import logging
+import mimetypes
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,10 @@ from PIL.ExifTags import TAGS
 from .. import besteffort, storage, timeline
 
 log = logging.getLogger("constructicon.image")
+
+# #602: Python's table doesn't know every JPEG alias (.jpe), so /f/<slug> would be served untyped.
+for _alias in (".jfif", ".jpe"):
+    mimetypes.add_type("image/jpeg", _alias)
 
 # EXIF tag ids. The capture-time tags live in the Exif SubIFD (0x8769 in
 # the main IFD, same place _exif_properties reads exposure/aperture/ISO
@@ -210,7 +215,9 @@ register(ObjectTypeSpec(
     thumbnail_source=ThumbnailSource.UPLOADED_FILE,
     ocr_capable=True,
     caption_capable=True,  # #239: the uploaded image itself goes to the vision model
-    extensions=frozenset({".png", ".jpg", ".jpeg", ".ico", ".bmp", ".tiff", ".tif", ".webp"}),
+    # #602: .jfif / .jpe are JPEGs under their older names; Pillow sniffs by content, so they are
+    # handled exactly like .jpg (thumbnail, OCR, perceptual hash).
+    extensions=frozenset({".png", ".jpg", ".jpeg", ".jfif", ".jpe", ".ico", ".bmp", ".tiff", ".tif", ".webp"}),
     properties_fn=get_properties,
     # #265: EXIF DateTimeOriginal -> content_date at upload time (and via
     # scripts/backfill_content_dates.py for rows that predate this). See

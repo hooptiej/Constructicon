@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Set up — {{ app_name() }}{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+{% include "_blog_builder.html" %}
+{% include "_export_builder.html" %}
+{#- #467 step 1: first-run setup. Served only while the install has no user (404 afterwards).
+    Creates the first admin, signs them in, and fills the install's owner name when unset. -#}
+<div class="app-main">
+  <section class="admin-panel auth-card">
+    <div>
+      <h1 class="page-title">Create the admin account</h1>
+      <p class="page-subtitle">This install has no accounts yet. The account you create here is its first admin: it can add
+        other people (viewers, editors, admins) in Admin &rarr; Users.{% if not owner_name_set %} Your name also becomes
+        the install's owner name (change it any time in Admin &rarr; Install).{% endif %}</p>
+    </div>
+    <form id="setup-form" class="auth-form" method="post" novalidate>
+      <label>Your name
+        <input class="input" name="display_name" id="setup-display-name" autocomplete="name" maxlength="80">
+      </label>
+      <label>Username
+        <input class="input" name="username" id="setup-username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="32">
+      </label>
+      <label>Password (at least 10 characters)
+        <input class="input" type="password" name="password" id="setup-password" autocomplete="new-password" required>
+      </label>
+      <label>Password again
+        <input class="input" type="password" name="confirm" id="setup-confirm" autocomplete="new-password" required>
+      </label>
+      <p class="error-text" id="setup-error" role="alert" hidden></p>
+      <button type="submit" class="btn-primary" id="setup-submit">Create the admin account</button>
+    </form>
+  </section>
+</div>
+<script>
+(function () {
+  const form = document.getElementById('setup-form');
+  const err = document.getElementById('setup-error');
+  const btn = document.getElementById('setup-submit');
+  function fail(msg) { err.textContent = msg; err.hidden = false; }
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    err.hidden = true;
+    if (form.password.value !== form.confirm.value) { fail('The two passwords are different.'); return; }
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/auth/setup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          username: form.username.value,
+          display_name: form.display_name.value,
+          password: form.password.value,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) { window.location.href = '/admin'; return; }
+      fail((body.error && body.error.message) || body.detail || ('Setup failed (' + res.status + ')'));
+    } catch (e) {
+      fail('Could not reach the server. Try again.');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -19,6 +19,7 @@ Policy for the headers, deliberately:
 """
 
 import os
+import re
 from urllib.parse import urlsplit
 
 from starlette.responses import JSONResponse
@@ -106,7 +107,30 @@ REDACTED = "[REDACTED]"
 AUDIT_ROUTE_RULES = {
     "/api/settings": "name_only",
     "/api/account/desktop-app-build": "none",
+    # #467 step 1: everything that carries a password (sign-in, first-run setup, my password,
+    # creating a user) logs no body values at all.
+    "/api/auth/login": "none",
+    "/api/auth/setup": "none",
+    "/api/account/password": "none",
+    "/api/users": "none",
 }
+
+# The same rules for parametrised paths (an admin's password reset for user N).
+AUDIT_ROUTE_PATTERNS = (
+    (re.compile(r"^/api/users/[^/]+/password$"), "none"),
+)
+
+
+def audit_route_rule(path):
+    """The redaction rule for a request path: exact match first, then the patterns; None = the
+    field-name backstop only."""
+    rule = AUDIT_ROUTE_RULES.get(path)
+    if rule:
+        return rule
+    for pattern, pat_rule in AUDIT_ROUTE_PATTERNS:
+        if pattern.match(path or ""):
+            return pat_rule
+    return None
 
 # Routes where a field that merely *looks* secret by name is known to be plain data.
 # provenance-options send `key` = an option slug.
@@ -121,7 +145,7 @@ def redact_audit_error(path, reason):
     """#583: the same redaction for the reason text of a refused request. A route whose body is
     logged as redacted ("none" / "name_only", #559) may echo what was sent in its message, so only
     the error code (the part before ": ") is kept; elsewhere the text is stored as is."""
-    if AUDIT_ROUTE_RULES.get(path) in ("none", "name_only"):
+    if audit_route_rule(path) in ("none", "name_only"):
         code, sep, _ = reason.partition(": ")
         return code if sep else REDACTED
     return reason
@@ -131,7 +155,7 @@ def redact_audit_body(path, form_data):
     """Return a copy of form_data that is safe to write to audit_log."""
     if not form_data:
         return {}
-    rule = AUDIT_ROUTE_RULES.get(path)
+    rule = audit_route_rule(path)
     if rule == "none":
         return {"_body": "not logged: this route carries secrets or file bodies"}
     if rule == "name_only":

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Sign out — {{ app_name() }}{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+{% include "_blog_builder.html" %}
+{% include "_export_builder.html" %}
+{#- #467 step 1: signing out is a POST (a GET never ends a session), from this page's button. -#}
+<div class="app-main">
+  <section class="admin-panel auth-card">
+    {% set _me = current_user() %}
+    {% if _me %}
+    <div>
+      <h1 class="page-title">Sign out</h1>
+      <p class="page-subtitle">Signed in as {{ _me.name }} ({{ _me.username }}, {{ _me.role }}).</p>
+    </div>
+    <p class="error-text" id="logout-error" role="alert" hidden></p>
+    <button type="button" class="btn-primary" id="logout-submit">Sign out</button>
+    {% else %}
+    <div>
+      <h1 class="page-title">You're signed out</h1>
+      <p class="page-subtitle"><a href="/login">Sign in</a> again, or go <a href="/">home</a>.</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% if _me %}
+<script>
+(function () {
+  const btn = document.getElementById('logout-submit');
+  const err = document.getElementById('logout-error');
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/auth/logout', {method: 'POST'});
+      if (res.ok) { window.location.href = '/'; return; }
+      const body = await res.json().catch(() => ({}));
+      err.textContent = (body.error && body.error.message) || body.detail || ('Sign-out failed (' + res.status + ')');
+      err.hidden = false;
+    } catch (e) {
+      err.textContent = 'Could not reach the server. Try again.';
+      err.hidden = false;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

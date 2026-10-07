@@ -11,7 +11,7 @@ from core import hobbies, physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
 from web.common import _build_breadcrumbs, _rev_note, templates
 from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_object_detail, _to_public, _to_timeline_project
-from core import policy, roles
+from core import policy, roles, users
 from web.roles import RoleRouter, requires
 
 router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own label are viewer
@@ -567,8 +567,10 @@ def admin_page(request: Request, embed: int = 0):
     no other drawers) so it can be loaded inside the Admin nav-rail drawer's
     iframe without nested chrome. The panels/JS are identical either way."""
     # #562: "Finish setting up this install" banner until the owner name is set (Admin > Install).
+    # #467 step 1: "Create the admin account" banner while the install has no user at all.
     return templates.TemplateResponse(request, "admin.html", {"embed": bool(embed),
-                                                              "install_setup_needed": install_config.setup_needed()})
+                                                              "install_setup_needed": install_config.setup_needed(),
+                                                              "users_setup_needed": users.setup_needed()})
 
 
 # #562: in-app guides (served from the app, not the owner's GitHub). slug -> (file, title).

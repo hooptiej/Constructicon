@@ -29,6 +29,16 @@
     <p class="page-subtitle">Decisions waiting on you, hidden items, integration keys, caption tuning, recent activity and maintenance.</p>
   </div>
 
+  {#- #467 step 1: shown while the install has no user account at all. Nothing forces setup yet
+      (nothing is enforced in step 1); the banner goes away once the first admin exists. -#}
+  {% if users_setup_needed %}
+  <div class="admin-panel" id="users-setup-banner" role="status"
+       style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 16px;border-color:var(--hazard-yellow)">
+    <span><strong>Create the admin account.</strong> This install has no accounts yet: the first one you create is its admin.</span>
+    <a class="btn-ms" href="/setup" target="_top" style="width:auto">Create the admin account</a>
+  </div>
+  {% endif %}
+
   {#- #562: shown until the install has an owner name (core/install_config.setup_needed). #467's
       first-run setup (the first admin account) will take this over; until then it points at
       Admin > Install below. Dismissing it hides it in this browser only. -#}
@@ -176,6 +186,41 @@
         <button type="button" class="btn-ms" id="admin-install-save" style="width:auto">Save</button>
         <span id="admin-install-msg" class="backup-status" role="status"></span>
       </div>
+    </section>
+
+    <!-- Users (#467 step 1): who can sign in, and with which role (core/users.py, /api/users).
+         Roles are recorded but not enforced yet (step 2 turns them on). Passwords are never shown
+         or logged; the last enabled admin can't be demoted, disabled or deleted. -->
+    <section class="admin-panel admin-panel-wide" id="admin-users-section" aria-labelledby="admin-users-heading">
+      <div class="admin-panel-header">
+        <div>
+          <h2 id="admin-users-heading">Users <span id="admin-users-count" class="apikey-status"></span></h2>
+          <div class="admin-row-hint">Viewers read the archive, editors curate it, admins run the install. Roles are not enforced
+            yet: signing in records who made each change.</div>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="admin-users-table">
+          <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last sign-in</th><th>Actions</th></tr></thead>
+          <tbody id="admin-users-rows"><tr><td colspan="6" class="admin-row-hint">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="admin-divider"></div>
+      <div class="admin-row">
+        <div class="admin-row-label">Add a user</div>
+        <form class="admin-users-add" id="admin-users-add" autocomplete="off" novalidate>
+          <input class="input" name="display_name" placeholder="Name" maxlength="80" aria-label="Name">
+          <input class="input" name="username" placeholder="Username" maxlength="32" autocapitalize="none" spellcheck="false" aria-label="Username">
+          <select class="input" name="role" aria-label="Role">
+            <option value="viewer">viewer</option>
+            <option value="editor" selected>editor</option>
+            <option value="admin">admin</option>
+          </select>
+          <input class="input" type="password" name="password" placeholder="Password (10+ characters)" autocomplete="new-password" aria-label="Password">
+          <button type="submit" class="btn-ms">Add user</button>
+        </form>
+      </div>
+      <span id="admin-users-msg" class="backup-status" role="status"></span>
     </section>
 
     <!-- API Keys (#55) — general secrets store for the app itself, starting
@@ -728,6 +773,130 @@
         banner.remove();
       });
     }
+  })();
+
+  // Users (#467 step 1): list, add, change role, reset password, disable/enable, delete.
+  // Everything goes through /api/users (JSON). Rows are built with textContent only.
+  (function () {
+    const rowsEl = document.getElementById('admin-users-rows');
+    const countEl = document.getElementById('admin-users-count');
+    const msgEl = document.getElementById('admin-users-msg');
+    const addForm = document.getElementById('admin-users-add');
+    if (!rowsEl) return;
+    let roleList = ['viewer', 'editor', 'admin'];
+
+    function setMsg(text, ok) {
+      msgEl.textContent = text || '';
+      msgEl.style.color = ok === false ? 'var(--hazard-red-soft)' : (ok ? 'var(--accent)' : '');
+    }
+    async function call(path, body) {
+      const res = await fetch(path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}),
+      });
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((r.error && r.error.message) || r.detail || `Failed (${res.status})`);
+      return r;
+    }
+    function el(tag, props, text) {
+      const n = document.createElement(tag);
+      Object.assign(n, props || {});
+      if (text !== undefined) n.textContent = text;
+      return n;
+    }
+    function button(label, onClick, danger) {
+      const b = el('button', { type: 'button', className: danger ? 'btn-ms btn-danger' : 'btn-ms' }, label);
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        try { await onClick(); } catch (e) { setMsg(e.message, false); } finally { b.disabled = false; }
+      });
+      return b;
+    }
+    function when(ts) { return ts ? new Date(ts * 1000).toLocaleString() : 'never'; }
+
+    function render(data) {
+      roleList = data.roles || roleList;
+      rowsEl.textContent = '';
+      countEl.textContent = data.users.length ? `${data.users.length}` : 'none yet';
+      if (!data.users.length) {
+        const tr = el('tr');
+        tr.appendChild(el('td', { colSpan: 6, className: 'admin-row-hint' },
+          'No accounts yet. Add one below, or create the admin account from the banner at the top.'));
+        rowsEl.appendChild(tr);
+        return;
+      }
+      data.users.forEach(u => {
+        const tr = el('tr');
+        tr.appendChild(el('td', {}, (u.display_name || u.username) + (data.me === u.id ? ' (you)' : '')));
+        tr.appendChild(el('td', { className: 'mono' }, u.username));
+        const roleTd = el('td');
+        const sel = el('select', { className: 'input', ariaLabel: `Role of ${u.username}` });
+        roleList.forEach(r => { const o = el('option', { value: r }, r); if (r === u.role) o.selected = true; sel.appendChild(o); });
+        sel.addEventListener('change', async () => {
+          sel.disabled = true;
+          try { await call(`/api/users/${u.id}/role`, { role: sel.value }); setMsg(`${u.username} is now ${sel.value}.`, true); }
+          catch (e) { setMsg(e.message, false); }
+          finally { sel.disabled = false; load(); }
+        });
+        roleTd.appendChild(sel);
+        tr.appendChild(roleTd);
+        tr.appendChild(el('td', {}, u.disabled ? 'disabled' : 'active'));
+        tr.appendChild(el('td', {}, when(u.last_login_at)));
+        const actions = el('td');
+        const box = el('div', { className: 'admin-users-actions' });
+        const pwRow = el('div', { className: 'admin-users-actions' });
+        pwRow.hidden = true;
+        const pw = el('input', { className: 'input', type: 'password', placeholder: 'New password', autocomplete: 'new-password' });
+        pw.style.width = '180px';
+        pwRow.appendChild(pw);
+        pwRow.appendChild(button('Set', async () => {
+          const r = await call(`/api/users/${u.id}/password`, { password: pw.value });
+          pw.value = ''; pwRow.hidden = true;
+          setMsg(`Password reset for ${u.username}` + (r.sessions_ended ? ` (${r.sessions_ended} session(s) signed out).` : '.'), true);
+        }));
+        box.appendChild(button('Reset password', async () => { pwRow.hidden = !pwRow.hidden; if (!pwRow.hidden) pw.focus(); }));
+        box.appendChild(button(u.disabled ? 'Enable' : 'Disable', async () => {
+          await call(`/api/users/${u.id}/${u.disabled ? 'enable' : 'disable'}`);
+          setMsg(`${u.username} ${u.disabled ? 'enabled' : 'disabled'}.`, true);
+          load();
+        }));
+        box.appendChild(button('Delete', async () => {
+          if (!confirm(`Delete the account ${u.username}? Their past changes keep their name.`)) return;
+          await call(`/api/users/${u.id}/delete`);
+          setMsg(`${u.username} deleted.`, true);
+          load();
+        }, true));
+        actions.appendChild(box);
+        actions.appendChild(pwRow);
+        tr.appendChild(actions);
+        rowsEl.appendChild(tr);
+      });
+    }
+    async function load() {
+      try {
+        const res = await fetch('/api/users');
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((r.error && r.error.message) || r.detail || `Failed (${res.status})`);
+        render(r);
+      } catch (e) {
+        rowsEl.textContent = '';
+        const tr = el('tr');
+        tr.appendChild(el('td', { colSpan: 6, className: 'error-text' }, e.message));
+        rowsEl.appendChild(tr);
+      }
+    }
+    addForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const f = addForm.elements;
+      try {
+        const r = await call('/api/users', {
+          username: f.username.value, display_name: f.display_name.value, role: f.role.value, password: f.password.value,
+        });
+        addForm.reset();
+        setMsg(`Added ${r.user.username} (${r.user.role}).`, true);
+        load();
+      } catch (e) { setMsg(e.message, false); }
+    });
+    load();
   })();
 
   // API Keys (#55) — presence-only status, and a save that never echoes the

@@ -1,8 +1,9 @@
 """Constructicon web app: upload, gallery, and the public /f/{slug} hotlink
 route.
 
-No auth — this runs on a LAN-only dev server with no port forward, so the
-network perimeter is the security boundary, not a login gate.
+#467 step 1: users can sign in (web/auth.py, core/users.py) and their writes are attributed to
+them, but nothing is enforced yet (core/roles.ENFORCE is False): an anonymous request still does
+everything it did before. Step 2 turns the roles on.
 
 #547: this file is the assembly point: the app, its exception handler, static
 mounts, middleware, startup (background work) and the routers. Routes live in
@@ -26,10 +27,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core import actor as actor_ctx, captions, db, decisions, errors, ocr, paths
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
-from web import request_guard
+from web import auth as web_auth, request_guard
 from web.common import _STATIC_DIR
 from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
-from web.routes import meta, pages, admin, items, curator, files, cards, hobbies, blog_export
+from web.routes import meta, pages, admin, items, curator, files, cards, hobbies, blog_export, auth as auth_routes
 
 app = FastAPI()
 
@@ -103,7 +104,11 @@ class _CurrentExportFiles(StaticFiles):
 paths.current_export_dir().mkdir(parents=True, exist_ok=True)
 app.mount("/preview", _CurrentExportFiles(directory=paths.current_export_dir(), html=True), name="preview")
 
+# #467 step 1: the per-session CSRF check, innermost so its refusals reach the request log.
+app.add_middleware(web_auth.CsrfMiddleware)
 app.add_middleware(AuditLoggingMiddleware)
+# #467 step 1: a live session cookie -> the signed-in user and actor "user:<name>" (web/auth.py).
+app.add_middleware(web_auth.SessionMiddleware)
 # #560: sets the request's actor (owner-ui) around the audit logger and the route.
 app.add_middleware(ActorMiddleware)
 # #558: outermost, so a forged cross-origin request is refused before anything runs.
@@ -250,3 +255,4 @@ app.include_router(files.router)
 app.include_router(cards.router)
 app.include_router(hobbies.router)
 app.include_router(blog_export.router)
+app.include_router(auth_routes.router)  # #467 step 1: login, setup, logout, users, my password

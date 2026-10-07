@@ -29,7 +29,8 @@ Sessions
 Sign-in backoff (in memory, per process): after LOGIN_FREE_ATTEMPTS failures for an IP or a
 username, each further attempt must wait 2**(extra failures) seconds (capped at
 LOGIN_MAX_DELAY_SECONDS) after the last failure, else 429 `too_many_attempts` without checking the
-password. Failures older than LOGIN_WINDOW_SECONDS are forgotten; a success clears the username.
+password. Failures older than LOGIN_WINDOW_SECONDS are forgotten; a success clears that username's
+and that IP's counts.
 
 Current user: a ContextVar set per request by web/auth.py. Its actor is "user:<username>"
 (core/actor.py); core/roles.role_of() reads the role through role_for_actor(). Anonymous requests
@@ -413,7 +414,10 @@ def authenticate(username, password, ip=None, *, now=None):
     if not ok:
         limiter.failed(keys, now)
         raise AppError("invalid_login", "Wrong username or password.", status=401)
-    limiter.succeeded([keys[0]])
+    # A success clears the IP's count too: one person's typos must not keep everyone behind that
+    # address (a NAT, or a Docker bridge where every client shows as the gateway) backing off.
+    # Each account is still guarded by its own username counter.
+    limiter.succeeded(keys)
     db._update_user(creds["id"], last_login_at=now)
     return db.get_user(user_id=creds["id"])
 

@@ -308,7 +308,9 @@ banner/Users panel).
   row touched at most every 10 minutes (and the cookie re-sent then). Logout deletes the row.
 - Sign-in backoff (`users.limiter`, in memory, web process): after 5 failures per username or per IP,
   each attempt must wait 2^(extra failures) s (max 15 min) after the last failure, else 429
-  `too_many_attempts` (`details.retry_after`) without checking the password. A wrong user, wrong
+  `too_many_attempts` (`details.retry_after`) without checking the password; a success clears that
+  username's and that IP's counts (behind a Docker bridge or NAT every client can share one IP, so
+  the IP count must not outlive a good sign-in). A wrong user, wrong
   password and disabled account all answer the same 401 `invalid_login` (an unknown user still
   spends a hash's time).
 - `delete_everything` keeps `users` and `sessions` (`reset.KEPT_TABLES`).

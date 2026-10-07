@@ -246,6 +246,9 @@ check("backoff: per-IP too (another username, same IP)",
       code_of(users.authenticate, ed_name, new_ed_pw, "10.9.9.9", now=last + 1) == "too_many_attempts")
 check("backoff: allowed once the delay passed", code_of(users.authenticate, admin_name, admin_pw2, "10.9.9.8",
                                                        now=last + 3) is None)
+check("backoff: a good sign-in from the IP clears the IP's count",
+      code_of(users.authenticate, ed_name, new_ed_pw, "10.9.9.9", now=last + 3) is None
+      and users.limiter.retry_after([("ip", "10.9.9.9")], now=last + 3) == 0)
 users.limiter.reset()
 r = client.post("/api/auth/login", json={"username": admin_name.upper(), "password": admin_pw2}, headers=SAME)
 check("sign in again (username any case)", r.status_code == 200)

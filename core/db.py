@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS install_config (
 );
 -- #562: per-hobby settings. shows_physical_piece = items in this hobby's cards get the
 -- PHYSICAL PIECE fields (core/physical_piece.py); was a name match on "Traditional Media".
+-- #596 adds synopsis / flavor (the hobby card's text box) in init_db's ALTER loop.
 CREATE TABLE IF NOT EXISTS hobby_settings (
     hobby_tag_id INTEGER PRIMARY KEY REFERENCES blog_tags(id),
     shows_physical_piece INTEGER NOT NULL DEFAULT 0
@@ -821,6 +822,18 @@ def init_db(migrate=True):
         for column, ddl_type in (("home_kind", "TEXT"), ("home_ref", "INTEGER")):
             if column not in existing_project_columns:
                 conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+        # #596: the card face's text box. synopsis (a few hand-written sentences) and flavor (one
+        # italic line) are set through cards.set_text; writeup_lead is a CACHE of the write-up's
+        # opening paragraph(s) (plain text, clamped), kept by the cards service whenever the
+        # write-up's body or writeup_slug changes, so a card list never reads write-up bodies.
+        for column, ddl_type in (("synopsis", "TEXT"), ("flavor", "TEXT"), ("writeup_lead", "TEXT")):
+            if column not in existing_project_columns:
+                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+        # #596: a hobby's own synopsis / flavor live with its other per-hobby settings.
+        existing_hobby_settings_columns = {row["name"] for row in conn.execute("PRAGMA table_info(hobby_settings)")}
+        for column, ddl_type in (("synopsis", "TEXT"), ("flavor", "TEXT")):
+            if column not in existing_hobby_settings_columns:
+                conn.execute(f"ALTER TABLE hobby_settings ADD COLUMN {column} {ddl_type}")
         # Change log: audit_log grows nullable columns so core operations can record
         # row images (before/after) for audit + undo. Direct HTTP callers keep getting
         # the old request-log row (these columns NULL there).
@@ -960,6 +973,17 @@ def _mig_empty_file_ocr_done_587():
                          (r["slug"],))
 
 
+def _mig_writeup_lead_596():
+    # #596: fill the projects.writeup_lead cache (the card face's write-up excerpt) once for every
+    # card that has a write-up. From then on the cards service keeps it in step with every write-up
+    # save. Derived data, recomputable at any time, so it isn't change-logged. Idempotent.
+    from . import cards
+    conn = get_conn()
+    for r in conn.execute("SELECT id, writeup_slug FROM projects WHERE writeup_slug IS NOT NULL").fetchall():
+        conn.execute("UPDATE projects SET writeup_lead = ? WHERE id = ?",
+                     (cards.writeup_lead(r["writeup_slug"]), r["id"]))
+
+
 # Order matters (v2c_1 first: later steps read the kind/stage it assigns).
 # #562: v2c_3 (the AlienWhoop family question) and v2c_4 (the AW canopy question) were about the
 # owner's own cards; they moved to scripts/archive/ (already recorded in schema_migrations on the
@@ -976,6 +1000,7 @@ MIGRATIONS = [
     ("install_config_seed_562", _mig_install_config_seed_562),
     ("hobby_physical_piece_562", _mig_hobby_physical_piece_562),
     ("empty_file_ocr_done_587", _mig_empty_file_ocr_done_587),
+    ("writeup_lead_596", _mig_writeup_lead_596),
 ]
 
 
@@ -4353,6 +4378,39 @@ def physical_piece_hobbies():
         return [dict(r) for r in conn.execute(
             "SELECT bt.id, bt.name, bt.slug FROM blog_tags bt JOIN hobby_settings hs ON hs.hobby_tag_id = bt.id "
             "WHERE bt.is_hobby = 1 AND hs.shows_physical_piece = 1 ORDER BY bt.id").fetchall()]
+    finally:
+        conn.close()
+
+
+def get_hobby_settings(hobby_id):
+    """#562/#596: one hobby's settings ({shows_physical_piece, synopsis, flavor}); defaults when
+    the hobby has no settings row yet."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT shows_physical_piece, synopsis, flavor FROM hobby_settings WHERE hobby_tag_id = ?",
+                           (hobby_id,)).fetchone()
+        return dict(row) if row else {"shows_physical_piece": 0, "synopsis": None, "flavor": None}
+    finally:
+        conn.close()
+
+
+def card_ids_with_writeup(slug):
+    """#596: ids of the cards whose write-up document is `slug` (normally none or one)."""
+    conn = get_conn()
+    try:
+        return [r[0] for r in conn.execute("SELECT id FROM projects WHERE writeup_slug = ? ORDER BY id", (slug,))]
+    finally:
+        conn.close()
+
+
+def first_card_titles():
+    """#596: {item slug: title of the card it was first filed into}, for the file face's
+    "Stacked · <card>" box. One query for the whole grid; unfiled items are absent."""
+    conn = get_conn()
+    try:
+        return {r[0]: r[1] for r in conn.execute(
+            "SELECT pi.post_slug, p.title FROM project_items pi JOIN projects p ON p.id = pi.project_id "
+            "WHERE pi.rowid IN (SELECT MIN(rowid) FROM project_items GROUP BY post_slug)")}
     finally:
         conn.close()
 

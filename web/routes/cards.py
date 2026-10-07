@@ -295,6 +295,16 @@ def api_set_card_provenance(project_id: str, provenance: str = Form(""), credit:
     return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
 
 
+@router.post("/api/projects/{project_id}/text")
+def api_set_card_text(project_id: str, synopsis: str | None = Form(None), flavor: str | None = Form(None)):
+    """#596: the card face's text: `synopsis` (a few sentences; the text box shows it before the
+    write-up lead and the description) and `flavor` (one italic line). Omit a field to leave it,
+    send it blank to clear it. 422 bad_card_text (too long / nothing sent). Undoable."""
+    result = cards.set_text(project_id, synopsis=... if synopsis is None else synopsis,
+                            flavor=... if flavor is None else flavor)
+    return JSONResponse(result.to_dict())
+
+
 @router.post("/api/projects/{project_id}/highlight")
 def api_set_card_highlight(project_id: str, on: str = Form("0")):
     """V2 cards 3.12: the card's own highlight flag (independent of file highlights)."""

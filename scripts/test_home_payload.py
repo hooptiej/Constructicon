@@ -74,7 +74,7 @@ for rel, names in JS_SOURCES.items():
 
 # Spot checks the regex can't see: fields the card visibly depends on.
 for must in ("slug", "display_name", "type_label", "card_date", "thumb_url", "has_thumbnail", "redacted",
-             "codes", "highlight", "provenance", "ocr_status", "extracted_text", "caption_capable",
+             "codes", "highlight", "stacked", "ocr_status", "extracted_text", "caption_capable",
              "type_metadata", "type_icon", "client", "uploaded_by_display", "tags", "uploaded_at",
              "media_type"):
     check(must in whitelist, "whitelist has %s" % must)
@@ -86,7 +86,7 @@ LONG = "word " * 400
 record = {
     "slug": "abc", "display_name": "A", "media_type": "image", "type_label": "Image", "type_icon": "I",
     "card_date": "Mar 4, 2021", "thumb_url": "/f/abc/thumb", "has_thumbnail": True, "redacted": False,
-    "highlight": True, "provenance": "found", "client": "P", "uploaded_by_display": "Me",
+    "highlight": True, "provenance": "found", "stacked": "Desk Build", "client": "P", "uploaded_by_display": "Me",
     "uploaded_at": 5, "tags": ["t"], "codes": ["3DP"], "ocr_status": "done", "extracted_text": LONG,
     "caption_capable": True,
     "type_metadata": {"rotation": 90, "auto_caption_status": "done", "auto_caption": LONG,
@@ -97,7 +97,8 @@ before = copy.deepcopy(record)
 slim = webapp.card_item_public(record)
 check(record == before, "projection does not mutate its input")
 check(set(slim) == whitelist, "projected record has exactly the whitelisted keys")
-for gone in ("description", "source", "artifact_link", "url", "content_date", "filename", "uploaded_by"):
+for gone in ("description", "source", "artifact_link", "url", "content_date", "filename", "uploaded_by",
+             "provenance"):  # #596: provenance left the file face
     check(gone not in slim, "heavy/unused field dropped: %s" % gone)
 tm = slim["type_metadata"]
 check(set(tm) == {"rotation", "auto_caption_status", "auto_caption"}, "type_metadata trimmed to the card's keys: %s" % sorted(tm))

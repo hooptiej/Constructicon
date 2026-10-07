@@ -96,6 +96,15 @@ def api_set_hobby_physical_piece(id_or_slug: str, enabled: bool = Form(...)):
     return JSONResponse(hobbies.set_physical_piece(id_or_slug, enabled).to_dict())
 
 
+@router.post("/api/hobby/{id_or_slug}/text")
+def api_set_hobby_text(id_or_slug: str, synopsis: str | None = Form(None), flavor: str | None = Form(None)):
+    """#596: the hobby card's own synopsis / flavor line (omit a field to leave it, blank clears it).
+    Editor; 422 bad_card_text; one undoable change-log row."""
+    result = hobbies.set_text(id_or_slug, synopsis=... if synopsis is None else synopsis,
+                              flavor=... if flavor is None else flavor)
+    return JSONResponse(result.to_dict())
+
+
 @router.post("/api/hobby/{id_or_slug}/add-project")
 def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str = Form(...)):
     """Add a project to a hobby.

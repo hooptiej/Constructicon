@@ -1,0 +1,58 @@
+{#- #596: the ABOUT group of the details panel (#515) for a card face's own text, shared by the
+     project page and the hobby page.
+
+     {% from "_card_text.html" import about_view, about_edit, about_script %}
+     {% set v %}{{ about_view(card_text) }}{% endset %}  {% set e %}{{ about_edit(card_text, limits) }}{% endset %}
+     {{ dp_group("about", "ABOUT", v, e) }}  ...  {{ about_script("/api/projects/12/text") }}
+
+     `t` is cards.text_fields() (synopsis, flavor, writeup_lead, face_text_source) or
+     hobbies.text_fields() (synopsis, flavor). `limits` = {synopsis, flavor} max lengths
+     (card_rules.SYNOPSIS_MAX / FLAVOR_MAX). Save posts both fields to `url` (blank clears);
+     details.js reloads the page, so the card face shows the new text. -#}
+
+{% macro about_view(t) -%}
+<dl class="dp-rows">
+  <div class="dp-row"><dt>Synopsis</dt><dd>{% if t.synopsis %}<span class="dp-pre">{{ t.synopsis }}</span>{% else %}<span class="dp-muted">Not written yet</span>{% endif %}</dd></div>
+  <div class="dp-row"><dt>Flavor</dt><dd>{% if t.flavor %}<em>{{ t.flavor }}</em>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>
+  {% if t.face_text_source is defined %}
+  <div class="dp-row"><dt>Card shows</dt><dd>{% if t.face_text_source == "synopsis" %}the synopsis{% elif t.face_text_source == "writeup" %}the write-up's opening <span class="dp-muted">(no synopsis yet)</span>{% elif t.face_text_source == "description" %}the description <span class="dp-muted">(no synopsis or write-up yet)</span>{% else %}<span class="dp-muted">nothing yet</span>{% endif %}</dd></div>
+  {% endif %}
+</dl>
+{%- endmacro %}
+
+{% macro about_edit(t, limits) -%}
+<div class="dp-field">
+  <label for="card-synopsis">Synopsis</label>
+  <textarea id="card-synopsis" class="input" rows="4" maxlength="{{ limits.synopsis }}" placeholder="A few sentences: what this is. The card shows it before the write-up's opening.">{{ t.synopsis or '' }}</textarea>
+</div>
+<div class="dp-field">
+  <label for="card-flavor">Flavor line</label>
+  <input type="text" id="card-flavor" class="input" maxlength="{{ limits.flavor }}" placeholder="One short line, shown in italics" value="{{ t.flavor or '' }}">
+</div>
+{%- endmacro %}
+
+{% macro about_script(url) -%}
+<script>
+(function () {
+  const DP = window.DetailsPanel;
+  const URL = {{ url | tojson }};
+  const syn = document.getElementById('card-synopsis');
+  const fla = document.getElementById('card-flavor');
+  if (!DP || !syn || !fla) return;
+  let saved = { s: syn.value, f: fla.value };
+  DP.register('about', {
+    save: async () => {
+      if (syn.value === saved.s && fla.value === saved.f) return;
+      const res = await fetch(URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ synopsis: syn.value, flavor: fla.value }).toString(),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((body.error && body.error.message) || body.detail || `Couldn't save (${res.status})`);
+      saved = { s: syn.value, f: fla.value };
+    },
+  });
+})();
+</script>
+{%- endmacro %}

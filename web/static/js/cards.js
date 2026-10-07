@@ -6,8 +6,8 @@
    together. Everything interpolated goes through esc().
 
    ItemCards.html(item, opts) -> string
-     item  an item from _to_public() in web/app.py (slug, display_name, type_label,
-           card_date, thumb_url/has_thumbnail, redacted, codes, provenance, highlight, ...)
+     item  a slim item record (core/card_payload.py: slug, display_name, type_label,
+           card_date, thumb_url/has_thumbnail, redacted, codes, stacked, highlight, ...)
      opts  href       link target (default /object/<slug>)
            size       "mini" (default) | "small"
            width      optional --cx-w override in px (the Unfiled grid/list toggle)
@@ -64,13 +64,18 @@
     return lamp(meta.color, title);
   }
 
-  // The card itself: same classes, same nesting, same text slots as _card.html (asset kind).
+  // The card itself: same classes, same nesting, same text slots as _card.html drawing
+  // core.cards.file_face() (#596): status box "Stacked · <card>", footer "<code> · <card>", no
+  // provenance. The grids carry no file text, so the text box stays empty (mini hides it anyway).
   function face(item, opts) {
     var size = opts.size === 'small' ? 'small' : 'mini';
     var href = opts.href || ('/object/' + item.slug);
     var title = item.display_name || item.slug;
     var typeLine = item.type_label || item.media_type || 'File';
-    var prov = item.provenance ? String(item.provenance).charAt(0).toUpperCase() + String(item.provenance).slice(1).toLowerCase() : '';
+    var stacked = item.stacked || '';
+    var code = (item.codes || [])[0] || '';
+    var zone = stacked ? 'Stacked · ' + stacked : '';
+    var foot = [code, stacked].filter(Boolean).join(' · ');
     var codes = (item.codes || []).map(function (c) { return '<span class="cx-code">' + esc(c) + '</span>'; }).join('');
     var hl = item.highlight ? '<span class="cx-hl on" role="img" aria-label="Highlighted"></span>' : '<span class="cx-hl" aria-hidden="true"></span>';
     var art;
@@ -89,8 +94,8 @@
       '<span class="cx-typeline"><span class="cx-type">' + esc(typeLine) + '</span>' +
         '<span class="cx-codes">' + codes + hl + '</span></span>' +
       '<span class="cx-body"></span>' +
-      '<span class="cx-boxes"></span>' +
-      '<span class="cx-foot"><span class="cx-prov">' + esc(prov) + '</span></span>' +
+      '<span class="cx-boxes">' + (zone ? '<span class="cx-box cx-status">' + esc(zone) + '</span>' : '') + '</span>' +
+      '<span class="cx-foot">' + (size === 'mini' ? '' : '<span class="cx-num">' + esc(foot) + '</span>') + '</span>' +
     '</a>';
   }
 

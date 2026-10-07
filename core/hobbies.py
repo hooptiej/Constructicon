@@ -15,6 +15,7 @@ group_code; cards join it through `project_hobbies` (#360, V2 cards 3.3 / 3.9).
   add_card(hobby, card) / remove_card  = cards.add_to_hobby / remove_from_hobby (already logged)
   set_activity / set_group_code        = cards.set_hobby_activity / set_group_code (already logged)
   set_physical_piece(hobby, enabled)   #562: the "shows physical-piece fields" setting (hobby_settings)
+  set_text(hobby, synopsis, flavor)    #596: the hobby card's own synopsis / flavor (hobby_settings)
   convert_from_card(card)              project -> hobby (was db.convert_project_to_hobby, not
                                        undoable); now fully imaged
   convert_to_card(hobby, kind, title, into_hobby)   hobby -> card, the reverse (see below)
@@ -54,6 +55,7 @@ OP_UNMARK = "hobby_unmark"
 OP_FROM_CARD = "convert_project_to_hobby"
 OP_TO_CARD = "convert_hobby_to_card"
 OP_PHYSICAL_PIECE = "hobby_physical_piece"  # #562
+OP_TEXT = "hobby_text"  # #596
 
 CONVERT_KINDS = ("family", "collection", "project")
 
@@ -188,6 +190,33 @@ def set_physical_piece(hobby, enabled, *, dry_run=False, actor=None, batch_id=No
     return Result(True, _flat(rows), [] if rows else ["Nothing changed."], batch_id if rows else None, dry_run,
                   {"hobby": hob["slug"], "shows_physical_piece": bool(want)})
 
+
+
+def set_text(hobby, *, synopsis=..., flavor=..., dry_run=False, actor=None, batch_id=None):
+    """#596: the hobby card's own face text (hobby_settings): `synopsis` (shown first in its text
+    box, above the project list) and `flavor` (the italic line). Same rules as cards.set_text
+    (card_rules.validate_card_text: `...` leaves a field alone, None or "" clears it, bad_card_text
+    when too long). One imaged row, undoable; nothing changed = nothing written. data: text_fields."""
+    hob = get_hobby(hobby)
+    fields = card_rules.validate_card_text(synopsis, flavor)
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_TEXT, actor, batch_id, [hob["slug"]]) as log:
+            key = {"hobby_tag_id": hob["id"]}
+            if log.get("hobby_settings", key) is None:
+                if any(fields.values()):
+                    log.insert("hobby_settings", key, fields)
+            else:
+                log.update("hobby_settings", key, fields)
+        rows = db.get_change_rows(batch_id=batch_id)
+    return Result(True, _flat(rows), [] if rows else ["Nothing changed."], batch_id if rows else None, dry_run,
+                  {"hobby": hob["slug"], **text_fields(hob)})
+
+
+def text_fields(hobby_row):
+    """#596: a hobby's face text as pages and tools return it: {synopsis, flavor}."""
+    settings = db.get_hobby_settings(hobby_row["id"])
+    return {"synopsis": settings.get("synopsis"), "flavor": settings.get("flavor")}
 
 
 def convert_from_card(card, *, dry_run=False, actor=None, batch_id=None):

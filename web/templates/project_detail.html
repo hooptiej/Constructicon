@@ -3,6 +3,7 @@
 {% block body %}
 {% from "_card.html" import card %}
 {% from "_details_group.html" import dp_group %}
+{% from "_card_text.html" import about_view, about_edit, about_script %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
@@ -300,7 +301,12 @@
       {% endif %}
       {% endset %}
 
+      {# ---- ABOUT (#596): the card face's own text: synopsis + flavor ---- #}
+      {% set about_v %}{{ about_view(card_text) }}{% endset %}
+      {% set about_e %}{{ about_edit(card_text, card_text_limits) }}{% endset %}
+
       <div class="dp-panel">
+        {{ dp_group("about", "ABOUT", about_v, about_e) }}
         {{ dp_group("identity", "IDENTITY", identity_view, identity_edit, done_only=false) }}
         {{ dp_group("status", "STATUS", status_view, status_edit) }}
         {{ dp_group("origin", "ORIGIN", origin_view, origin_edit) }}
@@ -955,6 +961,7 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
   })();
 })();
 </script>
+{{ about_script("/api/projects/" ~ project.id ~ "/text") }}
 
 <script>
 // Inline title rename (#241). Click the title text or the pencil to swap in

@@ -42,7 +42,7 @@ import os
 import time
 from datetime import datetime
 
-from . import captions, changes, db, embedded_metadata, ingest, membership, object_types, physical_piece, provenance_options
+from . import captions, cards, changes, db, embedded_metadata, ingest, membership, object_types, physical_piece, provenance_options
 from . import paths, storage, thumbnails, timeline
 from . import tags as tags_svc
 from .cards import Result
@@ -211,6 +211,8 @@ def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **field
         with db.ImageLog(OP_UPDATE, actor, batch_id, [slug]) as log:
             if cols:
                 log.update("capture_events", {"slug": slug}, cols)
+            if "type_metadata" in cols:
+                cards.refresh_writeup_lead(log, slug)  # #596: a write-up's body feeds its card's face
             if tags is not None:
                 tags_svc.write_free_text(log, slug, [str(t) for t in tags])
             muts = list(log.muts)
@@ -559,6 +561,7 @@ def _delete_one(row, batch_id, actor):
             log.delete("curator_dismissals", {"nudge_key": f"decision:{did}"})  # its deferred/dismissed state
             log.delete("pending_decisions", {"id": did})
         log.delete("capture_events", {"slug": slug})
+        cards.refresh_writeup_lead(log, slug)  # #596: a deleted write-up leaves no lead on its card's face
         entry = _trash_insert(log, batch_id, row, "delete", embedding)
         muts = list(log.muts)
     return entry, muts

@@ -20,7 +20,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import actor as actor_ctx, card_rules, changes, db, timeline
+from . import actor as actor_ctx, card_rules, changes, db, markdown_render, timeline
 from .card_rules import CardError
 from .errors import AppError, InvalidInput
 
@@ -218,6 +218,78 @@ def set_highlight(card, on, *, dry_run=False, actor=None, batch_id=None):
     if not dry_run and rows:
         db._update_card_columns(row["id"], fields, "set_highlight", actor, batch_id=batch_id)
     return Result(True, rows, [], batch_id, dry_run)
+
+
+# --- Face text: synopsis, flavor, the write-up lead (#596) ------------------------------
+# The card face's text box holds, in order: the synopsis, else the write-up's lead, else the
+# description (never whereabouts or provenance), then the italic flavor line. The lead is a
+# CACHE (projects.writeup_lead): refreshed here whenever a write-up's body or a card's
+# writeup_slug changes, so building a list of cards never reads a write-up body.
+
+OP_SET_CARD_TEXT = "set_card_text"
+FACE_TEXT_MAX = 320  # characters of synopsis / lead / description a face carries
+
+
+def set_text(card, *, synopsis=..., flavor=..., dry_run=False, actor=None, batch_id=None):
+    """Sets or clears the card's face text: `synopsis` (a few sentences; the text box's first
+    choice) and `flavor` (one italic line). `...` = leave alone, None or "" = clear. Validated by
+    card_rules.validate_card_text (bad_card_text, 422). One imaged row, undoable; setting what is
+    already there writes nothing. data: text_fields() of the card after."""
+    row = get_card(card)
+    fields = card_rules.validate_card_text(synopsis, flavor)
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_SET_CARD_TEXT, actor, batch_id, [row["slug"]]) as log:
+            log.update("projects", {"id": row["id"]}, fields)
+            muts = [{"op": OP_SET_CARD_TEXT, "affected_slugs": [row["slug"]], "mutations": list(log.muts)}]
+        fresh = db.get_project(row["id"])
+    flat = _changes_from_log(muts)
+    return Result(True, flat, [] if flat else ["Nothing changed."], batch_id if flat else None, dry_run,
+                  text_fields(fresh))
+
+
+def writeup_lead(writeup_slug):
+    """The cached lead for a write-up document: its opening paragraph(s) as plain text, clamped
+    (markdown_render.lead). None when there is no such item, its type has no write-up body, or the
+    body is blank / template-only."""
+    from . import object_types  # lazy: the registry imports a lot
+    row = db.get_by_slug(writeup_slug) if writeup_slug else None
+    body = object_types.writeup_body(row) if row else None
+    if not body:
+        return None
+    return markdown_render.lead(body, FACE_TEXT_MAX) or None
+
+
+def refresh_writeup_lead(log, writeup_slug):
+    """Recomputes projects.writeup_lead for every card whose write-up is `writeup_slug`, on the
+    caller's open ImageLog, so the cache change rides in the same change-log row as the edit
+    that caused it (one undo restores both). Called by items.update when an item's
+    type_metadata changes and by items.delete. A no-op for an item that is nobody's write-up."""
+    ids = db.card_ids_with_writeup(writeup_slug)
+    if ids:
+        lead = writeup_lead(writeup_slug)
+        for card_id in ids:
+            log.update("projects", {"id": card_id}, {"writeup_lead": lead})
+
+
+def face_text(card):
+    """(text, source) for a card's text box: source is "synopsis", "writeup" (the cached lead),
+    "description" or None (empty). Reads only the card row."""
+    for source, value in (("synopsis", card.get("synopsis")),
+                          ("writeup", card.get("writeup_lead") if card.get("writeup_slug") else None),
+                          ("description", card.get("description"))):
+        if (value or "").strip():
+            return markdown_render.clamp(value, FACE_TEXT_MAX), source
+    return "", None
+
+
+def text_fields(card):
+    """The face-text fields as pages and tools return them: the stored synopsis / flavor, the
+    cached write-up lead, and what the face shows (`face_text`, `face_text_source`)."""
+    text, source = face_text(card)
+    return {"synopsis": card.get("synopsis"), "flavor": card.get("flavor"),
+            "writeup_lead": card.get("writeup_lead") if card.get("writeup_slug") else None,
+            "face_text": text, "face_text_source": source}
 
 
 def suggest_provenance(card):
@@ -1683,7 +1755,7 @@ def update(card, *, title=None, description=None, cover_slug=None, cover_project
       title / description / cover_slug: None = leave alone (cover_slug "" stores "").
       cover_project_id (#356): ... = leave, None = clear, an id = borrow that CHILD card's cover.
       writeup_slug (#156): ... = leave, None/"" = clear, a slug = that item (it must exist and its
-        type must declare a writeup body).
+        type must declare a writeup body). The card's cached write-up lead (#596) follows it.
       start / end: the timeline overrides; ... = leave, None = clear, unix seconds = set.
     A non-empty cover_slug clears cover_project_id and vice versa (mutually exclusive). Every
     call bumps updated_at, as the old Save did. Parent, kind and status have their own ops
@@ -1712,6 +1784,7 @@ def update(card, *, title=None, description=None, cover_slug=None, cover_project
     fields["cover_slug"], fields["cover_project_id"] = new_cover_slug, new_cover_project
     if writeup_slug is not ...:
         fields["writeup_slug"] = writeup_slug or None
+        fields["writeup_lead"] = writeup_lead(writeup_slug) if writeup_slug else None  # #596: the face's cache
     if start is not ...:
         fields["start_date_override"] = None if start is None else float(start)
     if end is not ...:
@@ -1771,7 +1844,7 @@ def _file_summary(card, items):
 def explain_card(card):
     """Everything about a card in one call (spec 6) -- what to read before proposing a
     change. Returns a dict: identity, status (kind/activity/stage/stop_reason, `provisional`),
-    whereabouts, provenance, highlight, hobbies, families, members, parent, children, links,
+    whereabouts, provenance, highlight, face text (synopsis / flavor / writeup_lead), hobbies, families, members, parent, children, links,
     home (+ `home_chain`), files (counts per type, date span), level (pips + reasons),
     open_decisions, needs (computed + stored for this card), warnings, suggestions,
     recent_changes. Read-only."""
@@ -1795,6 +1868,7 @@ def explain_card(card):
         **status_fields(row),
         "provisional": provisional_legacy_status(row) is not None,
         **whereabouts_fields(row),
+        **text_fields(row),
         "hobbies": [hobby_fields(get_hobby(r["hobby_tag_id"]), with_flags=False)
                     for r in db.list_hobby_rows(row["id"]) if db.get_hobby(r["hobby_tag_id"])],
         **family_fields(row),
@@ -1816,14 +1890,24 @@ def explain_card(card):
     return out
 
 
-# --- Card face (8.1) ---------------------------------------------------------------
-# Everything a card renderer needs, in one dict. Reuses card_level / resolve_home /
-# list_links / family_fields rather than recomputing; explain_card is the long form
-# for a single card, this is the light form for a whole page of them.
+# --- Card face (8.1, #596) ---------------------------------------------------------------
+# Everything a card renderer needs, in one dict, zone by zone (the V2 mockup's Card template,
+# drawn by web/templates/_card.html):
+#   name bar, dates + pips, art, type line + group codes,
+#   text box   relationship lines (`rel_lines` + `rel_more`), the face text (`text`: synopsis, else
+#              the write-up lead, else the description; see face_text), `notes` (a hobby's project
+#              list and group-code line), then the italic `flavor` under a rule;
+#   status box `zone` ("In progress", "Stopped · failed", "Inside · <parent>", "Stacked · <card>");
+#   stat box   `stat` ("103 stacked · 1 nested", "3 members", "10 projects", "JPEG");
+#   footer     `foot` ("RCA · R/C Adventures", "COL · family card", "RCA · group card") + "n of N".
+# No face shows provenance, credit or whereabouts (#596): those live in the details panel only.
+# Reuses card_level / resolve_home / list_links rather than recomputing; explain_card is the long
+# form for a single card, this is the light form for a whole page of them.
 
-FACE_FACT_LINES = 4
-FLAVOR_MAX = 90
+FACE_REL_LINES = 2          # relationship lines on a face, then "+N more"
+FACE_PROJECT_LIST_MAX = 160  # characters of a hobby face's project list, then "+N more"
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_DOT = " · "
 
 
 def _month_year(ts):
@@ -1845,21 +1929,61 @@ def date_range_label(start, end, active=False, now=None):
     return first if first == last else f"{first} - {last}"
 
 
-def _flavor_line(description):
-    text = " ".join((description or "").split())
-    if not text:
+def _count(n, word):
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _face_relations(kind, links, parent):
+    """The text box's relationship lines (#596): an action that is part of a card and has no
+    applies_to link of its own reads "Applies to: <parent>."; then every OUTGOING directed typed
+    link, "<Label>: <title>." ("Built for: X.", "Applies to: X."). Returns (lines, more)."""
+    lines = []
+    out = [lk for lk in links if lk["direction"] == "out" and lk["type"] in card_rules.DIRECTED_LINK_TYPES]
+    if kind == "action" and parent and not any(lk["type"] == "applies_to" for lk in out):
+        lines.append(f"{card_rules.link_label('applies_to')}: {parent['title']}.")
+    lines += [f"{lk['label']}: {lk['title']}." for lk in out]
+    return lines[:FACE_REL_LINES], max(0, len(lines) - FACE_REL_LINES)
+
+
+def _face_zone(status, parent):
+    """The status box: "Inside · <parent>" for a nested card, else the stage label
+    ("Stopped · failed" with its reason)."""
+    if parent:
+        return f"Inside{_DOT}{parent['title']}"
+    label = status["stage_label"] or ""
+    if status["stage"] == "stopped" and status["stop_reason_label"]:
+        label += f"{_DOT}{status['stop_reason_label'].lower()}"
+    return label
+
+
+def _face_stat(kind, card_id, n_files):
+    """The stat box: a group's member count; otherwise the files stacked under the card and the
+    cards nested in it. "" when there is nothing to count."""
+    if kind in card_rules.GROUP_KINDS:
+        return _count(db.count_family_members(card_id), "member")
+    nested = len(db.list_child_projects(card_id))
+    parts = ([f"{n_files} stacked"] if n_files else []) + ([f"{nested} nested"] if nested else [])
+    return _DOT.join(parts)
+
+
+def _face_foot(kind, hobbies, home):
+    """The footer's left side: "<CODE> · <hobby>" for the card's home hobby (else its first),
+    "+N" when it has more; "<CODE> · family card" / "collection card" for a group."""
+    primary = next((h for h in hobbies if home.get("type") == "hobby" and h["id"] == home.get("id")),
+                   hobbies[0] if hobbies else None)
+    code = primary["code"] if primary else ""
+    if kind in card_rules.GROUP_KINDS:
+        return _DOT.join(x for x in (code, f"{kind} card") if x)
+    if primary is None:
         return ""
-    end = re.search(r"[.!?](\s|$)", text)
-    sentence = text[:end.end()].strip() if end else text
-    if len(sentence) > FLAVOR_MAX:
-        sentence = sentence[:FLAVOR_MAX - 1].rstrip(" ,;:") + "..."
-    return sentence
+    foot = _DOT.join(x for x in (code, primary["name"]) if x)
+    return foot + (f" +{len(hobbies) - 1}" if len(hobbies) > 1 else "")
 
 
 def card_face(card, items=None):
     """The card face data for one project/card row (a `db.get_project` dict): zone content
-    for web/templates/_card.html. `cover_slug` is the resolved cover (the caller turns it
-    into a URL). Hobby and file cards are built by the page from their own rows."""
+    for web/templates/_card.html (see the section comment above). `cover_slug` is the resolved
+    cover (the caller turns it into a URL). Hobby faces: hobby_card_face; file faces: file_face."""
     from . import card_level  # lazy, as in explain_card
     row = get_card(card) if not isinstance(card, dict) else card
     if items is None:
@@ -1878,20 +2002,8 @@ def card_face(card, items=None):
             hobbies.append({"id": h["id"], "slug": h["slug"], "name": h["name"],
                             "code": h.get("group_code") or "",
                             "active": (h.get("hobby_status") or "active") == "active"})
-    links = list_links(row["id"])
-    wf = whereabouts_fields(row)
-
-    facts = []
-    if wf["whereabouts_applies"] and wf["whereabouts"]:
-        facts.append(wf["whereabouts_label"] + (f" - {wf['whereabouts_note']}" if wf["whereabouts_note"] else ""))
-    if parent:
-        facts.append(f"Part of {parent['title']}")
-    for f in fams:
-        facts.append(f"In family {f['title']}")
-    for lk in links:
-        facts.append(f"{lk['label']} {lk['title']}")
-    facts_more = max(0, len(facts) - FACE_FACT_LINES)
-    facts = facts[:FACE_FACT_LINES]
+    rel_lines, rel_more = _face_relations(kind, list_links(row["id"]), parent)
+    text, text_source = face_text(row)
 
     type_line = status["kind_label"]
     if home.get("title"):
@@ -1899,12 +2011,7 @@ def card_face(card, items=None):
     elif kind in card_rules.GROUP_KINDS:
         type_line += " - group"
 
-    files = [i for i in items if i["slug"] != row.get("writeup_slug")]
-    if kind in card_rules.GROUP_KINDS:
-        n_members = db.count_family_members(row["id"])
-        stats = [("members", n_members)]
-    else:
-        stats = [("files", len(files)), ("nested", len(db.list_child_projects(row["id"]))), ("links", len(links))]
+    n_files = len([i for i in items if i["slug"] != row.get("writeup_slug")])
 
     order = None
     if len(fams) == 1:
@@ -1914,14 +2021,10 @@ def card_face(card, items=None):
             ranked = sorted(rows, key=lambda r: r["sort_order"])
             order = {"n": [r["member_id"] for r in ranked].index(row["id"]) + 1, "of": len(rows)}
 
-    provenance = wf["provenance_label"] or ""
-    if provenance and wf["provenance_credit"]:
-        provenance += f" - {wf['provenance_credit']}"
-
     return {
         "slug": row["slug"], "title": row["title"], "description": row.get("description") or "",
         **status,
-        "highlight": wf["highlight"],
+        "highlight": bool(row.get("highlight")),
         "effective_start": start, "effective_end": end, "created_at": row["created_at"],
         "dates": date_range_label(start, end, active=row.get("activity") == "active"),
         "level": level["score"], "level_checks": level["checks"],
@@ -1930,13 +2033,34 @@ def card_face(card, items=None):
         "type_line": type_line,
         "hobbies": hobbies,
         "codes": [h["code"] for h in hobbies if h["code"]],
-        "facts": facts, "facts_more": facts_more,
-        "flavor": _flavor_line(row.get("description")),
-        "stats": [{"label": l, "n": n} for l, n in stats],
-        "provenance": provenance,
+        "rel_lines": rel_lines, "rel_more": rel_more,
+        "text": text, "text_source": text_source, "notes": [],
+        "flavor": row.get("flavor") or "",
+        "zone": _face_zone(status, parent),
+        "stat": _face_stat(kind, row["id"], n_files),
+        "foot": _face_foot(kind, hobbies, home),
         "order": order,
         "family_ids": [f["id"] for f in fams],
         "card_id": row["id"],
+    }
+
+
+def file_face(*, slug, title, dates, type_line, cover_url, href, codes=(), highlight=False, stacked=None,
+              text="", stat=""):
+    """An asset (file) card face (8.1, #596), in card_face's shape: kind "asset", no pips, the
+    file's own date, type line = its type label. Status box "Stacked · <card>" when the file is on
+    a card; footer "<its first group code> · <card>"; text box = the file's own description; stat
+    = what the caller can say cheaply (the file extension). No provenance (#596).
+    web/static/js/cards.js builds the same face client-side for the item grids;
+    scripts/check_item_cards.py renders both from this function and compares them."""
+    code = codes[0] if codes else ""
+    return {
+        "slug": slug, "kind": "asset", "title": title, "dates": dates,  # no kind_label: the icon's title is the type
+        "type_line": type_line, "cover_url": cover_url, "href": href,
+        "codes": list(codes), "highlight": bool(highlight), "show_level": False,
+        "rel_lines": [], "rel_more": 0, "text": markdown_render.clamp(text, FACE_TEXT_MAX), "notes": [],
+        "flavor": "", "zone": f"Stacked{_DOT}{stacked}" if stacked else "", "stat": stat,
+        "foot": _DOT.join(x for x in (code, stacked) if x), "order": None,
     }
 
 
@@ -1949,19 +2073,16 @@ def _day_label(ts):
     return f"{_MONTHS[d.month - 1]} {d.day}, {d.year}"
 
 
-def _asset_card(r, ts, spec, project_slug, thumb_fn):
-    """One file's asset-card dict (8.1) for a pile or a fan."""
-    prov = (r.get("provenance") or "").strip()
-    return {
-        "slug": r["slug"], "kind": "asset",
-        "title": r.get("content_description") or r.get("description") or r.get("filename") or r["slug"],
-        "dates": _day_label(ts),
-        "type_line": spec.label,
-        "provenance": prov.capitalize(),
-        "cover_url": thumb_fn(r) if thumb_fn else None,
-        "href": f"/object/{r['slug']}?from=project:{project_slug}",
-        "show_level": False, "codes": [], "facts": [], "stats": [],
-    }
+def _asset_card(r, ts, spec, card_row, thumb_fn):
+    """One file's face (file_face) for a pile or a fan on `card_row`'s page."""
+    title = r.get("content_description") or r.get("description") or r.get("filename") or r["slug"]
+    text = next((t for t in (r.get("content_description"), r.get("description")) if t and t != title), "")
+    name = r.get("filename") or ""
+    ext = name.rpartition(".")[2] if "." in name else ""
+    return file_face(slug=r["slug"], title=title, dates=_day_label(ts), type_line=spec.label,
+                     cover_url=thumb_fn(r) if thumb_fn else None,
+                     href=f"/object/{r['slug']}?from=project:{card_row['slug']}",
+                     stacked=card_row["title"], text=text, stat=ext.upper())
 
 
 def project_pile(card, items=None, thumb_fn=None):
@@ -1977,50 +2098,70 @@ def project_pile(card, items=None, thumb_fn=None):
         return None
     dated = sorted(((timeline.resolve_item_date(r), r) for r in items), key=lambda p: p[0])
     shown = dated[:STACK_FAN_MAX]
-    cards = [_asset_card(r, ts, object_types.get_object_type(r.get("media_type") or "unknown"), row["slug"], thumb_fn)
+    cards = [_asset_card(r, ts, object_types.get_object_type(r.get("media_type") or "unknown"), row, thumb_fn)
              for ts, r in shown]
     return {"count": len(items), "span": date_range_label(dated[0][0], dated[-1][0]),
             "cards": cards, "more": max(0, len(items) - len(cards))}
 
 
-def hobby_card_face(hobby_row, projects, items_by_project, flags=None, needs_input=False):
-    """The card face for a hobby (#525), in the same dict shape `card_face` returns so
-    web/templates/_card.html draws it (kind 'hobby': the green frame). Built from the hobby
-    row and its member projects: the date line is the computed span of the member projects'
-    real dates, the stats are its project / file counts, the cover is the first member
-    project's resolved cover (the caller turns `cover_slug` into a URL).
+def _project_list_line(titles):
+    """ "Projects: A, B, C, +N more." for a hobby face, clamped to FACE_PROJECT_LIST_MAX."""
+    shown = []
+    for t in titles:
+        if shown and len(", ".join(shown + [t])) > FACE_PROJECT_LIST_MAX:
+            break
+        shown.append(t)
+    more = len(titles) - len(shown)
+    return "Projects: " + ", ".join(shown) + (f", +{more} more." if more else ".")
+
+
+def hobby_card_face(hobby_row, projects, items_by_project, needs_input=False):
+    """The card face for a hobby (#525, #596), in the same dict shape `card_face` returns so
+    web/templates/_card.html draws it (kind 'hobby': the green frame, the mountain icon). The
+    text box is the hobby's own synopsis (hobby_settings, hobbies.set_text), then its member
+    projects by name ("+N more") and "Every card in this hobby carries its group code, CODE.";
+    status box "Hobby · active|inactive", stat "N projects", footer "<CODE> · group card". The
+    date line is the computed span of the member projects' real dates; the cover is the first
+    member project's resolved cover (the caller turns `cover_slug` into a URL).
     `items_by_project` maps project id -> db.list_project_items rows."""
     status = hobby_row.get("hobby_status") or "active"
+    status_label = card_rules.HOBBY_ACTIVITY_LABELS.get(status, status)
     spans = [timeline.resolve_project_span(p, items_by_project.get(p["id"], [])) for p in projects]
     starts = [s for s, _ in spans if s is not None]
     ends = [e for _, e in spans if e is not None]
     start = min(starts) if starts else None
     end = max(ends) if ends else None
     code = hobby_row.get("group_code") or ""
-    n_files = len({i["slug"] for its in items_by_project.values() for i in its})
+    settings = db.get_hobby_settings(hobby_row["id"])
     cover_slug = None
     for p in sorted(projects, key=lambda p: (p.get("activity") != "active", -(p.get("updated_at") or 0))):
         cover_slug = db.resolve_project_cover_slug(p)
         if cover_slug:
             break
+    notes = [_project_list_line([p["title"] for p in projects])] if projects else []
+    if code:
+        notes.append(f"Every card in this hobby carries its group code, {code}.")
     return {
         "slug": hobby_row["slug"], "kind": "hobby", "kind_label": "Hobby",
         "href": "#stacks",
         "title": hobby_row["name"], "description": "",
-        "activity": status, "stage": None,
-        "stage_label": card_rules.HOBBY_ACTIVITY_LABELS.get(status, status),
-        "stop_reason_label": None,
+        "activity": status, "stage": None, "stage_label": status_label, "stop_reason_label": None,
         "needs_input": bool(needs_input),
         "highlight": False,
         "effective_start": start, "effective_end": end, "created_at": hobby_row.get("created_at") or 0,
         "dates": date_range_label(start, end, active=status == "active"),
         "level": 0, "show_level": False,
         "cover_slug": cover_slug,
-        "type_line": "Hobby",
+        "type_line": f"Hobby{_DOT}{status_label}",
         "codes": [code] if code else [],
-        "facts": [f["label"] for f in (flags or [])], "facts_more": 0, "flavor": "",
-        "stats": [{"label": "projects", "n": len(projects)}, {"label": "files", "n": n_files}],
-        "provenance": "", "order": None,
+        "rel_lines": [], "rel_more": 0,
+        "text": markdown_render.clamp(settings.get("synopsis") or "", FACE_TEXT_MAX),
+        "text_source": "synopsis" if settings.get("synopsis") else None,
+        "notes": notes, "flavor": settings.get("flavor") or "",
+        "zone": f"Hobby{_DOT}{status_label.lower()}",
+        "stat": _count(len(projects), "project"),
+        "foot": _DOT.join(x for x in (code, "group card") if x),
+        "order": None,
     }
 
 
@@ -2028,10 +2169,9 @@ def file_stacks(card, items=None, thumb_fn=None):
     """Piles for the detail page (8.3): one per `media_type` of the card's files, biggest
     first. Each pile: `media_type`, `label` (registry label), `count`, `span` (the
     `Mon YYYY - Mon YYYY` date span of the files' resolved dates), `cards` (up to
-    STACK_FAN_MAX asset-card dicts, earliest first: title, own real date, type line,
-    cover_url, href, provenance), and `more` (files beyond the fan). `thumb_fn(row)` gives
-    a row's thumbnail URL or None (the page decides, since thumbnails depend on storage).
-    Counts here are every file in the card's grid, write-up included."""
+    STACK_FAN_MAX file faces, earliest first), and `more` (files beyond the fan).
+    `thumb_fn(row)` gives a row's thumbnail URL or None (the page decides, since thumbnails
+    depend on storage). Counts here are every file in the card's grid, write-up included."""
     from . import object_types  # lazy, same reason as the other lazy imports in this module
     row = get_card(card) if not isinstance(card, dict) else card
     if items is None:
@@ -2044,7 +2184,7 @@ def file_stacks(card, items=None, thumb_fn=None):
         spec = object_types.get_object_type(mt)
         dated = sorted(((timeline.resolve_item_date(r), r) for r in rows), key=lambda p: p[0])
         shown = dated[:STACK_FAN_MAX]
-        cards = [_asset_card(r, ts, spec, row["slug"], thumb_fn) for ts, r in shown]
+        cards = [_asset_card(r, ts, spec, row, thumb_fn) for ts, r in shown]
         piles.append({
             "media_type": mt, "label": spec.label, "count": len(rows),
             "span": date_range_label(dated[0][0], dated[-1][0]),

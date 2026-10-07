@@ -984,6 +984,8 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
     owner_words (optional): true marks the write-up as holding the OWNER'S OWN wording (the
     oral-history flow), which earns the card its "owner words" pip (V2 cards 3.11); false
     clears the mark; omit to leave it alone.
+    Every write-up gets a synopsis (#596): after setting or rewriting a write-up, also give the card
+    a few-sentence synopsis with constructicon_set_card_text (the card face shows it first).
     Returns the updated project; a missing one returns the not_found error.
     """
     project = db.get_project(project_id)
@@ -1022,6 +1024,8 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
     - items: list of objects in the project (with their tags)
     - cover: the cover object if cover_slug is set, else None
     - writeup: the writeup document object if writeup_slug is set, else None
+    - synopsis, flavor, writeup_lead, face_text, face_text_source: what the card FACE's text box
+      shows and where it came from (#596; set them with constructicon_set_card_text)
 
     A missing card returns the not_found error.
     """
@@ -1066,6 +1070,8 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
         "links": cards.list_links(project["slug"]),
         "children": [{"id": c["id"], "slug": c["slug"], "title": c["title"]}
                      for c in db.list_child_projects(project["id"])],
+        # #596: the face text (synopsis, flavor, the cached write-up lead, what the face shows).
+        **cards.text_fields(project),
     }
 
 
@@ -1665,6 +1671,38 @@ def constructicon_set_whereabouts(card: str | int, whereabouts: str | None = Non
     """
     return cards.set_whereabouts(card, whereabouts, "" if clear_note else (note if note is not None else ...),
                                  dry_run=dry_run).to_dict()
+
+
+@mcp.tool()
+def constructicon_set_card_text(card: str | int | None = None, hobby: str | int | None = None,
+                                synopsis: str | None = None, flavor: str | None = None,
+                                clear_synopsis: bool = False, clear_flavor: bool = False,
+                                dry_run: bool = False) -> dict:
+    """Set (or clear) the text on a card's FACE (#596): its synopsis and its flavor line.
+
+    The card face's text box shows, in order: the synopsis, else the opening of the card's
+    write-up (cached, returned as `writeup_lead`), else its description; then the flavor line in
+    italics. Whereabouts and provenance never appear on a face.
+    synopsis: a few plain sentences (max 600 chars; one paragraph per line) saying what the card
+      IS. Every card with a write-up should get one: when you write or rewrite a write-up
+      (constructicon_set_project_writeup / constructicon_update of its body), also set the synopsis
+      here. Read the current state with constructicon_get_project (synopsis, flavor, writeup_lead,
+      face_text, face_text_source).
+    flavor: one short italic line (max 140 chars), e.g. a quip or the story of the name.
+    Leave a field out (null) to keep it; pass clear_synopsis / clear_flavor (or "") to erase it.
+
+    Target exactly one of `card` (project id or slug) or `hobby` (hobby id or slug; a hobby card
+    shows its synopsis above its project list). dry_run=true previews without writing.
+    Returns {ok, dry_run, changes, warnings, batch_id, synopsis, flavor, ...}; undo with
+    constructicon_undo(batch_id). Too long: {"ok": false, "error": {"code": "bad_card_text"}}.
+    """
+    if (card is None) == (hobby is None):
+        raise InvalidInput("Pass exactly one of card or hobby.")
+    syn = "" if clear_synopsis else (synopsis if synopsis is not None else ...)
+    fla = "" if clear_flavor else (flavor if flavor is not None else ...)
+    if card is not None:
+        return cards.set_text(card, synopsis=syn, flavor=fla, dry_run=dry_run).to_dict()
+    return hobbies.set_text(hobby, synopsis=syn, flavor=fla, dry_run=dry_run).to_dict()
 
 
 @mcp.tool()

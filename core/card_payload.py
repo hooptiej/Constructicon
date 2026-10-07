@@ -10,7 +10,8 @@ in step with the JS. Dependency-free on purpose (the test imports it without the
 
 CARD_ITEM_FIELDS = (
     "slug", "display_name", "media_type", "type_label", "type_icon", "type_badge",
-    "card_date", "thumb_url", "has_thumbnail", "redacted", "highlight", "provenance",
+    "card_date", "thumb_url", "has_thumbnail", "redacted", "highlight",
+    "stacked",  # #596: title of the card the file is on (the face's "Stacked · <card>"); provenance left the face
     "client", "uploaded_by_display", "uploaded_at", "tags", "codes",
     "ocr_status", "extracted_text", "caption_capable", "type_metadata",
     "superseded_by", "rev",  # #477: revision chain (slug of the current revision | None, 1-based position | None)

@@ -25,13 +25,11 @@ applied, and the suggestion is separate and may differ.
 import json
 import re
 
-from . import card_rules, changes, db, timeline
+from . import card_rules, changes, db, physical_piece, timeline
 
 SCHEMA_VERSION = 1
 
 _OWNED_WORDS = re.compile(r"\b(own|owned|bought|using|use|carry|daily)\b", re.I)
-_SOFTWARE_WORDS = re.compile(
-    r"\b(code|script|software|firmware|app|site|system|design|tool|lua|library)\b", re.I)
 _STALE_SECONDS = 2 * 365 * 24 * 3600
 
 STATUS_OPTION_LABELS = {
@@ -94,11 +92,71 @@ def suggest_status_for_shelved(card, facts):
     return "paused", "Recent activity or work in progress nested under it", "low"
 
 
+# Media types that are a picture or model OF a physical object (photos, video, 3D files, vector/raster art).
+# Everything else (code, markdown, data, text, installers, applications, documents, ...) is the
+# digital side of a card (#584). A NULL media_type reads as "image", as everywhere else.
+PHYSICAL_EVIDENCE_TYPES = frozenset({"image", "gif", "video", "stl", "sketchup", "psd", "svg", "eps", "ai", "youtube"})
+
+
+def _type_label(key):
+    from . import object_types
+    return object_types.get_object_type(key).label.lower()
+
+
+def _mix_text(counts, keys, total):
+    """"61 of 68 files are source code" / "61 of 68 files are source code, markdown file and data file"."""
+    n = sum(counts[k] for k in keys)
+    top = sorted(keys, key=lambda k: (-counts[k], k))
+    labels = [_type_label(k) for k in top[:3]]
+    what = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+    more = "" if len(top) <= 3 else f" (and {len(top) - 3} other kind(s))"
+    return f"{n} of {total} files are {what}{more}"
+
+
 def suggest_kind(card, facts):
-    """card_kind: Thing for a leaf with no software/system words, else Project."""
-    if _SOFTWARE_WORDS.search(f"{card['title']} {card.get('description') or ''}"):
-        return "project", "Title/description reads like software, a system or a design", "low"
-    return "thing", "Leaf card with no software/system words (reads like one physical object)", "low"
+    """card_kind: Thing or Project, from what the card actually holds (#584), not its title.
+
+    Evidence, strongest first (the reason text names it, so a wrong pre-tick is easy to spot):
+      * most member files are NOT photos/video/3D files (code, markdown, data, text, installers,
+        applications, documents...) -> Project ("61 of 68 files are source code");
+      * only photos / 3D files, or physical-piece fields on a file, or a whereabouts on the card
+        -> Thing;
+      * nothing either way (an empty card, an evenly split one with no physical signal) -> Project,
+        the less-claiming answer (spec 4.1).
+    `facts` carries `type_counts` ({media_type: n}), `physical_piece_files` (files with physical-piece
+    fields set) and `whereabouts` (all optional: a missing one counts as no evidence). The title and
+    description are deliberately not read any more."""
+    counts = dict(facts.get("type_counts") or {})
+    total = sum(counts.values())
+    physical_keys = [k for k in counts if k in PHYSICAL_EVIDENCE_TYPES]
+    digital_keys = [k for k in counts if k not in PHYSICAL_EVIDENCE_TYPES]
+    physical = sum(counts[k] for k in physical_keys)
+    digital = total - physical
+    pp = int(facts.get("physical_piece_files") or 0)
+    where = facts.get("whereabouts")
+    signals = []
+    if pp:
+        signals.append(f"{pp} file(s) have physical-piece fields set")
+    if where:
+        signals.append(f"whereabouts is set ({card_rules.whereabouts_label(where)})")
+
+    if total and digital * 2 > total:
+        conf = "medium" if digital * 5 >= total * 4 else "low"
+        return "project", _mix_text(counts, digital_keys, total) + ", not photos or 3D files", conf
+    if total and physical * 2 > total:  # mostly photos / video / 3D files
+        what = _mix_text(counts, physical_keys, total)
+        if signals:
+            return "thing", what + "; " + " and ".join(signals), "medium"
+        if physical == total:
+            return "thing", what + " (photos / 3D files only, no software files)", "low"
+        return "thing", what + " (mostly photos / 3D files, little else)", "low"
+    if signals:
+        mix = f"{physical} of {total} files are photos or 3D files; " if total else "no files yet; "
+        return "thing", mix + " and ".join(signals), "low"
+    if total:
+        return "project", (f"Mixed files ({physical} photos/3D, {digital} other) and no physical-piece fields "
+                           "or whereabouts: the less-claiming answer"), "low"
+    return "project", "No files and no physical-piece fields or whereabouts to go on: the less-claiming answer", "low"
 
 
 def rank_built_for_candidates(card, facts, all_cards):
@@ -126,6 +184,14 @@ def rank_built_for_candidates(card, facts, all_cards):
 
 # --- Planning -----------------------------------------------------------------------
 
+def _type_counts(content):
+    out = {}
+    for i in content:
+        k = i.get("media_type") or "image"
+        out[k] = out.get(k, 0) + 1
+    return out
+
+
 def _gather(card, all_cards, hobby_ids_by_card, children_by_parent, now):
     items = db.list_project_items(card["id"])
     writeup = card.get("writeup_slug")
@@ -149,6 +215,10 @@ def _gather(card, all_cards, hobby_ids_by_card, children_by_parent, now):
             for c in children_by_parent.get(card["id"], [])),
         "related": db.list_related_projects(card["slug"]),
         "writeup_body": writeup_body,
+        # #584: what the card holds, for suggest_kind
+        "type_counts": _type_counts(content),
+        "physical_piece_files": sum(1 for i in content if physical_piece.has_any(i.get("type_metadata"))),
+        "whereabouts": card.get("whereabouts"),
     }
 
 

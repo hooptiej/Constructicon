@@ -137,7 +137,27 @@ async def _ocr_watchdog():
             print(f"OCR watchdog error: {e!r}")
 
 
-TRASH_PURGE_INTERVAL_SECONDS = 3600  # #541: deleted files leave the trash after items.TRASH_DAYS
+CAPTION_SELFHEAL_INTERVAL_SECONDS = 300
+
+
+def _heal_captions():
+    try:
+        n = captions.requeue_orphans()
+        if n:
+            print(f"caption self-heal: re-queued {n} item(s) left pending with no queue row", flush=True)
+    except Exception as e:
+        print(f"caption self-heal error: {e!r}", flush=True)
+
+
+async def _caption_selfheal_loop():
+    """#592: the caption twin of the OCR watchdog. asyncio.to_thread copies this task's context,
+    so it runs as `system`."""
+    while True:
+        await asyncio.sleep(CAPTION_SELFHEAL_INTERVAL_SECONDS)
+        await asyncio.to_thread(_heal_captions)
+
+
+TRASH_PURGE_INTERVAL_SECONDS = 3600 # #541: deleted files leave the trash after items.TRASH_DAYS
 
 
 async def _trash_purge_loop():
@@ -206,7 +226,12 @@ def _startup_as_system():
     asyncio.create_task(_ocr_watchdog())
     # #549: web is the ONLY process that captions: it drains the caption_queue table (filled by
     # the MCP process), one at a time, through captions.run_caption (lock + breaker + cooldown).
+    # #592: every web caption is persisted into that table first, so a restart just resumes it.
+    # Anything left pending with no queue row (queued by an older process) is re-queued here and
+    # then every CAPTION_SELFHEAL_INTERVAL_SECONDS.
+    _heal_captions()
     captions.start_queue_worker()
+    asyncio.create_task(_caption_selfheal_loop())
     asyncio.create_task(_trash_purge_loop())
     asyncio.create_task(_decision_sweep_loop())
 

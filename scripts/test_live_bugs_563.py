@@ -104,7 +104,8 @@ try:
     decisions.resolve(did, choice="image", actor="test")
     check("retype changed the type", db.get_by_slug("rt1")["media_type"] == "image", db.get_by_slug("rt1")["media_type"])
     fns = [fn for fn, _ in calls]
-    check("retype schedules the real caption runner", captions.run_caption in fns, [getattr(f, "__name__", f) for f in fns])
+    # #592: captions are persisted into caption_queue by post_insert itself (no background callable)
+    check("retype queues the caption (persisted, #592)", (db.peek_caption_queue() or {}).get("slug") == "rt1", str(db.peek_caption_queue()))
 finally:
     ingest.run_in_thread = real_runner
 src = open(os.path.join(ROOT, "core", "object_types", "_pe.py"), encoding="utf-8").read()

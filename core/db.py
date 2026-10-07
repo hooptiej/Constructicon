@@ -1214,6 +1214,27 @@ def dequeue_caption(slug):
         conn.close()
 
 
+def list_orphan_pending_captions(media_types, uploaded_before):
+    """#592: caption-capable, non-redacted rows whose caption status is 'pending' but that have no
+    caption_queue row and were added before `uploaded_before` (epoch seconds): a caption that was
+    in flight when its process died. `media_types` = caption-capable type keys (NULL reads as image)."""
+    types = sorted(set(media_types))
+    if not types:
+        return []
+    type_ok = f"(c.media_type IN ({', '.join('?' * len(types))})" + (" OR c.media_type IS NULL OR c.media_type = ''" if "image" in types else "") + ")"
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT c.* FROM capture_events c WHERE c.redacted = 0 AND " + type_ok +
+            " AND json_extract(c.type_metadata, '$.auto_caption_status') = 'pending'"
+            " AND c.timestamp < ? AND NOT EXISTS (SELECT 1 FROM caption_queue q WHERE q.slug = c.slug)"
+            " ORDER BY c.timestamp",
+            (*types, float(uploaded_before))).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def list_pending_ocr():
     """Rows whose OCR never finished — normally just a brief in-flight window,
     but a process restart while a background OCR task was queued or running

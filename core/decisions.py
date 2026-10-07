@@ -193,9 +193,14 @@ def list_open():
             # or removed; with none left (or the file already linked by hand) it's stale.
             live = revisions.live_candidates(decision)  # non-empty (stale_reason)
             payload = decision["payload"]
-            entry["options"] = [o for o in payload.get("options", []) if o["key"] in live or o["key"] == revisions.NONE_KEY]
+            # #586: option keys are a bare candidate slug, "reverse:<slug>", "same:<slug>" or "none".
+            def _live_key(k):
+                action, cand = revisions.option_target(k)
+                return action == "none" or cand in live
+            entry["options"] = [o for o in payload.get("options", []) if _live_key(o["key"])]
             entry["question"] = payload.get("question", "")
-            entry["suggested"] = payload.get("suggested") if payload.get("suggested") in live else None
+            sug = payload.get("suggested")
+            entry["suggested"] = sug if sug and _live_key(sug) else None
             entry["suggested_reason"] = payload.get("suggested_reason") if entry["suggested"] else None
             entry["confidence"] = payload.get("confidence") if entry["suggested"] else None
 

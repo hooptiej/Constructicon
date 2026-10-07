@@ -18,15 +18,20 @@ convention (HTTP 422/409/404 and the MCP error dict carry the same code):
 
 Upload-time asking: queue_replace_question() adds an `item_supersedes` pending decision when a
 new file's normalized name matches an existing current item. It only ever ASKS; the link exists
-only if the owner answers with a candidate (resolve_decision). Never auto-links.
+only if the owner answers (resolve_decision). Never auto-links. Answers: replace (this file
+supersedes the candidate), reverse (the candidate supersedes this file) and same (identical bytes:
+this upload is trashed via items.delete); the suggestion follows the evidence (#586).
 """
 
+import logging
 import re
 import time
 
-from . import changes, db
+from . import besteffort, changes, db
 from .card_rules import CardError
 from .errors import InvalidInput
+
+log = logging.getLogger("constructicon.revisions")
 
 KIND_ITEM_SUPERSEDES = "item_supersedes"
 NONE_KEY = "none"
@@ -220,9 +225,89 @@ def remove_from_chain(slug, actor=None, batch_id=None, dry_run=False):
 
 # --- Upload-time question --------------------------------------------------------
 
+REVERSE_PREFIX = "reverse:"  # "No -- <candidate> replaces THIS file" (#586)
+SAME_PREFIX = "same:"         # "It's the same file: keep one" (#586)
+_COPY_N_RE = re.compile(r"\((\d{1,2})\)\s*$")
+
+
+def copy_number(filename):
+    """The n of a trailing " (n)" copy marker (macOS / Chrome name a repeat download "X (1).msi"),
+    0 for a name without one: no marker is older than (1)."""
+    m = _COPY_N_RE.search(_EXT_RE.sub("", (filename or "").strip()))
+    return int(m.group(1)) if m else 0
+
+
+def option_target(key):
+    """(action, candidate slug or None) for a question option key: 'replace' (a bare candidate
+    slug: this file replaces it), 'reverse', 'same' or 'none'."""
+    if key == NONE_KEY:
+        return "none", None
+    if key.startswith(REVERSE_PREFIX):
+        return "reverse", key[len(REVERSE_PREFIX):]
+    if key.startswith(SAME_PREFIX):
+        return "same", key[len(SAME_PREFIX):]
+    return "replace", key
+
+
+def _day(ts, other=None):
+    d = time.gmtime(ts)
+    s = f"{time.strftime('%b', d)} {d.tm_mday}"
+    if other is None or time.gmtime(other).tm_year != d.tm_year:
+        s += f" {d.tm_year}"
+    return s
+
+
+def _name(row):
+    return row.get("display_name") or row.get("filename") or row["slug"]
+
+
+def newer_of(this_row, cand_row):
+    """Which of two files is the later one, by the best evidence available (#586), newest wins:
+    1. the " (n)" copy marker (higher n = the later download; no marker is older than (1));
+    2. the files' own modified dates (`source_modified_at`);
+    3. upload time, only as a last resort.
+    Returns (this_is_newer, reason) or (None, None) when nothing separates them."""
+    a, b = copy_number(this_row.get("filename")), copy_number(cand_row.get("filename"))
+    if a != b:
+        newer, older = (this_row, cand_row) if a > b else (cand_row, this_row)
+        n = max(a, b)
+        reason = f"the ({n}) copy is the later download"
+        ma, mb = this_row.get("source_modified_at"), cand_row.get("source_modified_at")
+        if ma and mb and ma != mb:
+            reason += f"; modified {_day(max(ma, mb), min(ma, mb))} vs {_day(min(ma, mb), max(ma, mb))}"
+        return newer is this_row, reason
+    ma, mb = this_row.get("source_modified_at"), cand_row.get("source_modified_at")
+    if ma and mb and ma != mb:
+        return ma > mb, f"modified {_day(max(ma, mb), min(ma, mb))} vs {_day(min(ma, mb), max(ma, mb))}"
+    ta, tb = this_row.get("timestamp"), cand_row.get("timestamp")
+    if ta and tb and ta != tb:
+        return ta > tb, "uploaded later (no copy marker or modified date to go on)"
+    return None, None
+
+
+def same_file(row_a, row_b):
+    """True when the two stored files have the same size and byte-for-byte contents (#586: the
+    "(1)" copy of a download is often exactly the same file). Needs both files on disk."""
+    import filecmp
+    from . import storage
+    try:
+        if not row_a.get("stored_filename") or not row_b.get("stored_filename"):
+            return False
+        pa, pb = storage.path_for(row_a["stored_filename"]), storage.path_for(row_b["stored_filename"])
+        if not pa.exists() or not pb.exists() or pa.stat().st_size != pb.stat().st_size:
+            return False
+        return filecmp.cmp(pa, pb, shallow=False)
+    except OSError as e:
+        besteffort.warn(log, "revisions: could not compare two files byte for byte", e,
+                        slug=row_a.get("slug"), other=row_b.get("slug"))
+        return False
+
+
 def candidates_for(slug):
     """Existing CURRENT items of the same type whose normalized filename equals this item's.
-    Newest upload first. Empty when the stem is too generic or the item is already in a chain."""
+    Newest first by the files' own evidence (copy marker, then modified date, then upload time,
+    #586), not by upload order alone. Empty when the stem is too generic or the item is already
+    in a chain."""
     row = db.get_by_slug(slug)
     if row is None or row.get("redacted") or not row.get("filename"):
         return []
@@ -236,30 +321,67 @@ def candidates_for(slug):
     conn = db.get_conn()
     try:
         rows = conn.execute(
-            "SELECT slug, filename, display_name, media_type, timestamp FROM capture_events "
+            "SELECT slug, filename, display_name, media_type, timestamp, source_modified_at, stored_filename "
+            "FROM capture_events "
             "WHERE filename IS NOT NULL AND slug != ? AND redacted = 0 AND is_brand_asset = 0 AND media_type IS ? "
             "ORDER BY timestamp DESC", (slug, row.get("media_type"))).fetchall()
     finally:
         conn.close()
-    return [dict(r) for r in rows if r["slug"] not in fwd and normalize_stem(r["filename"]) == stem]
+    out = [dict(r) for r in rows if r["slug"] not in fwd and normalize_stem(r["filename"]) == stem]
+    out.sort(key=lambda c: (copy_number(c["filename"]), c.get("source_modified_at") or 0, c.get("timestamp") or 0),
+             reverse=True)
+    return out
 
 
 def queue_replace_question(slug):
     """Queues "Does this replace ...?" for a freshly uploaded file, if anything matches.
-    Returns the decision id, or None (no match, or this file was already asked about)."""
+    Returns the decision id, or None (no match, or this file was already asked about).
+
+    #586: the file just uploaded is NOT assumed to be the newer one. Each candidate gets three
+    answers: "Yes, it replaces <c>", "No -- <c> replaces this one" (the reverse, link recorded as
+    <c> superseding this file) and, when the two files are byte-for-byte identical, "It's the same
+    file: keep one" (this upload goes to the trash, 7-day undo). The suggestion follows the
+    evidence (identical contents, then the " (n)" copy marker, then modified dates, then upload
+    time) and `suggested_reason` says which one decided it."""
     row = db.get_by_slug(slug)
     cands = candidates_for(slug)
     if not cands:
         return None
     title = _display(row)
-    options = [{"key": c["slug"], "label": f"Yes, it replaces {c['display_name'] or c['filename']}"} for c in cands]
+    _fwd, back = _maps()
+    options, identical, directions = [], [], {}
+    for c in cands:
+        name = c["display_name"] or c["filename"]
+        newer, why = newer_of(row, c)
+        directions[c["slug"]] = (newer, why)
+        options.append({"key": c["slug"], "label": f"Yes, it replaces {name}"})
+        if c["slug"] not in back:  # a candidate that already replaces something can't also replace this
+            options.append({"key": REVERSE_PREFIX + c["slug"], "label": f"No — {name} replaces this one"})
+        if same_file(row, c):
+            identical.append(c)
+            options.append({"key": SAME_PREFIX + c["slug"],
+                            "label": f"It's the same file: keep one (this upload goes to the trash; {name} stays)"})
     options.append({"key": NONE_KEY, "label": "No, it's a separate file"})
+    suggested = reason = confidence = None
+    if identical:
+        c = identical[0]
+        suggested = SAME_PREFIX + c["slug"]
+        reason = (f"Same size and identical contents as {c['display_name'] or c['filename']}: "
+                  "it is the same file, so keeping one is enough.")
+        confidence = "high"
+    elif len(cands) == 1:
+        c = cands[0]
+        newer, why = directions[c["slug"]]
+        if newer is True:
+            suggested, reason, confidence = c["slug"], f"This is the later file: {why}.", "medium"
+        elif newer is False and c["slug"] not in back:
+            suggested, reason, confidence = REVERSE_PREFIX + c["slug"], f"The other file is the later one: {why}.", "medium"
+        else:
+            reason = None
     payload = {
-        "schema": 1, "question": f"Does “{title}” replace an earlier file?", "options": options,
+        "schema": 2, "question": f"Does “{title}” replace an earlier file?", "options": options,
         "candidate_slugs": [c["slug"] for c in cands], "stem": normalize_stem(row["filename"]),
-        "suggested": cands[0]["slug"] if len(cands) == 1 else None,
-        "suggested_reason": "Same name apart from the revision or date marker." if len(cands) == 1 else None,
-        "confidence": "medium" if len(cands) == 1 else None,
+        "suggested": suggested, "suggested_reason": reason, "confidence": confidence,
     }
     return db.queue_decision_once(KIND_ITEM_SUPERSEDES, slug, payload)
 
@@ -289,11 +411,25 @@ def resolve_decision(decision, choice, actor=None, dry_run=False):
         raise InvalidInput(f"'{choice}' is not one of this question's options: {sorted(candidates)}",
                            code="invalid_choice")
     batch_id = changes.new_batch_id()
+    action, cand = option_target(choice)
+    this = decision["post_slug"]
     with db.transaction(dry_run=dry_run):
         applied = []
-        if choice != NONE_KEY:
-            mark_superseded(choice, decision["post_slug"], actor=actor, batch_id=batch_id)
-            applied.append(choice)
+        if action == "replace":
+            mark_superseded(cand, this, actor=actor, batch_id=batch_id)
+            applied.append(cand)
+        elif action == "reverse":  # #586: the candidate is the newer file, so it supersedes this one
+            mark_superseded(this, cand, actor=actor, batch_id=batch_id)
+            applied.append(cand)
+        elif action == "same":
+            # #586: keep one. The upload goes to the trash through the item service (7-day undo);
+            # its pending question (this one) is deleted with it, imaged in the same batch.
+            from . import items
+            if not _exists(cand) or not same_file(_exists(this), _exists(cand)):
+                raise CardError("bad_revision", "Those two files are no longer identical, so one can't be dropped as a copy.")
+            items.delete([this], actor=actor, batch_id=batch_id, dry_run=dry_run)
+            return {"ok": True, "applied": [], "trashed": this, "kept": cand, "batch_id": batch_id,
+                    "remaining": _count_open()}
         db._resolve_pending_decision(decision["id"], {"choice": choice, "superseded": applied},
                                     log={"op": OP_RESOLVE, "actor": actor, "batch_id": batch_id})
     return {"ok": True, "applied": applied, "batch_id": batch_id, "remaining": _count_open()}

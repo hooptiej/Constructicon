@@ -557,7 +557,10 @@ To add a new object type (issue #448 contract v2):
   Rules live in `core/card_rules.py` (pure), operations in `core/cards.py`,
   every core write is logged with row images in `audit_log` via
   `core/changes.py`, and the v1 -> v2 mapping is `core/card_migration.py`
-  (run from `init_db()`, idempotent: only cards with `stage IS NULL`).
+  (run from `init_db()`, idempotent: only cards with `stage IS NULL`). `card_migration.suggest_kind`
+  (Thing or Project) reads what the card holds (#584): mostly non-photo/3D files -> Project ("61 of 68
+  files are source code"); only photos/3D files, physical-piece fields or a whereabouts -> Thing; no
+  evidence -> Project. The title is not read.
 - **Families + nesting (V2, piece 3)** — `family_members(family_id, member_id)`
   is many-to-many membership for `kind=family|collection` cards (not nesting;
   no files move). `projects.parent_id` now means "part of" only:
@@ -591,7 +594,12 @@ To add a new object type (issue #448 contract v2):
   revisions. Upload-time: `ingest.auto_match` queues an `item_supersedes`
   pending decision (post_slug = the new file's slug, options = candidate slugs +
   `none`) when the new file's normalized name matches a current item of the same
-  type. It only ever asks; the link exists only if the owner answers. Not
+  type. It only ever asks; the link exists only if the owner answers. The question does not assume the
+  new file is the newer one (#586): each candidate gets "Yes, it replaces", "No, <candidate> replaces
+  this one" (`reverse:<slug>`) and, for byte-identical files, "It's the same file: keep one"
+  (`same:<slug>`: this upload goes to the trash via `items.delete`, 7-day undo). The suggestion follows
+  identical contents, then the ` (n)` copy marker (higher n = later; no marker = older than (1)), then
+  `source_modified_at`, then upload time, and `suggested_reason` names which one decided it. Not
   `capture_event_relations`: that one is symmetric and syncs tags/projects.
   `scripts/test_revisions.py` runs on a throwaway DB, no server.
 
@@ -746,11 +754,15 @@ JSON body). No secrets there: the publish token stays a write-only API key (`app
 `constructicon-web` and `constructicon-mcp` are two processes on one SQLite DB, so
 anything that must happen "only once" cannot live in process-local state.
 
-- **Captions:** only the web process captions. `mcp_server/server.py` sets
-  `CONSTRUCTICON_ROLE=mcp`, and in that role `captions.run_caption` marks the item
-  caption-pending and inserts into the `caption_queue` table instead of calling the GPU.
-  Every caption trigger (upload, import, retype via `ingest.run_in_thread`, a future one)
-  goes through `run_caption`, so no call site can slip past. Web's `captions.start_queue_worker()`
+- **Captions:** only the web process captions, and every caption is persisted first (#592).
+  `captions.run_caption` (called by upload, import, retype, the regenerate click and MCP alike)
+  marks the item caption-pending, inserts into the `caption_queue` table and wakes web's worker
+  (`captions.wake_worker()`, an Event the worker waits on instead of sleeping); it never runs the
+  model itself. The model call is `_run_caption_now`, called only by the worker. So a restart just
+  resumes the queue rows. Safety net: `captions.requeue_orphans()` (startup + every 5 min in
+  `web/app.py`) re-queues an item left `pending` with no queue row for over 10 minutes (no-op with
+  captions off, #585). Thumbnails regenerate lazily on view and embeddings ride inside OCR, which has
+  its own self-heal, so captions were the only request-started work that could be orphaned. Web's `captions.start_queue_worker()`
   thread drains the queue one at a time through `run_caption`, so `CAPTION_LOCK`, the
   breaker and the cooldown still apply; it leaves the queue alone while the breaker is open
   and backs off 2s -> 15s when idle. A queue row is removed only after the caption ran.

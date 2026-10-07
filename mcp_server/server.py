@@ -2239,7 +2239,9 @@ def constructicon_mark_superseded(old: str, new: str, dry_run: bool = False, bat
     and one click away). Both are item slugs. A chain is linear: A -> B -> C, and the CURRENT revision
     is the one with nothing newer. This is the explicit tool; the upload-time "does this replace ...?"
     question is only ever answered by the owner (constructicon_resolve_pending_decision, kind
-    item_supersedes, choice = the older file's slug or "none").
+    item_supersedes, choice = one option key: the older file's slug (this file replaces it),
+    "reverse:<slug>" (that file replaces this one), "same:<slug>" (identical bytes: this upload goes to
+    the trash, undoable for 7 days) or "none").
 
     Errors ({"ok": false, "error": {code, message}}): not_found; bad_revision (self-link, or a
     redacted item); revision_cycle (new is already at or before old in the chain);

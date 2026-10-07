@@ -6,6 +6,8 @@ constants. They live in the `install_config` key/value table (schema in core/db.
 in Admin > Install (GET/POST /api/install-config, admin role).
 
 Keys (KEYS below):
+  app_name          the app's name in the header, home title and every tab title (#581)
+  app_logo          slug of a brand-asset image shown as the logo (#581); the bundled logo when unset
   owner_name        the owner's name: home page gallery tab name and its initials
   owner_label       the "who" prefix of every upload's Source label (capture_events.tech), e.g.
                     "<owner_label> - manual upload". Defaults to owner_name.
@@ -45,12 +47,18 @@ OP_SEED = "migration_install_config_562"
 
 FALLBACK_OWNER = "Owner"
 FALLBACK_SITE_TITLE = "Constructicon"
+FALLBACK_APP_NAME = "Constructicon"
+BUNDLED_LOGO_URL = "/brand/logo.png"
 CACHE_SECONDS = 2.0
 MAX_TEXT = 120
 MAX_TARGETS = 10
 
 # key -> (label, hint) for the admin form. Order is display order.
 KEYS = {
+    "app_name": ("App name", "Shown in the header, on the home page and in every browser tab title. "
+                             "Leave blank for \"Constructicon\"."),
+    "app_logo": ("App logo", "A brand-asset image (mark one in the Brand drawer) shown as the logo. "
+                             "Leave blank for the bundled logo."),
     "owner_name": ("Owner name", "Shown on the home page's gallery tab (its initials too)."),
     "owner_label": ("Uploader label", "Starts the Source label of every upload, e.g. \"<label> — manual upload\". "
                                       "Defaults to the owner name. Changing it does not rewrite existing uploads."),
@@ -152,6 +160,17 @@ def site_title():
     return get("site_title") or FALLBACK_SITE_TITLE
 
 
+def app_name():
+    """#581: the install's own name (header, home title, tab titles); "Constructicon" when unset."""
+    return get("app_name") or FALLBACK_APP_NAME
+
+
+def app_logo_url():
+    """#581: where the logo image lives: the chosen brand asset's /f/ URL, else the bundled logo."""
+    slug = get("app_logo")
+    return f"/f/{slug}" if slug else BUNDLED_LOGO_URL
+
+
 def copyright_holder():
     return get("copyright_holder")
 
@@ -173,9 +192,11 @@ def public():
     vals = _read_all()
     return {
         "values": {k: vals.get(k, {} if k == "publish_targets" else "") for k in KEYS},
-        "fields": [{"key": k, "label": lab, "hint": hint} for k, (lab, hint) in KEYS.items()],
+        "fields": [{"key": k, "label": lab, "hint": hint,
+                    **({"kind": "brand_asset"} if k == "app_logo" else {})} for k, (lab, hint) in KEYS.items()],
         "setup_needed": not vals.get("owner_name"),
-        "fallbacks": {"owner_name": FALLBACK_OWNER, "site_title": FALLBACK_SITE_TITLE},
+        "fallbacks": {"owner_name": FALLBACK_OWNER, "site_title": FALLBACK_SITE_TITLE,
+                      "app_name": FALLBACK_APP_NAME, "app_logo": "bundled logo"},
     }
 
 
@@ -190,6 +211,23 @@ def _clean_text(key, value):
     if len(v) > MAX_TEXT:
         raise InvalidInput(f"{key} is too long (max {MAX_TEXT} characters)", code="bad_install_config")
     return v or None
+
+
+def _clean_logo(value):
+    """app_logo is the slug of an existing brand-asset image (the Brand drawer's upload/marking
+    is the one handling for logo files). Returns the slug, or None to clear."""
+    slug = _clean_text("app_logo", value)
+    if slug is None:
+        return None
+    item = db.get_by_slug(slug)
+    if not item or item.get("redacted"):
+        raise InvalidInput(f"No item {slug!r} to use as the logo", code="bad_install_config")
+    if not item.get("is_brand_asset"):
+        raise InvalidInput("The logo must be a brand asset: mark the image as one in the Brand drawer first",
+                           code="bad_install_config")
+    if (item.get("media_type") or "image") != "image":
+        raise InvalidInput("The logo must be an image", code="bad_install_config")
+    return slug
 
 
 def clean_targets(value):
@@ -233,6 +271,8 @@ def _clean(changes_in):
         if key == "publish_targets":
             t = clean_targets(value)
             out[key] = json.dumps(t) if t else None
+        elif key == "app_logo":
+            out[key] = _clean_logo(value)
         else:
             out[key] = _clean_text(key, value)
     return out

@@ -80,6 +80,154 @@ def _fixed_version(pe):
             f"{fi.FileVersionLS >> 16}.{fi.FileVersionLS & 0xFFFF}")
 
 
+# #587 item 3: an overlay (data appended after the PE image) that is most of the file, or that
+# opens with an archive/installer signature, is the classic shape of a self-extracting installer.
+OVERLAY_MAJORITY = 0.5
+_ARCHIVE_SIGNATURES = (  # (marker, label), looked for at the start of the overlay
+    (b"7z\xbc\xaf\x27\x1c", "7z"),
+    (b"PK\x03\x04", "zip"),
+    (b"MSCF", "cab"),
+    (b"Rar!\x1a\x07", "rar"),
+)
+_INSTALLER_MARKERS = (  # looked for anywhere in the scanned overlay head
+    (b"\xef\xbe\xad\xdeNullsoftInst", "NSIS"),
+    (b"Inno Setup Setup Data", "Inno Setup"),
+    (b"rDlPtS\xcd\xe6\xd7\x7b", "Inno Setup"),
+)
+_ARCHIVE_HEAD = 4096
+
+
+def _cert_table(pe):
+    """(file offset, size) of the Authenticode certificate table, or None. Unlike every other
+    data directory its address is a FILE offset, not an RVA."""
+    dirs = pe.OPTIONAL_HEADER.DATA_DIRECTORY
+    if len(dirs) > 4 and dirs[4].VirtualAddress and dirs[4].Size:
+        return dirs[4].VirtualAddress, dirs[4].Size
+    return None
+
+
+def _overlay(pe, path):
+    """(overlay_start, overlay_bytes) for an open PE, or (None, 0). The Authenticode signature
+    sits in the appended data too, so its size is not counted as payload."""
+    start = pe.get_overlay_data_start_offset()
+    if not start:
+        return None, 0
+    total = Path(path).stat().st_size
+    size = total - start
+    cert = _cert_table(pe)
+    if cert and cert[0] >= start:
+        size -= cert[1]
+    return start, max(size, 0)
+
+
+def overlay_info(path):
+    """What the appended data (overlay) says: {"overlay_bytes": n, "overlay_ratio": 0-1,
+    "overlay_signature": "7z"|"zip"|"cab"|"rar"|"NSIS"|"Inno Setup"|None}. Reads at most the first
+    OVERLAY_SCAN bytes of the overlay; nothing is executed."""
+    pe = _load(path)
+    try:
+        start, size = _overlay(pe, path)
+    finally:
+        pe.close()
+    out = {"overlay_bytes": size, "overlay_ratio": 0.0, "overlay_signature": None}
+    if not start or size <= 0:
+        return out
+    total = Path(path).stat().st_size
+    out["overlay_ratio"] = size / total if total else 0.0
+    with open(path, "rb") as f:
+        f.seek(start)
+        head = f.read(OVERLAY_SCAN)
+    for marker, label in _ARCHIVE_SIGNATURES:
+        if marker in head[:_ARCHIVE_HEAD]:
+            out["overlay_signature"] = label
+            return out
+    for marker, label in _INSTALLER_MARKERS:
+        if marker in head:
+            out["overlay_signature"] = label
+            return out
+    return out
+
+
+def looks_like_self_extractor(info):
+    """True when overlay_info() says most of the file is an embedded payload or the payload opens
+    with an archive/installer signature."""
+    return bool(info.get("overlay_signature")) or info.get("overlay_ratio", 0) > OVERLAY_MAJORITY
+
+
+# #587 item 4: the Authenticode signer as a publisher fallback. The certificate table is a
+# WIN_CERTIFICATE (length, revision, type) wrapping a PKCS#7 blob that carries the signer's
+# certificate chain. Read only: no signature or chain is verified and nothing goes online.
+_CERT_SCAN_MAX = 2 * 1024 * 1024
+_EKU_CODE_SIGNING = "1.3.6.1.5.5.7.3.3"
+_EKU_TIMESTAMPING = "1.3.6.1.5.5.7.3.8"
+
+
+def _der_certificates(blob):
+    """Every X.509 certificate found in a PKCS#7/BER blob. The wrapper may be BER (indefinite
+    lengths) which a strict loader refuses, but the certificates inside are DER, so they are
+    found by their SEQUENCE header and parsed one by one."""
+    from cryptography import x509
+    certs = []
+    i = 0
+    while True:
+        i = blob.find(b"\x30\x82", i)
+        if i < 0 or i + 4 > len(blob):
+            break
+        length = 4 + int.from_bytes(blob[i + 2:i + 4], "big")
+        if length > 64 and i + length <= len(blob):
+            try:
+                certs.append(x509.load_der_x509_certificate(blob[i:i + length]))
+                i += length
+                continue
+            except ValueError:  # silent-ok: not a certificate at this offset, keep scanning
+                pass
+        i += 2
+    return certs
+
+
+def _name_attr(name, oid):
+    attrs = name.get_attributes_for_oid(oid)
+    return attrs[0].value.strip() if attrs and attrs[0].value else None
+
+
+def signer_name(path):
+    """The Authenticode signer's subject CN (else O) from the embedded certificate table, or None
+    when the file isn't signed, the table is unreadable, or no leaf certificate is found. The
+    signer is the leaf certificate that is not another certificate's issuer, preferring one with a
+    code-signing usage over a timestamp authority's."""
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    pe = _load(path)
+    try:
+        cert = _cert_table(pe)
+    finally:
+        pe.close()
+    if not cert:
+        return None
+    offset, size = cert
+    with open(path, "rb") as f:
+        f.seek(offset)
+        blob = f.read(min(size, _CERT_SCAN_MAX))
+    certs = _der_certificates(blob[8:])  # skip the WIN_CERTIFICATE header
+    issuers = {c.issuer.rfc4514_string() for c in certs if c.issuer != c.subject}
+    leaves = [c for c in certs if c.subject.rfc4514_string() not in issuers]
+
+    def usage(c):
+        try:
+            eku = {o.dotted_string for o in c.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value}
+        except x509.ExtensionNotFound:  # silent-ok: no EKU extension just means no usage preference
+            return 1
+        if _EKU_TIMESTAMPING in eku:
+            return 2
+        return 0 if _EKU_CODE_SIGNING in eku else 1
+
+    for c in sorted(leaves, key=usage):
+        name = _name_attr(c.subject, NameOID.COMMON_NAME) or _name_attr(c.subject, NameOID.ORGANIZATION_NAME)
+        if name:
+            return name
+    return None
+
+
 def facts(path):
     """Everything worth showing about an .exe, as a flat JSON-safe dict."""
     pe = _load(path)
@@ -98,6 +246,18 @@ def facts(path):
                            ("LegalCopyright", "copyright")):
             if strings.get(key):
                 info[field] = strings[key]
+        _start, overlay_bytes = _overlay(pe, path)
+        if overlay_bytes > 0:
+            info["overlay_bytes"] = overlay_bytes  # #587 item 3
+        if info["signed"] and "publisher" not in info:
+            # #587 item 4: no CompanyName, so name the signer instead (labelled "Signed by").
+            try:
+                signer = signer_name(path)
+            except Exception as e:
+                besteffort.warn(log, "pe: couldn't read the Authenticode signer", e, path=str(path))
+                signer = None
+            if signer:
+                info["signer"] = signer
         version = strings.get("ProductVersion") or strings.get("FileVersion") or _fixed_version(pe)
         if version:
             info["version"] = version

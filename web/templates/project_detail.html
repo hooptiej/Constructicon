@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ project.title }} — Constructicon{% endblock %}
+{% block title %}{{ project.title }} — {{ app_name() }}{% endblock %}
 {% block body %}
 {% from "_card.html" import card %}
 {% from "_details_group.html" import dp_group %}
@@ -975,7 +975,7 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
     currentTitle = title;
     textEl.textContent = title;
     if (breadcrumbEl) breadcrumbEl.textContent = title;
-    document.title = `${title} — Constructicon`;
+    document.title = `${title} — ` + {{ app_name() | tojson }};
   }
 
   function startEdit() {

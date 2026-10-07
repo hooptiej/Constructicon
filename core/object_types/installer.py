@@ -527,6 +527,8 @@ def get_properties(row):
                            ("architecture", "Architecture"), ("min_os", "Min OS")):
             if stats.get(key):
                 props[label] = str(stats[key])
+        if stats.get("signer") and not stats.get("publisher"):
+            props["Signed by"] = str(stats["signer"])  # #587 item 4: a signed .exe with no CompanyName
         if stats.get("components"):
             props["Components"] = f"{stats['components']:,}"
         if stats.get("installed_size_kib"):

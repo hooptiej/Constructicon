@@ -575,6 +575,7 @@ body.delete-mode-on .card-select-row { display: flex; }
 .audit-log-status { order: 2; font-weight: 500; }
 .audit-log-time { order: 3; margin-left: auto; color: var(--text-3); text-align: right; }
 .audit-log-path { order: 4; flex-basis: 100%; color: var(--text); word-break: break-all; }
+.audit-log-reason { order: 4; flex-basis: 100%; color: var(--hazard-red); word-break: break-word; }
 .audit-log-slugs { order: 5; flex-basis: 100%; color: var(--text-3); word-break: break-all; }
 .audit-log-status-success { color: var(--accent); }
 .audit-log-status-error { color: var(--hazard-red); }

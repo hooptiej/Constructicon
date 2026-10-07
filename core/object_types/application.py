@@ -7,9 +7,11 @@ An .exe is one of two things, and the file can't always say which:
   installer type's higher-priority sniffer, with no question asked.
 - Every other .exe lands here, and pre_store_fn stores it as an application
   AND queues "installer or standalone app?" in the admin's Needs your input
-  (answering retypes the row). When only the name hints at an installer
-  ("Setup" in the filename or version info), "installer" is the suggested
-  answer; otherwise "application" is.
+  (answering retypes the row). When the name hints at an installer ("Setup"
+  in the filename or version info), or most of the file is data appended
+  after the program (or that data opens with a 7z/zip/cab/NSIS/Inno marker,
+  #587), "installer" is the suggested answer and the question says why;
+  otherwise "application" is.
 
 Either way the object page offers a Reclassify action (this file's for
 app -> installer, installer.py's for the reverse), since nothing else can
@@ -21,16 +23,37 @@ when plausible, also seeds content_date. Nothing is executed.
 """
 
 import datetime
+import logging
 
-from .. import storage
+from .. import besteffort, storage
 from . import _pe, _preview, register, ObjectTypeSpec, PreStore, ThumbnailSource, TypeAction
 
 STATS_KEY = "application_stats"
+log = logging.getLogger("constructicon.application")
 
 
 def sniff(path, filename):
     """sniff_fn: a real PE executable (MZ + PE header)."""
     return _pe.is_pe(path)
+
+
+def _payload_reason(path):
+    """A sentence saying why the file's shape suggests an installer, or None. Best-effort: an
+    unreadable file just gives no hint."""
+    try:
+        info = _pe.overlay_info(path)
+    except Exception as e:
+        besteffort.warn(log, "application: couldn't read the overlay", e, path=str(path))
+        return None
+    if not _pe.looks_like_self_extractor(info):
+        return None
+    mb = info["overlay_bytes"] / (1024 * 1024)
+    size = f"{mb:.1f} MB" if mb >= 1 else f"{info['overlay_bytes'] // 1024} KB"
+    if info.get("overlay_signature"):
+        return (f"Most installers carry their payload this way: {size} of this file is data appended after the "
+                f"program, and it starts like a {info['overlay_signature']} archive.")
+    return (f"Most of this file is an embedded payload: {size} ({info['overlay_ratio']:.0%}) is data appended "
+            f"after the program, the usual shape of a self-extracting installer.")
 
 
 def pre_store(candidate):
@@ -43,12 +66,18 @@ def pre_store(candidate):
     question = f"Is {name} an installer or a standalone app?"
     if hint:
         question += " (Its name or version info mentions setup/install, but no installer framework was found.)"
+    # #587 item 3: the strongest installer signal is the shape of the file: most of it is data
+    # appended after the program (an embedded payload), or that data opens with an archive signature.
+    payload = _payload_reason(candidate.path)
+    if payload:
+        question += f" ({payload})"
+    suggest_installer = bool(hint or payload)
     return PreStore.needs_decision(
         kind="exe_classification",
         question=question,
         options=[
-            {"key": "installer", "label": "Installer (sets software up)", "suggested": hint},
-            {"key": "application", "label": "Standalone app (runs as-is)", "suggested": not hint},
+            {"key": "installer", "label": "Installer (sets software up)", "suggested": suggest_installer},
+            {"key": "application", "label": "Standalone app (runs as-is)", "suggested": not suggest_installer},
         ],
         provisional_type="application",
     )
@@ -85,6 +114,10 @@ def get_properties(row):
                            ("copyright", "Copyright")):
             if stats.get(key):
                 props[label] = str(stats[key])
+        if stats.get("signer") and not stats.get("publisher"):
+            props["Signed by"] = str(stats["signer"])  # #587 item 4: no CompanyName, so the signing certificate
+        if stats.get("overlay_bytes", 0) >= 64 * 1024:
+            props["Appended data"] = f"{stats['overlay_bytes'] / (1024 * 1024):.1f} MB"  # #587 item 3
         if "signed" in stats:
             # Windows' own binaries are catalog-signed, so "no embedded
             # signature" is the honest wording, not "unsigned".

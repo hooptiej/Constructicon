@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_card.html" import card %}
-{% block title %}Constructicon{% endblock %}
+{% block title %}{{ app_name() }}{% endblock %}
 {% block body %}
 {% include "_header.html" %}
 {% include "_gallery_drawer.html" %}
@@ -13,7 +13,7 @@
 
 <div class="app-main{% if timeline_projects %} app-main-shifted{% endif %}">
   <div>
-    <h1 class="page-title">Constructicon</h1>
+    <h1 class="page-title">{{ app_name() }}</h1>
     <p class="page-subtitle">Curated projects below — gallery and upload live behind the tab on the right (hover, or drag a file over it).</p>
   </div>
 

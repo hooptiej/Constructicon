@@ -8,6 +8,10 @@ A static check (AST, no server, no DB). It fails when:
   3. anything outside core/policy.py (and the type registry that defines it) decides restriction
      itself: `object_types.is_restricted(`, `restricted_types(` or the retired `_not_restricted`.
      `db.list_restricted` (the admin's list of restricted items) is the one allowed exception.
+  1b. (#604 follow-up 7) a door that OPENS one item (ACCESS_LOGGED) no longer records a sensitive
+     item's access with `policy.note_access(...)`.
+Since #603 "restricted" means sensitive: a restricted type OR an item flagged "This is sensitive";
+visible to admins and the item's uploader (scripts/test_ownership_sensitive.py proves the matrix).
 
 What it CAN'T check, honestly:
   * that the policy call is on the right rows (it only sees that the function body mentions
@@ -56,6 +60,27 @@ DOORS = {
     ("mcp_server/server.py", "constructicon_list_brand_assets"): "MCP list_brand_assets",
     ("core/site_export.py", "build_site"): "static site export",
     ("core/project_export.py", "export_project"): "project zip export",
+    # #603: a flagged item can be in flight or captioned, so these name items now.
+    ("web/routes/items.py", "api_processing"): "GET /api/processing (in-flight items' names)",
+    ("web/routes/items.py", "api_captions_unreviewed"): "GET /api/captions/unreviewed (caption review page)",
+    ("web/routes/items.py", "api_access_log"): "GET /api/image/{slug}/access-log (admin)",
+    ("mcp_server/server.py", "constructicon_view"): "MCP view",
+    ("core/captions.py", "needs_caption"): "MCP list_needs_caption (never a sensitive item)",
+    ("core/curation_queue.py", "for_actor"): "the Curator queue (shared cache, filtered per actor)",
+    ("core/decisions.py", "list_open"): "the decision queue",
+    ("core/revisions.py", "chain_detail"): "revision chains on the item page / MCP",
+}
+
+# #604 follow-up 7: doors that OPEN one item must record a sensitive item's access
+# (`policy.note_access(row, how)`, a no-op for an ordinary item).
+ACCESS_LOGGED = {
+    ("web/routes/pages.py", "object_detail_page"): "/object/{slug}",
+    ("web/routes/items.py", "api_get_image"): "GET /api/image/{slug}",
+    ("web/routes/files.py", "get_file"): "/f/{slug}",
+    ("web/routes/files.py", "get_thumbnail"): "/f/{slug}/thumb",
+    ("mcp_server/server.py", "constructicon_get"): "MCP get",
+    ("mcp_server/server.py", "constructicon_download"): "MCP download",
+    ("mcp_server/server.py", "constructicon_view"): "MCP view",
 }
 
 # db reads that hand out item rows.
@@ -67,10 +92,8 @@ ITEM_READS = {"get_by_slug", "list_project_items", "list_related", "search", "li
 # Net exemptions: (file, function) -> why it needs no item policy. An entry the net no longer
 # reaches is stale and fails the check (so this list can't quietly rot).
 EXEMPT = {
-    ("web/routes/items.py", "api_processing"): "upload/OCR progress for the caller's own in-flight uploads "
-                                               "(status, filename, thumbnail flag); no file or metadata served",
-    ("web/routes/items.py", "api_captions_unreviewed"): "caption suggestions only exist for caption-capable types; "
-                                                        "no restricted type is caption-capable",
+    # (#603 retired the two old entries: the processing drawer and the caption-review list now name
+    # items a flagged image can be among, so they are DOORS above.)
 }
 
 NET_FILES = ["web/routes/pages.py", "web/routes/items.py", "web/routes/files.py", "web/routes/cards.py",
@@ -127,6 +150,15 @@ def main():
         elif not _calls_policy(fn):
             failures.append(f"{rel}:{fn.lineno} {name} ({what}): doesn't call core/policy.py")
 
+    # 1b. #604 follow-up 7: the single-item doors log a sensitive item's access
+    for (rel, name), what in ACCESS_LOGGED.items():
+        fn = _functions(tree(rel)).get(name)
+        if fn is None:
+            failures.append(f"{rel}:{name} ({what}): access-logged door not found (renamed? update ACCESS_LOGGED)")
+        elif not any(isinstance(n, ast.Attribute) and n.attr == "note_access" and isinstance(n.value, ast.Name)
+                     and n.value.id == "policy" for n in ast.walk(fn)):
+            failures.append(f"{rel}:{fn.lineno} {name} ({what}): doesn't record sensitive access (policy.note_access)")
+
     # 2. the net
     netted = 0
     netted_names = set()
@@ -161,7 +193,8 @@ def main():
                     continue
                 failures.append(f"{rel}:{i}: decides restriction itself ({line.strip()[:90]}); ask core/policy.py")
 
-    print(f"known doors: {len(DOORS)}; GET routes / MCP read tools reading items (net): {netted}; exempt: {len(EXEMPT)}")
+    print(f"known doors: {len(DOORS)}; access-logged doors: {len(ACCESS_LOGGED)}; "
+          f"GET routes / MCP read tools reading items (net): {netted}; exempt: {len(EXEMPT)}")
     if failures:
         print(f"FAIL: {len(failures)} problem(s):")
         for f in failures:

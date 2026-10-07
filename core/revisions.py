@@ -137,9 +137,15 @@ def chain_detail(slug):
     slugs = chain_slugs(slug)
     if len(slugs) < 2:
         return []
+    from . import policy  # lazy: policy imports nothing from here, but keep revisions' imports light
     out = []
     for i, s in enumerate(slugs, start=1):
         row = db.get_by_slug(s) or {"slug": s}
+        if row.get("id") is not None and not policy.can_view(row):
+            # #603: a sensitive revision the actor may not see keeps its place, never its name.
+            out.append({"slug": s, "title": "(an item you can't see)", "filename": None, "rev": i,
+                        "is_current": s == slugs[-1], "is_this": s == slug, "redacted": False, "hidden": True})
+            continue
         out.append({"slug": s, "title": _display(row), "filename": row.get("filename"), "rev": i,
                     "is_current": s == slugs[-1], "is_this": s == slug, "redacted": bool(row.get("redacted"))})
     return out

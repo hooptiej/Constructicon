@@ -286,6 +286,8 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   unless admin); `decisions.list_open()` leaves out questions about items the actor can't see.
   Don't decide restriction anywhere else (`object_types.is_restricted` / `restricted_types` outside
   the policy fail the check below).
+- **Since #603** "restricted" = sensitive: a restricted type OR an item flagged "This is sensitive",
+  visible to admins AND the item's uploader (`can_view`), see "Ownership and sensitive items" below.
 - **Adding a door** (anything that hands out an item or a list of items, web or MCP): call the
   policy in it, and add it to `DOORS` in `scripts/check_policy_doors.py`. That script (AST, no
   server) fails when a known door stops calling `policy.`, when a GET route or MCP read tool reads
@@ -462,6 +464,88 @@ containers (`sudo docker restart <web> <mcp>`), update every client. **Lost admi
 Check with `scripts/test_auth_step2.py` (throwaway DB: the whole matrix per role and for the token,
 mounts, `next`, the decision queue, the MCP refusing to start, the uploader's API module, no secrets
 in the audit log). Later (not built): HTTPS (Caddy), per-user MCP tokens, a separate uploader token.
+
+## Ownership and sensitive items (#604 build steps 1-2, #603)
+
+Owner decisions 2026-10-07 (#604 "Decided" table + settled follow-ups). Step 1 records who made what;
+step 2 is the per-item "This is sensitive" switch, its first consumer. Private cards, card members,
+edit rules by owner and per-user MCP tokens are #604 steps 3-5 (not built).
+
+**Ownership (step 1).** A users.id, set at WRITE time from the actor context
+(`users.user_id_for_actor`): a signed-in user's id; NULL for the install token, the MCP, scripts, the
+system and anonymous, which means **admin-owned**. Read it back with `users.owner_info(id)` ({id,
+username, name}, or None).
+- `capture_events.uploaded_by_user_id`: set in `db.insert_upload`, the ONE place an item row is made
+  (web upload and `/api/content`, MCP upload / import / add_content, a card's write-up). Not the
+  `tech` Source label, which is unchanged (and is what the JSON key `uploaded_by` still means).
+- `projects.created_by_user_id`: `db._create_project` (every card create, split, conversion).
+- `hobby_settings.created_by_user_id`: `hobbies.create`, only when a signed-in user makes the hobby
+  (an imaged `hobby_settings` insert; re-marking an existing hobby never changes it).
+- `blog_entries.created_by_user_id`: `blog.create` (in the imaged insert).
+- **Backfill** (`db.MIGRATIONS` `ownership_backfill_604`, once, `db._ownership_backfill`): only
+  `actor = user:<name>` rows of a user who still exists. Items from the request-log row of a
+  successful `POST /api/upload` (its logged `file` = the filename) or `/api/content` (its
+  `external_url`), matched to the nearest unowned item with that name / URL created up to 10 minutes
+  before; cards from `create_card` change-log rows (+ the write-up made with them); hobbies from
+  `hobby_create` rows that turned a tag into a hobby; blog entries from `blog_entry_create`. Never
+  overwrites. One change-log row `migration_ownership_backfill_604` carries the counts.
+- **Shown:** item JSON and MCP item reads carry `uploaded_by_user` (null = admin-owned); the item page's
+  ORIGIN group says "Uploaded by <name>" / "Admin (no user recorded)"; the card page's ORIGIN says
+  "Created by"; MCP `get_project` carries `created_by_user`.
+
+**The sensitive flag (step 2, #603).** `capture_events.sensitive` (0/1) + `sensitive_by` (the actor
+string) + `sensitive_at`. Written only by `items.set_sensitive(slugs, on)`: ONE imaged change-log row
+(op `item_sensitive`), undoable with the generic undo.
+- **Mark: editor or above. Clear: admin only** (403 `forbidden`, checked before the items are looked
+  up). An undo that would clear a flag is an unmark, so it is admin-only too
+  (`items.check_undo_allowed`, called by `cards.undo`); undoing an unmark (re-locking) is open.
+- **Where:** the item page's ORIGIN group ("This is sensitive" / "Clear sensitive", `POST
+  /api/image/{slug}/sensitive`, `sensitive=true|false`); the Unfiled and uploader-gallery selection bars
+  ("Mark sensitive", `POST /api/bulk/sensitive`, one batch); the upload drawer's checkbox (`sensitive`
+  form field on `/api/upload` and `/api/content`, set IN the INSERT so the item is never visible
+  unlocked; a duplicate upload marks the existing item instead); MCP `constructicon_set_sensitive(slug,
+  sensitive, dry_run)`, and `sensitive` on `constructicon_upload` / `import` / `add_content`.
+- **Policy:** `policy.is_restricted(item)` = a restricted TYPE (`is_type_restricted`) OR flagged
+  (`is_flagged`); "sensitive" means either. `can_view`: an ordinary item -> yes; a sensitive one -> an
+  admin, or **its uploader** (a signed-in, enabled user whose id = `uploaded_by_user_id`). The uploader
+  rule applies to BOTH kinds when an uploader is known; NULL = admin-only (so every key and certificate
+  uploaded before step 1 is exactly as locked as before). A REDACTION still beats it: the file doors
+  refuse a redacted item to anyone but an admin, the uploader included.
+- **Browsing** (`sql_browse_clause`, so search, OCR text and embeddings never surface it): a restricted
+  type stays out of browsing for everyone (unchanged); a flagged item is in browsing for admins and its
+  uploader only (`AND (COALESCE(sensitive,0) = 0 OR uploaded_by_user_id = <id>)`, nothing for an admin).
+  `list_uploaders`' totals use the same clause, so a `?query=` can't probe a hidden description.
+- **Every door:** item page, item API (and its revisions / similar / every write route through
+  `viewable_item`), `/f/<slug>` and thumbnail (404 for anyone else, signed in or not), browse, search,
+  the gallery, Unfiled, card / hobby / blog lists, exports (`filter_exportable`: never, for anyone), MCP
+  get / search / download / view / get_project / get_related, `list_needs_caption` (never offers a
+  sensitive item even to the admin MCP: `filter_exportable`, the picture would leave the install), the
+  processing drawer (`/api/processing`), the caption-review list, the decision queue (a supersedes
+  candidate the actor can't see isn't offered), revision chains (a hidden revision shows as "(an item
+  you can't see)"), and the **Curator queue**: its shared cache is now built as `system` (the whole
+  queue) and filtered per actor on read (`curation_queue.for_actor`; file questions carry `item_slug`).
+  The MCP acts as admin (install token) until per-user tokens (#604 step 5).
+- **Admin's list** (Admin > "Sensitive items", `GET /api/restricted`, MCP `list_restricted`): restricted
+  types AND flagged items, each with `reason` ("type: Certificate" / "marked by Jason K. on ...") and
+  how often it was opened.
+
+**View logging (#604 follow-up 7): sensitive items only.** `core/access_log.py`, table
+`item_access_log(slug, actor, how, at)`. A door that OPENS one item calls `policy.note_access(row, how)`
+after its policy check passed (a no-op for an ordinary item): `page` (`/object`), `api` (`GET
+/api/image/{slug}`), `file` (`/f`), `thumb`, `mcp_get`, `mcp_download`, `mcp_view`. The same actor
+through the same door within 5 minutes is folded into one row (the page polls its item API; grids
+re-request thumbnails). Refused looks aren't logged. Best effort: a failed write is logged
+(`besteffort.warn`) and the read still succeeds. Admins see it on the item page (ORIGIN, "Opened by"),
+in Admin's sensitive list (count + last opener) and at `GET /api/image/{slug}/access-log` (admin).
+`item_access_log` is kept by delete-all (`reset.KEPT_TABLES`), like the audit log.
+
+**Checks.** `scripts/check_policy_doors.py` also requires `policy.note_access` in every single-item
+door (`ACCESS_LOGGED`) and lists the new doors (processing, caption review, the queue filter, MCP view).
+`scripts/test_ownership_sensitive.py` (throwaway DB, real sessions for an admin, two editors and a
+viewer, anonymous and the token): ownership on every create path, the backfill and its idempotence,
+the full matrix per door, who may flip it, undo, bulk, the upload-time flag, a restricted type with an
+uploader, the captioning agent, exports and the view log. `test_role_policy.py` covers a flagged
+fixture next to the certificate.
 
 ## Service layer (#541): one core module per domain
 
@@ -720,6 +804,8 @@ To add a new object type (issue #448 contract v2):
   - `display_name`, `icon` — optional per-object override of the
     filename/content_description/slug and the media type's default badge
     icon.
+  - `uploaded_by_user_id` (#604 step 1, NULL = admin-owned) and `sensitive` / `sensitive_by` /
+    `sensitive_at` (#603): see "Ownership and sensitive items".
   - `type_metadata` — freeform JSON bag for per-type properties that don't
     fit a generic column (e.g. YouTube view/like/comment counts; an audio
     file's ID3 artist/album/track/year/genre, #255). One

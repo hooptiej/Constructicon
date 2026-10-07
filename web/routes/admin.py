@@ -11,8 +11,8 @@ from fastapi.responses import JSONResponse
 from core import backup, captions, db, install_config, items, object_types, paths, reset, storage
 from core import provenance_options
 from web.common import DESKTOP_APP_BUILD_DIR, DESKTOP_APP_BUILD_PATH
-from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public
-from core import roles
+from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public, actor_label
+from core import access_log, roles
 from web.roles import RoleRouter, requires
 
 router = RoleRouter(default_role=roles.ADMIN)  # #557: routes without their own label are admin
@@ -176,13 +176,26 @@ def api_list_restricted():
     attached to) is where they live until authentication (#467) locks them
     properly. Each carries its type's properties and the projects it's on."""
     items = []
-    for row in db.list_restricted():
+    rows = db.list_restricted()  # #603: restricted types AND items flagged sensitive
+    opened = access_log.summary(r["slug"] for r in rows)
+    for row in rows:
         spec = object_types.get_object_type(row.get("media_type"))
+        public = _to_public(row)
+        reason = public.get("sensitive_reason") or {}
+        if reason.get("kind") == "flag":
+            reason_text = f"marked by {reason.get('by_label')}" + (f" on {reason['at_display']}" if reason.get("at_display") else "")
+        else:
+            reason_text = f"type: {reason.get('type') or spec.label}"
+        seen = opened.get(row["slug"])
         items.append({
-            **_to_public(row),
+            **public,
             "link": f"/object/{row['slug']}",
             "properties": _call_properties_fn(spec, row),
             "projects": [{"title": p["title"], "slug": p["slug"]} for p in db.list_projects_for_post(row["slug"])],
+            "reason": reason_text,  # #603: "type: Certificate" vs "marked by Jason K. on ..."
+            # #604 follow-up 7: how often it was opened, and by whom last.
+            "opened": ({"count": seen["count"], "last_by": actor_label(seen["last_actor"]),
+                        "last_at": _friendly_datetime(seen["last_at"])} if seen else None),
         })
     return JSONResponse({"count": len(items), "items": items})
 

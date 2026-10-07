@@ -11,7 +11,8 @@ from core import hobbies, physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
 from web.common import _build_breadcrumbs, _rev_note, templates
 from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_object_detail, _to_public, _to_timeline_project
-from core import policy, roles, users
+from core import access_log, actor as actor_ctx, policy, roles, users
+from web.shapes import actor_label
 from web.roles import RoleRouter, requires
 
 router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own label are viewer
@@ -316,6 +317,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "card_status": cards.status_fields(project),
             # V2 cards 3.4 / 3.5 / 3.12: whereabouts, card provenance + credit, highlight.
             "card_extra": cards.whereabouts_fields(project),
+            "card_created_by": users.owner_info(project.get("created_by_user_id")),  # #604 step 1
             # #596: the face text (synopsis, flavor, the cached write-up lead) for the ABOUT group.
             "card_text": cards.text_fields(project),
             "card_text_limits": card_rules.CARD_TEXT_LIMITS,
@@ -501,6 +503,7 @@ def object_detail_page(request: Request, slug: str):
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
     policy.require_view(row)  # #557: the item policy (today: served; #467: restricted needs admin)
+    policy.note_access(row, access_log.HOW_PAGE)  # #604 follow-up 7: sensitive items only
     item = _to_object_detail(row)
     full_url = str(request.base_url).rstrip("/") + item["url"] if item["is_file"] else None
     full_object_url = str(request.base_url).rstrip("/") + f"/object/{slug}"
@@ -536,9 +539,19 @@ def object_detail_page(request: Request, slug: str):
         "medium_suggestions": physical_piece.medium_suggestions(db),
     }
     redact_hold = db.get_redact_hold(slug) if row.get("redacted") else None
+    # #603: who may flip the switch here (mark = editor+, clear = admin), and for an admin the
+    # sensitive item's access log (#604 follow-up 7).
+    my_role = roles.role_of(actor_ctx.current_actor())
+    sensitive_ctl = {
+        "can_mark": roles.at_least(my_role, roles.EDITOR),
+        "can_unmark": policy.can_unmark_sensitive(),
+        "access_log": ([{**e, "who": actor_label(e["actor"]), "at_display": _friendly_datetime(e["at"])}
+                        for e in access_log.for_item(slug, limit=50)]
+                       if item["sensitive"] and roles.at_least(my_role, roles.ADMIN) else None),
+    }
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "redact_hold": redact_hold, "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
+        {"item": item, "redact_hold": redact_hold, "sensitive_ctl": sensitive_ctl, "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
     )
 
 

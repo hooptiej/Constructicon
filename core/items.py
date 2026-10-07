@@ -21,6 +21,7 @@ constructicon_undo(batch_id); it calls back into this module for the file side o
   relate(a, b) / unrelate(a, b)   (phase C) the "related" link; relate also shares tags and
                            card memberships both ways (#16), all imaged.
   update(..., tags=[...])  (phase C) the free-text tags ride in the same batch (core/tags.py).
+  set_sensitive(slugs, on) (#603) the "This is sensitive" flag: mark = editor+, clear = admin only.
   purge_expired() / empty_trash(confirm) / trash_summary()
 
 Trash (owner decision on #541, 2026-10-04): a deleted file stays in the trash for TRASH_DAYS,
@@ -59,6 +60,7 @@ OP_DELETE = "item_delete"
 OP_PURGE = "trash_purge"
 OP_RECOVER = "item_recover_redacted"
 OP_ERASE = "item_redact_erase"
+OP_SENSITIVE = "item_sensitive"  # #603
 REASON_REDACT = "redact"
 
 TRASH_DIR_NAME = paths.TRASH_DIR_NAME
@@ -260,6 +262,70 @@ def set_caption(slug, text, *, accept=False, dry_run=False, actor=None, batch_id
     res = update(slug, dry_run=dry_run, actor=actor, batch_id=batch_id, **fields)
     res.data.update(accepted=bool(accept))
     return res
+
+
+# --- the sensitive flag (#603, #604 step 2) ------------------------------------------------
+
+def _forbidden(message):
+    return AppError("forbidden", message, status=403)
+
+
+def set_sensitive(slugs, sensitive, *, dry_run=False, actor=None, batch_id=None):
+    """Marks (sensitive=True) or clears the per-item "This is sensitive" flag on one or more items,
+    as ONE imaged change-log row (op item_sensitive), undoable. A flagged item is then locked by the
+    item policy on every door exactly like a restricted type: only admins and its uploader see it.
+      * Marking: editor or above (locking is the safe direction). Stamps sensitive_by (the actor) and
+        sensitive_at, which Admin's restricted list shows as the reason.
+      * Clearing: admin only (403 `forbidden` for anyone else, checked before the items are even
+        looked up, so the answer says nothing about whether they exist).
+    Every slug must exist and be visible to the actor (else 404 not_found, nothing written). An item
+    already in the wanted state is left alone. data: {slugs, changed, sensitive}."""
+    from . import actor as actor_ctx, policy, roles  # lazy: policy is imported by db at call time
+    wanted = [slugs] if isinstance(slugs, str) else list(slugs or [])
+    wanted = list(dict.fromkeys(s for s in wanted if s))
+    if not wanted:
+        raise InvalidInput("Give at least one item.", code="no_items")
+    want = bool(sensitive)
+    who = actor_ctx.resolve(actor)
+    if not want and not policy.can_unmark_sensitive(who):
+        raise _forbidden("Only an admin can clear the sensitive flag.")
+    if want and not roles.at_least(roles.role_of(who), roles.EDITOR):
+        raise _forbidden("Marking an item sensitive needs an editor or an admin.")
+    rows = []
+    for slug in wanted:
+        row = db.get_by_slug(slug)
+        if row is None or not policy.can_view(row, who):
+            raise NotFound(f"No item {slug!r}.")
+        rows.append(row)
+    batch_id = batch_id or changes.new_batch_id()
+    now = time.time()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_SENSITIVE, actor, batch_id, wanted) as log:
+            for row in rows:
+                if bool(row.get("sensitive")) == want:
+                    continue
+                fields = ({"sensitive": 1, "sensitive_by": who, "sensitive_at": now} if want
+                          else {"sensitive": 0, "sensitive_by": None, "sensitive_at": None})
+                log.update("capture_events", {"slug": row["slug"]}, fields)
+            muts = list(log.muts)
+        item = db.get_by_slug(wanted[0]) if len(wanted) == 1 else None
+    return _result(OP_SENSITIVE, muts, batch_id, dry_run, item, slugs=wanted,
+                   changed=[m["key"]["slug"] for m in muts], sensitive=want)
+
+
+def check_undo_allowed(rows, actor=None):
+    """Called by the generic undo (cards.undo) before it writes anything: undoing a change that SET
+    the sensitive flag would clear it, which is an unmark, so it is admin-only too (403 forbidden).
+    Undoing an unmark (re-locking) is open to anyone who may undo."""
+    from . import policy  # lazy
+    for r in rows:
+        for m in r.get("mutations") or []:
+            before, after = m.get("before"), m.get("after")
+            if m.get("table") != "capture_events" or before is None or after is None:
+                continue
+            if after.get("sensitive") and "sensitive" in before and not before.get("sensitive"):
+                if not policy.can_unmark_sensitive(actor):
+                    raise _forbidden("Undoing this would clear an item's sensitive flag, which only an admin can do.")
 
 
 # --- related items (#16) -----------------------------------------------------------------

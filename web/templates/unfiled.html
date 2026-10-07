@@ -57,6 +57,7 @@
     <button type="button" class="ocr-retry-btn" id="apply-provenance-btn">Apply</button>
 
     <button type="button" class="btn-secondary" id="create-project-btn">Turn into project…</button>
+    <button type="button" class="btn-secondary" id="sensitive-selected-btn" title="Only each item's uploader and admins will see it">Mark sensitive</button>
     <button type="button" class="btn-danger" id="delete-selected-btn">Delete selected</button>
   </div>
 
@@ -91,6 +92,7 @@
     document.getElementById('bulk-tag-input').disabled = !count;
     document.getElementById('create-project-btn').disabled = !count;
     document.getElementById('delete-selected-btn').disabled = !count;
+    document.getElementById('sensitive-selected-btn').disabled = !count;
   }
 
   // #514: shared asset card (static/js/cards.js); the select checkbox row sits under it.
@@ -204,6 +206,21 @@
       window.showUndoBar(`Deleted ${body.deleted} item${body.deleted === 1 ? '' : 's'}. In the trash for 7 days.`,
         body.batch_id, () => reload());
     } else alert('Delete failed.');
+  });
+
+  // #603: bulk "Mark sensitive" (one undoable batch; only an admin can clear it later).
+  document.getElementById('sensitive-selected-btn').addEventListener('click', async () => {
+    const slugs = [...selectedSlugs];
+    if (!slugs.length) return;
+    if (!confirm(`Mark ${slugs.length} selected item${slugs.length === 1 ? '' : 's'} sensitive? Only each item's uploader and admins will see them. Only an admin can clear it.`)) return;
+    const fd = new FormData();
+    slugs.forEach(s => fd.append('slugs', s));
+    fd.append('sensitive', 'true');
+    const res = await fetch('/api/bulk/sensitive', { method: 'POST', body: fd });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      window.showUndoBar(`Marked ${body.count} item${body.count === 1 ? '' : 's'} sensitive.`, body.batch_id, () => reload());
+    } else alert((body.error && body.error.message) || body.detail || 'Mark sensitive failed.');
   });
 
   // --- Add to project (existing project, via dropdown — GET /api/projects,

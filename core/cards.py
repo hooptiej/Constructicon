@@ -2518,6 +2518,7 @@ def undo(target, *, force=False, dry_run=False, actor=None):
     # #541 phase B: an item delete/redact moved files into the trash. Plan the file side first so
     # a purged file refuses the whole undo (trash_expired) before anything is written.
     from . import items as _items  # lazy: items imports this module
+    _items.check_undo_allowed(rows, actor)  # #603: an undo that would clear a sensitive flag is admin-only
     file_plan = _items.undo_prepare(rows)
     batch_id = changes.new_batch_id()
     applied, slugs, moved = [], [], []

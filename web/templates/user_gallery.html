@@ -43,6 +43,7 @@
   <div class="selection-bar" id="selection-bar">
     <span class="selection-count" id="selection-count"></span>
     <button type="button" class="ocr-retry-btn" id="clear-selection-btn">Clear</button>
+    <button type="button" class="btn-secondary" id="sensitive-selected-btn" title="Only each item's uploader and admins will see it">Mark sensitive</button>
     <button type="button" class="btn-danger" id="delete-selected-btn">Delete selected</button>
   </div>
   <div class="cx-item-grid" id="user-gallery-grid"></div>
@@ -138,6 +139,23 @@ document.getElementById('delete-selected-btn').addEventListener('click', async (
       body.batch_id, () => window.location.reload());
   } else {
     alert('Delete failed.');
+  }
+});
+
+// #603: bulk "Mark sensitive" (one undoable batch; only an admin can clear it later).
+document.getElementById('sensitive-selected-btn').addEventListener('click', async () => {
+  const slugs = [...selectedSlugs];
+  if (!slugs.length) return;
+  if (!confirm(`Mark ${slugs.length} selected item${slugs.length === 1 ? '' : 's'} sensitive? Only each item's uploader and admins will see them. Only an admin can clear it.`)) return;
+  const fd = new FormData();
+  slugs.forEach(s => fd.append('slugs', s));
+  fd.append('sensitive', 'true');
+  const res = await fetch('/api/bulk/sensitive', { method: 'POST', body: fd });
+  const body = await res.json().catch(() => ({}));
+  if (res.ok) {
+    window.showUndoBar(`Marked ${body.count} item${body.count === 1 ? '' : 's'} sensitive.`, body.batch_id, () => window.location.reload());
+  } else {
+    alert((body.error && body.error.message) || body.detail || 'Mark sensitive failed.');
   }
 });
 </script>

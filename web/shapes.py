@@ -2,7 +2,7 @@
 into the dicts pages and the JSON API return, plus the small pure helpers they use.
 Moved verbatim from web/app.py."""
 
-from core import captions, card_payload, cards, db, object_types, policy, revisions, storage, timeline
+from core import captions, card_payload, cards, db, object_types, policy, revisions, storage, timeline, users
 
 
 def _has_thumbnail(row, spec=None):
@@ -138,7 +138,30 @@ def _to_public(row):
         # #514: the item card's date line is the item's own effective date (same
         # resolver as the project detail page's file cards), in the same label format.
         "card_date": cards._day_label(timeline.resolve_item_date(row)),
+        # #604 step 1 / #603: who uploaded it (a user, or None = admin-owned: token / MCP / script)
+        # and the sensitive lock. `uploaded_by` above is the older free-text Source label.
+        **ownership_fields(row),
     }
+
+
+def actor_label(actor):
+    """A change-log / access-log actor as a person reads it: a user's display name, else a plain
+    word for the install's own actors."""
+    if isinstance(actor, str) and actor.startswith("user:"):
+        u = db.get_user(username=actor[5:])
+        return (u.get("display_name") or u["username"]) if u else actor[5:]
+    return {"token": "install token", "mcp": "MCP agent", "script": "script", "system": "system",
+            "migration": "migration", "anonymous": "anonymous"}.get(actor, actor or "unknown")
+
+
+def ownership_fields(row):
+    """{uploaded_by_user, sensitive, sensitive_reason} for an item shape (#604, #603)."""
+    reason = policy.restriction_reason(row)
+    if reason and reason.get("kind") == "flag":
+        reason = {**reason, "by_label": actor_label(reason.get("by")),
+                  "at_display": _friendly_datetime(reason["at"]) if reason.get("at") else None}
+    return {"uploaded_by_user": users.owner_info(row.get("uploaded_by_user_id")),
+            "sensitive": reason is not None, "sensitive_reason": reason}
 
 
 def _public_items(rows):
@@ -347,6 +370,8 @@ def _to_object_detail(row):
         "edit_fields": [{"key": f.key, "label": f.label, "input": f.input, "help_text": f.help_text, "value": (row.get("type_metadata") or {}).get(f.key)} for f in spec.edit_fields if f.input],
         # #449: external link button label (types may override).
         "external_link_label": spec.external_link_label,
+        # #604 step 1 / #603: the uploader (ORIGIN: "Uploaded by") and the sensitive lock.
+        **ownership_fields(row),
     }
     # #449: the type's own preview, built from the finished item dict (not the
     # raw row) so preview_fn sees display_name/type_label/icon/url/thumb_url.

@@ -489,6 +489,32 @@ def signed_in_as(user):
         _current.reset(token)
 
 
+def user_id_for_actor(actor):
+    """#604: the users.id behind a "user:<name>" actor, or None for every other actor (the install
+    token, the MCP, scripts, the system, anonymous) and for a name with no user row. This is what
+    the ownership columns record: NULL = admin-owned. A disabled user still has an id (they still
+    owned what they made); whether they may SEE anything is roles.role_of's call."""
+    if not (isinstance(actor, str) and actor.startswith(USER_ACTOR_PREFIX)):
+        return None
+    name = actor[len(USER_ACTOR_PREFIX):]
+    cur = _current.get()
+    if cur and cur["username"] == name:
+        return cur["id"]
+    u = db.get_user(username=name)
+    return u["id"] if u else None
+
+
+def owner_info(user_id):
+    """{id, username, name} for an ownership column's value; None for NULL (admin-owned). A user
+    deleted since shows as {"id", "username": None, "name": "deleted user #<id>"}."""
+    if user_id is None:
+        return None
+    u = db.get_user(user_id=user_id)
+    if not u:
+        return {"id": user_id, "username": None, "name": f"deleted user #{user_id}"}
+    return {"id": u["id"], "username": u["username"], "name": u.get("display_name") or u["username"]}
+
+
 def role_for_actor(actor):
     """core/roles.role_of() for a "user:<name>" actor: that user's role (PUBLIC when the user is
     gone or disabled)."""

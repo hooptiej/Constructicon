@@ -189,6 +189,8 @@
       <dl class="dp-rows">
         <div class="dp-row"><dt>Provenance</dt><dd>{% if card_extra.provenance_label %}{{ card_extra.provenance_label }}{% else %}<span class="dp-muted">Not set</span>{% endif %}</dd></div>
         <div class="dp-row"><dt>Credit</dt><dd>{% if card_extra.provenance_credit %}{{ card_extra.provenance_credit }}{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>
+        {# #604 step 1: the card's creator; none recorded = made by the install (token, MCP, script) = admin-owned #}
+        <div class="dp-row"><dt>Created by</dt><dd>{% if card_created_by %}{{ card_created_by.name }}{% else %}<span class="dp-muted">Admin (no user recorded)</span>{% endif %}</dd></div>
       </dl>
       {% endset %}
       {% set origin_edit %}

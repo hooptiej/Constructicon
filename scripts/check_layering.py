@@ -100,6 +100,7 @@ PUBLIC_WRITERS = {
     "dequeue_caption": "caption queue (the web worker drains)",
     "set_setting": "app settings (keys, export config); not archive content",
     "insert_audit_log": "the request log (web middleware)",
+    "insert_access_log": "the sensitive-item access log (core/access_log.py, #604 follow-up 7); a read log, not content",
     "insert_change_log": "the change log itself (core/changes.py, undo)",
     "mark_change_rows_undone": "undo bookkeeping (cards.undo)",
     "invert_image": "undo: applies one row image's inverse",

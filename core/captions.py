@@ -398,8 +398,17 @@ def caption_once(image_path, prompt=None, temperature=None, num_predict=None, la
 
 QUEUE_POLL_MIN_SECONDS = 2.0
 QUEUE_POLL_MAX_SECONDS = 15.0
+ORPHAN_GRACE_SECONDS = 600  # #592: pending with no queue row for this long = forgotten, re-queue it
 _worker_thread = None
 _worker_guard = threading.Lock()
+# #592: every caption (web upload, retype, regenerate click, MCP) is persisted into caption_queue
+# first; this Event just nudges web's worker so an upload still captions right away instead of
+# waiting out the idle poll. In the MCP process nothing waits on it (setting it is harmless).
+_wake = threading.Event()
+
+
+def wake_worker():
+    _wake.set()
 
 
 def enqueue_only():
@@ -419,8 +428,25 @@ def enqueue_caption(slug, start_step=0, cascade=True):
         db._update_content_metadata(slug, type_metadata={STATUS_KEY: "pending"})
         db.enqueue_caption(slug, start_step, cascade)
         print(f"caption: queued {slug} for the web worker", flush=True)
+        wake_worker()
     except Exception as e:
         print(f"caption enqueue failed for {slug}: {e!r}", flush=True)
+
+
+def requeue_orphans(grace_seconds=ORPHAN_GRACE_SECONDS):
+    """#592: the self-heal. A caption-capable item sitting at `pending` with no caption_queue row
+    for longer than `grace_seconds` was forgotten (the process that held it died before the queue
+    existed for web uploads, or a row was lost): queue it again. Returns how many it re-queued.
+    Does nothing when captions are off: the processing view already shows those as `off` (#585)."""
+    if DISABLED:
+        return 0
+    rows = db.list_orphan_pending_captions(caption_capable_types(), time.time() - grace_seconds)
+    queued = 0
+    for row in policy.filter_visible(rows):
+        print(f"caption self-heal: re-queuing {row['slug']} (pending with no queue row)", flush=True)
+        enqueue_caption(row["slug"])
+        queued += 1
+    return queued
 
 
 def _drain_one():
@@ -439,7 +465,7 @@ def _drain_one():
     elif DISABLED or not spec.caption_capable:
         db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
     else:
-        run_caption(slug, item["start_step"], bool(item["cascade"]))
+        _run_caption_now(slug, item["start_step"], bool(item["cascade"]))
     db.dequeue_caption(slug)
     return True
 
@@ -447,6 +473,7 @@ def _drain_one():
 def queue_worker_loop():
     delay = QUEUE_POLL_MIN_SECONDS
     while True:
+        _wake.clear()  # before the drain, so a nudge that lands mid-drain is not lost
         try:
             if _drain_one():
                 delay = QUEUE_POLL_MIN_SECONDS
@@ -454,7 +481,7 @@ def queue_worker_loop():
                 continue
         except Exception as e:
             print(f"caption queue worker error: {e!r}", flush=True)
-        time.sleep(delay)
+        _wake.wait(delay)  # #592: an upload wakes this at once; idle otherwise
         delay = min(delay * 1.5, QUEUE_POLL_MAX_SECONDS)  # idle backoff, never a hot loop
 
 
@@ -587,12 +614,15 @@ def run_caption(slug, start_step=0, cascade=True):
     even if it comes back empty, so repeated clicks give real variety
     instead of hidden multi-step jumps behind one click).
 
-    #549: in the MCP process this does NOT run -- it enqueues (see enqueue_only) and the web
-    process's queue worker calls it for real. Every caption trigger funnels through here, so
-    no call site (upload, import, retype, a future one) can caption outside web."""
-    if enqueue_only():
-        enqueue_caption(slug, start_step, cascade)
-        return
+    #549/#592: this does NOT caption: it persists the request into caption_queue and wakes web's
+    worker, which runs it through _run_caption_now (lock, breaker, cooldown as always). Every
+    caption trigger funnels through here, in web and in MCP alike, so nothing is held only in
+    memory: a restart leaves the queue rows and the worker resumes them."""
+    enqueue_caption(slug, start_step, cascade)
+
+
+def _run_caption_now(slug, start_step=0, cascade=True):
+    """The actual caption run. Only web's queue worker calls this (see run_caption)."""
     try:
         row = db.get_by_slug(slug)
         if row is None or row["redacted"]:

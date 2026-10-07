@@ -328,9 +328,9 @@ def api_retry_caption(request: Request, slug: str, background_tasks: BackgroundT
     if advance:
         current_step = row["type_metadata"].get(captions.STEP_KEY, 0)
         next_step = (current_step + 1) % len(captions.STEPS)
-        background_tasks.add_task(captions.run_caption, slug, next_step, False)
+        captions.run_caption(slug, next_step, False)  # #592: persists into caption_queue, no background task
     else:
-        background_tasks.add_task(captions.run_caption, slug)
+        captions.run_caption(slug)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
 
 

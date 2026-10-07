@@ -169,8 +169,10 @@ def post_insert(slug, spec, run_background):
     # background task, its own serialization (core/captions.py's
     # CAPTION_LOCK + per-image Ollama restart) — deliberately not folded
     # into OCR's semaphore, it's a different resource (the GPU).
+    # #592: persisted before the response goes out (a caption_queue row + a nudge to web's
+    # worker), not handed to run_background: a restart can no longer lose it.
     if captions.should_caption(spec):
-        run_background(captions.run_caption, slug)
+        captions.run_caption(slug)
 
 
 def ingest_file(

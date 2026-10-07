@@ -2245,3 +2245,25 @@ body.delete-mode-on .card-select-row { display: flex; }
 
 /* #508: build version badge, bottom-left, deliberately quiet */
 .app-version { position: fixed; left: 8px; bottom: 6px; z-index: 1; font: 400 10px/1 "JetBrains Mono", monospace; color: var(--icon-muted, #888); opacity: 0.55; pointer-events: none; user-select: text; }
+
+/* #467 step 1: the header's user chip, and the small sign-in / setup / password cards */
+.user-chip { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.user-chip a { color: var(--text-2); text-decoration: none; }
+.user-chip a:hover { color: var(--accent); }
+.user-chip-name {
+  color: var(--text) !important; padding: 4px 12px; background: var(--chip);
+  border: 1px solid var(--border-strong); border-radius: 999px; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.auth-card { width: 100%; max-width: 400px; margin: 24px 0; }
+.auth-form { display: flex; flex-direction: column; gap: 12px; }
+.auth-form label { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.auth-ok { font-size: 12.5px; color: var(--accent); margin: 0; }
+.admin-users-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin-users-table th { text-align: left; font-weight: 500; color: var(--text-2); padding: 6px 8px; border-bottom: 1px solid var(--border-strong); }
+.admin-users-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.admin-users-table select.input { width: auto; padding: 5px 8px; }
+.admin-users-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-users-actions .btn-ms { width: auto; padding: 5px 10px; font-size: 12px; }
+.admin-users-add { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; }
+.admin-users-add .btn-ms { width: auto; }

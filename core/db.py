@@ -228,6 +228,29 @@ CREATE TABLE IF NOT EXISTS trash (
     PRIMARY KEY (batch_id, slug)
 );
 CREATE INDEX IF NOT EXISTS idx_trash_expires ON trash(purged_at, expires_at);
+-- #467 step 1: user accounts and server-side sessions (core/users.py owns every write).
+-- password_hash is "scrypt$n$r$p$salt$hash" (NULL = no usable password until a reset). It is
+-- never imaged into the change log and never returned by a listing.
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    display_name TEXT,
+    role TEXT NOT NULL,
+    password_hash TEXT,
+    created_at REAL NOT NULL,
+    last_login_at REAL,
+    disabled INTEGER NOT NULL DEFAULT 0
+);
+-- token_hash = sha256 of the cookie token: the token itself is never stored.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    csrf_token TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    last_seen REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -4422,6 +4445,196 @@ def hobby_shows_physical_piece(hobby_id):
         row = conn.execute("SELECT shows_physical_piece FROM hobby_settings WHERE hobby_tag_id = ?",
                            (hobby_id,)).fetchone()
         return bool(row and row[0])
+    finally:
+        conn.close()
+
+
+# --- Users and sessions (#467 step 1) -------------------------------------------------------
+# core/users.py owns every write (the `_` writers below are called only from there). Reads that
+# hand rows to a page or a listing never include password_hash: only `get_user_credentials`
+# returns it, for the password check itself.
+
+USER_PUBLIC_COLUMNS = "id, username, display_name, role, created_at, last_login_at, disabled"
+
+
+def count_users():
+    conn = get_conn()
+    try:
+        return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def count_active_admins(exclude_user_id=None):
+    """Admins that are not disabled (optionally leaving one user out: "would this change leave
+    an admin?")."""
+    conn = get_conn()
+    try:
+        sql = "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0"
+        args = []
+        if exclude_user_id is not None:
+            sql += " AND id != ?"
+            args.append(exclude_user_id)
+        return conn.execute(sql, args).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def list_users():
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            f"SELECT {USER_PUBLIC_COLUMNS} FROM users ORDER BY username COLLATE NOCASE")]
+    finally:
+        conn.close()
+
+
+def get_user(user_id=None, username=None):
+    """One user (no password hash) by id or by username (case-insensitive); None when absent."""
+    conn = get_conn()
+    try:
+        if user_id is not None:
+            row = conn.execute(f"SELECT {USER_PUBLIC_COLUMNS} FROM users WHERE id = ?", (user_id,)).fetchone()
+        else:
+            row = conn.execute(f"SELECT {USER_PUBLIC_COLUMNS} FROM users WHERE username = ? COLLATE NOCASE",
+                               (username or "",)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_user_credentials(username):
+    """{id, username, password_hash, disabled} for the sign-in check only; None when absent."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT id, username, password_hash, disabled FROM users WHERE username = ? "
+                           "COLLATE NOCASE", (username or "",)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_user_password_hash(user_id):
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def get_session(token_hash, now):
+    """The live session for a token hash joined with its (enabled) user, else None."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT s.token_hash, s.user_id, s.csrf_token, s.created_at, s.last_seen, s.expires_at, "
+            "u.username, u.display_name, u.role FROM sessions s JOIN users u ON u.id = s.user_id "
+            "WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0", (token_hash, now)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def count_sessions(user_id=None):
+    conn = get_conn()
+    try:
+        if user_id is None:
+            return conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        return conn.execute("SELECT COUNT(*) FROM sessions WHERE user_id = ?", (user_id,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _insert_user(username, display_name, role, password_hash, now):
+    conn = get_conn()
+    try:
+        cur = conn.execute("INSERT INTO users (username, display_name, role, password_hash, created_at, disabled) "
+                           "VALUES (?, ?, ?, ?, ?, 0)", (username, display_name, role, password_hash, now))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+_USER_WRITABLE = ("display_name", "role", "password_hash", "disabled", "last_login_at")
+
+
+def _update_user(user_id, **fields):
+    bad = set(fields) - set(_USER_WRITABLE)
+    if bad:
+        raise ValueError(f"not a writable user column: {sorted(bad)}")
+    if not fields:
+        return
+    conn = get_conn()
+    try:
+        conn.execute(f"UPDATE users SET {', '.join(f'{c} = ?' for c in fields)} WHERE id = ?",
+                     list(fields.values()) + [user_id])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _delete_user(user_id):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _insert_session(token_hash, user_id, csrf_token, now, expires_at):
+    conn = get_conn()
+    try:
+        conn.execute("INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, last_seen, expires_at) "
+                     "VALUES (?, ?, ?, ?, ?, ?)", (token_hash, user_id, csrf_token, now, now, expires_at))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _touch_session(token_hash, now, expires_at):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE sessions SET last_seen = ?, expires_at = ? WHERE token_hash = ?",
+                     (now, expires_at, token_hash))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _delete_session(token_hash):
+    conn = get_conn()
+    try:
+        n = conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,)).rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+def _delete_user_sessions(user_id, keep_token_hash=None):
+    conn = get_conn()
+    try:
+        if keep_token_hash:
+            n = conn.execute("DELETE FROM sessions WHERE user_id = ? AND token_hash != ?",
+                             (user_id, keep_token_hash)).rowcount
+        else:
+            n = conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,)).rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+def _purge_expired_sessions(now):
+    conn = get_conn()
+    try:
+        n = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,)).rowcount
+        conn.commit()
+        return n
     finally:
         conn.close()
 

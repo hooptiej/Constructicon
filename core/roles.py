@@ -13,11 +13,11 @@ Web routes carry their label through `web.roles.requires(...)` (see web/roles.py
 scripts/check_routes_roles.py). Item visibility (restricted items) is a separate check, in
 core/policy.py: a request must pass BOTH, the route's role and the item's policy.
 
-TODAY NOTHING IS REFUSED. `ENFORCE` is False and `role_of()` says every actor is the owner
-(admin): this is a single-owner install with no login. #467 flips this module, in this order:
-  1. `role_of(actor)` returns the logged-in user's role (and the MCP / uploader install token's);
-  2. `ENFORCE = True`, so web.roles.require_role refuses a request below the route's label
-     with 403 `forbidden` (the shared error shape).
+TODAY NOTHING IS REFUSED. `ENFORCE` is False. #467 flips this module, in this order:
+  1. (step 1, done) `role_of(actor)` returns a signed-in user's role; every other actor is still
+     admin. Step 2 maps the MCP / uploader install token too and drops anonymous to public;
+  2. (step 2) `ENFORCE = True`, so web.roles.require_role refuses a request below the route's
+     label with 403 `forbidden` (the shared error shape).
 """
 
 PUBLIC = "public"
@@ -50,7 +50,12 @@ def at_least(have, need):
 
 
 def role_of(actor):
-    """The role an actor holds. #467 HOOK: today there are no users, so every actor (the
-    owner's UI, the MCP, scripts, system work) is the owner, i.e. admin. Auth replaces this
-    with a lookup of the logged-in user (web) or the install token's identity (MCP/uploader)."""
+    """The role an actor holds. #467 step 1: a signed-in user's actor ("user:<name>",
+    core/users.py) holds that user's role. Every other actor (an anonymous browser = owner-ui,
+    the MCP, scripts, system work) is still the owner, i.e. admin, so nothing changes while
+    ENFORCE is False. Step 2: anonymous web requests drop to public, and the MCP / uploader
+    install token maps to its role (admin, per the owner's 2026-10-07 decision)."""
+    if isinstance(actor, str) and actor.startswith("user:"):
+        from . import users  # lazy: users imports this module
+        return users.role_for_actor(actor)
     return ADMIN

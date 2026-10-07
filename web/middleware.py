@@ -17,8 +17,9 @@ log = logging.getLogger("constructicon.middleware")
 # --- Actor context (#560) ---
 
 def request_actor(scope):
-    """Who is making this request. Today every HTTP request is the owner's UI; #467 (auth)
-    replaces this with the logged-in user. The one place that decides it."""
+    """Who is making an ANONYMOUS request: the owner's UI, as before auth (#467 step 1). A
+    signed-in request is overridden to "user:<username>" by web/auth.py's SessionMiddleware,
+    which runs inside this one. Step 2 decides what an anonymous request becomes."""
     return actor_ctx.ACTOR_UI
 
 

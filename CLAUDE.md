@@ -12,10 +12,10 @@ this repo, and its old vocabulary (`tech`, `client`, `ticket_id`) still
 echoes through the schema and code as repurposed/vestigial fields (see
 below).
 
-It's a single-owner tool on a LAN-only server with no port forward — there
-is **no auth/login anywhere in the app**. The network perimeter is the
-security boundary, not a login gate. Don't add one without checking with
-the owner first.
+It started as a single-owner tool on a LAN-only server with no port forward, where the network
+perimeter was the security boundary. Auth is now being turned on in steps (#467; owner decisions
+2026-10-07): **step 1 (users, sign-in, first-run setup) exists but enforces nothing**, so an
+anonymous browser still does everything it did before. See "Users and sessions" below.
 
 Long-term goal (see `README.md` for the full writeup): this is the dynamic
 backend for a future blog-driven personal site. A future static-export step
@@ -166,9 +166,9 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
 
 **Who did it: `core/actor.py`.** The actor is a `ContextVar`, set once per entry
 point, never a string literal at a call site.
-- HTTP: `web/middleware.py`'s `ActorMiddleware` sets `owner-ui` per request
-  (`request_actor()` is the hook #467 will point at the logged-in user). The
-  request-log rows in `audit_log` record it too.
+- HTTP: `web/middleware.py`'s `ActorMiddleware` sets `owner-ui` per request; a signed-in
+  request is overridden to `user:<username>` by `web/auth.py`'s `SessionMiddleware` (#467 step 1,
+  see "Users and sessions"). The request-log rows in `audit_log` record it too.
 - MCP: every tool runs inside `acting_as("mcp")` (the `@mcp.tool()` wrapper, below).
 - Boot, the OCR watchdog and the caption queue worker run as `system`. A script
   started from `scripts/` defaults to `script`.
@@ -248,8 +248,9 @@ anything; each has one switch that #467 flips.
 - `require_role(role)` (the dependency) only **records** the label today:
   `request.state.required_role`, written by the audit middleware into the request log's
   `audit_log.required_role` column. The refusal (403 `forbidden`, shared error shape) is already
-  written behind `roles.ENFORCE` (False) and `roles.role_of(actor)` (says every actor is admin).
-  #467: make `role_of` return the logged-in user's / install token's role, set `ENFORCE = True`.
+  written behind `roles.ENFORCE` (False) and `roles.role_of(actor)`. Since #467 step 1 `role_of`
+  returns a signed-in user's role (`user:<name>` actors); every other actor is still admin.
+  Step 2: map the install token, drop anonymous to public, set `ENFORCE = True`.
 - `python scripts/check_routes_roles.py [--list]` (run in the container: it imports the app) fails
   when a route has no label, two labels, or a mount isn't listed; it prints the count per role.
 
@@ -278,10 +279,92 @@ anything; each has one switch that #467 flips.
   on the right rows: `scripts/test_role_policy.py` (throwaway DB) proves the behaviour by flipping
   the switch, then by denying everything, and checks every door refuses.
 
+## Users and sessions (#467 step 1: users, sign-in, first-run setup; NOTHING ENFORCED YET)
+
+Owner decisions 2026-10-07 (#467): built-in auth, one install per customer, HTTPS later. Step 1
+adds accounts and attribution only: `roles.ENFORCE` stays False, so anonymous use is unchanged
+(proved with the golden master: anonymous pages differ only by the header chip and the admin setup
+banner/Users panel).
+
+**Model (`core/users.py`, the service module; tables in `core/db.py`).**
+- `users(id, username UNIQUE COLLATE NOCASE, display_name, role viewer|editor|admin, password_hash,
+  created_at, last_login_at, disabled)`. Usernames are 2-32 of `[A-Za-z0-9._-]`, kept as typed,
+  unique in any case.
+- Passwords: stdlib `hashlib.scrypt` (no dependency), n=2^15 r=8 p=1 (~95 ms, 32 MB on the NAS),
+  16-byte random salt, stored as `scrypt$n$r$p$salt$hash` (urlsafe base64), so the cost can rise and
+  old hashes still verify. `hmac.compare_digest`. Minimum 10 characters, nothing else. A NULL hash =
+  no usable password.
+- Ops (each validated, one `db.transaction()`, ONE change-log row with actor from context):
+  `create_user`, `set_role`, `set_password` (logs `password_changed: true`, never the hash; ends the
+  user's other sessions), `set_disabled` (disable ends every session), `delete_user`,
+  `create_first_admin`. The last enabled admin can't be demoted, disabled or deleted (409
+  `last_admin`). Other codes: `bad_username`, `bad_password`, `bad_role`, `username_taken` (409).
+- **User rows are deliberately not imaged** (`users` is not in `db.IMAGE_TABLE_KEYS`): row images
+  would copy the hash into `audit_log`, and the generic undo is an editor door that would bypass the
+  last-admin rule. The change-log row carries a `details` summary instead; generic undo refuses it
+  (`undo_refused`). The inverse op is the undo (enable, set the role back, reset the password).
+- `sessions(token_hash PK, user_id, csrf_token, created_at, last_seen, expires_at)`: the cookie holds
+  a random 32-byte token; only its sha256 is stored. Sliding expiry 30 days (`SESSION_DAYS`), the
+  row touched at most every 10 minutes (and the cookie re-sent then). Logout deletes the row.
+- Sign-in backoff (`users.limiter`, in memory, web process): after 5 failures per username or per IP,
+  each attempt must wait 2^(extra failures) s (max 15 min) after the last failure, else 429
+  `too_many_attempts` (`details.retry_after`) without checking the password; a success clears that
+  username's and that IP's counts (behind a Docker bridge or NAT every client can share one IP, so
+  the IP count must not outlive a good sign-in). A wrong user, wrong
+  password and disabled account all answer the same 401 `invalid_login` (an unknown user still
+  spends a hash's time).
+- `delete_everything` keeps `users` and `sessions` (`reset.KEPT_TABLES`).
+
+**How the actor is set (`web/auth.py`).** Middleware order: origin guard -> `ActorMiddleware`
+(owner-ui) -> `SessionMiddleware` -> audit logger -> `CsrfMiddleware` -> routes. A request with the
+`constructicon_session` cookie that resolves to a live session runs as actor `user:<username>`
+with `users.current_user()` set (pages' `current_user()` Jinja global; `roles.role_of` reads it).
+No cookie, or a dead one = owner-ui, exactly as before. The cookie: HttpOnly, SameSite=Lax, Path=/,
+Max-Age 30 days, `Secure` only when the request is HTTPS (deferred). Change-log rows AND
+request-log rows record `user:<name>`.
+
+**CSRF.** On top of the origin guard (#558): a POST/PUT/PATCH/DELETE **that carries a live session
+cookie** must send that session's token in `X-CSRF-Token`, else 403 `csrf_failed` (in the request
+log). Requests without a session cookie (scripts, the MCP, the desktop uploader, anonymous pages)
+are not affected. Injection: `base.html` renders `<meta name="csrf-token">` plus
+`static/js/csrf.js` (loaded before every other script) only on a signed-in page; csrf.js wraps
+`fetch` and `XMLHttpRequest` and adds the header to same-origin state-changing calls. **There are
+no plain HTML POST forms** (every form is submitted by JS, including login/setup, which use
+`method="post"` only so a no-JS submit can't put a password in a URL); a new plain POST form would
+have to submit through fetch, since the server reads only the header.
+
+**Routes (`web/routes/auth.py`, JSON bodies, #558 JSON gate).** Public: `GET /login`, `GET /setup`
+(404 once any user exists), `GET /logout` (a page with a Sign out button: a GET never signs out),
+`POST /api/auth/login|logout|setup`, `GET /api/auth/me`. Viewer: `GET /account/password`,
+`POST /api/account/password` (`current_password`, `new_password`; 401 `not_signed_in` /
+`wrong_password`). Admin: `GET/POST /api/users`, `POST /api/users/{id}/role|password|disable|enable|delete`
+(Admin > Users panel). The header's user chip shows the name (-> Change my password) and Sign out,
+or "Sign in". **No secrets in logs:** `request_guard.AUDIT_ROUTE_RULES` / `AUDIT_ROUTE_PATTERNS`
+log no body values for login, setup, my password, user create and the admin reset; error reasons on
+those keep only the code.
+
+**First run.** While `users` is empty, `/admin` shows "Create the admin account" -> `/setup`, which
+creates the first admin, signs them in and fills `install_config.owner_name` if unset. Nothing
+redirects to setup (nothing is enforced).
+
+**Reset script (on the box).** `sudo docker exec -it <web container> python3 scripts/reset_password.py
+<username>` (prompts twice), `... <username> --generate` (prints a generated password once, no -it
+needed), `--enable` (re-enable), `--create-admin <username> [--display-name N]` (creates an admin, or
+makes an existing user an enabled admin with a new password: recovery for an install with no usable
+admin), `--list`. Runs as actor `script`; never prints a hash.
+
+**What step 2 flips:** `roles.ENFORCE = True`; `role_of`: anonymous web -> public, the MCP install
+token -> admin (turn it on, `mcp_server/auth.py` hook, roll out to this PC and the Mac);
+`policy.RESTRICTED_VIEW_ROLE = roles.ADMIN`; `/f` public except restricted/redacted; force sign-in
+(redirect pages to `/login`, `/setup` while no users); gate the non-route mounts (`/preview`, docs).
+Step 3: HTTPS, per-user MCP tokens, a separate uploader token.
+
+Check with `scripts/test_auth_step1.py` (throwaway DB).
+
 ## Service layer (#541): one core module per domain
 
 **The rule: all writes go through `core/{items,membership,tags,cards,hobbies,blog,decisions,reset}.py`
-(plus `core/revisions.py` for revision chains); the raw writers in `core/db.py` are private
+(plus `core/revisions.py` for revision chains, `core/install_config.py` and `core/users.py`); the raw writers in `core/db.py` are private
 (`_`-prefixed); `scripts/check_layering.py` enforces it.** Run `python scripts/check_layering.py`
 (no server, no DB; `--list` prints every db.py writer and its class) before every PR that touches
 `core/`, `web/` or `mcp_server/`. It fails when:

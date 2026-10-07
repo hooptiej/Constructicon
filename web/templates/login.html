@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Sign in — {{ app_name() }}{% endblock %}
+{% block body %}
+{% include "_header.html" %}
+{% include "_upload_drawer.html" %}
+{% include "_blog_builder.html" %}
+{% include "_export_builder.html" %}
+{#- #467 step 1: sign in. Nothing requires it yet (step 2 turns the roles on). The form is
+    submitted by JS as JSON; method="post" only so a no-JS submit can never put the password
+    in a URL. -#}
+<div class="app-main">
+  <section class="admin-panel auth-card">
+    <div>
+      <h1 class="page-title">Sign in</h1>
+      {% set _me = current_user() %}
+      {% if _me %}
+      <p class="page-subtitle">You're signed in as {{ _me.name }}. Signing in again replaces that.</p>
+      {% elif setup_needed %}
+      <p class="page-subtitle">This install has no accounts yet. <a href="/setup">Create the admin account</a> first.</p>
+      {% endif %}
+    </div>
+    <form id="login-form" class="auth-form" method="post" novalidate>
+      <label>Username
+        <input class="input" name="username" id="login-username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      </label>
+      <label>Password
+        <input class="input" type="password" name="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <p class="error-text" id="login-error" role="alert" hidden></p>
+      <button type="submit" class="btn-primary" id="login-submit">Sign in</button>
+    </form>
+  </section>
+</div>
+<script>
+(function () {
+  const form = document.getElementById('login-form');
+  const err = document.getElementById('login-error');
+  const btn = document.getElementById('login-submit');
+  const nextUrl = {{ next_url | tojson }};
+  document.getElementById('login-username').focus();
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    err.hidden = true;
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username: form.username.value, password: form.password.value}),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) { window.location.href = nextUrl; return; }
+      err.textContent = (body.error && body.error.message) || body.detail || ('Sign-in failed (' + res.status + ')');
+      err.hidden = false;
+      form.password.value = '';
+      form.password.focus();
+    } catch (e) {
+      err.textContent = 'Could not reach the server. Try again.';
+      err.hidden = false;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

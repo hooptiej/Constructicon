@@ -9,8 +9,9 @@ from urllib.parse import unquote, quote
 
 from fastapi.templating import Jinja2Templates
 
-from core import besteffort, db, install_config, markdown_render, object_types, storage
+from core import besteffort, db, install_config, markdown_render, object_types, storage, users
 from core import version as version_info
+from web import auth as web_auth
 
 log = logging.getLogger("constructicon.web")
 
@@ -60,6 +61,12 @@ templates.env.globals["app_version"] = version_info.get_version
 # its DEV- prefix: base.html puts is_dev in front of whatever name the page's title block makes.
 templates.env.globals["app_name"] = install_config.app_name
 templates.env.globals["app_logo_url"] = install_config.app_logo_url
+
+# #467 step 1: who is signed in (the header's user chip) and the session's CSRF token (base.html
+# injects it only for a signed-in page, so an anonymous page's HTML is unchanged). Both read the
+# request's context, set by web/auth.py's SessionMiddleware.
+templates.env.globals["current_user"] = users.current_user
+templates.env.globals["csrf_token"] = web_auth.csrf_token
 
 # #431: derive the file upload accept list from the object_types registry
 # rather than hardcoding it in templates. This ensures web/templates/_upload_drawer.html

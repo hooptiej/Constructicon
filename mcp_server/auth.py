@@ -17,8 +17,13 @@ Token source (first hit wins):
   * token < 32 chars: refuse to start.
 
 Identity: one install token = one identity, and the actor stays the literal "mcp".
-# TODO(#467): map tokens -> users here (look the presented token up, put the user on the ASGI
-# scope, and have the tool wrapper in server.py set the actor from it instead of "mcp").
+# #467 STEP 2 HOOK (step 1, users + login, left the MCP untouched on purpose): turn the token on
+# (docker-compose CONSTRUCTICON_MCP_TOKEN_FILE, roll it out to this PC and the Mac) and map it to
+# role admin (owner decision 2026-10-07): core/roles.role_of() already says "every non-user actor
+# is admin", so the token's actor "mcp" keeps admin when ENFORCE goes on; step 2 only has to make
+# that explicit (e.g. roles.role_of("mcp") -> ADMIN, anonymous web -> PUBLIC). Per-user MCP tokens
+# are step 3: look the presented token up here, put its user on the ASGI scope, and have the tool
+# wrapper in server.py run as users.actor_for(user) instead of "mcp".
 """
 import hmac
 import json

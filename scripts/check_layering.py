@@ -37,6 +37,7 @@ SERVICE_MODULES = {
     "core/reset.py": "the one delete-all (phase C)",
     "core/revisions.py": "revision chains (#477) and their questions",
     "core/install_config.py": "install identity: owner, site title, publish targets (#562)",
+    "core/users.py": "user accounts, passwords and sessions (#467 step 1)",
 }
 
 # Raw writes kept on purpose, outside the service layer. Each needs a reason.

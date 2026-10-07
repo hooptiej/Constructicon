@@ -13,9 +13,10 @@ echoes through the schema and code as repurposed/vestigial fields (see
 below).
 
 It started as a single-owner tool on a LAN-only server with no port forward, where the network
-perimeter was the security boundary. Auth is now being turned on in steps (#467; owner decisions
-2026-10-07): **step 1 (users, sign-in, first-run setup) exists but enforces nothing**, so an
-anonymous browser still does everything it did before. See "Users and sessions" below.
+perimeter was the security boundary. Auth is on (#467; owner decisions 2026-10-07): **step 1**
+added users, sign-in and first-run setup; **step 2 enforces it**: every page and API needs at least
+a viewer, roles are checked, restricted items are admin-only, and scripts / the desktop uploader /
+the MCP send the install token. See "Users and sessions" and "Auth enforcement" below.
 
 Long-term goal (see `README.md` for the full writeup): this is the dynamic
 backend for a future blog-driven personal site. A future static-export step
@@ -88,6 +89,8 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
   starts with `import _testenv; TMP = _testenv.isolate("name-")` (temp DB + storage + exports, then
   asserts the resolved paths are in a temp dir and outside the repo, exiting otherwise); a test that
   talks to a live server (`test_office.py`) says so at the top and never calls delete-all/empty-trash.
+  Since #467 step 2 `isolate()` also sets a fresh per-run install token (never the container's):
+  use `_testenv.client(app)` for an admin TestClient; a bare TestClient is anonymous.
 - **`core/ocr.py`, `core/similarity.py`** — text extraction
   (tesseract via `pytesseract`) and "related items" (perceptual hash +
   sentence-transformers embedding similarity, `all-MiniLM-L6-v2`, baked
@@ -142,9 +145,10 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
   path (a past incident wiped storage while only the DB got backed up).
 - **`desktop_app/`** — a separate desktop uploader app (own README), built
   and distributed as a downloadable zip from `/downloads/...`. Talks to the
-  web app over the same `/api/upload`/`/api/content` HTTP API, identified
-  server-side via the `X-Imagerepo-Client: desktop-app` header (not a
-  client-supplied identity — this is still single-owner).
+  web app over the same `/api/upload`/`/api/content` HTTP API. It sends the
+  install token (`Authorization: Bearer`, menu "Set Install Token…", #467 step 2);
+  its `X-Constructicon-Client: desktop-app` header only picks the upload's Source
+  label and grants nothing.
 - **`mcp_server/server.py`** — the live `constructicon-mcp` sidecar (see
   "MCP server: `constructicon-mcp`" below for the tool surface and how it
   runs alongside `constructicon-web`). Tool names are `constructicon_*`;
@@ -154,6 +158,8 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
   to a running instance over HTTP (`--base-url`), the same discipline the
   app's own UI would use, rather than writing to the DB directly — see
   individual script docstrings for the reasoning and any exceptions.
+  Since #467 step 2 each one calls `_http.install(<base url>)` (`scripts/_http.py`) so its
+  requests carry the install token; see "Auth enforcement".
 - **The details panel (#515)** — the project and item pages edit through one
   grouped panel: `templates/_details_group.html` (the `dp_group` macro: a
   fact-sheet view plus a per-group edit form), `static/js/details.js` (edit /
@@ -166,9 +172,11 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
 
 **Who did it: `core/actor.py`.** The actor is a `ContextVar`, set once per entry
 point, never a string literal at a call site.
-- HTTP: `web/middleware.py`'s `ActorMiddleware` sets `owner-ui` per request; a signed-in
-  request is overridden to `user:<username>` by `web/auth.py`'s `SessionMiddleware` (#467 step 1,
-  see "Users and sessions"). The request-log rows in `audit_log` record it too.
+- HTTP: `web/middleware.py`'s `ActorMiddleware` sets `anonymous` per request; a signed-in
+  request is overridden to `user:<username>` by `web/auth.py`'s `SessionMiddleware` (#467 step 1),
+  an install-token request to `token` by its `AccessMiddleware` (#467 step 2). The request-log rows
+  in `audit_log` record it too. `owner-ui` is the pre-step-2 anonymous actor: old rows and
+  in-process tests still carry it, no request does.
 - MCP: every tool runs inside `acting_as("mcp")` (the `@mcp.tool()` wrapper, below).
 - Boot, the OCR watchdog and the caption queue worker run as `system`. A script
   started from `scripts/` defaults to `script`.
@@ -230,8 +238,8 @@ Don't map these by hand in routes or tools: the two front ends do it.
 ## Roles and policy (#557, groundwork for auth #467)
 
 Two separate checks, and a request must pass **both**: the route's **role** (may this actor use
-this door at all?) and the item **policy** (may this actor see this item?). Today neither refuses
-anything; each has one switch that #467 flips.
+this door at all?) and the item **policy** (may this actor see this item?). Each had one switch;
+#467 step 2 flipped both (`roles.ENFORCE = True`, `policy.RESTRICTED_VIEW_ROLE = roles.ADMIN`).
 
 **Roles: `core/roles.py` + `web/roles.py`.** The ladder is `public < viewer < editor < admin`.
 - Every router in `web/routes/` is a `RoleRouter(default_role=roles.X)`. A route without its own
@@ -245,12 +253,14 @@ anything; each has one switch that #467 flips.
   the trash, permanent deletes, whole-card/hobby conversions) admin; public only for what must work
   with no login (`/f/<slug>` hotlinks, `/healthz`). A new non-APIRoute (a mount) goes in
   `web.roles.NON_ROUTE_ROLES`.
-- `require_role(role)` (the dependency) only **records** the label today:
-  `request.state.required_role`, written by the audit middleware into the request log's
-  `audit_log.required_role` column. The refusal (403 `forbidden`, shared error shape) is already
-  written behind `roles.ENFORCE` (False) and `roles.role_of(actor)`. Since #467 step 1 `role_of`
-  returns a signed-in user's role (`user:<name>` actors); every other actor is still admin.
-  Step 2: map the install token, drop anonymous to public, set `ENFORCE = True`.
+- `require_role(role)` (the dependency) records the label (`request.state.required_role`, written
+  by the audit middleware into the request log's `audit_log.required_role` column) and, with
+  `roles.ENFORCE` (True since #467 step 2), refuses a request below it: 401 `unauthorized` when the
+  actor holds no role (anonymous), else 403 `forbidden`, shared error shape. `roles.role_of(actor)`:
+  `user:<name>` -> that user's role; `token`, `mcp`, `script`, `system`, `migration` (and the legacy
+  `owner-ui`) -> admin; `anonymous` and anything unknown -> public (fail closed). Before any route
+  runs, `web/auth.py`'s `AccessMiddleware` resolves the request to its route or mount label
+  (`web.roles.required_role_for`) and turns anonymous requests away (see "Auth enforcement").
 - `python scripts/check_routes_roles.py [--list]` (run in the container: it imports the app) fails
   when a route has no label, two labels, or a mount isn't listed; it prints the count per role.
 
@@ -266,11 +276,16 @@ anything; each has one switch that #467 flips.
   `filter_visible` where the route holds the rows.
 - Exports (static site, project zip) call `policy.filter_exportable(rows)`: restricted items never
   leave the install, whoever asks.
-- **Today** `can_view` is True for everything (restricted items are still served by their direct
-  link, card page and MCP get/download), browsing still hides restricted items, exports exclude
-  them: exactly the pre-#557 behaviour. **#467 flips one constant:** `RESTRICTED_VIEW_ROLE =
-  roles.ADMIN` ("restricted means locked, not just hidden"). Don't decide restriction anywhere else
-  (`object_types.is_restricted` / `restricted_types` outside the policy fail the check below).
+- **Since #467 step 2** `RESTRICTED_VIEW_ROLE = roles.ADMIN` ("restricted means locked, not just
+  hidden"): `can_view` is False for a restricted item unless the actor is an admin (a signed-in
+  admin, the install token, the MCP, in-process scripts), so every direct door answers 404 and every
+  list drops it; browsing hides restricted items from everyone; exports exclude them.
+  `policy.viewable_item(slug)` (row or 404, then the policy) guards every single-item web route,
+  reads AND writes (an editor can't edit, redact, delete or relate a restricted item either);
+  `policy.require_file(row)` guards `/f/<slug>` and its thumbnail (also 404 for a REDACTED item
+  unless admin); `decisions.list_open()` leaves out questions about items the actor can't see.
+  Don't decide restriction anywhere else (`object_types.is_restricted` / `restricted_types` outside
+  the policy fail the check below).
 - **Adding a door** (anything that hands out an item or a list of items, web or MCP): call the
   policy in it, and add it to `DOORS` in `scripts/check_policy_doors.py`. That script (AST, no
   server) fails when a known door stops calling `policy.`, when a GET route or MCP read tool reads
@@ -279,12 +294,10 @@ anything; each has one switch that #467 flips.
   on the right rows: `scripts/test_role_policy.py` (throwaway DB) proves the behaviour by flipping
   the switch, then by denying everything, and checks every door refuses.
 
-## Users and sessions (#467 step 1: users, sign-in, first-run setup; NOTHING ENFORCED YET)
+## Users and sessions (#467 step 1: users, sign-in, first-run setup)
 
 Owner decisions 2026-10-07 (#467): built-in auth, one install per customer, HTTPS later. Step 1
-adds accounts and attribution only: `roles.ENFORCE` stays False, so anonymous use is unchanged
-(proved with the golden master: anonymous pages differ only by the header chip and the admin setup
-banner/Users panel).
+added accounts and attribution; step 2 enforces them (next section, "Auth enforcement").
 
 **Model (`core/users.py`, the service module; tables in `core/db.py`).**
 - `users(id, username UNIQUE COLLATE NOCASE, display_name, role viewer|editor|admin, password_hash,
@@ -316,17 +329,19 @@ banner/Users panel).
 - `delete_everything` keeps `users` and `sessions` (`reset.KEPT_TABLES`).
 
 **How the actor is set (`web/auth.py`).** Middleware order: origin guard -> `ActorMiddleware`
-(owner-ui) -> `SessionMiddleware` -> audit logger -> `CsrfMiddleware` -> routes. A request with the
+(anonymous) -> `SessionMiddleware` -> `AccessMiddleware` (install token + sign-in gate, step 2) ->
+audit logger -> `CsrfMiddleware` -> routes. A request with the
 `constructicon_session` cookie that resolves to a live session runs as actor `user:<username>`
 with `users.current_user()` set (pages' `current_user()` Jinja global; `roles.role_of` reads it).
-No cookie, or a dead one = owner-ui, exactly as before. The cookie: HttpOnly, SameSite=Lax, Path=/,
+No cookie, or a dead one = `anonymous`. The cookie: HttpOnly, SameSite=Lax, Path=/,
 Max-Age 30 days, `Secure` only when the request is HTTPS (deferred). Change-log rows AND
 request-log rows record `user:<name>`.
 
 **CSRF.** On top of the origin guard (#558): a POST/PUT/PATCH/DELETE **that carries a live session
 cookie** must send that session's token in `X-CSRF-Token`, else 403 `csrf_failed` (in the request
-log). Requests without a session cookie (scripts, the MCP, the desktop uploader, anonymous pages)
-are not affected. Injection: `base.html` renders `<meta name="csrf-token">` plus
+log). Install-token requests (scripts, the desktop uploader; `Authorization: Bearer`) never need it:
+a browser can't attach that header cross-site without a CORS preflight the app never grants, and a
+token request carries no session even when a cookie rides along. Injection: `base.html` renders `<meta name="csrf-token">` plus
 `static/js/csrf.js` (loaded before every other script) only on a signed-in page; csrf.js wraps
 `fetch` and `XMLHttpRequest` and adds the header to same-origin state-changing calls. **There are
 no plain HTML POST forms** (every form is submitted by JS, including login/setup, which use
@@ -343,9 +358,10 @@ or "Sign in". **No secrets in logs:** `request_guard.AUDIT_ROUTE_RULES` / `AUDIT
 log no body values for login, setup, my password, user create and the admin reset; error reasons on
 those keep only the code.
 
-**First run.** While `users` is empty, `/admin` shows "Create the admin account" -> `/setup`, which
-creates the first admin, signs them in and fills `install_config.owner_name` if unset. Nothing
-redirects to setup (nothing is enforced).
+**First run.** While `users` is empty, every page (and `/login`) redirects to `/setup` (step 2),
+which creates the first admin, signs them in and fills `install_config.owner_name` if unset (that
+fill is logged as actor `anonymous`: nobody is signed in yet). `/setup` is 404 once any user exists.
+`/admin` (reachable with the install token before then) shows "Create the admin account".
 
 **Reset script (on the box).** `sudo docker exec -it <web container> python3 scripts/reset_password.py
 <username>` (prompts twice), `... <username> --generate` (prints a generated password once, no -it
@@ -353,13 +369,99 @@ needed), `--enable` (re-enable), `--create-admin <username> [--display-name N]` 
 makes an existing user an enabled admin with a new password: recovery for an install with no usable
 admin), `--list`. Runs as actor `script`; never prints a hash.
 
-**What step 2 flips:** `roles.ENFORCE = True`; `role_of`: anonymous web -> public, the MCP install
-token -> admin (turn it on, `mcp_server/auth.py` hook, roll out to this PC and the Mac);
-`policy.RESTRICTED_VIEW_ROLE = roles.ADMIN`; `/f` public except restricted/redacted; force sign-in
-(redirect pages to `/login`, `/setup` while no users); gate the non-route mounts (`/preview`, docs).
-Step 3: HTTPS, per-user MCP tokens, a separate uploader token.
-
 Check with `scripts/test_auth_step1.py` (throwaway DB).
+
+## Auth enforcement (#467 step 2: login everywhere, roles, the restricted lock, the install token)
+
+Owner decisions 2026-10-07. **Login scope is everything**, roles are enforced, restricted items are
+admin-only, and the one install token is how every non-browser client gets in (as admin).
+
+**What's open without login (role public):** `/healthz`, `/login`, `/logout` (the page), `/setup`
+(only while there are no users, 404 after), `/api/auth/login|logout|setup|me`, `/static`, `/brand`,
+and the `/f/<slug>` hotlinks + thumbnails **except restricted and redacted items** (an admin session
+or the token gets them, an admin sees the redacted item's 410; anyone else 404, as if missing).
+**Everything else needs at least viewer**, including `/preview` (the export preview) and the
+OpenAPI docs (`/docs`, `/redoc`, `/openapi.json`), which are mounts gated in middleware via
+`web.roles.NON_ROUTE_ROLES`.
+
+**The gate (`web/auth.py` `AccessMiddleware`, before any body is read).** It resolves the request to
+its route or mount label (`web.roles.required_role_for`, walking `app.routes` with the lazily
+included routers expanded; an unknown path counts as viewer, so a stranger can't map the API by
+404s) and compares it with `roles.role_of(actor)`:
+- anonymous + a page (GET/HEAD outside `/api/`, not `/openapi.json`) -> 302 to `/setup` while there
+  are no users, else to `/login?next=<path?query>`; `/login` validates `next` (`_safe_next`: one
+  leading `/`, no `//`, no `\`, no control characters or whitespace anywhere, at most 2000 chars,
+  else `/`), so it can't be an open redirect;
+- anonymous + anything else -> 401 `unauthorized` (shared shape, `WWW-Authenticate: Bearer`);
+- signed in but below a MOUNT's label -> 403 `forbidden`; below a ROUTE's label -> 403 `forbidden`
+  from `web.roles.require_role` (the labels from #557; a page answers the same JSON 403).
+- **No trust for loopback or LAN addresses**: no session and no token = anonymous, whatever the IP
+  or `X-Forwarded-For`. The old `X-Constructicon-Client: desktop-app` header grants nothing (it only
+  picks the upload's Source label).
+
+**The install token (`core/install_token.py`).** One secret, two containers:
+- **MCP** (`mcp_server/auth.py`): every request needs `Authorization: Bearer <token>` (401 otherwise;
+  only `GET /healthz` is exempt). Role **admin**, actor `mcp`. **With roles enforced and no token
+  configured the MCP refuses to start** (exit with "refusing to start: no install token"): the safer
+  choice, a crash-looping container is loud, a 401-everything server looks healthy.
+- **Web**: `Authorization: Bearer <token>` = role **admin**, actor `token`, no session, **no CSRF**.
+  A Bearer header with a WRONG token is 401 `invalid_token` on every path (even `/f`), so a
+  misconfigured script fails loudly instead of browsing as anonymous. Other schemes (Basic) are
+  ignored. No token configured = every Bearer refused; sessions still work. A broken token config
+  (unreadable or empty file, under 32 chars) stops the web app at startup, like the MCP.
+- **Where it's read from** (first hit wins): `CONSTRUCTICON_INSTALL_TOKEN`,
+  `CONSTRUCTICON_INSTALL_TOKEN_FILE` (preferred), then the older `CONSTRUCTICON_MCP_TOKEN(_FILE)`.
+  Use ONE file, mounted read-only into BOTH services:
+  `./secrets/constructicon_token:/run/secrets/constructicon_token:ro` +
+  `CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token` (`docker-compose.yml.example`).
+  `secrets/` is gitignored. Never print it, never put it in git, chat, a report or the audit log
+  (the audit log stores no headers).
+
+**How each client authenticates.**
+- **Browsers:** sign in (session cookie + CSRF header, step 1).
+- **Claude Code / any MCP client:** `{"type":"http","url":"http://<host>:8100/mcp","headers":
+  {"Authorization":"Bearer <token>"}}` in `.mcp.json` / `~/.claude.json` (test box MCP:
+  `http://10.0.1.242:8100/mcp`).
+- **Repo scripts that talk HTTP** (`golden_master.py`, `test_office.py`, `seed_test_from_production.py`,
+  `check_curator_queue.py`, the backfill / sync / import scripts): one line,
+  `_http.install(args.base_url)` (`scripts/_http.py`), adds the header to requests for that origin
+  only (never to YouTube/GitHub, never across a redirect). Token from `CONSTRUCTICON_TOKEN`,
+  `CONSTRUCTICON_TOKEN_FILE`, else the install's own variables, so `docker exec <web container>
+  python3 scripts/x.py` just works. `golden_master.py --anonymous` snapshots what a stranger sees.
+- **In-process tests** (`scripts/test_*.py`): `_testenv.isolate()` configures a fresh random token
+  per run (dropping the container's token variables); `_testenv.client(app)` is a TestClient that
+  sends it (admin, actor `token`); a bare `TestClient` is anonymous. `_testenv.use_token()` for a
+  test that builds its own temp DB.
+- **Desktop uploader:** menu "Set Install Token…" (stored in its config.json, written mode 600, never
+  shown back in full); every upload sends the Bearer header; a 401 shows "The server needs the
+  install token: set it in the menu, Set Install Token...".
+
+**Rollout for an install (order matters; prod is the main session's job).**
+1. Deploy the code (`./scripts/deploy.sh`). Until step 3, the MCP container keeps running its old
+   process; a restart without a token makes it refuse to start.
+2. On the box, in the checkout: `mkdir -p secrets && chmod 700 secrets && python3
+   scripts/mcp_token.py generate secrets/constructicon_token` (prints only the path, mode 600).
+3. Compose, BOTH services: add the volume `./secrets/constructicon_token:/run/secrets/constructicon_token:ro`
+   and the env `CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token`; `sudo docker
+   compose up -d` (recreates both; a plain restart doesn't pick up compose changes).
+4. Check: `sudo docker exec <web> python3 scripts/mcp_token.py check --web-url http://localhost:<port>`
+   (expects 401 without, 200 with the token) and the MCP log line "bearer token auth ENABLED".
+5. First admin: open the site, it redirects to `/setup` (or `docker exec <web> python3
+   scripts/reset_password.py --create-admin <name> --generate`).
+6. Clients: every MCP client's config gets the `headers` block; the uploader gets the token; scripts
+   run elsewhere get `CONSTRUCTICON_TOKEN_FILE`.
+**What breaks if a client isn't updated:** an MCP client without the header gets 401 on every call
+(Claude Code shows the server as failed); the uploader's uploads fail with the "install token"
+notification; an HTTP script gets 401 (or a 302 to `/login` on a page); a hotlink to a restricted or
+redacted item 404s; an open browser tab is sent to `/login`.
+
+**Rotate:** `python3 scripts/mcp_token.py generate secrets/constructicon_token --force`, restart BOTH
+containers (`sudo docker restart <web> <mcp>`), update every client. **Lost admin password:**
+`sudo docker exec -it <web> python3 scripts/reset_password.py <user>` (or `--create-admin`), see above.
+
+Check with `scripts/test_auth_step2.py` (throwaway DB: the whole matrix per role and for the token,
+mounts, `next`, the decision queue, the MCP refusing to start, the uploader's API module, no secrets
+in the audit log). Later (not built): HTTPS (Caddy), per-user MCP tokens, a separate uploader token.
 
 ## Service layer (#541): one core module per domain
 
@@ -814,23 +916,24 @@ configuration gap for that session, not evidence the server itself is gone.
 The MCP HTTP transport (port 8100) is guarded by one **install bearer token**
 (`mcp_server/auth.py`, an ASGI middleware around the streamable-HTTP app; the server now
 runs that app via uvicorn itself, same host/port).
-- **Where the token lives:** env `CONSTRUCTICON_MCP_TOKEN`, or (preferred) a file named by
-  `CONSTRUCTICON_MCP_TOKEN_FILE` (mounted read-only into the MCP container, see
-  `docker-compose.yml.example`). Create it with `python scripts/mcp_token.py generate <file>`
-  (mode 600, prints only the path, never the token); `... check [--url http://host:8100/mcp]`
-  reports whether a token is configured. Never put the token in git or in chat.
+- **Where the token lives:** it is the install token, shared with the web app (`core/install_token.py`,
+  see "Auth enforcement"): `CONSTRUCTICON_INSTALL_TOKEN_FILE` (preferred; the older
+  `CONSTRUCTICON_MCP_TOKEN(_FILE)` still work), one file mounted read-only into both containers.
+  Create it with `python scripts/mcp_token.py generate <file>` (mode 600, prints only the path,
+  never the token); `... check [--url http://host:8100/mcp] [--web-url http://host:port]` reports
+  whether a token is configured and probes both servers. Never put the token in git or in chat.
 - **Behaviour:** token set -> every request needs `Authorization: Bearer <token>`
   (`hmac.compare_digest`), else 401 + `WWW-Authenticate: Bearer` + `{"ok":false,"error":
-  {"code":"unauthorized",...}}`; only `GET /healthz` is exempt. Token unset -> open, with a loud
-  startup warning (fresh installs, dev). Token under 32 chars -> the server refuses to start.
+  {"code":"unauthorized",...}}`; only `GET /healthz` is exempt. **Token unset -> the server refuses
+  to start** (#467 step 2: roles are enforced, an open MCP would be an open admin door). Token under
+  32 chars, or an unreadable/empty file -> refuses to start.
 - **Client config** (Claude Code `.mcp.json` / `~/.claude.json`):
   `{"type":"http","url":"http://<host>:8100/mcp","headers":{"Authorization":"Bearer <token>"}}`
-- **Rotate:** `python scripts/mcp_token.py generate <file> --force`, restart the MCP container,
-  update every client's `headers`. Old token stops working at the restart.
-- **Identity:** one install token = one identity; the actor stays `mcp`. #467 will map tokens
-  to users (hook comment in `auth.py`). Restricted items via `constructicon_download` now go
-  through the item policy (`core/policy.py`, #557); it still serves them until #467 flips
-  `RESTRICTED_VIEW_ROLE`.
+- **Rotate:** `python scripts/mcp_token.py generate <file> --force`, restart BOTH containers (web
+  and MCP), update every client's `headers`. Old token stops working at the restart.
+- **Identity:** one install token = one identity: role **admin** (owner decision 2026-10-07), actor
+  `mcp`, so the agent sees restricted items (the policy's admin role). Per-user MCP tokens are a
+  later step (hook comment in `auth.py`).
 
 ## Install config (#562, groundwork for #467)
 

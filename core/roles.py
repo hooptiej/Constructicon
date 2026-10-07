@@ -13,11 +13,14 @@ Web routes carry their label through `web.roles.requires(...)` (see web/roles.py
 scripts/check_routes_roles.py). Item visibility (restricted items) is a separate check, in
 core/policy.py: a request must pass BOTH, the route's role and the item's policy.
 
-TODAY NOTHING IS REFUSED. `ENFORCE` is False. #467 flips this module, in this order:
-  1. (step 1, done) `role_of(actor)` returns a signed-in user's role; every other actor is still
-     admin. Step 2 maps the MCP / uploader install token too and drops anonymous to public;
-  2. (step 2) `ENFORCE = True`, so web.roles.require_role refuses a request below the route's
-     label with 403 `forbidden` (the shared error shape).
+ENFORCED since #467 step 2 (owner decisions 2026-10-07): `ENFORCE` is True.
+  * web.roles.require_role refuses a request below the route's label: 403 `forbidden` for a
+    signed-in user (or token) without the role, 401 `unauthorized` for an anonymous request
+    (the shared error shape). web/auth.py's AccessMiddleware refuses anonymous requests even
+    earlier (pages redirect to /login, the API answers 401) and gates the mounts.
+  * `role_of(actor)` (below): a signed-in user's role; the install token (`token`, `mcp`) and
+    in-process work (`script`, `system`, `migration`, the legacy `owner-ui`) are admin; an
+    anonymous web request and any actor this module doesn't know are public (fail closed).
 """
 
 PUBLIC = "public"
@@ -28,9 +31,9 @@ ADMIN = "admin"
 ORDER = (PUBLIC, VIEWER, EDITOR, ADMIN)
 _RANK = {r: i for i, r in enumerate(ORDER)}
 
-# #467: the switch. False = labels are recorded (request.state.required_role, the request log's
-# required_role column) but never compared, so behaviour is unchanged.
-ENFORCE = False
+# #467 step 2: the switch, ON. Labels are recorded (request.state.required_role, the request log's
+# required_role column) AND compared: a request below its route's label is refused.
+ENFORCE = True
 
 
 def validate(role):
@@ -49,13 +52,21 @@ def at_least(have, need):
     return rank(have) >= rank(need)
 
 
+# Actors that act for the install itself: the install token (web `token`, the MCP `mcp`, owner
+# decision 2026-10-07: the agent keeps admin), and in-process work that never came through a door
+# (`script` run on the box, `system` boot/workers, `migration`). `owner-ui` is the pre-step-2
+# anonymous web actor: no request carries it any more; kept admin for old in-process callers.
+ADMIN_ACTORS = frozenset({"token", "mcp", "script", "system", "migration", "owner-ui"})
+
+
 def role_of(actor):
-    """The role an actor holds. #467 step 1: a signed-in user's actor ("user:<name>",
-    core/users.py) holds that user's role. Every other actor (an anonymous browser = owner-ui,
-    the MCP, scripts, system work) is still the owner, i.e. admin, so nothing changes while
-    ENFORCE is False. Step 2: anonymous web requests drop to public, and the MCP / uploader
-    install token maps to its role (admin, per the owner's 2026-10-07 decision)."""
+    """The role an actor holds (#467 step 2):
+      * "user:<name>" -> that user's role (core/users.py; public when the user is gone or disabled);
+      * an ADMIN_ACTORS member -> admin;
+      * "anonymous" (a web request with no session and no token) and anything unknown -> public."""
     if isinstance(actor, str) and actor.startswith("user:"):
         from . import users  # lazy: users imports this module
         return users.role_for_actor(actor)
-    return ADMIN
+    if actor in ADMIN_ACTORS:
+        return ADMIN
+    return PUBLIC

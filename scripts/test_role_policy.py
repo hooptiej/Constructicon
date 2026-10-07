@@ -3,18 +3,19 @@
 
     python scripts/test_role_policy.py
 
-1. Today (nothing flipped): every route has exactly one role label; a restricted item (a real
-   certificate-only PEM, type certkey) is served by its direct doors and listed on its card, its
-   blog entry and its neighbour's Related list, but hidden from search and never exported; the
-   request log records each write's required role.
-2. The #467 switch (policy.RESTRICTED_VIEW_ROLE = admin, the actor a viewer): every door refuses
-   the restricted item with 404 not_found in the shared error shape, every list drops it, and an
-   ordinary item is untouched. As an admin it is served again.
+1. As an admin (the per-run install token, _testenv.client): every route has exactly one role
+   label; a restricted item (a real certificate-only PEM, type certkey) is served by its direct
+   doors and listed on its card, its blog entry and its neighbour's Related list, but hidden from
+   search and never exported; the request log records each write's required role.
+2. The #467 switch (policy.RESTRICTED_VIEW_ROLE = admin, ON since step 2; the actor made a viewer):
+   every door refuses the restricted item with 404 not_found in the shared error shape, every list
+   drops it, and an ordinary item is untouched. As an admin it is served again.
 3. A stricter proof that no door bypasses the policy: can_view monkeypatched to deny EVERYTHING,
    and every direct door refuses even an ordinary item.
 4. The role hook (roles.ENFORCE, role_of): a viewer gets 403 forbidden on admin and editor routes,
-   keeps viewer and public routes; an admin passes.
-Everything is reset afterwards. Exits 1 if any check fails.
+   keeps viewer and public routes; anonymous gets the sign-in redirect / 401; an admin passes.
+Everything is restored afterwards. Exits 1 if any check fails. The full step-2 matrix (real
+sessions, tokens, /setup, mounts) is scripts/test_auth_step2.py.
 """
 
 import datetime
@@ -66,7 +67,7 @@ def pem_certificate():
 
 db.init_db()
 HOST = "testhost.local:8000"
-client = TestClient(webapp.app, base_url=f"http://{HOST}")
+client = _testenv.client(webapp.app, base_url=f"http://{HOST}")
 
 CERT, PLAIN = "rp-cert-1", "rp-plain-1"
 (paths.storage_dir() / f"{CERT}.pem").write_bytes(pem_certificate())
@@ -182,6 +183,8 @@ check("request log: POST /api/image/{slug} recorded as editor", logged.get(f"/ap
 # ---- 2. the #467 switch ----------------------------------------------------------------------
 print("--- 2. the switch: restricted needs admin, the actor is a viewer ---")
 orig_role_of = roles.role_of
+orig_restricted_role = policy.RESTRICTED_VIEW_ROLE
+check("#467 step 2: the switch is ON in the code (RESTRICTED_VIEW_ROLE = admin)", orig_restricted_role == roles.ADMIN)
 policy.RESTRICTED_VIEW_ROLE = roles.ADMIN
 roles.role_of = lambda a: roles.VIEWER
 try:
@@ -212,7 +215,7 @@ try:
     check("switch, as admin: /f serves it again", client.get(f"/f/{CERT}").status_code == 200)
     check("switch, as admin: MCP get serves it again", mcp_direct(CERT)["get"].get("slug") == CERT)
 finally:
-    policy.RESTRICTED_VIEW_ROLE = None
+    policy.RESTRICTED_VIEW_ROLE = orig_restricted_role
     roles.role_of = orig_role_of
 
 # ---- 3. deny everything: nothing bypasses can_view -------------------------------------------
@@ -234,6 +237,7 @@ finally:
 
 # ---- 4. the role hook ------------------------------------------------------------------------
 print("--- 4. the role hook: ENFORCE on, the actor a viewer ---")
+orig_enforce = roles.ENFORCE
 roles.ENFORCE = True
 roles.role_of = lambda a: roles.VIEWER
 try:
@@ -246,12 +250,17 @@ try:
     check("enforce: viewer GET / (viewer) -> 200", client.get("/").status_code == 200)
     check("enforce: viewer GET /f/{slug} (public) -> 200", client.get(f"/f/{PLAIN}").status_code == 200)
     roles.role_of = lambda a: roles.PUBLIC
-    check("enforce: public GET / (viewer) -> 403", forbidden(client.get("/")))
+    r = client.get("/", follow_redirects=False)
+    check("enforce: public GET / (viewer page) -> 302 to /setup (this DB has no user yet)", r.status_code == 302
+          and r.headers["location"] == "/setup", f"{r.status_code} {r.headers.get('location')}")
+    r = client.get("/api/settings")
+    check("enforce: public GET /api/settings -> 401 unauthorized",
+          r.status_code == 401 and r.json()["error"]["code"] == "unauthorized", f"{r.status_code} {r.text[:120]}")
     check("enforce: public GET /healthz -> 200", client.get("/healthz").status_code == 200)
     roles.role_of = lambda a: roles.ADMIN
     check("enforce: admin GET /api/settings -> 200", client.get("/api/settings").status_code == 200)
 finally:
-    roles.ENFORCE = False
+    roles.ENFORCE = orig_enforce
     roles.role_of = orig_role_of
 
 check("reset: nothing refused again", client.get(f"/object/{CERT}").status_code == 200

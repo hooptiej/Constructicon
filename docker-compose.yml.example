@@ -16,9 +16,14 @@ services:
       - ./assets:/app/assets:ro
       - ./storage:/app/storage
       - ./db:/app/data
+      # #467 step 2: the install token, ONE file shared with the MCP service below. Create it with
+      #   python3 scripts/mcp_token.py generate ./secrets/constructicon_token   (mode 600)
+      - ./secrets/constructicon_token:/run/secrets/constructicon_token:ro
     environment:
       - IMAGEREPO_BASE_URL=http://10.0.1.78:8000
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
+      # Non-browser clients (scripts, the desktop uploader) send it as Authorization: Bearer.
+      - CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token
     command: uvicorn web.app:app --host 0.0.0.0 --port 8000
 
   constructicon-mcp:
@@ -31,14 +36,13 @@ services:
       - ./assets:/app/assets:ro
       - ./storage:/app/storage
       - ./db:/app/data
-      - ./secrets/mcp_token:/run/secrets/mcp_token:ro
+      - ./secrets/constructicon_token:/run/secrets/constructicon_token:ro
     environment:
       - CONSTRUCTICON_BASE_URL=http://constructicon-web:8000
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
-      # #561: bearer install token. Without one the MCP is OPEN (and logs a warning).
-      # Keep the token in a file, not in this compose file:
-      #   python scripts/mcp_token.py generate ./secrets/mcp_token   (mode 600)
-      - CONSTRUCTICON_MCP_TOKEN_FILE=/run/secrets/mcp_token
+      # #561 / #467 step 2: the same install token file as the web service. Required: with roles
+      # enforced the MCP refuses to start without one. Clients send Authorization: Bearer <token>.
+      - CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token
     command: python -m mcp_server.server
     depends_on:
       - constructicon-web

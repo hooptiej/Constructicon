@@ -37,7 +37,7 @@ os.environ["CONSTRUCTICON_ROLE"] = "mcp"
 from mcp.server.mcpserver import Image as McpImage, MCPServer
 from mcp.types import CallToolResult, TextContent
 
-from core import actor as actor_ctx, policy
+from core import actor as actor_ctx, policy, roles
 from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
@@ -2420,7 +2420,14 @@ if __name__ == "__main__":
     except mcp_auth.TokenConfigError as exc:
         sys.exit(f"constructicon-mcp: refusing to start: {exc}")
     if _token:
-        print("constructicon-mcp: bearer token auth ENABLED", flush=True)
+        print("constructicon-mcp: bearer token auth ENABLED (install token = role admin, actor mcp)", flush=True)
+    elif roles.ENFORCE:
+        # #467 step 2: roles are enforced, so an MCP without a token would be an open admin door.
+        # Refuse to start (a crash-looping container is loud; a server that 401s everything looks
+        # healthy). See CLAUDE.md "Auth enforcement" for the rollout.
+        sys.exit("constructicon-mcp: refusing to start: no install token configured and roles are enforced. "
+                 "Set CONSTRUCTICON_INSTALL_TOKEN_FILE (or CONSTRUCTICON_MCP_TOKEN_FILE) to a token file "
+                 "made with: python scripts/mcp_token.py generate <file>")
     else:
         logging.basicConfig(level=logging.WARNING)
         logging.getLogger("constructicon-mcp").warning(

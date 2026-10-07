@@ -30,8 +30,13 @@ python setup.py py2app
 2. Menu bar icon shows status: 🟢 idle, 🟡 uploading, 🔴 last upload failed
    (check Notification Center for the actual error).
 
-No sign-in step — Constructicon has no auth (LAN-only dev server), so uploads
-just go straight through.
+3. **Set the install token** (menu bar icon > **Set Install Token…**). Since
+   Constructicon #467 step 2 the server refuses anonymous uploads: the app sends
+   the install token as `Authorization: Bearer <token>`. Ask the Constructicon
+   admin for it (it's the token file the server's containers mount). Without it,
+   uploads fail with "The server needs the install token…". The token is stored
+   in `~/Library/Application Support/Constructicon Uploader/config.json`, which
+   the app writes owner-only (mode 600), and is never shown back in full.
 
 ## Known gap
 

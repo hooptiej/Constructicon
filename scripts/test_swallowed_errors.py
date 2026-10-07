@@ -23,6 +23,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.modules.setdefault("cairosvg", types.ModuleType("cairosvg"))  # no libcairo needed here
+import _testenv  # noqa: E402
+_testenv.use_token()  # #467 step 2: the web part below sends the per-run install token
 
 from core import besteffort, card_rules, captions, curator, db, physical_piece  # noqa: E402
 from core import version as version_info  # noqa: E402
@@ -153,7 +155,7 @@ check("...and logs it", "EXIF IFD" in cap.text(), cap.text())
 from fastapi.testclient import TestClient  # noqa: E402
 from web import app as webapp  # noqa: E402
 
-client = TestClient(webapp.app)
+client = _testenv.client(webapp.app)
 
 r = client.post("/api/content", data={"media_type": "url", "external_url": "https://example.com/", "tags": "not json"})
 check("POST /api/content with tags that aren't JSON: clean 400 (was: tags silently dropped)",

@@ -76,6 +76,8 @@ def main():
     ap.add_argument("--before", help="build_queue() JSON from main on this same DB")
     ap.add_argument("--after", help="build_queue() JSON from this code on the same DB snapshot as --before")
     args = ap.parse_args()
+    import _http  # #467 step 2: send the install token to the app (scripts/_http.py)
+    _http.install(BASE)
 
     # 1. badge == full queue ------------------------------------------------------------
     truth = norm(cq.build_queue())

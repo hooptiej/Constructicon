@@ -87,7 +87,7 @@ check("suggestions: capped", len(physical_piece.medium_suggestions(db, limit=2))
 from fastapi.testclient import TestClient  # noqa: E402
 from web import app as webapp  # noqa: E402
 
-client = TestClient(webapp.app)
+client = _testenv.client(webapp.app)
 slug = make_item("piece1", title="A dragon")
 page = client.get(f"/object/{slug}")
 check("page renders", page.status_code == 200, page.status_code)

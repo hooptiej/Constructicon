@@ -75,6 +75,8 @@ def main():
         help="Base URL of the running Constructicon instance (default: http://localhost:8000)",
     )
     args = parser.parse_args()
+    import _http  # #467 step 2: send the install token to the app (scripts/_http.py)
+    _http.install(args.base_url)
 
     rows = [r for r in db.search(limit=1000000, include_brand=True) if r.get("tags")]
     if not rows:

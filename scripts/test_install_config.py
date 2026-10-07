@@ -65,7 +65,7 @@ def restart():
     db.init_db()
 
 
-client = TestClient(webapp.app)
+client = _testenv.client(webapp.app)
 OWNERISH = ("hooptie", "alienwhoop", "traditional media")
 
 # ---- 1. fresh install -----------------------------------------------------------------------

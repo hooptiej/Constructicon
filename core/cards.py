@@ -925,7 +925,10 @@ def resolve_decision(decision_id, choice=None, choices=None, actor=None, batch_i
     db._resolve_pending_decision(decision_id, {
         "choice": picked[0] if len(picked) == 1 else picked,
         "applied_batch": batch_id,
-        "by": "owner" if actor_ctx.resolve(actor) == changes.ACTOR_UI else "claude",
+        # #467 step 2: a person answering through the web (a signed-in user, or the legacy owner-ui
+        # actor) is "owner"; the agent and scripts (mcp, token, script, system) are "claude".
+        "by": "owner" if (actor_ctx.resolve(actor) == changes.ACTOR_UI
+                          or str(actor_ctx.resolve(actor)).startswith("user:")) else "claude",
         "at": time.time(),
     }, log={"op": "resolve_decision", "actor": actor, "batch_id": batch_id})
     return {"ok": True, "applied": picked, "batch_id": batch_id, "remaining": _decisions.count_open()}

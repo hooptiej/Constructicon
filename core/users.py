@@ -1,4 +1,4 @@
-"""Users, passwords and sessions (#467 step 1: users, login, first-run setup; nothing enforced yet).
+"""Users, passwords and sessions (#467 step 1: users, login, first-run setup; enforced since step 2).
 
 The service module for the `users` and `sessions` tables (schema in core/db.py). Every write goes
 through here (scripts/check_layering.py); the web layer (web/auth.py, web/routes/auth.py) and the
@@ -34,7 +34,7 @@ and that IP's counts.
 
 Current user: a ContextVar set per request by web/auth.py. Its actor is "user:<username>"
 (core/actor.py); core/roles.role_of() reads the role through role_for_actor(). Anonymous requests
-keep the old actor (owner-ui) and role (admin) in step 1.
+are actor `anonymous`, role public (step 2).
 """
 
 import base64

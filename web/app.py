@@ -1,9 +1,9 @@
 """Constructicon web app: upload, gallery, and the public /f/{slug} hotlink
 route.
 
-#467 step 1: users can sign in (web/auth.py, core/users.py) and their writes are attributed to
-them, but nothing is enforced yet (core/roles.ENFORCE is False): an anonymous request still does
-everything it did before. Step 2 turns the roles on.
+#467: users sign in (web/auth.py, core/users.py) and, since step 2, roles are enforced
+(core/roles.ENFORCE): every page and API needs at least viewer, except the public doors
+(/f hotlinks, /healthz, /login, /setup, static assets). Non-browser clients send the install token.
 
 #547: this file is the assembly point: the app, its exception handler, static
 mounts, middleware, startup (background work) and the routers. Routes live in
@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core import actor as actor_ctx, captions, db, decisions, errors, ocr, paths
+from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
 from web import auth as web_auth, request_guard
 from web.common import _STATIC_DIR
@@ -107,6 +107,10 @@ app.mount("/preview", _CurrentExportFiles(directory=paths.current_export_dir(), 
 # #467 step 1: the per-session CSRF check, innermost so its refusals reach the request log.
 app.add_middleware(web_auth.CsrfMiddleware)
 app.add_middleware(AuditLoggingMiddleware)
+# #467 step 2: the install token (actor `token`, admin) and the sign-in gate (anonymous pages ->
+# /login or /setup, anonymous API -> 401, mounts gated by web.roles.NON_ROUTE_ROLES). Outside the
+# audit logger so a refused anonymous request never has its body read.
+app.add_middleware(web_auth.AccessMiddleware, routes=lambda: app.routes)
 # #467 step 1: a live session cookie -> the signed-in user and actor "user:<name>" (web/auth.py).
 app.add_middleware(web_auth.SessionMiddleware)
 # #560: sets the request's actor (owner-ui) around the audit logger and the route.
@@ -210,6 +214,14 @@ async def startup():
 
 
 def _startup_as_system():
+    # #467 step 2: a broken install-token configuration (unreadable/empty file, too short) stops the
+    # app here, loudly, like the MCP. No token at all is fine: sessions work, bearer clients get 401.
+    try:
+        token_on = install_token.enabled()
+    except install_token.TokenConfigError as exc:
+        raise RuntimeError(f"constructicon-web: refusing to start: {exc}") from None
+    print(f"install token: {'configured (Bearer clients = admin)' if token_on else 'NOT configured (Bearer clients refused)'}",
+          flush=True)
     db.init_db()
     # #562: the imagerepo IT-client seed ("Unknown", "Not Business", "Internal Infrastructure")
     # is no longer inserted on every boot: nothing in Constructicon reads those rows (only

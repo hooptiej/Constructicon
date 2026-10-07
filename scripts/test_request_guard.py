@@ -36,7 +36,7 @@ def check(name, cond, extra=""):
 
 db.init_db()
 HOST = "testhost.local:8000"
-client = TestClient(webapp.app, base_url=f"http://{HOST}")
+client = _testenv.client(webapp.app, base_url=f"http://{HOST}")
 DUMMY = "dummy-not-a-real-secret-123"
 
 

@@ -1,15 +1,23 @@
-"""Manage the MCP install token (#561, part of #467). Never prints the token.
+"""Manage the install token (#561; #467 step 2). Never prints the token.
+
+The install token is ONE secret used by both containers: the MCP sidecar requires it on every
+call (role admin, actor `mcp`) and the web app accepts it as `Authorization: Bearer <token>` from
+non-browser clients (scripts, the desktop uploader; role admin, actor `token`). Keep it in one
+file and mount that file read-only into BOTH services with
+CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token (see docker-compose.yml.example
+and CLAUDE.md "Auth enforcement"). The older CONSTRUCTICON_MCP_TOKEN(_FILE) names still work.
 
   python scripts/mcp_token.py generate <file> [--force]
       Write a new random token (secrets.token_urlsafe(48)) to <file>, mode 600. Prints only
-      "written to <path>". Refuses to overwrite an existing file without --force (rotation).
+      "written to <path>". Refuses to overwrite an existing file without --force (rotation:
+      regenerate, restart BOTH containers, update every client).
 
-  python scripts/mcp_token.py check [--url http://host:8100/mcp]
-      Local: reports whether CONSTRUCTICON_MCP_TOKEN / CONSTRUCTICON_MCP_TOKEN_FILE is
-      configured in THIS environment (run it via `docker exec <mcp container>` to see what
-      the server sees) and whether it is long enough.
-      With --url: also probes the running server with no credentials; 401 means a token is
-      required, 2xx/4xx-other means the server is open.
+  python scripts/mcp_token.py check [--url http://host:8100/mcp] [--web-url http://host:8000]
+      Local: reports which variable configures the token in THIS environment (run it via
+      `docker exec <container>` to see what that server sees) and whether it is long enough.
+      --url: probes the MCP with no credentials; 401 = token required, anything else = OPEN.
+      --web-url: probes the web API with no credentials (expects 401) and, when a token is
+      configured locally, with it (expects 200).
 """
 import argparse
 import os
@@ -19,7 +27,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from mcp_server import auth  # noqa: E402  (pure stdlib module, no DB import)
+from core import install_token  # noqa: E402  (stdlib only, no DB import)
 
 
 def cmd_generate(args):
@@ -34,40 +42,64 @@ def cmd_generate(args):
         f.write(token + "\n")
     try:
         os.chmod(path, 0o600)  # in case the file pre-existed with looser bits
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"warning: couldn't set mode 600 on {path} ({exc.strerror or exc}); fix it by hand", file=sys.stderr)
     print(f"written to {path}")
     return 0
 
 
+def _status(url, headers=None):
+    req = urllib.request.Request(url, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def cmd_check(args):
     rc = 0
+    token = ""
     try:
-        token = auth.load_token()
-    except auth.TokenConfigError as exc:
+        token = install_token.load()
+    except install_token.TokenConfigError as exc:
         print(f"local config: INVALID: {exc}")
         rc = 1
     else:
         if token:
-            via = "CONSTRUCTICON_MCP_TOKEN" if os.environ.get("CONSTRUCTICON_MCP_TOKEN") else "CONSTRUCTICON_MCP_TOKEN_FILE"
-            print(f"local config: token configured via {via} ({len(token)} chars)")
+            print(f"local config: token configured via {install_token.configured_source()} ({len(token)} chars)")
         else:
-            print("local config: NO token configured (MCP would run open)")
+            print("local config: NO token configured (the MCP refuses to start; web Bearer clients get 401)")
     if args.url:
         req = urllib.request.Request(args.url, data=b"{}", method="POST",
                                      headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
-                print(f"server {args.url}: answered {r.status} without credentials: OPEN")
+                print(f"MCP {args.url}: answered {r.status} without credentials: OPEN")
                 rc = rc or 2
         except urllib.error.HTTPError as e:
             if e.code == 401:
-                print(f"server {args.url}: 401 without credentials: token required")
+                print(f"MCP {args.url}: 401 without credentials: token required")
             else:
-                print(f"server {args.url}: answered {e.code} without credentials: OPEN (no token)")
+                print(f"MCP {args.url}: answered {e.code} without credentials: OPEN (no token)")
                 rc = rc or 2
         except OSError as e:
-            print(f"server {args.url}: unreachable ({e})")
+            print(f"MCP {args.url}: unreachable ({e})")
+            rc = rc or 3
+    if args.web_url:
+        probe = args.web_url.rstrip("/") + "/api/version"
+        try:
+            anon = _status(probe)
+            print(f"web {probe}: {anon} without credentials" + ("" if anon == 401 else "  <- expected 401 (enforcement off?)"))
+            if anon != 401:
+                rc = rc or 2
+            if token:
+                with_token = _status(probe, {"Authorization": f"Bearer {token}"})
+                print(f"web {probe}: {with_token} with the local token" + ("" if with_token == 200 else "  <- expected 200"))
+                if with_token != 200:
+                    rc = rc or 2
+        except OSError as e:
+            print(f"web {probe}: unreachable ({e})")
             rc = rc or 3
     return rc
 
@@ -81,6 +113,7 @@ def main():
     g.set_defaults(fn=cmd_generate)
     c = sub.add_parser("check")
     c.add_argument("--url")
+    c.add_argument("--web-url")
     c.set_defaults(fn=cmd_check)
     args = ap.parse_args()
     sys.exit(args.fn(args))

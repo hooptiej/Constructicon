@@ -17,10 +17,11 @@ log = logging.getLogger("constructicon.middleware")
 # --- Actor context (#560) ---
 
 def request_actor(scope):
-    """Who is making an ANONYMOUS request: the owner's UI, as before auth (#467 step 1). A
-    signed-in request is overridden to "user:<username>" by web/auth.py's SessionMiddleware,
-    which runs inside this one. Step 2 decides what an anonymous request becomes."""
-    return actor_ctx.ACTOR_UI
+    """Who is making a request before web/auth.py looks at it: `anonymous` (#467 step 2; role
+    public). Inside this middleware, SessionMiddleware overrides it with "user:<username>" for a
+    live session and AccessMiddleware with `token` for the install token. The client's address is
+    never trusted (no loopback/LAN exception)."""
+    return actor_ctx.ACTOR_ANONYMOUS
 
 
 class ActorMiddleware:

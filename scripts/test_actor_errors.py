@@ -152,19 +152,19 @@ check("no context in a script -> script", last_change_actor("set_status") == ("s
 from fastapi.testclient import TestClient  # noqa: E402
 from web import app as webapp  # noqa: E402
 
-client = TestClient(webapp.app)
+client = _testenv.client(webapp.app)
 r = client.post(f"/api/projects/{card['slug']}", data={"stage": "done"})
 check("web card edit 200", r.status_code == 200, r.text[:200])
-check("web card edit change-log row is owner-ui", last_change_actor("set_status") == ("set_status", "owner-ui"),
+check("web card edit change-log row is token", last_change_actor("set_status") == ("set_status", "token"),
       last_change_actor())
 req = last_request_row(f"/api/projects/{card['slug']}")
-check("web request-log row records owner-ui", req and req["actor"] == "owner-ui", req)
+check("web request-log row records token", req and req["actor"] == "token", req)
 
 # BackgroundTasks/run_in_threadpool see the request's actor: a sync route body runs in the threadpool.
 r = client.post("/api/provenance-options/card", data={"key": "actor_test", "label": "Actor test"})
 check("provenance option add 200", r.status_code == 200, r.text[:200])
-check("provenance option change-log row is owner-ui",
-      last_change_actor("provenance_option_add") == ("provenance_option_add", "owner-ui"), last_change_actor())
+check("provenance option change-log row is token",
+      last_change_actor("provenance_option_add") == ("provenance_option_add", "token"), last_change_actor())
 
 
 def shape(r, status, code, detail=None):

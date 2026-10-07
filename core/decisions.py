@@ -19,7 +19,7 @@ same batch as whatever the answer applied.
 import json
 import time
 
-from core import automatch, cards, changes, db, ingest, items, membership, object_types, revisions
+from core import automatch, cards, changes, db, ingest, items, membership, object_types, policy, revisions
 from core.errors import Conflict, InvalidInput, NotFound
 
 
@@ -160,6 +160,8 @@ def list_open():
             })
             continue
         row = db.get_by_slug(decision["post_slug"])
+        if row is not None and not policy.can_view(row):
+            continue  # #467 step 2: a question about a restricted item is for admins only
 
         entry = {
             "id": decision["id"],

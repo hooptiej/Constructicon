@@ -338,8 +338,17 @@ def normalise(body, ctype):
     return body
 
 
+# #467 step 2: the app needs a signed-in user or the install token. By default every request sends
+# the token (scripts/_http.py: CONSTRUCTICON_TOKEN(_FILE) or the container's own install token);
+# --anonymous sends nothing, to snapshot what a stranger sees.
+_AUTH = {"token": None}
+
+
 def fetch(base, url, method="GET", data=None, headers=None):
-    req = urllib.request.Request(base + url, data=data, method=method, headers=headers or {})
+    hdrs = dict(headers or {})
+    if _AUTH["token"]:
+        hdrs.setdefault("Authorization", f"Bearer {_AUTH['token']}")
+    req = urllib.request.Request(base + url, data=data, method=method, headers=hdrs)
     try:
         with _OPENER.open(req, timeout=120) as resp:
             return resp.status, dict(resp.headers), resp.read()
@@ -585,7 +594,14 @@ def main():
     ap.add_argument("--no-http", action="store_true", help="skip the HTTP snapshots (routes/resolution/openapi only)")
     ap.add_argument("--mutations", action="store_true", help="also run the write round-trips (writes to the DB)")
     ap.add_argument("--errors", action="store_true", help="also run the error probes (#548; one revision link made + removed)")
+    ap.add_argument("--anonymous", action="store_true",
+                    help="send no install token (#467 step 2: every non-public response is then a 401 / sign-in redirect)")
     args = ap.parse_args()
+    if not args.anonymous:
+        import _http
+        _AUTH["token"] = _http.token() or None
+        if not _AUTH["token"]:
+            print("note: no install token found (CONSTRUCTICON_TOKEN_FILE); the snapshot is anonymous", file=sys.stderr)
 
     if args.compare:
         sys.exit(compare(*args.compare))

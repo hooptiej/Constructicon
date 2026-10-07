@@ -1,6 +1,10 @@
-"""Thin client for the Constructicon upload API — the same POST /api/upload the
-web drawer and the MCP server use. No auth: Constructicon runs on a LAN-only
-dev server with no port forward, so anyone who can reach it can upload.
+"""Thin client for the Constructicon upload API: the same POST /api/upload the web drawer and the
+MCP server use.
+
+Auth (Constructicon #467 step 2): the server refuses anonymous uploads, so every request carries
+the install token as `Authorization: Bearer <token>` (Settings > "Set Install Token..."; the admin
+gets it from the server's token file). Without it, or with a wrong one, the server answers 401 and
+upload_file raises AuthError with a message saying so.
 """
 
 import os
@@ -9,13 +13,14 @@ import requests
 
 REQUEST_TIMEOUT_SECONDS = 30
 
-# Identifies every request from this app (both the silent Desktop-folder
-# watcher and the in-app drop zone — see watcher.py/dropzone.py) as an
-# automated/unattended upload, as opposed to a deliberate one-off drag-drop
-# through the web UI's own upload drawer. The server (web/app.py's
-# api_upload) uses this to pick the right Source string for capture_events.tech
-# — see core/db.py's source_automated_upload()/source_manual_upload().
+# Identifies every request from this app (both the silent Desktop-folder watcher and the in-app
+# drop zone, see watcher.py/dropzone.py) as an automated/unattended upload, as opposed to a
+# deliberate one-off drag-drop through the web UI's own upload drawer. The server uses it ONLY to
+# pick the Source label for capture_events.tech (core/db.py's source_automated_upload()); since
+# #467 step 2 it grants no access at all, the install token does.
 CLIENT_IDENTITY_HEADERS = {"X-Constructicon-Client": "desktop-app"}
+
+AUTH_HELP = "The server needs the install token: set it in the menu, Set Install Token..."
 
 
 class UploadError(Exception):
@@ -27,7 +32,20 @@ class DuplicateUploadError(UploadError):
     already uploaded — not a failure, just nothing new to do."""
 
 
-def upload_file(base_url, path, description="", tags=None, client=""):
+class AuthError(UploadError):
+    """401: no install token configured, or the wrong one."""
+
+
+def request_headers(token=""):
+    """The headers every request sends: the client identity, plus the bearer token when set."""
+    headers = dict(CLIENT_IDENTITY_HEADERS)
+    token = (token or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def upload_file(base_url, path, description="", tags=None, client="", token=""):
     url = base_url.rstrip("/") + "/api/upload"
     data = {
         "description": description,
@@ -39,10 +57,16 @@ def upload_file(base_url, path, description="", tags=None, client=""):
         files = {"file": (os.path.basename(path), f)}
         try:
             resp = requests.post(
-                url, data=data, files=files, headers=CLIENT_IDENTITY_HEADERS, timeout=REQUEST_TIMEOUT_SECONDS
+                url, data=data, files=files, headers=request_headers(token), timeout=REQUEST_TIMEOUT_SECONDS,
+                allow_redirects=False,
             )
         except requests.RequestException as e:
             raise UploadError(f"Couldn't reach {base_url}: {e}")
+    if resp.status_code == 401:
+        detail = _error_detail(resp)
+        if (token or "").strip():
+            raise AuthError(f"The install token was refused ({detail}). {AUTH_HELP}")
+        raise AuthError(AUTH_HELP)
     if resp.status_code == 409:
         detail = _error_detail(resp)
         raise DuplicateUploadError(detail)
@@ -58,6 +82,10 @@ def _tags_json(tags):
 
 def _error_detail(resp):
     try:
-        return resp.json().get("detail", f"HTTP {resp.status_code}")
+        body = resp.json()
     except ValueError:
         return f"HTTP {resp.status_code}"
+    err = body.get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict) and err.get("message"):
+        return err["message"]
+    return body.get("detail", f"HTTP {resp.status_code}") if isinstance(body, dict) else f"HTTP {resp.status_code}"

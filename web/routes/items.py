@@ -278,10 +278,7 @@ def api_processing(request: Request, session: str = ""):
 
 @router.get("/api/image/{slug}", dependencies=requires(roles.VIEWER))
 def api_get_image(request: Request, slug: str):
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
-    policy.require_view(row)  # #557
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     return JSONResponse(_to_public(row))
 
 
@@ -289,9 +286,7 @@ def api_get_image(request: Request, slug: str):
 def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks):
     """Force a (re-)run of OCR — for images that never got it, or a lousy
     first pass worth retrying."""
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     if row["redacted"]:
         raise HTTPException(status_code=400, detail="File was redacted — there's no image left to OCR")
     spec = object_types.get_object_type(row.get("media_type"))
@@ -316,9 +311,7 @@ def api_retry_caption(request: Request, slug: str, background_tasks: BackgroundT
     last one, so repeated clicks give real variety instead of repeating
     the same greedy default. advance=False (the "Generate" case, no prior
     caption) behaves as before: start at step 0 and auto-cascade on empty."""
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     if row["redacted"]:
         raise HTTPException(status_code=400, detail="File was redacted — there's no image left to caption")
     spec = object_types.get_object_type(row.get("media_type"))
@@ -343,9 +336,7 @@ def api_mark_caption_used(slug: str):
     frontend's side: the description edit itself isn't gated on this
     succeeding, since losing the provenance note is much cheaper than
     losing the actual caption text."""
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     tm = row["type_metadata"]
     if tm.get(captions.STATUS_KEY) != "done" or not tm.get(captions.METADATA_KEY):
         raise HTTPException(status_code=400, detail="No current suggested caption to mark as used")
@@ -382,9 +373,7 @@ def api_captions_unreviewed(request: Request):
 def api_caption_skip(slug: str):
     """#409: mark an auto-caption suggestion reviewed-but-not-used, so it drops
     out of the confirm_caption queue without being copied into the description."""
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     items.update(slug, type_metadata={"auto_caption_dismissed": True})
     return JSONResponse({"ok": True})
 
@@ -413,8 +402,7 @@ async def api_update_image(
     batch (undo restores all of it). Validation (provenance key, physical-piece date, dates)
     happens before anything is written. #541 phase C: free-text tags ride in the same call
     (items.update(tags=...)), so tags + fields are still ONE batch."""
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     tag_list = None
     if tags is not None:
         tag_list = _parse_tags_form(tags)
@@ -480,8 +468,7 @@ def api_redact_image(request: Request, slug: str):
     trash with no expiry (owner decision 2026-10-04): never auto-deleted, and
     "Empty trash now" skips it. Recover it (POST .../recover-redacted) or
     delete it permanently (POST .../delete-redacted-file)."""
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     result = items.redact(slug)
     return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id, "held": True})
 
@@ -490,8 +477,7 @@ def api_redact_image(request: Request, slug: str):
 def api_recover_redacted(slug: str):
     """Brings a held redacted file back and un-redacts the item (as before the redact).
     409 no_redact_hold when no file is held (already deleted, or an old redaction)."""
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     result = items.recover_redacted(slug)
     return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id})
 
@@ -500,8 +486,7 @@ def api_recover_redacted(slug: str):
 def api_delete_redacted_file(slug: str, confirm: str = Form("")):
     """Permanently erases the held redacted file (confirm=true). The item stays redacted,
     metadata only. Not undoable."""
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     result = items.delete_redacted_file(slug, confirm)
     return JSONResponse({"deleted": True, "slug": slug, "bytes": result.data["bytes"]})
 
@@ -515,8 +500,7 @@ def api_unredact_image(request: Request, slug: str):
     answers 409 redact_hold_exists: recover it or delete it permanently. 409 rather than a silent
     no-op on a row that isn't redacted, so a stale admin-page list can't
     misreport success."""
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     return JSONResponse(_to_public(items.unredact(slug).item))
 
 
@@ -524,8 +508,7 @@ def api_unredact_image(request: Request, slug: str):
 def api_delete_image(request: Request, slug: str):
     """Full delete — the row and everything pointing at it. #541: the file goes to the trash
     for 7 days; POST /api/changes/{batch_id}/undo restores row, links and file until then."""
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     result = items.delete([slug])
     return JSONResponse({"deleted": True, "batch_id": result.batch_id, "trash_days": items.TRASH_DAYS})
 
@@ -535,9 +518,7 @@ def api_refresh_thumbnail(request: Request, slug: str):
     """#385: Force (re)generation of a thumbnail. Deletes any existing cached
     thumbnail and calls ensure_thumbnail to regenerate it. Useful when a
     thumbnail failed (e.g. youtube FETCH_URL thumbnail 404'd) or was missed."""
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
 
     spec = object_types.get_object_type(row.get("media_type"))
     if spec.thumbnail_source == object_types.ThumbnailSource.NONE:
@@ -567,9 +548,7 @@ async def api_run_type_action(request: Request, slug: str, key: str):
     """#448: Generic per-type action route. The type file owns the handler;
     actions are declared in ObjectTypeSpec.actions. #446: actions must
     applies_to(row) to be runnable."""
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
 
     if row.get("redacted"):
         raise HTTPException(status_code=409, detail="object is redacted")
@@ -599,16 +578,15 @@ async def api_run_type_action(request: Request, slug: str, key: str):
 
 @router.post("/api/image/{slug}/related")
 def api_add_related(request: Request, slug: str, related_slug: str = Form(...)):
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
-    if db.get_by_slug(related_slug) is None:
-        raise HTTPException(status_code=404, detail="related image not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.viewable_item(related_slug, "related image not found")  # #467: 404 if missing or not viewable
     items.relate(slug, related_slug)  # #541 phase C: the link and the tags/cards it shares, one undo
     return JSONResponse([_to_public(r) for r in db.list_related(slug)])
 
 
 @router.post("/api/image/{slug}/related/remove")
 def api_remove_related(request: Request, slug: str, related_slug: str = Form(...)):
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     items.unrelate(slug, related_slug)
     return JSONResponse([_to_public(r) for r in db.list_related(slug)])
 
@@ -619,16 +597,15 @@ def api_remove_related(request: Request, slug: str, related_slug: str = Form(...
 
 @router.get("/api/image/{slug}/revisions", dependencies=requires(roles.VIEWER))
 def api_get_revisions(slug: str):
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
-    policy.require_view(row)  # #557
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     return JSONResponse(revisions.revision_view(slug))
 
 
 @router.post("/api/image/{slug}/superseded-by")
 def api_mark_superseded_by(slug: str, new_slug: str = Form(...)):
     """`new_slug` replaces this item (this item becomes "Superseded, see <current>")."""
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.viewable_item(new_slug)
     result = revisions.mark_superseded(slug, new_slug)
     return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
@@ -636,6 +613,8 @@ def api_mark_superseded_by(slug: str, new_slug: str = Form(...)):
 @router.post("/api/image/{slug}/supersedes")
 def api_mark_supersedes(slug: str, old_slug: str = Form(...)):
     """This item replaces `old_slug`."""
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.viewable_item(old_slug)
     result = revisions.mark_superseded(old_slug, slug)
     return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
@@ -643,6 +622,7 @@ def api_mark_supersedes(slug: str, old_slug: str = Form(...)):
 @router.post("/api/image/{slug}/revisions/remove")
 def api_remove_from_revisions(slug: str):
     """Takes this item out of its chain; its neighbours link up (A -> B -> C minus B = A -> C)."""
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     result = revisions.remove_from_chain(slug)
     return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
@@ -655,8 +635,7 @@ def api_add_object_to_project(request: Request, slug: str, project_id: str = For
     _attach_to_project's silent-ignore-on-bad-id (fine for a stale value
     riding along with an upload), a bad project_id here is a real error —
     it's the only thing this request is trying to do."""
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     if db.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="project not found")
     membership.add_files(project_id, [slug], **membership.UI_EFFECTS)  # #541 phase C: undoable
@@ -670,8 +649,7 @@ def api_remove_object_from_project(request: Request, slug: str, project_id: str 
     never untags anything either. The tag field is already separately
     editable right above this on the detail page if the user wants it gone
     too."""
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     project = db.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
@@ -686,10 +664,7 @@ def api_get_similar(request: Request, slug: str):
     Each result carries similarity_reason ("visual"/"text"/"both") and
     similarity_score so the UI can label why it's suggested.
     """
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise HTTPException(status_code=404, detail="not found")
-    policy.require_view(row)  # #557
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     matches = similarity.find_similar(slug)
     results = []
     for m in matches:

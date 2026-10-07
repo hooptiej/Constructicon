@@ -370,19 +370,9 @@ finally:
     install_token.reset_cache()
 
 # ---- 7. the desktop uploader's API module ---------------------------------------------------------
-print("--- 7. desktop uploader ---")
-try:
-    import requests  # noqa: F401
-except ImportError:  # the container has it; a bare dev box may not: the module only needs the name
-    stub = types.ModuleType("requests")
-    stub.RequestException = type("RequestException", (Exception,), {})
-    sys.modules["requests"] = stub
-sys.path.insert(0, os.path.join(ROOT, "desktop_app"))
-from constructicon_uploader import api as up_api  # noqa: E402
-raw = new_client()
-
-
 class _Resp:
+    """Just enough of a requests.Response for the uploader's api module."""
+
     def __init__(self, r):
         self.status_code, self._r = r.status_code, r
         self.ok = 200 <= r.status_code < 400
@@ -391,31 +381,50 @@ class _Resp:
         return self._r.json()
 
 
-def _fake_post(url, data=None, files=None, headers=None, timeout=None, allow_redirects=True):
-    assert url.startswith(BASE)
-    return _Resp(raw.post(url[len(BASE):], data=data, files=files, headers={**(headers or {}), **SAME}))
+def uploader_checks():
+    try:
+        import requests  # noqa: F401
+    except ImportError:  # the module only needs the name; its post() is replaced below
+        stub = types.ModuleType("requests")
+        stub.RequestException = type("RequestException", (Exception,), {})
+        sys.modules["requests"] = stub
+    sys.path.insert(0, os.path.join(ROOT, "desktop_app"))
+    from constructicon_uploader import api as up_api
+    raw = new_client()
+
+    def fake_post(url, data=None, files=None, headers=None, timeout=None, allow_redirects=True):
+        assert url.startswith(BASE)
+        return _Resp(raw.post(url[len(BASE):], data=data, files=files, headers={**(headers or {}), **SAME}))
+
+    up_api.requests.post = fake_post
+    upfile = os.path.join(TMP, "auth2-uploader.txt")
+    with open(upfile, "w") as f:
+        f.write("from the desktop uploader\n")
+    try:
+        up_api.upload_file(BASE, upfile)
+        check("uploader without a token -> AuthError", False, "no error")
+    except up_api.AuthError as e:
+        check("uploader without a token -> AuthError 'set the install token'", "Set Install Token" in str(e), str(e))
+    try:
+        up_api.upload_file(BASE, upfile, token="wrong-" + "x" * 40)
+        check("uploader with a wrong token -> AuthError", False, "no error")
+    except up_api.AuthError as e:
+        check("uploader with a wrong token -> AuthError (refused)", "refused" in str(e), str(e))
+    res = up_api.upload_file(BASE, upfile, token=TOKEN)
+    up_row = db.get_by_slug(res["slug"])
+    check("uploader with the token uploads, labelled automated",
+          up_row and up_row["tech"] == db.source_automated_upload(), up_row and up_row["tech"])
+    check("uploader headers: Bearer + client identity", up_api.request_headers("abc") ==
+          {"X-Constructicon-Client": "desktop-app", "Authorization": "Bearer abc"})
 
 
-up_api.requests.post = _fake_post
-upfile = os.path.join(TMP, "auth2-uploader.txt")
-with open(upfile, "w") as f:
-    f.write("from the desktop uploader\n")
-try:
-    up_api.upload_file(BASE, upfile)
-    check("uploader without a token -> AuthError", False, "no error")
-except up_api.AuthError as e:
-    check("uploader without a token -> AuthError 'set the install token'", "Set Install Token" in str(e), str(e))
-try:
-    up_api.upload_file(BASE, upfile, token="wrong-" + "x" * 40)
-    check("uploader with a wrong token -> AuthError", False, "no error")
-except up_api.AuthError as e:
-    check("uploader with a wrong token -> AuthError (refused)", "refused" in str(e), str(e))
-res = up_api.upload_file(BASE, upfile, token=TOKEN)
-up_row = db.get_by_slug(res["slug"])
-check("uploader with the token uploads, labelled automated", up_row and up_row["tech"] == db.source_automated_upload(),
-      up_row and up_row["tech"])
-check("uploader headers: Bearer + client identity", up_api.request_headers("abc") ==
-      {"X-Constructicon-Client": "desktop-app", "Authorization": "Bearer abc"})
+print("--- 7. desktop uploader ---")
+if os.path.isdir(os.path.join(ROOT, "desktop_app", "constructicon_uploader")):
+    uploader_checks()
+else:
+    # The app image doesn't carry desktop_app/ (only core/web/mcp_server/scripts are mounted), so a
+    # run inside the container skips this part; a run from a checkout covers it.
+    print("SKIP desktop uploader checks: desktop_app/ is not in this checkout")
 
 # ---- 8. no secrets in the audit log ---------------------------------------------------------------
 print("--- 8. audit log ---")

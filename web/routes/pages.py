@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pathlib import Path
 
 from core import card_rules, cards, curation_queue, curator, db, install_config, markdown_render, object_types, revisions, timeline
-from core import physical_piece, provenance_options
+from core import hobbies, physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
 from web.common import _build_breadcrumbs, _rev_note, templates
 from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_object_detail, _to_public, _to_timeline_project
@@ -68,21 +68,17 @@ def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
             spec = object_types.get_object_type(media_type)
             has_thumb = _should_advertise_thumb(row, spec)
             title = row.get("display_name") or row.get("content_description") or row["filename"] or row["slug"]
-            # Asset card (8.1): display name, the file's effective date, thumbnail, type
-            # line = media type label, provenance footer; no pips, no counts.
+            # Asset card (8.1, #596): display name, the file's effective date, thumbnail, type
+            # line = media type label; loose, so no "Stacked" box; no provenance on the face.
             reference_objects.append({
                 "slug": row["slug"],
                 "title": title,
                 "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
-                "card": {
-                    "kind": "asset", "kind_label": "File", "slug": None, "href": f"/object/{row['slug']}",
-                    "title": title,
-                    "dates": cards.date_range_label(timeline.resolve_item_date(row), None),
-                    "cover_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
-                    "type_line": spec.label if spec else media_type,
-                    "provenance": card_rules.file_provenance_label(row.get("provenance")) or "",
-                    "show_level": False, "stats": [], "facts": [], "codes": [],
-                },
+                "card": cards.file_face(
+                    slug=None, title=title, href=f"/object/{row['slug']}",
+                    dates=cards.date_range_label(timeline.resolve_item_date(row), None),
+                    cover_url=f"/f/{row['slug']}/thumb" if has_thumb else None,
+                    type_line=spec.label if spec else media_type),
             })
     # Owner name/initials for the combined gallery+upload pop-out's tab (#17): the install's
     # owner name (#562, core/install_config.py; "Owner" until one is set), initials derived from
@@ -320,6 +316,9 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "card_status": cards.status_fields(project),
             # V2 cards 3.4 / 3.5 / 3.12: whereabouts, card provenance + credit, highlight.
             "card_extra": cards.whereabouts_fields(project),
+            # #596: the face text (synopsis, flavor, the cached write-up lead) for the ABOUT group.
+            "card_text": cards.text_fields(project),
+            "card_text_limits": card_rules.CARD_TEXT_LIMITS,
             # #523: autocomplete suggestions for the free-text credit / whereabouts-note inputs.
             "suggest_credit": db.distinct_card_values("provenance_credit"),
             "suggest_whereabouts_note": db.distinct_card_values("whereabouts_note"),
@@ -431,8 +430,7 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     active_roots = [n for n in roots if n["face"]["activity"] == "active"]
     inactive_roots = [n for n in roots if n["face"]["activity"] != "active"]
 
-    hobby_face = cards.hobby_card_face(hobby, projects, items_by_project, fields["flags"],
-                                       needs_input=bool(queue["items"]))
+    hobby_face = cards.hobby_card_face(hobby, projects, items_by_project, needs_input=bool(queue["items"]))
     hobby_face["cover_url"] = _project_cover_url(hobby_face["cover_slug"]) if hobby_face["cover_slug"] else None
 
     loose_rows, n_sup = _split_revisions(policy.filter_visible(db.list_loose_hobby_objects(hobby["id"], include_superseded=True)),
@@ -456,6 +454,9 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
             "dates_end": _friendly_date(end) if end else None,
             # #562: the per-hobby "shows physical-piece fields" setting (was a name match).
             "shows_physical_piece": db.hobby_shows_physical_piece(hobby["id"]),
+            # #596: the hobby card's own synopsis / flavor (the ABOUT group).
+            "hobby_text": hobbies.text_fields(hobby),
+            "card_text_limits": card_rules.CARD_TEXT_LIMITS,
         },
     )
 

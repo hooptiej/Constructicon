@@ -157,8 +157,10 @@ def _public_items(rows):
 # their items as inline JSON. They get the slim card_payload projection, not the full
 # _to_public record (see core/card_payload.py for the whitelist).
 def _card_items(rows):
-    """_public_items(rows) slimmed for embedding in a page (#517)."""
-    return [card_payload.card_item_public(it) for it in _public_items(rows)]
+    """_public_items(rows) slimmed for embedding in a page (#517), plus `stacked` (#596): the
+    title of the card each file is on, for its face's status box (one query per grid)."""
+    stacked = db.first_card_titles()
+    return [card_payload.card_item_public({**it, "stacked": stacked.get(it["slug"])}) for it in _public_items(rows)]
 
 
 def _split_revisions(rows, show_all):

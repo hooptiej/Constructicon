@@ -654,3 +654,35 @@ def validate_split_part(part, index=0):
     if relation not in SPLIT_RELATIONS:
         raise CardError("bad_split", f"Part {index + 1}: relation must be 'child' or 'sibling'.")
     return relation
+
+
+# --- Card face text (#596) -----------------------------------------------------------
+# The text box of a card face: an optional hand-written synopsis (a few sentences) and an
+# optional one-line italic flavor. Shared by cards (projects.synopsis / flavor) and hobbies
+# (hobby_settings.synopsis / flavor). The write-up lead and the description are not set here.
+SYNOPSIS_MAX = 600
+FLAVOR_MAX = 140
+CARD_TEXT_LIMITS = {"synopsis": SYNOPSIS_MAX, "flavor": FLAVOR_MAX}  # the edit form's maxlength
+
+
+def validate_card_text(synopsis=..., flavor=...):
+    """The text fields to write, from what the caller passed: `...` = leave alone (absent from the
+    result), None or blank = clear (None), else the cleaned text. A synopsis keeps its line breaks
+    (one paragraph per line, blank lines dropped); a flavor is one line. Raises
+    CardError('bad_card_text') when nothing was passed or a value is too long."""
+    out = {}
+    if synopsis is not ...:
+        lines = [" ".join(line.split()) for line in str(synopsis or "").splitlines()]
+        text = "\n".join(line for line in lines if line)
+        if len(text) > SYNOPSIS_MAX:
+            raise CardError("bad_card_text", f"The synopsis is {len(text)} characters; keep it under {SYNOPSIS_MAX} "
+                            "(a few sentences: the full story belongs in the write-up).")
+        out["synopsis"] = text or None
+    if flavor is not ...:
+        text = " ".join(str(flavor or "").split())
+        if len(text) > FLAVOR_MAX:
+            raise CardError("bad_card_text", f"The flavor line is {len(text)} characters; keep it under {FLAVOR_MAX}.")
+        out["flavor"] = text or None
+    if not out:
+        raise CardError("bad_card_text", "Nothing to set: pass a synopsis and/or a flavor line (blank clears).")
+    return out

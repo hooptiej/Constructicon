@@ -426,6 +426,59 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   `test_hobbies_blog.py` (phase D: hobbies, both conversions, card create/Save, blog, the sweep;
   every write undone and the whole DB compared), `check_layering.py`. All run on a throwaway DB.
 
+## Card faces (#596)
+
+One card component (`web/templates/_card.html`, `static/css/cards.css`; sizes full / small / mini),
+fed by `core/cards.py`: `card_face(card)` (project, thing, action, family, collection, event),
+`hobby_card_face(...)` and `file_face(...)` (files; `static/js/cards.js` builds the same file face
+client-side for the item grids, `scripts/check_item_cards.py` compares the two). Zones, top to bottom,
+matching the V2 mockup's Card template:
+- **Name bar** (title + kind icon), **dates** (big) + curation pips (not on hobby / file faces),
+  **art**, **type line** (`Thing - <home>`, `Hobby · Active`, the file's type) + group codes.
+- **Text box:** relationship lines first (`rel_lines`): an action that is part of a card with no
+  `applies_to` link of its own reads "Applies to: <parent>."; then each OUTGOING directed typed link,
+  "Built for: X." / "Applies to: X." / "Used in: X." / "Inspired by: X." (2 lines, then "+N more").
+  Then the card's own text (`text`), then a hobby's `notes`, then the italic `flavor` under a rule.
+- **Status box** (`zone`): the stage ("In progress", "Stopped · failed"); "Inside · <parent>" for a
+  nested card; "Hobby · active|inactive"; "Stacked · <card>" on a file. Activity dot + "needs your input".
+- **Stat box** (`stat`): "N stacked · M nested" (files on the card, cards nested in it), "N members"
+  (family / collection), "N projects" (hobby), the file extension (file).
+- **Footer** (`foot`): "<CODE> · <hobby>" (the home hobby, else the first; "+N" for more), "<CODE> ·
+  family card" / "collection card", "<CODE> · group card" (hobby), "<CODE> · <card>" (file); "n of N"
+  on the right for an ordered family member.
+- **No provenance, credit or whereabouts on any face** (project, file or hobby). They live in the
+  details panel (ORIGIN / STATUS) only. Mini cards carry no text box, stat or footer at all.
+- Hobby face text box: its synopsis, then "Projects: A, B, C, +N more." and "Every card in this hobby
+  carries its group code, CODE.".
+
+**The text, in this order** (`cards.face_text(card)` -> `(text, source)`; never whereabouts or provenance):
+1. `projects.synopsis`: a few hand-written sentences (max 600; one paragraph per line);
+2. else `projects.writeup_lead`: the write-up's opening paragraph(s) as plain text, clamped to
+   `cards.FACE_TEXT_MAX` (`markdown_render.lead`: headings, lists, all-italic editorial notes and
+   "Reconstructed by / Written up by ..." production notes skipped; never across a heading);
+3. else the description; else empty. Then `projects.flavor` (one line, max 140) in italics.
+- `writeup_lead` is a **cache**, so a card list never reads write-up bodies (#528): `items.update` refreshes
+  it whenever an item's `type_metadata` changes (`cards.refresh_writeup_lead(log, slug)`, same
+  change-log row, so undoing the body edit restores both), `cards.update(writeup_slug=...)` recomputes
+  it, `items.delete` of the write-up clears it, and the `writeup_lead_596` migration filled it once.
+- **Writes:** `cards.set_text(card, synopsis=..., flavor=...)` / `hobbies.set_text(hobby, ...)` (hobby
+  text lives in `hobby_settings.synopsis / flavor`): `...` leaves a field, None / "" clears it,
+  `card_rules.validate_card_text` (`bad_card_text`, 422). One imaged row each (`set_card_text`,
+  `hobby_text`), undoable. Web (editor): `POST /api/projects/{id}/text`, `POST /api/hobby/{id}/text`
+  (omit a form field to leave it, send it blank to clear). MCP: `constructicon_set_card_text(card=|hobby=,
+  synopsis, flavor, clear_synopsis, clear_flavor, dry_run)`. Reads: `cards.text_fields(card)` (in
+  `explain_card`, MCP `constructicon_get_project`: synopsis, flavor, writeup_lead, face_text,
+  face_text_source). UI: the ABOUT group of the details panel on the project and hobby pages
+  (`templates/_card_text.html`).
+- **Every write-up gets a synopsis** (owner, 2026-10-06). An agent that writes or rewrites a card's
+  write-up (`constructicon_set_project_writeup`, or an `update` of its body) also sets that card's
+  synopsis with `constructicon_set_card_text`: a few plain sentences saying what the card is.
+- Item grids embed `stacked` (the title of the card a file is on, `db.first_card_titles()`, one query per
+  grid) in the slim payload (`core/card_payload.py`); `provenance` left it. Check with
+  `scripts/test_card_faces.py` (throwaway DB), `check_item_cards.py`, `test_home_payload.py`.
+- Not done (no data for it): the mockup's "From: <item>, <date>." line on a file derived from another
+  file (there is no derived-from relation), and image dimensions in a file's stat box (not stored).
+
 ## Adding an object type
 
 To add a new object type (issue #448 contract v2):

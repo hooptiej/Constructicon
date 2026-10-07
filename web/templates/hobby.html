@@ -4,6 +4,7 @@
 {% from "_card.html" import card %}
 {% from "_details_group.html" import dp_group %}
 {% from "_hobby_nodes.html" import project_nodes %}
+{% from "_card_text.html" import about_view, about_edit, about_script %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
@@ -106,7 +107,12 @@
       </dl>
       {% endset %}
 
+      {# ---- ABOUT (#596): the hobby card's own synopsis + flavor (shown above its project list) ---- #}
+      {% set about_v %}{{ about_view(hobby_text) }}{% endset %}
+      {% set about_e %}{{ about_edit(hobby_text, card_text_limits) }}{% endset %}
+
       <div class="dp-panel">
+        {{ dp_group("about", "ABOUT", about_v, about_e) }}
         {{ dp_group("status", "STATUS", status_view, status_edit) }}
         {{ dp_group("identity", "IDENTITY", identity_view, identity_edit) }}
         {{ dp_group("settings", "SETTINGS", settings_view, settings_edit) }}
@@ -400,4 +406,5 @@
   cv.go.addEventListener('click', () => runConvert(false));
 })();
 </script>
+{{ about_script("/api/hobby/" ~ hobby.id ~ "/text") }}
 {% endblock %}

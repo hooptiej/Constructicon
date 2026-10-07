@@ -6,6 +6,7 @@ from datetime import datetime
 
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from core import besteffort, card_rules, cards, changes, db, hobbies, membership, timeline
 from core.errors import NotFound
@@ -293,6 +294,18 @@ def api_set_card_provenance(project_id: str, provenance: str = Form(""), credit:
     Per-file provenance (/api/image/{slug}) is a separate field and untouched."""
     result = cards.set_provenance(project_id, provenance or None, credit if credit is not None else ...)
     return JSONResponse({**result.to_dict(), **cards.whereabouts_fields(db.get_project(project_id))})
+
+
+@router.post("/api/projects/{project_id}/text")
+async def api_set_card_text(request: Request, project_id: str):
+    """#596: the card face's text, form fields `synopsis` (a few sentences; the text box shows it
+    before the write-up lead and the description) and `flavor` (one italic line). Omit a field to
+    leave it, send it blank to clear it (read from the raw form: FastAPI's Form() turns a blank
+    optional field into None, which would read as "omitted"). 422 bad_card_text. Undoable."""
+    form = await request.form()
+    result = await run_in_threadpool(cards.set_text, project_id, synopsis=form.get("synopsis", ...),
+                                     flavor=form.get("flavor", ...))
+    return JSONResponse(result.to_dict())
 
 
 @router.post("/api/projects/{project_id}/highlight")

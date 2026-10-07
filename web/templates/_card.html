@@ -1,12 +1,14 @@
-{#- V2 card face (docs/design/v2-cards.md 8.1). One macro, three sizes.
+{#- V2 card face (docs/design/v2-cards.md 8.1, zones per #596). One macro, three sizes.
 
      {% from "_card.html" import card %}
      {{ card(c, "full") }}          size: "full" | "small" | "mini"
 
-     `c` is a core.cards.card_face() dict plus `cover_url` (the home page adds it), or a
-     manually assembled dict for a file card (kind "asset": title, dates, cover_url, type_line,
-     provenance, href; no level, no stats). Every value is autoescaped by Jinja; nothing
+     `c` is a core.cards.card_face() / hobby_card_face() / file_face() dict plus `cover_url`
+     (the page adds it). Zones: name bar, dates + pips, art, type line + codes, text box
+     (rel_lines, text, notes, flavor), status box (zone), stat box (stat), footer (foot,
+     "n of N"). No provenance on any face (#596). Every value is autoescaped by Jinja; nothing
      here is marked |safe. The whole card is one real link. Styles: static/css/cards.css.
+     The asset (file) face at mini size must match static/js/cards.js (check_item_cards.py).
      Vocabulary rule: plain labels only (spec section 1). -#}
 
 {% macro kind_icon(kind) -%}
@@ -54,22 +56,30 @@
       {%- if c.highlight %}<span class="cx-hl on" role="img" aria-label="Highlighted"></span>{% else %}<span class="cx-hl" aria-hidden="true"></span>{% endif -%}
     </span>
   </span>
+  {#- Text box, stat box and footer are hidden at mini size (cards.css), so they aren't sent there
+      either: a page of mini cards (home's inactive row, every file grid) stays light. -#}
   <span class="cx-body">
-    {% for line in c.facts %}<span class="cx-fact">{{ line }}</span>{% endfor %}
-    {% if c.facts_more %}<span class="cx-fact cx-more">+{{ c.facts_more }} more</span>{% endif %}
+    {%- if size != "mini" %}
+    {% for line in c.rel_lines %}<span class="cx-rel">{{ line }}</span>{% endfor %}
+    {% if c.rel_more %}<span class="cx-rel cx-more">+{{ c.rel_more }} more</span>{% endif %}
+    {% if c.text %}<span class="cx-text">{{ c.text }}</span>{% endif %}
+    {% for line in c.notes %}<span class="cx-note">{{ line }}</span>{% endfor %}
     {% if c.flavor %}<span class="cx-flavor">{{ c.flavor }}</span>{% endif %}
+    {%- endif -%}
   </span>
   <span class="cx-boxes">
-    {% if c.stage_label %}
-    <span class="cx-box cx-status"><span class="cx-dot{% if not inactive %} on{% endif %}" aria-hidden="true"></span>{{ c.stage_label }}{% if c.stage == 'stopped' and c.stop_reason_label %} - {{ c.stop_reason_label | lower }}{% endif %}{% if c.needs_input %}<span class="cx-needs" title="A question about this card is waiting in the Curator queue"> - needs your input</span>{% endif %}</span>
-    {% endif %}
-    {% if c.stats %}
-    <span class="cx-box cx-stats">{% for s in c.stats %}{% if s.n %}<span class="cx-stat">{{ s.label }} {{ s.n }}</span>{% endif %}{% endfor %}</span>
-    {% endif %}
+    {%- if c.zone %}
+    <span class="cx-box cx-status">{% if c.activity %}<span class="cx-dot{% if not inactive %} on{% endif %}" aria-hidden="true"></span>{% endif %}{{ c.zone }}{% if c.needs_input %}<span class="cx-needs" title="A question about this card is waiting in the Curator queue"> - needs your input</span>{% endif %}</span>
+    {%- endif %}
+    {%- if c.stat and size != "mini" %}
+    <span class="cx-box cx-stats">{{ c.stat }}</span>
+    {%- endif -%}
   </span>
   <span class="cx-foot">
-    <span class="cx-prov">{{ c.provenance }}</span>
+    {%- if size != "mini" %}
+    <span class="cx-num">{{ c.foot }}</span>
     {% if c.order %}<span class="cx-order">{{ c.order.n }} of {{ c.order.of }}</span>{% endif %}
+    {%- endif -%}
   </span>
 </a>
 {%- endmacro %}

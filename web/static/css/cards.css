@@ -125,15 +125,21 @@
 .cx-hl { width: .56em; height: .56em; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .45); background: rgba(0, 0, 0, .12); }
 .cx-hl.on { background: #E0622F; }
 
-/* Facts box + flavor */
+/* Text box (#596): relationship lines, the card's own text (synopsis / write-up lead /
+   description, one paragraph per line, clamped), a hobby's notes, then the italic flavor */
 .cx-body {
   flex: 1 1 0; min-height: 0; overflow: hidden; border-radius: .375em; background: #F4EEDF; padding: .5em .69em;
   box-sizing: border-box; display: flex; flex-direction: column; gap: .31em; font-size: .75em; line-height: 1.35;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .2);
 }
-.cx-fact { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cx-more { color: #5A5342; font-style: italic; }
-.cx-flavor { margin-top: auto; padding-top: .31em; border-top: 1px solid rgba(30, 27, 22, .25); font-style: italic; color: #3B352B; }
+.cx-rel { display: block; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.cx-more { color: #5A5342; font-style: italic; font-weight: 400; }
+.cx-text {
+  white-space: pre-line; overflow: hidden; min-height: 0;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--cx-text-lines, 6);
+}
+.cx-note { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; flex-shrink: 0; }
+.cx-flavor { margin-top: auto; padding-top: .31em; border-top: 1px solid rgba(30, 27, 22, .25); font-style: italic; color: #3B352B; flex-shrink: 0; }
 
 /* Status + counts */
 .cx-boxes { display: flex; gap: .375em; font-family: var(--card-font-mono); font-size: .656em; }
@@ -142,7 +148,6 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cx-stats { text-align: right; }
-.cx-stat + .cx-stat::before { content: " \00b7 "; }
 .cx-dot { display: inline-block; width: .6em; height: .6em; border-radius: 50%; background: #8A8F98; margin-right: .4em; vertical-align: baseline; }
 .cx-dot.on { background: #3FA35B; }
 .cx-needs { font-style: normal; font-weight: 600; }
@@ -152,21 +157,22 @@
   display: flex; justify-content: space-between; padding: 0 .25em; font-family: var(--card-font-mono);
   font-size: .5625em; color: #F2F2F2; letter-spacing: .03em; min-height: 1.2em;
 }
-.cx-prov { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cx-num { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cx-order { flex-shrink: 0; padding-left: .5em; }
 
 /* Inactive cards sit slightly back */
 .cx-inactive { box-shadow: 0 .4em 1em rgba(0, 0, 0, .35), inset 0 0 0 .125em rgba(255, 255, 255, .12); }
 
-/* Small: everything stays, just at reduced scale; text bumped so it stays readable */
+/* Small: everything stays, just at reduced scale; text bumped so it stays readable (fewer text lines) */
 .cx-small .cx-name { font-size: 1.2em; }
 .cx-small .cx-dates { font-size: 1.3em; }
 .cx-small .cx-type { font-size: .8em; }
-.cx-small .cx-body { font-size: .86em; }
+.cx-small .cx-body { font-size: .86em; --cx-text-lines: 4; }
 .cx-small .cx-boxes { font-size: .75em; }
-.cx-small .cx-flavor { display: none; }
 .cx-small .cx-foot { font-size: .7em; }
 
-/* Mini: name, dates, art, type line, status only (no facts, flavor, counts or footer) */
+/* Mini: name, dates, art, type line, status only (no text box, counts or footer; the macro
+   and cards.js don't send them at this size either) */
 .cx-mini .cx-name { font-size: 1.35em; }
 .cx-mini .cx-dates { font-size: 1.4em; }
 .cx-mini .cx-type { font-size: .85em; }

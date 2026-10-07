@@ -2,6 +2,7 @@
 
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from core import card_rules, cards, db, hobbies
 from web.shapes import _to_object_detail
@@ -94,6 +95,17 @@ def api_set_hobby_physical_piece(id_or_slug: str, enabled: bool = Form(...)):
     Media"): items in its cards get the PHYSICAL PIECE group and the hobby page links the capture
     guide. Editor (curation, like the other hobby details). One undoable change-log row."""
     return JSONResponse(hobbies.set_physical_piece(id_or_slug, enabled).to_dict())
+
+
+@router.post("/api/hobby/{id_or_slug}/text")
+async def api_set_hobby_text(request: Request, id_or_slug: str):
+    """#596: the hobby card's own synopsis / flavor line, form fields as in POST
+    /api/projects/{id}/text (omit a field to leave it, blank clears it). Editor; 422
+    bad_card_text; one undoable change-log row."""
+    form = await request.form()
+    result = await run_in_threadpool(hobbies.set_text, id_or_slug, synopsis=form.get("synopsis", ...),
+                                     flavor=form.get("flavor", ...))
+    return JSONResponse(result.to_dict())
 
 
 @router.post("/api/hobby/{id_or_slug}/add-project")

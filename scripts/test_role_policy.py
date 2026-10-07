@@ -76,10 +76,15 @@ db.insert_upload(CERT, "role-policy-push.pem", f"{CERT}.pem", "tester", media_ty
                  description="role-policy restricted fixture")
 db.insert_upload(PLAIN, "role-policy-notes.txt", f"{PLAIN}.txt", "tester", media_type="document",
                  description="role-policy ordinary fixture")
+# #603: an ordinary type flagged "This is sensitive" (no uploader: admin-owned) must be locked like CERT.
+FLAG = "rp-flag-1"
+(paths.storage_dir() / f"{FLAG}.txt").write_text("a flagged file about the role-policy card\n")
+db.insert_upload(FLAG, "role-policy-flagged.txt", f"{FLAG}.txt", "tester", media_type="document",
+                 description="role-policy flagged fixture", sensitive=True)
 with actor.acting_as(actor.ACTOR_UI):
     cards.create("Role Policy Card")
     CARD = next(p for p in db.list_projects() if p["title"] == "Role Policy Card")
-    membership.add_files(CARD["id"], [CERT, PLAIN], **membership.UI_EFFECTS)
+    membership.add_files(CARD["id"], [CERT, PLAIN, FLAG], **membership.UI_EFFECTS)
     items.relate(PLAIN, CERT)
     ENTRY = blog.create("Role policy entry").data["entry"]
     blog.set_items(ENTRY["slug"], [(CERT, ""), (PLAIN, "")])
@@ -169,6 +174,13 @@ lists = mcp_lists()
 check("today: MCP get_project, get_related(neighbour), get_blog_entry list it; search hides it",
       lists == {"get_project": True, "get_related(plain)": True, "get_blog_entry": True, "search": False}, lists)
 
+# #603: the flagged item, as an admin: served, and (unlike a restricted TYPE) found by search
+for path in DIRECT_WEB[:4]:  # (a .txt has no thumbnail, so /f/{s}/thumb is 404 for anyone)
+    check(f"today: GET {path} serves the flagged item to an admin", client.get(path.format(s=FLAG)).status_code == 200)
+check("today: search finds the flagged item for an admin", has(FLAG, client.get("/api/search?query=role-policy").json()))
+st, manifest = zip_slugs(CARD["id"])
+check("today: project zip excludes the flagged item", not has(FLAG, manifest))
+
 # the request log records the route's role
 same = {"Origin": f"http://{HOST}"}
 client.post("/api/settings", data={"key": "thingiverse_app_token", "value": "dummy-not-real"}, headers=same)
@@ -197,6 +209,11 @@ try:
     check("switch: /project drops it, keeps the ordinary file",
           not has(CERT, client.get(f"/project/{CARD['slug']}").text) and has(PLAIN, client.get(f"/project/{CARD['slug']}").text))
     check("switch: the neighbour's Related list drops it", not has(CERT, client.get(f"/object/{PLAIN}").text))
+    for path in DIRECT_WEB:
+        check(f"switch: GET {path} refuses the FLAGGED item too (404)", is_not_found(client.get(path.format(s=FLAG))))
+    check("switch: /project and search drop the flagged item",
+          not has(FLAG, client.get(f"/project/{CARD['slug']}").text)
+          and not has(FLAG, client.get("/api/search?query=role-policy").json()))
     check("switch: the blog entry drops it", not has(CERT, client.get(f"/api/blog-entries/{ENTRY['slug']}").json()))
     check("switch: search still hides it", not has(CERT, client.get("/api/search?query=role-policy").json()))
     st, manifest = zip_slugs(CARD["id"])

@@ -44,7 +44,7 @@ Collecting):
   card, its write-up and its memberships.
 """
 
-from . import card_rules, cards, changes, db, membership
+from . import actor as actor_ctx, card_rules, cards, changes, db, membership, users
 from . import tags as tags_svc
 from .card_rules import CardError
 from .cards import Result
@@ -128,6 +128,17 @@ def create(name, status="active", *, dry_run=False, actor=None, batch_id=None):
             tag, made = tags_svc.ensure(log, name, None)
             _mark(log, tag["id"], status)
             log.slugs.append(tag["slug"])
+            # #604 step 1: a signed-in creator is recorded in the hobby's settings row (imaged, so undo
+            # removes it with the rest). The token / MCP / scripts record nothing (NULL = admin-owned),
+            # and re-marking an existing hobby never changes who created it.
+            creator = users.user_id_for_actor(actor_ctx.resolve(actor))
+            if creator is not None:
+                key = {"hobby_tag_id": tag["id"]}
+                current = log.get("hobby_settings", key)
+                if current is None:
+                    log.insert("hobby_settings", key, {"created_by_user_id": creator})
+                elif current.get("created_by_user_id") is None and made:
+                    log.update("hobby_settings", key, {"created_by_user_id": creator})
         rows = db.get_change_rows(batch_id=batch_id)
         hobby = db.get_hobby(tag["id"])
     return Result(True, _flat(rows), warnings, batch_id, dry_run, {"hobby": public(hobby), "tag_created": made})

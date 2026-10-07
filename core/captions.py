@@ -549,7 +549,9 @@ def needs_caption(limit=50, include_failed=True):
     Works with captions disabled: that is exactly the install that needs an agent."""
     limit = max(1, min(int(limit), 500))
     rows = db.list_needs_caption(caption_capable_types(), include_failed=include_failed, limit=limit)
-    return policy.filter_visible(rows)[:limit]
+    # #603: a sensitive item (flagged, or a restricted type) is never handed to a captioning agent,
+    # even an admin one: like an export, the picture would leave the install.
+    return policy.filter_exportable(policy.filter_visible(rows))[:limit]
 
 
 def count_needs_caption(include_failed=True):

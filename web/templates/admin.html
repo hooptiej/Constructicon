@@ -117,8 +117,8 @@
     <section class="admin-panel">
       <div class="admin-panel-header">
         <div>
-          <h2>Keys &amp; certificates <span id="admin-restricted-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Your private reference: kept out of general browsing and never exported to the site. Shown on projects you attach them to. Access control comes with authentication (#467).</div>
+          <h2>Sensitive items <span id="admin-restricted-count" class="apikey-status"></span></h2>
+          <div class="admin-row-hint">Keys, certificates and every item marked "This is sensitive". Only admins and each item's uploader can see them; they are never exported. The reason says which: its type, or who marked it and when.</div>
         </div>
       </div>
       <div id="admin-restricted-list" class="admin-redacted-list"></div>
@@ -1186,7 +1186,7 @@
     restrictedCount.textContent = items.length ? `(${items.length})` : '';
     restrictedList.innerHTML = '';
     if (items.length === 0) {
-      restrictedList.innerHTML = '<div class="audit-log-empty">No keys or certificates stored</div>';
+      restrictedList.innerHTML = '<div class="audit-log-empty">No sensitive items</div>';
       return;
     }
     for (const item of items) {
@@ -1201,8 +1201,10 @@
           <span class="pending-decision-thumb pending-decision-thumb-icon">${escapeHtml(item.type_icon || '')}</span>
           <div class="redacted-item-text">
             <a class="pending-decision-title" href="${escapeHtml(item.link)}" title="${escapeHtml(item.display_name)}">${escapeHtml(item.display_name)}</a>
+            <div class="redacted-item-meta">Reason: ${escapeHtml(item.reason || '')}${item.uploaded_by_user ? ` &middot; uploaded by ${escapeHtml(item.uploaded_by_user.name)}` : ''}</div>
             <div class="redacted-item-meta">${escapeHtml(summary)}</div>
             <div class="redacted-item-meta">${projects ? `On: ${projects}` : 'Not on any project'}</div>
+            <div class="redacted-item-meta">${item.opened ? `Opened ${item.opened.count} time${item.opened.count === 1 ? '' : 's'}, last by ${escapeHtml(item.opened.last_by)} on ${escapeHtml(item.opened.last_at)}` : 'Not opened since logging began'}</div>
           </div>
         </div>`;
       restrictedList.appendChild(el);

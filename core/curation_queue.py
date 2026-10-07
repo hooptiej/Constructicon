@@ -31,7 +31,7 @@ import threading
 import time
 from urllib.parse import quote
 
-from . import cards, curator_needs, db, decisions
+from . import actor as actor_ctx, cards, curator_needs, db, decisions, policy, roles
 from .errors import InvalidInput
 
 TYPE_QUESTION = "question"
@@ -121,6 +121,12 @@ def _card_question(decision_id, kind, payload, slug):
 
 
 def _file_question(entry):
+    """One v1 file-level decision as a queue item, carrying `item_slug` (the file it is about) so
+    for_actor can apply the item policy to the shared cached queue."""
+    return {**_file_question_item(entry), "item_slug": entry["row"]["slug"]}
+
+
+def _file_question_item(entry):
     """One v1 file-level decision (project_match / retype) as a queue item."""
     row = entry["row"]
     title = row.get("display_name") or row.get("content_description") or row.get("filename") or row["slug"]
@@ -421,9 +427,10 @@ def _cached():
     return None
 
 
-def cached_queue():
-    """The unfiltered queue, from the cache when nothing has been written since it was built.
-    Treat the result as read-only: it is shared."""
+def _full_queue():
+    """The WHOLE queue (every question, whoever asks), from the cache when nothing has been written
+    since it was built. Built as `system` so the shared cache never depends on who happened to ask
+    first; callers get `cached_queue()`, which applies the item policy for the actor asking."""
     hit = _cached()
     if hit is not None:
         return hit
@@ -432,10 +439,43 @@ def cached_queue():
         if hit is not None:
             return hit
         fp = db.change_fingerprint()   # taken BEFORE the build: a write during it invalidates it
-        q = build_queue()
+        with actor_ctx.acting_as(actor_ctx.ACTOR_SYSTEM):
+            q = build_queue()
         with _cache_lock:
             _cache.update(fp=fp, at=time.time(), q=q)
         return q
+
+
+def for_actor(q, actor=None):
+    """The queue `q` as `actor` (default: the current context) may see it (#603, #467): a file
+    question about an item the item policy hides (a sensitive item that isn't theirs) is left out,
+    and the counts follow. An admin sees it unchanged. Returns `q` itself when nothing is hidden."""
+    if roles.at_least(roles.role_of(actor_ctx.resolve(actor)), roles.ADMIN):
+        return q
+    hidden = set()
+    for g in q["groups"] + q["deferred"]:
+        for i in g["items"]:
+            slug = i.get("item_slug")
+            if slug and slug not in hidden and not policy.can_view(db.get_by_slug(slug), actor):
+                hidden.add(slug)
+    if not hidden:
+        return q
+
+    def keep(groups):
+        out = []
+        for g in groups:
+            its = [i for i in g["items"] if i.get("item_slug") not in hidden]
+            if its:
+                out.append({**g, "items": its})
+        return out
+    open_groups, deferred_groups = keep(q["groups"]), keep(q["deferred"])
+    return {**q, "groups": open_groups, "deferred": deferred_groups, "counts": _counts(open_groups, deferred_groups)}
+
+
+def cached_queue():
+    """The queue for the actor asking (for_actor over the shared, cached whole queue). Treat the
+    result as read-only: it may be the shared object."""
+    return for_actor(_full_queue())
 
 
 def cached_counts():

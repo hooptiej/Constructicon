@@ -198,7 +198,10 @@ def list_open():
             # #586: option keys are a bare candidate slug, "reverse:<slug>", "same:<slug>" or "none".
             def _live_key(k):
                 action, cand = revisions.option_target(k)
-                return action == "none" or cand in live
+                if action == "none":
+                    return True
+                # #603: a candidate the actor may not see (a sensitive item) isn't offered or named.
+                return cand in live and policy.can_view(db.get_by_slug(cand))
             entry["options"] = [o for o in payload.get("options", []) if _live_key(o["key"])]
             entry["question"] = payload.get("question", "")
             sug = payload.get("suggested")

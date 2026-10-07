@@ -251,6 +251,17 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+-- #604 follow-up 7 / #603: who opened, previewed or downloaded a SENSITIVE item (a restricted type
+-- or the per-item flag). One row per access (core/access_log.py; repeats by the same actor through
+-- the same door within a few minutes are folded into one). Ordinary items are never logged.
+CREATE TABLE IF NOT EXISTS item_access_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    how TEXT NOT NULL,
+    at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_item_access_log_slug ON item_access_log(slug, at);
 """
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
@@ -628,7 +639,8 @@ class _DryRunRollback(Exception):
 # /api/processing) derives the per-stage state, since that needs object_types.
 _PROCESSING_COLS = (
     "slug, filename, display_name, content_description, media_type, "
-    "ocr_status, type_metadata, (embedding IS NOT NULL) AS has_embedding, timestamp"
+    "ocr_status, type_metadata, (embedding IS NOT NULL) AS has_embedding, timestamp, "
+    "sensitive, uploaded_by_user_id"  # #603: the item policy needs these (processing drawer)
 )
 
 
@@ -857,6 +869,22 @@ def init_db(migrate=True):
         for column, ddl_type in (("synopsis", "TEXT"), ("flavor", "TEXT")):
             if column not in existing_hobby_settings_columns:
                 conn.execute(f"ALTER TABLE hobby_settings ADD COLUMN {column} {ddl_type}")
+        # #604 step 1: ownership. The user who uploaded an item / created a card, hobby or blog entry
+        # (users.id), set at write time from the actor context; NULL = no signed-in user did it (the
+        # install token, the MCP, a script, the system) = admin-owned. #603 (#604 step 2): the
+        # per-item "This is sensitive" flag, plus who set it (the actor string) and when.
+        for column, ddl_type in (("uploaded_by_user_id", "INTEGER"), ("sensitive", "INTEGER NOT NULL DEFAULT 0"),
+                                 ("sensitive_by", "TEXT"), ("sensitive_at", "REAL")):
+            if column not in existing_columns:
+                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+        if "created_by_user_id" not in existing_project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN created_by_user_id INTEGER")
+        if "created_by_user_id" not in existing_hobby_settings_columns:
+            conn.execute("ALTER TABLE hobby_settings ADD COLUMN created_by_user_id INTEGER")
+        existing_blog_entry_columns = {row["name"] for row in conn.execute("PRAGMA table_info(blog_entries)")}
+        if "created_by_user_id" not in existing_blog_entry_columns:
+            conn.execute("ALTER TABLE blog_entries ADD COLUMN created_by_user_id INTEGER")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_capture_events_sensitive ON capture_events(sensitive)")
         # Change log: audit_log grows nullable columns so core operations can record
         # row images (before/after) for audit + undo. Direct HTTP callers keep getting
         # the old request-log row (these columns NULL there).
@@ -1046,6 +1074,118 @@ def _mig_reextract_utf16_text_607():
             fixed += 1
     print(f"reextract_utf16_text_607: {len(rows)} short-text rows, {checked} with a text reader, {fixed} re-extracted", flush=True)
 
+_UPLOAD_FILE_FIELD = re.compile(r"^<file: (.*)>$", re.S)
+OWNERSHIP_BACKFILL_WINDOW = 600  # seconds between an item row's timestamp and its request-log row
+
+
+def _ownership_backfill(conn):
+    """#604 step 1: fill the new ownership columns once from the audit log, for what a SIGNED-IN user
+    made before ownership was recorded at write time. Only `actor = user:<name>` rows count, and only
+    when that user still exists; everything else stays NULL (= admin-owned, the safe default).
+      * items: the request-log row of a successful `POST /api/upload` (its logged `file` field, the
+        filename) or `POST /api/content` (its `external_url`), matched to the not-yet-owned item
+        with that filename / URL created within OWNERSHIP_BACKFILL_WINDOW before the request was
+        logged (the nearest one);
+      * cards: `create_card` change-log rows (the projects row they inserted), plus the card's own
+        write-up item made in the same create;
+      * hobbies: `hobby_create` rows that turned a tag INTO a hobby (hobby_settings.created_by_user_id);
+      * blog entries: `blog_entry_create` rows (the blog_entries row they inserted).
+    Never overwrites a value already set. Idempotent. Returns the counts per kind."""
+    users_by_name = {r["username"].lower(): r["id"] for r in conn.execute("SELECT id, username FROM users")}
+
+    def uid(actor):
+        if not (actor or "").startswith("user:"):
+            return None
+        return users_by_name.get(actor[5:].lower())
+
+    def body(text):
+        try:
+            data = json.loads(text) if text else {}
+        except ValueError:  # silent-ok: an unreadable request body can't name a file; that row is skipped
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    counts = {"items": 0, "cards": 0, "card_writeups": 0, "hobbies": 0, "blog_entries": 0}
+    for r in conn.execute("SELECT timestamp, actor, path, form_body FROM audit_log WHERE op IS NULL AND method = 'POST' "
+                          "AND path IN ('/api/upload', '/api/content') AND status_code = 200 AND actor LIKE 'user:%' "
+                          "ORDER BY id").fetchall():
+        owner = uid(r["actor"])
+        if owner is None:
+            continue
+        fields = body(r["form_body"])
+        if r["path"] == "/api/upload":
+            m = _UPLOAD_FILE_FIELD.match(str(fields.get("file") or ""))
+            column, value = "filename", (m.group(1) if m else None)
+        else:
+            column, value = "external_url", fields.get("external_url")
+        if not value:
+            continue
+        hit = conn.execute(
+            f"SELECT slug FROM capture_events WHERE uploaded_by_user_id IS NULL AND {column} = ? "
+            "AND timestamp BETWEEN ? AND ? ORDER BY ABS(timestamp - ?) LIMIT 1",
+            (value, r["timestamp"] - OWNERSHIP_BACKFILL_WINDOW, r["timestamp"] + 1, r["timestamp"])).fetchone()
+        if hit:
+            conn.execute("UPDATE capture_events SET uploaded_by_user_id = ? WHERE slug = ?", (owner, hit["slug"]))
+            counts["items"] += 1
+
+    def changes_by_user(op):
+        for r in conn.execute("SELECT actor, mutations FROM audit_log WHERE op = ? AND actor LIKE 'user:%' "
+                              "AND mutations IS NOT NULL ORDER BY id", (op,)).fetchall():
+            owner = uid(r["actor"])
+            if owner is None:
+                continue
+            try:
+                muts = json.loads(r["mutations"]) or []
+            except ValueError:  # silent-ok: a change-log row with unreadable images can't name what it made
+                continue
+            yield owner, [m for m in muts if isinstance(m, dict)]
+
+    for owner, muts in changes_by_user("create_card"):
+        for m in muts:
+            if m.get("table") == "projects" and m.get("before") is None and (m.get("key") or {}).get("id"):
+                card_id = m["key"]["id"]
+                cur = conn.execute("UPDATE projects SET created_by_user_id = ? WHERE id = ? AND created_by_user_id IS NULL",
+                                   (owner, card_id))
+                if cur.rowcount:
+                    counts["cards"] += 1
+                    card = conn.execute("SELECT writeup_slug, created_at FROM projects WHERE id = ?", (card_id,)).fetchone()
+                    if card and card["writeup_slug"]:
+                        counts["card_writeups"] += conn.execute(
+                            "UPDATE capture_events SET uploaded_by_user_id = ? WHERE slug = ? AND uploaded_by_user_id IS NULL "
+                            "AND ABS(timestamp - ?) < 60", (owner, card["writeup_slug"], card["created_at"])).rowcount
+    for owner, muts in changes_by_user("hobby_create"):
+        for m in muts:
+            after, before = m.get("after") or {}, m.get("before")
+            if m.get("table") != "blog_tags" or after.get("is_hobby") != 1:
+                continue
+            if before is not None and before.get("is_hobby") == 1:
+                continue  # re-marked an existing hobby: not its creation
+            tag_id = (m.get("key") or {}).get("id")
+            if not tag_id or not conn.execute("SELECT 1 FROM blog_tags WHERE id = ? AND is_hobby = 1", (tag_id,)).fetchone():
+                continue
+            conn.execute("INSERT OR IGNORE INTO hobby_settings (hobby_tag_id) VALUES (?)", (tag_id,))
+            counts["hobbies"] += conn.execute(
+                "UPDATE hobby_settings SET created_by_user_id = ? WHERE hobby_tag_id = ? AND created_by_user_id IS NULL",
+                (owner, tag_id)).rowcount
+    for owner, muts in changes_by_user("blog_entry_create"):
+        for m in muts:
+            if m.get("table") == "blog_entries" and m.get("before") is None and (m.get("key") or {}).get("id"):
+                counts["blog_entries"] += conn.execute(
+                    "UPDATE blog_entries SET created_by_user_id = ? WHERE id = ? AND created_by_user_id IS NULL",
+                    (owner, m["key"]["id"])).rowcount
+    return counts
+
+
+def _mig_ownership_backfill_604():
+    # #604 step 1: who made what, from the audit log (see _ownership_backfill). One change-log row
+    # carries the counts (no row images: derived data, recomputable from the log itself).
+    from . import changes
+    conn = get_conn()
+    counts = _ownership_backfill(conn)
+    insert_change_log(conn, "migration_ownership_backfill_604", changes.ACTOR_MIGRATION, [],
+                      batch_id=changes.new_batch_id(), details={"counts": counts})
+    print(f"schema_migrations: ownership_backfill_604 counts {counts}", flush=True)
+
 
 # Order matters (v2c_1 first: later steps read the kind/stage it assigns).
 # #562: v2c_3 (the AlienWhoop family question) and v2c_4 (the AW canopy question) were about the
@@ -1065,6 +1205,8 @@ MIGRATIONS = [
     ("empty_file_ocr_done_587", _mig_empty_file_ocr_done_587),
     ("writeup_lead_596", _mig_writeup_lead_596),
     ("reextract_utf16_text_607", _mig_reextract_utf16_text_607),
+
+    ("ownership_backfill_604", _mig_ownership_backfill_604),
 ]
 
 
@@ -1155,7 +1297,7 @@ def _row_to_dict(row):
 def insert_upload(slug, filename, stored_filename, uploaded_by, description="", tags=None, client=None,
                    source="screenshot", file_size=None, source_modified_at=None, ocr_status=None,
                    media_type="image", external_url=None, content_description=None, content_date=None,
-                   type_metadata=None):
+                   type_metadata=None, sensitive=False):
     """Creates a capture_events row. filename/stored_filename are for uploaded files and can be
     None for content that lives elsewhere (media_type='youtube' + external_url, for example) —
     there's no requirement that a row correspond to an actual file on disk.
@@ -1165,19 +1307,32 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
     capture_events column comments in SCHEMA for the distinction. type_metadata is a freeform
     dict for whatever per-type properties don't fit those generic columns — see
     core/object_types.py's MetadataField and set_type_metadata below.
+
+    #604 step 1: `uploaded_by_user_id` is the signed-in user of the current actor context
+    (users.user_id_for_actor), NULL for the token / MCP / scripts / system = admin-owned. This is
+    the ONE place an item row is created, so every path (web upload and content, MCP upload,
+    import and add_content, a card's write-up) records it the same way. `uploaded_by` above is
+    the free-text Source label (`tech`), unrelated.
+    #603: `sensitive=True` (the upload dialog's checkbox) sets the flag in the same INSERT, so the
+    item is never visible unlocked, not even for a moment.
     """
+    from . import actor as actor_ctx, users  # lazy: users imports this module
+    who = actor_ctx.current_actor()
+    owner_id = users.user_id_for_actor(who)
     conn = get_conn()
     try:
         now = time.time()
         conn.execute(
             "INSERT INTO capture_events (slug, source, client, timestamp, tech, description, "
             "extracted_text, artifact_link, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
-            "media_type, external_url, content_description, content_date, type_metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "media_type, external_url, content_description, content_date, type_metadata, uploaded_by_user_id, "
+            "sensitive, sensitive_by, sensitive_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (slug, source, client, now, uploaded_by, description,
              f"/f/{slug}", json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
              now if ocr_status == "pending" else None,
-             media_type, external_url, content_description, content_date, json.dumps(type_metadata or {})),
+             media_type, external_url, content_description, content_date, json.dumps(type_metadata or {}), owner_id,
+             1 if sensitive else 0, who if sensitive else None, now if sensitive else None),
         )
         conn.commit()
 
@@ -1190,7 +1345,7 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
 
 
 def insert_content(slug, uploaded_by, media_type, external_url=None, content_description=None, content_date=None,
-                    description="", tags=None, client=None, source="external", type_metadata=None):
+                    description="", tags=None, client=None, source="external", type_metadata=None, sensitive=False):
     """Thin wrapper around insert_upload for rows with no uploaded file — e.g. a YouTube video,
     where the content lives at external_url rather than in local storage. filename/stored_filename
     are left None. ocr_status starts "pending" whenever the type is OCR-capable (see
@@ -1206,7 +1361,7 @@ def insert_content(slug, uploaded_by, media_type, external_url=None, content_des
         source=source, media_type=media_type, external_url=external_url,
         content_description=content_description, content_date=content_date,
         ocr_status="pending" if spec.ocr_capable else None,
-        type_metadata=type_metadata,
+        type_metadata=type_metadata, sensitive=sensitive,
     )
 
 
@@ -1770,7 +1925,9 @@ def list_uploaders(query=None, client=None):
         # #282: these totals sit next to /api/gallery's per-uploader item
         # lists, which come from search() and hide redacted rows -- count
         # the same set so "N items" matches what's actually listed.
-        clauses, params = ["redacted = 0"], []
+        # #603: and the same browse clause search() applies, so a hidden item's description can't be
+        # probed through these counts (a ?query= that only matches a sensitive item counts 0).
+        clauses, params = ["redacted = 0" + policy.sql_browse_clause()], []
         if query:
             clauses.append("(description LIKE ? OR filename LIKE ?)")
             params += [f"%{query}%", f"%{query}%"]
@@ -1792,19 +1949,66 @@ def list_uploaders(query=None, client=None):
 
 def list_restricted():
     """#443: every non-redacted row of a restricted type, newest first, for
-    the admin pane's "Keys & certificates" list (and the MCP)."""
+    the admin pane's restricted list (and the MCP). #603: plus every row flagged
+    "This is sensitive" (capture_events.sensitive), of any type."""
     from core import object_types  # lazy: type modules import db
     keys = object_types.restricted_types()
-    if not keys:
-        return []
+    type_clause = f"media_type IN ({', '.join('?' * len(keys))}) OR " if keys else ""
     conn = get_conn()
     try:
         rows = conn.execute(
-            f"SELECT * FROM capture_events WHERE redacted = 0 AND media_type IN ({', '.join('?' * len(keys))}) "
+            f"SELECT * FROM capture_events WHERE redacted = 0 AND ({type_clause}sensitive = 1) "
             "ORDER BY timestamp DESC",
-            keys,
+            list(keys),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# --- #604 follow-up 7: the sensitive-item access log (core/access_log.py) ---
+
+def insert_access_log(slug, actor, how, at, fold_seconds=0):
+    """One access row (pipeline/infra log, like the request log). When the same actor opened the same
+    item through the same door within `fold_seconds`, nothing is written (returns False)."""
+    conn = get_conn()
+    try:
+        if fold_seconds and conn.execute(
+                "SELECT 1 FROM item_access_log WHERE slug = ? AND actor = ? AND how = ? AND at > ? LIMIT 1",
+                (slug, actor, how, at - fold_seconds)).fetchone():
+            return False
+        conn.execute("INSERT INTO item_access_log (slug, actor, how, at) VALUES (?, ?, ?, ?)", (slug, actor, how, at))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def list_access_log(slug, limit=100):
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT actor, how, at FROM item_access_log WHERE slug = ? ORDER BY at DESC, id DESC LIMIT ?",
+            (slug, int(limit))).fetchall()]
+    finally:
+        conn.close()
+
+
+def access_log_summary(slugs):
+    """{slug: {count, last_at, last_actor}} for the given slugs (absent = never opened)."""
+    if not slugs:
+        return {}
+    conn = get_conn()
+    try:
+        out = {}
+        marks = ", ".join("?" * len(slugs))
+        for r in conn.execute(
+                f"SELECT slug, COUNT(*) AS n, MAX(at) AS last_at FROM item_access_log WHERE slug IN ({marks}) "
+                "GROUP BY slug", list(slugs)).fetchall():
+            last = conn.execute("SELECT actor FROM item_access_log WHERE slug = ? ORDER BY at DESC, id DESC LIMIT 1",
+                                (r["slug"],)).fetchone()
+            out[r["slug"]] = {"count": r["n"], "last_at": r["last_at"], "last_actor": last["actor"] if last else None}
+        return out
     finally:
         conn.close()
 
@@ -2691,12 +2895,14 @@ def _create_project(title, description="", cover_slug=None, status="active", tag
             slug = f"{base_slug}-{n}"
             n += 1
         now = time.time()
+        from . import actor as actor_ctx, users  # lazy: users imports this module
+        created_by = users.user_id_for_actor(actor_ctx.resolve(actor))  # #604: NULL = admin-owned
         cur = conn.execute(
             "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at, tag_id, parent_id, "
-            "kind, activity, stage, stop_reason) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "kind, activity, stage, stop_reason, created_by_user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (slug, title, description, cover_slug, status, now, now, tag_id, parent_id,
-             kind, status_triple["activity"], status_triple["stage"], status_triple["stop_reason"]),
+             kind, status_triple["activity"], status_triple["stage"], status_triple["stop_reason"], created_by),
         )
         project_id = cur.lastrowid
         project = {
@@ -2712,6 +2918,7 @@ def _create_project(title, description="", cover_slug=None, status="active", tag
             "parent_id": parent_id,
             "writeup_slug": None,
             "kind": kind,
+            "created_by_user_id": created_by,
             **status_triple,
         }
         insert_change_log(

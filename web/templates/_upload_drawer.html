@@ -55,6 +55,11 @@
         </select>
         <input class="input mono" id="upload-new-project-input" placeholder="New project name" style="display:none;margin-top:6px">
       </div>
+      {# #603: lock the upload before anyone sees it: only the uploader and admins can see a sensitive item. #}
+      <div class="field" style="display:flex;align-items:flex-start;gap:8px">
+        <input type="checkbox" id="upload-sensitive-checkbox" style="margin-top:3px">
+        <label for="upload-sensitive-checkbox" style="text-transform:none">This is sensitive <span class="optional">(only you and admins can see it; only an admin can clear it)</span></label>
+      </div>
     </div>
   </form>
 </div>

@@ -250,6 +250,11 @@ r = client.post(f"/api/projects/{clod['id']}/text", data={"flavor": "Same synops
 check("web set text: an omitted field is left alone",
       r.status_code == 200 and r.json()["synopsis"].startswith("Two") and r.json()["flavor"] == "Same synopsis, new flavor.")
 cards.undo(r.json()["batch_id"])
+r = client.post(f"/api/projects/{clod['id']}/text", data={"synopsis": "", "flavor": ""})
+check("web set text: blank fields clear (the ABOUT group's Save with empty boxes)",
+      r.status_code == 200 and r.json()["synopsis"] is None and r.json()["flavor"] is None
+      and r.json()["face_text_source"] == "writeup", r.text[:300])
+cards.undo(r.json()["batch_id"])
 undo_ok("web set text", body["batch_id"], before)
 r = client.post(f"/api/projects/{clod['id']}/text", data={"synopsis": "x" * 700})
 check("web set text: too long -> 422 bad_card_text, nothing written",

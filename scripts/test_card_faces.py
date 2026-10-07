@@ -185,7 +185,7 @@ from web import app as webapp  # noqa: E402
 from web.shapes import _card_items  # noqa: E402
 from mcp_server import server  # noqa: E402
 
-client = TestClient(webapp.app)
+client = _testenv.client(webapp.app)
 
 H = hobbies.create("R/C Adventures").data["hobby"]
 hobbies.set_group_code(H["id"], "RCA")
@@ -234,7 +234,7 @@ r = client.post(f"/api/projects/{clod['id']}/text", data={"synopsis": "Two Clodb
 body = r.json()
 check("web set text: 200, synopsis + flavor stored", r.status_code == 200 and body.get("synopsis", "").startswith("Two")
       and body.get("flavor") == "Very nearly named Clod-a-Pete." and body.get("face_text_source") == "synopsis", body)
-check("web set text: one change-log row, actor owner-ui", ops_of(body.get("batch_id")) == [("set_card_text", "owner-ui")],
+check("web set text: one change-log row, actor token", ops_of(body.get("batch_id")) == [("set_card_text", "token")],
       ops_of(body.get("batch_id")))
 f = cards.card_face(clod["id"])
 check("face: synopsis first (one paragraph per line), flavor set",
@@ -336,7 +336,7 @@ check("hobby project list clamps with '+N more'", re.search(r", \+\d+ more\.$", 
 before = snapshot()
 r = client.post(f"/api/hobby/{H['slug']}/text", data={"synopsis": "Everything with wheels.", "flavor": "Mostly Tamiya."})
 check("web hobby text: 200, one change-log row", r.status_code == 200
-      and ops_of(r.json()["batch_id"]) == [("hobby_text", "owner-ui")], r.text[:300])
+      and ops_of(r.json()["batch_id"]) == [("hobby_text", "token")], r.text[:300])
 hf = cards.hobby_card_face(db.get_hobby(H["id"]), projects, {p["id"]: [] for p in projects})
 check("hobby face: synopsis first, then the list; flavor", hf["text"] == "Everything with wheels."
       and hf["flavor"] == "Mostly Tamiya." and hf["notes"][0].startswith("Projects: "))

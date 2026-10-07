@@ -589,6 +589,8 @@ def main():
     ap.add_argument("--unfiled-per-type", type=int, default=1, help="unfiled items of each media_type (default 1)")
     ap.add_argument("--execute", action="store_true", help="actually wipe and seed the target (default: dry run)")
     args = ap.parse_args()
+    import _http  # #467 step 2: send the install token to the app (scripts/_http.py)
+    _http.install(args.base_url)
 
     conn, tmp = open_source_snapshot(args.source_db)
     try:

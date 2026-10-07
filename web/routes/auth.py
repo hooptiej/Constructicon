@@ -4,13 +4,13 @@ Thin adapters over core/users.py. Bodies are JSON (#558: Content-Type must be ap
 415 otherwise). Request-log redaction for every route that carries a password is in
 web/request_guard.py (AUDIT_ROUTE_RULES / AUDIT_ROUTE_PATTERNS: no body values logged).
 
-Nothing is enforced in step 1 (core/roles.ENFORCE is False): the role labels below are recorded,
-and the admin-only user routes still answer an anonymous request (the anonymous owner-ui actor is
-admin until step 2), exactly like every other admin route today.
+Step 2 enforces the labels below (core/roles.ENFORCE): the sign-in routes are public, "my
+password" needs a session (viewer), the user routes are admin (a signed-in admin or the install
+token). /login redirects to /setup while the install has no user; /setup is 404 once one exists.
 """
 
 from fastapi import HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from core import install_config, roles, users
 from core.errors import AppError, NotFound
@@ -36,9 +36,15 @@ async def _json_body(request: Request):
 
 
 def _safe_next(target):
-    """A same-site path to go to after signing in ("/" otherwise): no scheme, no //host."""
-    t = (target or "").strip()
-    if not t.startswith("/") or t.startswith("//") or t.startswith("/\\"):
+    """A same-site path to go to after signing in ("/" otherwise). Refused: anything not starting
+    with one "/", "//host" and "/\\host" (browsers treat "\\" as "/"), and any control character or
+    whitespace anywhere (browsers strip tabs/newlines from URLs, so "/\\t/evil" would become
+    "//evil"). Too long -> "/"."""
+    t = target or ""
+    if (not t.startswith("/") or len(t) > 2000 or "\\" in t
+            or any(ord(c) < 0x21 or ord(c) == 0x7f for c in t)):
+        return "/"
+    if t.startswith("//"):
         return "/"
     return t
 
@@ -58,6 +64,8 @@ def _signed_in_response(request, user, payload):
 
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/"):
+    if users.setup_needed():  # #467 step 2: a fresh install has no one to sign in as yet
+        return RedirectResponse("/setup", status_code=302)
     return templates.TemplateResponse(request, "login.html", {"next_url": _safe_next(next),
                                                               "setup_needed": users.setup_needed()})
 

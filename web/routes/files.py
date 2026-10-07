@@ -87,14 +87,16 @@ def api_list_wallpapers(request: Request):
     ])
 
 
-# --- Public hotlink (no auth — Hudu/Slack need to fetch this directly) ---
+# --- Public hotlink (no login: Hudu/Slack/the static site fetch these directly) ---
+# #467 step 2: restricted and redacted items need an admin session or the install token; anyone
+# else gets 404, the same as a missing slug (policy.require_file).
 
 @router.get("/f/{slug}", dependencies=requires(roles.PUBLIC))
 def get_file(slug: str):
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
-    policy.require_view(row)  # #557: public route, but the item policy still decides
+    policy.require_file(row)  # #467 step 2: public, except restricted/redacted items (admin only, else 404)
     if row["redacted"]:
         raise HTTPException(status_code=410, detail="file was redacted (sensitive content) — metadata is still on the image page")
     if not row.get("stored_filename"):
@@ -114,7 +116,7 @@ def get_thumbnail(slug: str):
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
-    policy.require_view(row)  # #557
+    policy.require_file(row)  # #467 step 2: public, except restricted/redacted items (admin only, else 404)
     if row["redacted"]:
         raise HTTPException(status_code=410, detail="file was redacted (sensitive content)")
     if not storage.thumb_path_for(slug).exists() and not row.get("stored_filename"):

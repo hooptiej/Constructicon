@@ -65,7 +65,7 @@ def last_audit(path):
     return rows[0] if rows else None
 
 
-client = TestClient(webapp.app, raise_server_exceptions=False)
+client = _testenv.client(webapp.app, raise_server_exceptions=False)
 with client:  # real startup (init_db + migrations)
     pass
 

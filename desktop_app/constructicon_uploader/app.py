@@ -45,6 +45,7 @@ class ConstructiconUploaderApp(rumps.App):
             None,
             rumps.MenuItem("Change Watched Folder…", callback=self._prompt_for_watch_folder),
             rumps.MenuItem("Change Server URL…", callback=self._prompt_for_base_url),
+            rumps.MenuItem("Set Install Token…", callback=self._prompt_for_install_token),
             None,
             rumps.MenuItem("Open Constructicon", callback=self._open_web_app),
             None,
@@ -106,9 +107,14 @@ class ConstructiconUploaderApp(rumps.App):
             path, description = self._upload_queue.get()
             self._set_status(STATUS_UPLOADING)
             try:
-                api.upload_file(self.config["base_url"], str(path), description=description)
+                api.upload_file(self.config["base_url"], str(path), description=description,
+                                token=self.config.get("install_token", ""))
             except api.DuplicateUploadError:
                 pass  # already in Constructicon — not an error, nothing to report
+            except api.AuthError as e:
+                # #467 step 2: the server refuses uploads without the install token.
+                rumps.notification("Constructicon: sign-in needed", path.name, str(e))
+                self._flash_error()
             except api.UploadError as e:
                 rumps.notification("Constructicon upload failed", path.name, str(e))
                 self._flash_error()
@@ -163,6 +169,25 @@ class ConstructiconUploaderApp(rumps.App):
         if not response.clicked or not response.text.strip():
             return
         self.config["base_url"] = response.text.strip()
+        config.save_config(self.config)
+
+    def _prompt_for_install_token(self, _sender):
+        """The install token (Constructicon #467 step 2). Never shown back in full: the field
+        starts empty, and the message says only whether one is set (and its last 4 characters)."""
+        current = (self.config.get("install_token") or "").strip()
+        state = f"A token ending in …{current[-4:]} is set." if current else "No token is set."
+        response = rumps.Window(
+            title="Constructicon install token",
+            message=f"{state} Paste the install token from your Constructicon admin "
+                    "(leave empty and Save to keep the current one):",
+            default_text="",
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(320, 40),
+        ).run()
+        if not response.clicked or not response.text.strip():
+            return
+        self.config["install_token"] = response.text.strip()
         config.save_config(self.config)
 
     def _open_web_app(self, _sender):

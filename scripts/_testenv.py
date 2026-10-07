@@ -77,5 +77,37 @@ def isolate(prefix="test-", db_name="test.db"):
     os.environ["CONSTRUCTICON_EXPORTS_DIR"] = os.path.join(tmp, "exports")
     os.makedirs(os.environ["CONSTRUCTICON_STORAGE_DIR"], exist_ok=True)
     os.makedirs(os.environ["CONSTRUCTICON_EXPORTS_DIR"], exist_ok=True)
+    use_token()
     assert_isolated()
     return tmp
+
+
+# The per-run install token isolate() configures (see client()).
+import secrets as _secrets  # noqa: E402
+TOKEN = "test-" + _secrets.token_urlsafe(40)
+
+
+def use_token():
+    """#467 step 2: roles are enforced, so a test talking to the app in-process needs a credential.
+    Configures a fresh random install token for this run (never the container's own: the token-file
+    variables are dropped, so a test run inside constructicon-test can't read or use the real one).
+    isolate() calls it; a test that sets up its own temp DB calls it before importing core/web."""
+    for name in ("CONSTRUCTICON_INSTALL_TOKEN_FILE", "CONSTRUCTICON_MCP_TOKEN", "CONSTRUCTICON_MCP_TOKEN_FILE"):
+        os.environ.pop(name, None)
+    os.environ["CONSTRUCTICON_INSTALL_TOKEN"] = TOKEN
+    mod = sys.modules.get("core.install_token")
+    if mod is not None:
+        mod.reset_cache()
+
+
+def auth_headers():
+    """{"Authorization": "Bearer <TOKEN>"}: an admin request as actor `token`."""
+    return {"Authorization": f"Bearer {TOKEN}"}
+
+
+def client(app, **kwargs):
+    """A TestClient that sends the install token on every request (role admin, actor `token`),
+    for tests that exercise routes rather than sign-in. Tests about sign-in use a bare TestClient."""
+    from fastapi.testclient import TestClient
+    headers = {**auth_headers(), **(kwargs.pop("headers", None) or {})}
+    return TestClient(app, headers=headers, **kwargs)

@@ -113,6 +113,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--base-url", default="http://localhost:80")
     args = ap.parse_args()
+    import _http  # #467 step 2: send the install token to the app (scripts/_http.py)
+    _http.install(args.base_url)
     c = Client(args.base_url)
     title = re.search(r"<title>([^<]*)</title>", c.get("/"))
     print("target:", args.base_url, "|", title.group(1) if title else "?")

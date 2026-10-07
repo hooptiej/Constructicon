@@ -148,7 +148,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from web import app as webapp  # noqa: E402
 from mcp_server import server  # noqa: E402
 
-client = TestClient(webapp.app)
+client = _testenv.client(webapp.app)
 
 A, B, C, D, E, F, G = (mk(s) for s in ("ia", "ib", "ic", "id", "ie", "if", "ig"))
 base = cards.create("Base Card", link_tag=True).data["card"]  # a card that exists throughout
@@ -178,7 +178,7 @@ check("create: bad status -> bad_request, nothing written",
 before = snapshot()
 r = client.post("/api/hobbies", data={"name": "Web Hobby"})
 check("web POST /api/hobbies: 200 + id/slug/batch_id", r.status_code == 200 and {"id", "slug", "batch_id"} <= set(r.json()), r.text)
-check("web create logged as owner-ui", ops_of(r.json()["batch_id"]) == [("hobby_create", "owner-ui")])
+check("web create logged as token", ops_of(r.json()["batch_id"]) == [("hobby_create", "token")])
 undo_ok("web hobby create", r.json()["batch_id"], before)
 r = client.post("/api/hobbies", data={"name": "   "})
 check("web create, blank name: 400 + same message", r.status_code == 400 and r.json()["detail"] == "Hobby name can't be empty", r.text)
@@ -193,14 +193,14 @@ H = hobbies.create("Collecting").data["hobby"]
 before = snapshot()
 r = client.post(f"/api/hobby/{H['slug']}/add-project", data={"project_id": str(base["id"])})
 row = q("SELECT batch_id, actor FROM audit_log WHERE op = 'add_to_hobby' ORDER BY id DESC LIMIT 1")
-check("web add-project: 200, logged as owner-ui", r.status_code == 200 and row and row[0]["actor"] == "owner-ui", r.text)
+check("web add-project: 200, logged as token", r.status_code == 200 and row and row[0]["actor"] == "token", r.text)
 check("web add-project: card in hobby", base["id"] in [p["id"] for p in db.list_projects_for_hobby(H["id"])])
 undo_ok("web add-project", row[0]["batch_id"], before)
 client.post(f"/api/hobby/{H['slug']}/add-project", data={"project_id": str(base["id"])})
 before = snapshot()
 r = client.post(f"/api/hobby/{H['slug']}/remove-project", data={"project_id": base["slug"]})
 row = q("SELECT batch_id, actor FROM audit_log WHERE op = 'remove_from_hobby' ORDER BY id DESC LIMIT 1")
-check("web remove-project: 200, logged as owner-ui, card out", r.status_code == 200 and row[0]["actor"] == "owner-ui"
+check("web remove-project: 200, logged as token, card out", r.status_code == 200 and row[0]["actor"] == "token"
       and base["id"] not in [p["id"] for p in db.list_projects_for_hobby(H["id"])])
 undo_ok("web remove-project", row[0]["batch_id"], before)
 before = snapshot()
@@ -263,7 +263,7 @@ check("convert->hobby: card gone, its tag is an active hobby holding the childre
 check("convert->hobby: open question resolved, link/family/blog rows gone",
       cards.open_card_decisions(proj["slug"]) == [] and db.list_project_link_rows(slug=proj["slug"]) == []
       and db.list_families_for_member(proj["id"]) == [] and db.list_entry_projects(entry["id"]) == [])
-check("convert->hobby logged as owner-ui", {a for _, a in ops_of(body["batch_id"])} == {"owner-ui"})
+check("convert->hobby logged as token", {a for _, a in ops_of(body["batch_id"])} == {"token"})
 undo_ok("convert project -> hobby", body["batch_id"], before)
 check("convert->hobby undo: card, children, files, write-up, question back",
       db.get_project(proj["id"]) is not None and db.get_project(kid1["id"])["parent_id"] == proj["id"]
@@ -319,8 +319,8 @@ check("hobby->card: loose objects on the card, home override now the card, hobby
       and (db.get_project(homer["id"])["home_kind"], db.get_project(homer["id"])["home_ref"]) == ("card", new["id"])
       and db.get_hobby(GI["id"]) is None and q("SELECT COUNT(*) AS n FROM project_hobbies WHERE hobby_tag_id = ?",
                                                GI["id"])[0]["n"] == 0)
-check("hobby->card logged as owner-ui in one batch", ops_of(res["batch_id"]) and
-      {a for _, a in ops_of(res["batch_id"])} == {"owner-ui"}, ops_of(res["batch_id"]))
+check("hobby->card logged as token in one batch", ops_of(res["batch_id"]) and
+      {a for _, a in ops_of(res["batch_id"])} == {"token"}, ops_of(res["batch_id"]))
 undo_ok("convert hobby -> card (family)", res["batch_id"], before)
 check("hobby->card undo: hobby back with its code, members and home override",
       db.get_hobby(GI["id"])["group_code"] == GI["group_code"]
@@ -435,7 +435,7 @@ r = client.post("/api/blog-entries", data={"title": "Trip Report", "subtitle": "
 ent = r.json()
 b = q("SELECT batch_id FROM audit_log WHERE op = 'blog_entry_create' ORDER BY id DESC LIMIT 1")[0]["batch_id"]
 check("blog create (web): 200, slug, logged", r.status_code == 200 and ent["slug"] == "trip-report"
-      and ops_of(b) == [("blog_entry_create", "owner-ui")], r.text[:200])
+      and ops_of(b) == [("blog_entry_create", "token")], r.text[:200])
 undo_ok("blog create", b, before)
 ent = blog.create("Trip Report").data["entry"]
 step = snapshot()

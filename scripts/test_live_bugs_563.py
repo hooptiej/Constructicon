@@ -46,7 +46,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from mcp_server import server  # noqa: E402
 from web import app as webapp  # noqa: E402
 
-client = TestClient(webapp.app)
+client = _testenv.client(webapp.app)
 
 # ---- 1. remove-from-project x (db.get_post never existed) ----------------------------------
 check("no db.get_post call left in app.py", "db.get_post(" not in open(os.path.join(ROOT, "web", "app.py"), encoding="utf-8").read())

@@ -7,8 +7,10 @@ Covers: the scrypt hash format and verification; validation; first-run setup (on
 in, fills the owner name); the session cookie's flags; sliding expiry and logout; sign-in failures
 and the backoff; CSRF (required with a session cookie, not without); actor attribution in the
 change log and request log; the last-admin rule; disabling and password changes ending sessions;
-role_of() reading the signed-in user's role while nothing is enforced; generic undo refusing a
-user change; the reset script; and that no password or hash ever reaches the audit log.
+role_of() reading the signed-in user's role; generic undo refusing a user change; the reset
+script; and that no password or hash ever reaches the audit log. Updated for step 2 (roles
+enforced): anonymous requests are redirected/refused, scripts use the install token (_testenv);
+the full enforcement matrix is scripts/test_auth_step2.py.
 Every credential here is generated per run. Exits 1 if any check fails.
 """
 
@@ -91,13 +93,16 @@ check("bad role refused", code_of(users.validate_role, "owner") == "bad_role")
 
 # --- 3. first-run setup ---------------------------------------------------------------------
 client = TestClient(webapp.app, base_url=f"http://{HOST}")
-anon = TestClient(webapp.app, base_url=f"http://{HOST}")  # never signs in (a script / anonymous page)
+anon = TestClient(webapp.app, base_url=f"http://{HOST}")  # never signs in (an anonymous browser)
+tokc = _testenv.client(webapp.app, base_url=f"http://{HOST}")  # a script with the install token (admin)
 check("setup needed on an empty install", users.setup_needed())
 check("GET /setup open while no users", client.get("/setup").status_code == 200)
-r = client.get("/admin")
+r = tokc.get("/admin")
 check("admin page shows 'Create the admin account' banner", "users-setup-banner" in r.text and "/setup" in r.text)
-r = client.get("/")
-check("anonymous page: 'Sign in' chip, no CSRF meta", "Sign in" in r.text and csrf_from(r.text) is None)
+r = client.get("/", follow_redirects=False)
+check("step 2: anonymous page -> /setup while no users", r.status_code == 302 and r.headers["location"] == "/setup")
+r = client.get("/setup")
+check("anonymous setup page: 'Sign in' chip, no CSRF meta", "Sign in" in r.text and csrf_from(r.text) is None)
 admin_name, admin_pw = "admin_" + secrets.token_hex(3), pw()
 SECRETS.append(admin_pw)
 r = client.post("/api/auth/setup", json={"username": admin_name, "password": "short"}, headers=SAME)
@@ -132,26 +137,32 @@ r = client.post("/api/install-config", json=body, headers={**SAME, "X-CSRF-Token
 check("cookie request with a wrong token -> 403", r.status_code == 403)
 r = client.post("/api/install-config", json=body, headers={**SAME, "X-CSRF-Token": token})
 check("cookie request with the token works", r.status_code == 200, r.text[:200])
+r = tokc.post("/api/install-config", json={"copyright_holder": "Anon"}, headers=SAME)
+check("install-token client: no CSRF token needed", r.status_code == 200, r.text[:200])
 r = anon.post("/api/install-config", json={"copyright_holder": "Anon"}, headers=SAME)
-check("non-cookie client unaffected (no token needed)", r.status_code == 200, r.text[:200])
+check("step 2: anonymous write -> 401 unauthorized", r.status_code == 401
+      and r.json()["error"]["code"] == "unauthorized", r.text[:200])
 
 # --- 6. actor attribution -------------------------------------------------------------------
 conn = sqlite3.connect(db.DB_PATH)
 rows = conn.execute("SELECT actor, op FROM audit_log WHERE op = 'install_config_update' ORDER BY id").fetchall()
 check("change log: signed-in edit is user:<name>", ("user:" + admin_name, "install_config_update") in rows, rows)
-check("change log: anonymous edit stays owner-ui", ("owner-ui", "install_config_update") in rows, rows)
+check("change log: install-token edit is 'token'", ("token", "install_config_update") in rows, rows)
+check("change log: the only anonymous edit is first-run setup filling owner_name",
+      [a for a, _ in rows if a in ("anonymous", "owner-ui")] == ["anonymous"], rows)
 req = conn.execute("SELECT actor, status_code FROM audit_log WHERE op IS NULL AND path = '/api/install-config' "
                    "ORDER BY id").fetchall()
 check("request log: signed-in rows are user:<name>, incl. the CSRF refusal",
       ("user:" + admin_name, 403) in req and ("user:" + admin_name, 200) in req, req)
-check("request log: anonymous row owner-ui", ("owner-ui", 200) in req, req)
+check("request log: token row is 'token'", ("token", 200) in req, req)
 setup_row = conn.execute("SELECT actor FROM audit_log WHERE op = 'user_first_admin'").fetchone()
-check("setup is logged (anonymous actor at setup time)", setup_row and setup_row[0] == "owner-ui")
+check("setup is logged (anonymous actor at setup time)", setup_row and setup_row[0] == "anonymous")
 
-# --- 7. role_of while nothing is enforced ----------------------------------------------------
-check("roles.ENFORCE still False", roles.ENFORCE is False)
+# --- 7. role_of (enforced since step 2) -------------------------------------------------------
+check("roles.ENFORCE is True (step 2)", roles.ENFORCE is True)
 check("role_of(user:admin) = admin", roles.role_of("user:" + admin_name) == "admin")
-check("role_of(owner-ui) = admin (unchanged)", roles.role_of("owner-ui") == "admin")
+check("role_of(anonymous) = public", roles.role_of("anonymous") == "public")
+check("role_of(owner-ui) = admin (legacy in-process actor)", roles.role_of("owner-ui") == "admin")
 
 # --- 8. Admin > Users -----------------------------------------------------------------------
 auth_h = {**SAME, "X-CSRF-Token": token}
@@ -212,7 +223,11 @@ check("change my password", r.status_code == 200 and r.json()["sessions_ended"] 
 check("this session kept, the other ended", client.get("/api/auth/me").json()["signed_in"]
       and not other.get("/api/auth/me").json()["signed_in"])
 r = anon.post("/api/account/password", json={"current_password": "x", "new_password": pw()}, headers=SAME)
-check("anonymous change-password -> 401 not_signed_in", r.status_code == 401 and r.json()["error"]["code"] == "not_signed_in")
+check("anonymous change-password -> 401 (gate: unauthorized)", r.status_code == 401
+      and r.json()["error"]["code"] == "unauthorized")
+r = tokc.post("/api/account/password", json={"current_password": "x", "new_password": pw()}, headers=SAME)
+check("install-token change-password -> 401 not_signed_in (no user to change)", r.status_code == 401
+      and r.json()["error"]["code"] == "not_signed_in")
 
 # --- 10. logout / login / backoff -------------------------------------------------------------
 old_cookie = client.cookies.get(users.SESSION_COOKIE)
@@ -223,7 +238,7 @@ replay = TestClient(webapp.app, base_url=f"http://{HOST}")
 replay.cookies.set(users.SESSION_COOKIE, old_cookie)
 check("the old cookie replayed is anonymous", replay.get("/api/auth/me").json()["signed_in"] is False)
 r = replay.post("/api/install-config", json={"copyright_holder": "Replay"}, headers=SAME)
-check("a dead cookie is treated as anonymous (no CSRF needed, actor owner-ui)", r.status_code == 200)
+check("a dead cookie is treated as anonymous (step 2: 401)", r.status_code == 401)
 r = client.post("/api/auth/login", json={"username": admin_name, "password": "wrong-password-1"}, headers=SAME)
 check("wrong password -> 401 invalid_login", r.status_code == 401 and r.json()["error"]["code"] == "invalid_login")
 r = client.post("/api/auth/login", json={"username": "nobody-here", "password": "wrong-password-1"}, headers=SAME)

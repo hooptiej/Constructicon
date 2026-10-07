@@ -320,6 +320,8 @@ def main():
              "(must share a database with this process — see module docstring)",
     )
     args = parser.parse_args()
+    import _http  # #467 step 2: send the install token to the app (scripts/_http.py)
+    _http.install(args.base_url)
     site_dir = Path(args.site_dir).resolve()
     if not (site_dir / "blog" / "index.html").exists():
         print(f"Doesn't look like a hooptiej.github.io clone: {site_dir}")

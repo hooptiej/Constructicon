@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from core import besteffort, card_rules, cards, changes, db, hobbies, membership, timeline
 from core.errors import NotFound
 from web.shapes import _to_card_face, _to_project_option
-from core import roles
+from core import policy, roles
 from web.roles import RoleRouter, requires
 
 log = logging.getLogger("constructicon.web")
@@ -116,8 +116,7 @@ def api_create_project_from_related(slug: str = Form(...), title: str = Form(...
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Project name can't be empty")
-    if db.get_by_slug(slug) is None:
-        raise HTTPException(status_code=404, detail="not found")
+    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     batch_id = changes.new_batch_id()
     with db.transaction():
         project = cards.create(title, batch_id=batch_id).data["card"]
@@ -377,9 +376,7 @@ def api_remove_item_from_project(project_id: str, slug: str = Form(...)):
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Verify the object exists.
-    obj = db.get_by_slug(slug)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="Object not found")
+    policy.viewable_item(slug, "Object not found")  # #467: 404 if missing or not viewable
 
     result = membership.remove_files(project["id"], [slug])
     return JSONResponse({"success": True, "batch_id": result.batch_id})

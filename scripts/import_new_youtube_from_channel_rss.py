@@ -205,6 +205,8 @@ def main():
         help="Only report what would be imported; don't POST anything.",
     )
     args = parser.parse_args()
+    import _http  # #467 step 2: send the install token to the app (scripts/_http.py)
+    _http.install(args.base_url)
 
     db.init_db()
 

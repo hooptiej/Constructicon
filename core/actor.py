@@ -4,8 +4,8 @@ Every change-log row (`audit_log.actor`) and every request-log row records an ac
 comes from a `contextvars.ContextVar` set once per entry point, never from a string literal
 at a call site:
 
-  * HTTP  -> web/middleware.py's ActorMiddleware sets ACTOR_UI per request (the hook where
-             #467 will later put the logged-in user).
+  * HTTP  -> web/middleware.py's ActorMiddleware sets ACTOR_ANONYMOUS per request; web/auth.py
+             overrides it with "user:<name>" (a live session) or ACTOR_TOKEN (the install token).
   * MCP   -> mcp_server/server.py's tool registration wraps every tool in acting_as(ACTOR_MCP).
   * Boot, the OCR watchdog, the caption queue worker and other background work -> ACTOR_SYSTEM.
   * A script run from scripts/ -> ACTOR_SCRIPT by default (see _process_default).
@@ -30,7 +30,9 @@ import threading
 
 from . import besteffort
 
-ACTOR_UI = "owner-ui"
+ACTOR_UI = "owner-ui"        # legacy: an anonymous web request before #467 step 2 (old log rows; in-process tests)
+ACTOR_ANONYMOUS = "anonymous"  # #467 step 2: a web request with no live session and no install token
+ACTOR_TOKEN = "token"        # #467 step 2: a web request carrying the install token (scripts, the uploader)
 ACTOR_MCP = "mcp"
 ACTOR_SYSTEM = "system"      # boot, migrations' surrounding work, OCR/caption workers
 ACTOR_SCRIPT = "script"      # a CLI script under scripts/ calling core directly

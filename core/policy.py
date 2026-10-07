@@ -16,21 +16,18 @@ item (or a list of items) asks this module:
 
 scripts/check_policy_doors.py fails if a known door stops calling this module.
 
-What it decides TODAY (identical to the behaviour before #557):
-  * `can_view` is True for every item for every actor that can reach the door. Restricted items
-    (a type with `restricted=True`: keys and certificates, object_types.restricted_types())
-    are still served by their direct link, project page and MCP get/download.
+What it decides since #467 step 2 ("restricted means locked, not just hidden", #467 2026-10-02):
+  * `RESTRICTED_VIEW_ROLE = roles.ADMIN`: `can_view` says False for a restricted item (a type with
+    `restricted=True`: keys and certificates, object_types.restricted_types()) unless the actor is
+    an admin (a signed-in admin, the install token `token`, the MCP `mcp`, in-process scripts).
+    Every direct door refuses it with 404 `not_found` (deliberately the same answer as "no such
+    item", so the slug's existence isn't leaked) and every list drops it.
+  * The public file doors also hide REDACTED items from non-admins (`require_file`, 404).
   * General browsing hides restricted items from everyone (`sql_browse_clause`, the fragment
-    that was `db._not_restricted`), as it always has. Card / hobby / blog-entry lists still show
-    them (the owner attaches keys to cards on purpose).
+    that was `db._not_restricted`), as it always has; an admin finds them in /admin's "Keys &
+    certificates" list and on the cards they're attached to.
   * Exports never contain them, for anyone.
-
-HOW #467 FLIPS IT ("restricted means locked, not just hidden", #467 2026-10-02): set
-`RESTRICTED_VIEW_ROLE = roles.ADMIN` (and make core.roles.role_of return real roles). Then
-`can_view` says False for a restricted item unless the actor is an admin, every direct door
-refuses it with 404 `not_found` (deliberately the same answer as "no such item", so the slug's
-existence isn't leaked), and every list drops it. One switch; nothing else changes. A request must
-pass BOTH checks: the route's role (web/roles.py) and this item policy.
+A request must pass BOTH checks: the route's role (web/roles.py) and this item policy.
 """
 
 import re
@@ -39,8 +36,13 @@ from core import actor as actor_ctx, roles
 from core.errors import NotFound
 
 # #467: the switch. None = restricted items are visible to anyone who can reach the door
-# (today's behaviour). roles.ADMIN = only admins see them anywhere.
-RESTRICTED_VIEW_ROLE = None
+# (the pre-step-2 behaviour). roles.ADMIN (#467 step 2, ON) = only admins see them anywhere.
+RESTRICTED_VIEW_ROLE = roles.ADMIN
+
+# #467 step 2: the public file doors (/f/<slug>, /f/<slug>/thumb) answer a REDACTED item only to
+# this role (an admin then gets the old 410 "file was redacted"); anyone else gets 404 not_found,
+# the same answer as a missing item, so the slug's existence isn't leaked through a public door.
+REDACTED_FILE_ROLE = roles.ADMIN
 
 
 def is_restricted(item):
@@ -69,8 +71,31 @@ def require_view(item, actor=None, message="not found"):
     return item
 
 
+def viewable_item(slug, message="not found", actor=None):
+    """The item row for `slug`, or NotFound (404 `not_found`) when there is no such row OR the actor
+    may not see it. For every single-item web door, reads AND writes (#467 step 2: an editor who
+    somehow holds a restricted item's slug can't edit, redact, delete or relate it either, and the
+    answer doesn't reveal that it exists)."""
+    from core import db  # lazy: core.db imports this module
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise NotFound(message)
+    return require_view(row, actor, message)
+
+
+def require_file(item, actor=None, message="not found"):
+    """The public file doors (/f/<slug> and its thumbnail, #467 step 2: "public, except restricted
+    and redacted items, which need an admin"). `require_view` (restricted -> admin), then a redacted
+    item -> NotFound unless the actor holds REDACTED_FILE_ROLE. The caller keeps its own "no such
+    row" 404 first and its own 410 for the admin who asks for a redacted file."""
+    require_view(item, actor, message)
+    if item.get("redacted") and not roles.at_least(roles.role_of(actor_ctx.resolve(actor)), REDACTED_FILE_ROLE):
+        raise NotFound(message)
+    return item
+
+
 def filter_visible(items, actor=None):
-    """The items `actor` may see, order kept. Today: all of them."""
+    """The items `actor` may see, order kept (restricted items only for an admin)."""
     return [i for i in items if can_view(i, actor)]
 
 

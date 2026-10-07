@@ -111,7 +111,7 @@ db.init_db()
 from fastapi.testclient import TestClient  # noqa: E402
 from web import app as webapp  # noqa: E402
 
-client = TestClient(webapp.app, raise_server_exceptions=False)
+client = _testenv.client(webapp.app, raise_server_exceptions=False)
 with client:
     pass
 

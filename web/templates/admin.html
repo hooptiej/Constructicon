@@ -29,8 +29,8 @@
     <p class="page-subtitle">Decisions waiting on you, hidden items, integration keys, caption tuning, recent activity and maintenance.</p>
   </div>
 
-  {#- #467 step 1: shown while the install has no user account at all. Nothing forces setup yet
-      (nothing is enforced in step 1); the banner goes away once the first admin exists. -#}
+  {#- #467: shown while the install has no user account at all (only the install token reaches
+      /admin then: step 2 sends every browser to /setup); gone once the first admin exists. -#}
   {% if users_setup_needed %}
   <div class="admin-panel" id="users-setup-banner" role="status"
        style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 16px;border-color:var(--hazard-yellow)">

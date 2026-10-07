@@ -189,7 +189,7 @@ check("undo upload-style add", state(P["id"], [C]) == before)
 from fastapi.testclient import TestClient  # noqa: E402
 from web import app as webapp  # noqa: E402
 
-client = TestClient(webapp.app)
+client = _testenv.client(webapp.app)
 
 before = state(P["id"], [A])
 r = client.post(f"/api/image/{A}/project", data={"project_id": str(P["id"])})
@@ -197,7 +197,7 @@ s = state(P["id"], [A])
 check("web item page add: 200 + UI flags", r.status_code == 200 and s["members"] == [A] and s["cover"] == (A, None)
       and TAG["name"] in s["free"][A] and TAG["id"] in s["post_tags"][A], r.text[:200])
 b = last_batch("add_files")
-check("web add recorded as owner-ui", changes_of(b)[0]["actor"] == "owner-ui")
+check("web add recorded as token", changes_of(b)[0]["actor"] == "token")
 r = client.post(f"/api/changes/{b}/undo")
 check("web undo of the add restores everything", r.status_code == 200 and state(P["id"], [A]) == before, r.text[:200])
 

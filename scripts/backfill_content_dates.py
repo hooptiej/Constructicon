@@ -143,6 +143,8 @@ def main():
         help="Only this row (repeatable) — for verifying one real file end to end.",
     )
     args = parser.parse_args()
+    import _http  # #467 step 2: send the install token to the app (scripts/_http.py)
+    _http.install(args.base_url)
 
     media_types = tuple(args.media_types) if args.media_types else DEFAULT_MEDIA_TYPES
     slugs = set(args.slugs) if args.slugs else None

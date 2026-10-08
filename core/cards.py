@@ -1315,13 +1315,33 @@ def _transfer_files(slugs, from_card, to_card, move, dry_run, actor, batch_id):
     if move and src.get("cover_slug") in slugs:
         warnings.append(f"'{src['title']}' still has {src['cover_slug']} as its cover; pick another if you want.")
     batch_id = batch_id or changes.new_batch_id()
+    op = "move_files" if move else "copy_files"
+    # #590: the files gain the destination's linked tag (both tag stores); a move also sheds the
+    # source's own linked tag. Planned read-only first so a dry run shows it.
+    plan, dst_tag, src_tag = _membership().plan_transfer_tags(slugs, src, dst, drop_source=move)
+    rows += _tag_rows(plan, dst_tag, src_tag, src, dst)
     if not dry_run:
         with db.transaction():
-            _membership().write(dst["id"], slugs, [], "move_files" if move else "copy_files", actor, batch_id,
-                                [src["slug"], dst["slug"]])
+            _membership().write(dst["id"], slugs, [], op, actor, batch_id, [src["slug"], dst["slug"]])
             if move:
-                _membership().write(src["id"], [], slugs, "move_files", actor, batch_id, [src["slug"], dst["slug"]])
-    return Result(True, rows, warnings, batch_id, dry_run)
+                _membership().write(src["id"], [], slugs, op, actor, batch_id, [src["slug"], dst["slug"]])
+            _membership().apply_transfer_tags(plan, dst_tag, src_tag, op, actor, batch_id,
+                                              [src["slug"], dst["slug"]] + [d["slug"] for d in plan])
+    return Result(True, rows, warnings, batch_id, dry_run,
+                  {"tags_added": sum(1 for d in plan if d["link_add"] or d["chip_add"]),
+                   "tags_removed": sum(1 for d in plan if d["link_drop"] or d["chip_drop"])})
+
+
+def _tag_rows(plan, dst_tag, src_tag, src, dst):
+    """Change-summary rows for a tag plan: one per card, naming the tag and how many files."""
+    rows = []
+    gained = sum(1 for d in plan if d["link_add"] or d["chip_add"])
+    lost = sum(1 for d in plan if d["link_drop"] or d["chip_drop"])
+    if gained and dst_tag:
+        rows.append({"card": dst["slug"], "field": "tag", "before": None, "after": f"{dst_tag['name']} (+{gained} file(s))"})
+    if lost and src_tag:
+        rows.append({"card": src["slug"], "field": "tag", "before": f"{src_tag['name']} (-{lost} file(s))", "after": None})
+    return rows
 
 
 def move_files(slugs, from_card, to_card, *, dry_run=False, actor=None, batch_id=None):
@@ -1474,6 +1494,11 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
     if a.get("writeup_slug") and not blank_writeup and a["writeup_slug"] in moving:
         warnings.append(f"'{a['title']}' had a write-up with text; it's now an ordinary file in '{keep['title']}'.")
     _membership().write(a["id"], [], file_slugs, op, actor, batch_id, slugs)
+    # #590: a merge is a move into the kept card, so the files take keep's linked tag and shed the
+    # absorbed card's own (the same rule as move_files; the absorbed card is going away).
+    plan, dst_tag, src_tag = _membership().plan_transfer_tags(moving, a, keep, drop_source=True)
+    _membership().apply_transfer_tags(plan, dst_tag, src_tag, op, actor, batch_id, slugs + [d["slug"] for d in plan])
+    rows += _tag_rows(plan, dst_tag, src_tag, a, keep)
     if blank_writeup:
         def _drop_doc(log):
             for r in db.list_post_tag_rows(blank_writeup):

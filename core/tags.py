@@ -169,6 +169,15 @@ def merge_free_text_name(log, slug, name):
     return log.update("capture_events", {"slug": slug}, {"tags": json.dumps(existing + [name])})
 
 
+def remove_free_text_name(log, slug, name):
+    """Drops `name` from the item's free-text list if it is there (the reverse of
+    merge_free_text_name; #590: a file leaving a card sheds that card's chip). True if it changed."""
+    existing = _free_text(log, slug)
+    if name not in existing:
+        return False
+    return log.update("capture_events", {"slug": slug}, {"tags": json.dumps([n for n in existing if n != name])})
+
+
 def _flat(op, muts):
     from .items import _flat as items_flat  # same change-summary shape as the item service
     return items_flat(op, muts)

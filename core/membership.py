@@ -135,6 +135,73 @@ def remove_files(card, slugs, *, dry_run=False, actor=None, batch_id=None):
     return Result(True, _flat(OP_REMOVE, muts), [], batch_id, dry_run, {"card": project["slug"], "removed": removed})
 
 
+# --- tags that follow a transfer (#590) ------------------------------------------------
+
+def plan_transfer_tags(slugs, src, dst, *, drop_source, ignore_card_ids=()):
+    """What a move / copy / merge does to the files' tags, as a read-only plan (so a dry run can
+    show it). The files gain `dst`'s linked tag in both stores (post_tags and the free-text chip).
+    With `drop_source` they lose `src`'s linked tag in both stores, but only that exact tag (a tag
+    the user added by hand under another name stays), and not while the file is still on another
+    card whose linked tag is the same tag (or has the same name, for the chip).
+    `ignore_card_ids`: cards that are going away in the same batch (a merge's absorbed cards), so
+    they don't count as "still on another card". Returns a list of per-file dicts
+    {slug, link_add, chip_add, link_drop, chip_drop} with only the files that change, plus the two
+    tag dicts: (changes, dst_tag, src_tag)."""
+    dst_tag = db.get_tag(dst["tag_id"]) if dst.get("tag_id") else None
+    src_tag = db.get_tag(src["tag_id"]) if drop_source and src.get("tag_id") else None
+    if src_tag is not None and dst_tag is not None and src_tag["id"] == dst_tag["id"]:
+        src_tag = None
+    if dst_tag is None and src_tag is None:
+        return [], None, None
+    skip_ids = {src["id"], *ignore_card_ids}
+    marks = ",".join("?" for _ in skip_ids)
+    out = []
+    conn = db.get_conn()
+    try:
+        for slug in slugs:
+            row = db.get_by_slug(slug)
+            if row is None:
+                continue
+            have = {r["tag_id"] for r in conn.execute("SELECT tag_id FROM post_tags WHERE post_slug = ?", (slug,))}
+            chips = list(row.get("tags") or [])
+            d = {"slug": slug, "link_add": False, "chip_add": False, "link_drop": False, "chip_drop": False}
+            if dst_tag is not None:
+                d["link_add"] = dst_tag["id"] not in have
+                d["chip_add"] = dst_tag["name"] not in chips
+            if src_tag is not None:
+                elsewhere = conn.execute(
+                    "SELECT t.id, t.name FROM project_items pi JOIN projects p ON p.id = pi.project_id "
+                    f"JOIN blog_tags t ON t.id = p.tag_id WHERE pi.post_slug = ? AND p.id NOT IN ({marks})",
+                    (slug, *skip_ids)).fetchall()
+                same_tag = any(r["id"] == src_tag["id"] for r in elsewhere)
+                same_name = any(r["name"] == src_tag["name"] for r in elsewhere)
+                d["link_drop"] = src_tag["id"] in have and not same_tag
+                d["chip_drop"] = (src_tag["name"] in chips and not same_name
+                                  and not (dst_tag is not None and dst_tag["name"] == src_tag["name"]))
+            if any(d[k] for k in ("link_add", "chip_add", "link_drop", "chip_drop")):
+                out.append(d)
+    finally:
+        conn.close()
+    return out, dst_tag, src_tag
+
+
+def apply_transfer_tags(plan, dst_tag, src_tag, op, actor, batch_id, affected_slugs=None):
+    """Writes a `plan_transfer_tags` plan as one imaged change-log row under the caller's `op`
+    and batch, so the batch's one undo reverses it with the membership change."""
+    if not plan:
+        return
+    with db.ImageLog(op, actor, batch_id, affected_slugs or [d["slug"] for d in plan]) as log:
+        for d in plan:
+            if d["link_drop"]:
+                tags.unlink(log, d["slug"], src_tag["id"])
+            if d["chip_drop"]:
+                tags.remove_free_text_name(log, d["slug"], src_tag["name"])
+            if d["link_add"]:
+                tags.link(log, d["slug"], dst_tag["id"])
+            if d["chip_add"]:
+                tags.merge_free_text_name(log, d["slug"], dst_tag["name"])
+
+
 def _flat(op, muts):
     from .items import _flat as items_flat  # same change-summary shape as the item service
     return items_flat(op, muts)

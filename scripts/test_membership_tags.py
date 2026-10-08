@@ -7,7 +7,7 @@ functions called directly. Covers:
   - every "put files on a card" path and the side-effect flags it passes (linked tag, free-text
     tag merge, auto-cover), each undone, with the actor recorded;
   - every remove path (membership only; tags and cover stay), each undone in place;
-  - the card reshaping ops (copy/move/split) still have no tag/cover side effects;
+  - the card reshaping ops: no cover side effects (copy/move now swap the linked tag, #590: see test_move_tags_590.py);
   - tags: the item Save (tags + title + provenance = ONE change-log row), bulk attach-tags creating
     a tag, MCP attach/detach/create, undo removing a created tag, the in-use refusal, lookups
     never creating;
@@ -288,14 +288,14 @@ membership.write(S["id"], [A, B], [], "test_seed", None)
 before_t = state(T["id"], [A, B])
 res = cards.copy_files([A], S["id"], T["id"])
 s = state(T["id"], [A, B])
-check("copy_files: membership only, no tag/cover, op copy_files",
-      s["members"] == [A] and s["cover"] == (None, None) and s["post_tags"] == before_t["post_tags"]
-      and s["free"] == before_t["free"] and [x["op"] for x in changes_of(res.batch_id)] == ["copy_files"])
+check("copy_files: no cover change; gains the destination tag (#590), ops copy_files",
+      s["members"] == [A] and s["cover"] == (None, None) and s["post_tags"] != before_t["post_tags"]
+      and set(x["op"] for x in changes_of(res.batch_id)) == {"copy_files"})
 cards.undo(res.batch_id)
 res = cards.move_files([A, B], S["id"], T["id"])
-check("move_files: rows moved, ops logged once per side",
+check("move_files: rows moved, ops logged under move_files (membership per side + the tag swap, #590)",
       [x["post_slug"] for x in db.list_project_item_rows(T["id"])] == [A, B] and db.list_project_item_rows(S["id"]) == []
-      and [x["op"] for x in changes_of(res.batch_id)] == ["move_files", "move_files"])
+      and set(x["op"] for x in changes_of(res.batch_id)) == {"move_files"})
 cards.undo(res.batch_id)
 res = cards.split_card(S["id"], [{"title": "Split Part", "file_slugs": [B]}], dry_run=True)
 check("split dry run plans the move and writes nothing", res.dry_run and changes_of(res.batch_id) == []

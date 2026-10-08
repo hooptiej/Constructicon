@@ -663,6 +663,13 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   reshaping ops (copy / move / split / merge / delete) call `membership.write(...)` / `write_items(log,
   ...)`: rows only, logged under their own op (`db.write_card_items` is gone). Don't call
   `db.add_item_to_project` / `remove_item_from_project` from a route or tool.
+  **Tags follow a transfer (#590).** `membership.plan_transfer_tags` / `apply_transfer_tags` (read-only
+  plan, then one imaged row under the op's own batch): `cards.move_files` and `cards.copy_files` give
+  the files the destination's linked tag in BOTH stores (`post_tags` + the free-text chip); a move
+  also drops the source's own linked tag (`projects.tag_id` exactly; hand-added tags stay), unless the
+  file is still on another card whose linked tag is the same tag (chip: same name). `merge_cards` is
+  a move into the kept card (the absorbed card is ignored in the "still elsewhere" check). Split is
+  left alone (the new card has no linked tag). No cover change. Check: `scripts/test_move_tags_590.py`.
 - **Tags (phase C): `core/tags.py`.** `create(name, parent_name)` (MCP create_tag), `attach(slug,
   names)` / `detach(slug, tag_id)` (MCP; `post_tags` only, as before), `set_item_tags` and
   `merge_item_tags(slugs, names)` (bulk attach-tags: free-text column + its `post_tags` sync, one

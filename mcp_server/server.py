@@ -1989,7 +1989,11 @@ def constructicon_move_files(slugs: list[str], from_card: str | int, to_card: st
                              batch_id: str | None = None) -> dict:
     """Move files (by slug) from one card to another: they leave from_card and join to_card.
     A card's own write-up can't be moved. Refused with bad_files if a file isn't in from_card.
-    dry_run=true previews. Returns {ok, dry_run, changes, warnings, batch_id}."""
+    Tags follow the move (#590), in both tag stores (the tag tree and the free-text chips): the files
+    gain to_card's linked tag and lose from_card's own linked tag (tags added by hand stay; a file
+    still on another card with the same linked tag keeps it). One batch, so one undo reverses the
+    move and the tag swap together. dry_run=true previews. Returns {ok, dry_run, changes, warnings,
+    batch_id, tags_added, tags_removed}."""
     return cards.move_files(slugs, from_card, to_card, dry_run=dry_run, batch_id=batch_id).to_dict()
 
 
@@ -1997,7 +2001,8 @@ def constructicon_move_files(slugs: list[str], from_card: str | int, to_card: st
 def constructicon_copy_files(slugs: list[str], from_card: str | int, to_card: str | int, dry_run: bool = False,
                              batch_id: str | None = None) -> dict:
     """Add files from one card to another WITHOUT removing them (files are many-to-many, so
-    a photo can live in a project and in a Thing). Same rules as constructicon_move_files."""
+    a photo can live in a project and in a Thing). Same rules as constructicon_move_files, except the
+    files keep from_card's tag and only gain to_card's linked tag (#590)."""
     return cards.copy_files(slugs, from_card, to_card, dry_run=dry_run, batch_id=batch_id).to_dict()
 
 

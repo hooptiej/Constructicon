@@ -19,12 +19,17 @@ a viewer, roles are checked, restricted items are admin-only, and scripts / the 
 install token. See "Users and sessions" and "Auth enforcement" below.
 
 Long-term goal (see `README.md` for the full writeup): this is the dynamic
-backend for a future blog-driven personal site. A future static-export step
-will freeze content out of here and publish it to GitHub Pages (the owner's
-`hooptiej/hooptiej.github.io`; the targets are per-install config since #562, see
-"Install config" below).
+backend for a blog-driven personal site. The static-export step exists: it freezes content out
+of here into a self-contained static site, previews it at `/preview`, and publishes it to GitHub
+Pages (the owner's `hooptiej/hooptiej.github.io`; the targets are per-install config since #562).
+See "Static export" and "Install config" below.
 
 ## Architecture at a glance
+
+**Architecture section verified against commit c6d2831 (main, after #629, plus the #552 changes
+themselves) on 2026-10-08.** Every module, route file, script and command named in this section was
+checked against the code at that commit (issue #552). If a claim here disagrees with the code, the code wins: fix the claim, and move
+the date and commit forward when you re-verify.
 
 - **`web/`** — FastAPI/Starlette app, split into routers (#547). The ASGI
   entry point is still `web.app:app`.
@@ -38,21 +43,29 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
   - `web/routes/` holds one `RoleRouter` (an `APIRouter` whose routes all carry a role label,
     see "Roles and policy" below) per area, **no prefix** (each
     route writes its full path): `pages.py` (HTML pages + legacy redirects),
-    `items.py` (`/api/upload`, `/api/content`, `/api/image/*`, per-item
-    captions, gallery, bulk, tags, search, multi-delete), `cards.py`
+    `items.py` (`/api/upload`, `/api/content`, `/api/image/*` incl. `replace-file`, per-item
+    captions, `/api/gallery`, `/api/home/files`, `/api/clients`, bulk, tags, search, multi-delete), `cards.py`
     (`/api/projects*`, `/api/project/*`, `/api/cards/*`, `/api/links*`,
     `/api/families/*`, `/api/changes/*`), `hobbies.py`, `curator.py`
     (`/api/curator/*`, `/api/pending-decisions*`), `blog_export.py`
     (`/api/blog-entries*`, `/api/export/*`), `admin.py` (settings, backup,
     delete-all, audit log, redacted/restricted, storage stats, provenance
     options, caption tuning/breaker), `files.py` (`/f/*`,
-    brand-asset and wallpaper listings) and `meta.py`
-    (`/healthz`, `/api/version`).
+    brand-asset and wallpaper listings), `meta.py`
+    (`/healthz`, `/api/version`) and `auth.py` (sign-in, setup, users, my password; see "Users and
+    sessions"). `app.py` includes them in this order: meta, pages, admin, items, curator, files,
+    cards, hobbies, blog_export, auth.
   - `web/shapes.py`: the `_to_*` response shapers and the pure helpers they
     share. `web/common.py`: the `templates` object and its Jinja globals,
     breadcrumbs / `?rev=` note helpers.
     `web/middleware.py`: the actor middleware and audit logging. Routers import from `common` and
     `shapes`, never from `web.app` or from each other.
+  - The rest of `web/`: `auth.py` (session, access-gate and CSRF middleware), `roles.py` (`RoleRouter`,
+    `requires`, `NON_ROUTE_ROLES`), `request_guard.py` (same-origin guard and the audit-log redaction
+    rules), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged home
+    Files feed, #624), `guides/` (in-app markdown guides), `export_templates/` (the static site's
+    Jinja templates), `templates/` and `static/` (css, js; `static/js/mountain-time.js` is the JS twin
+    of `core/datefmt.py`).
   - **Adding a route:** put it in the router for its area, decorated
     `@router.get(...)`/`@router.post(...)` with the full path. Registration
     order matters only when two paths can match the same URL (first one
@@ -76,16 +89,47 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
     the JSON/form API the templates' JS calls; `/f/{slug}` and
     `/f/{slug}/thumb` are the public hotlink + thumbnail routes (stable URLs
     meant to be embedded elsewhere).
-- **`core/db.py`** — all SQLite access. No ORM; raw SQL via `sqlite3`, one
-  `get_conn()`/`conn.close()` pair per call. This is the schema source of
-  truth — read it directly rather than trusting any description here or in
-  README.md, which can drift.
-- **`core/object_types.py`** — registry of object/media types
-  (`ObjectTypeSpec` per `media_type`: thumbnail strategy, OCR eligibility,
-  per-type metadata fields). `core/thumbnails.py` and `core/ocr.py`
-  dispatch purely off this registry — neither should ever grow a literal
-  `if media_type == "..."` branch. Adding a new type means adding one spec
-  here, not touching call sites elsewhere.
+- **`core/db.py`** (~5,000 lines) — the SQLite layer and the schema source of truth (`SCHEMA`,
+  `MIGRATIONS`, `init_db`, `transaction()`, `ImageLog`, every read query, the pipeline writers). No
+  ORM; raw SQL via `sqlite3`, one `get_conn()`/`conn.close()` pair per call (or one shared
+  connection inside `db.read_session()` / `transaction()`). **It is not the only module with raw SQL:**
+  eleven other core modules (`backup`, `blog`, `card_migration`, `curator_needs`, `hobbies`,
+  `install_config`, `membership`, `physical_piece`, `provenance_options`, `revisions`, `tags`) and
+  `web/routes/admin.py` also call `.execute(...)` themselves (the service-layer cleanup that would pull
+  them in is tracked in the issues, not done). Read the schema in `core/db.py` rather than trusting
+  any description here or in README.md, which can drift. Writes still go through the service modules
+  ("Service layer" below).
+- **`core/object_types/`** — a package, one module per object/media type (`image.py`, `video.py`,
+  `pdf.py`, `stl.py`, `psd.py`, `svg.py`, `eps.py`, `audio.py`, `youtube.py`, `code.py`, ... plus the
+  underscore helpers `_preview.py`, `_textstats.py`, `_office.py`, `_pe.py`). `__init__.py` holds the
+  registry: `ObjectTypeSpec` (thumbnail strategy, OCR / caption eligibility, preview and properties
+  functions, per-type metadata fields), `register()`, `get_object_type()`, `mismatch_reason()` and
+  `is_restricted()`; it imports every module in the package at load (`pkgutil.iter_modules`), so a
+  new file registers itself. The per-format rendering (PDF, STL, PSD, SVG, EPS) lives inside those
+  modules, not in `core/pdf.py` and friends (they no longer exist). `core/thumbnails.py` and
+  `core/ocr.py` dispatch purely off this registry: neither should ever grow a literal
+  `if media_type == "..."` branch. Adding a new type means adding one module here, not touching call
+  sites elsewhere (see "Adding an object type").
+- **Module map: the rest of `core/`** (one line each; the module docstring is the detail):
+  - *Writes, the service layer (#541):* `items.py`, `membership.py`, `tags.py`, `cards.py`,
+    `hobbies.py`, `blog.py`, `decisions.py`, `reset.py`, `revisions.py`, `users.py`,
+    `install_config.py`, `provenance_options.py`; `changes.py` (the change-log API), `actor.py`
+    (who did it), `errors.py` (`AppError` family), `besteffort.py` (logged, rate-limited non-fatal
+    failures). See "Service layer" and "Actor and errors".
+  - *Rules and policy (pure or near-pure):* `card_rules.py` (card enums, labels, validation, no DB),
+    `card_level.py` (the 0-5 curation pips), `card_payload.py` (slim item records for grids),
+    `timeline.py` (effective-date resolution; `source_datetime_to_epoch`), `datefmt.py` (the one place
+    a stored date becomes text, in Mountain Time, #544), `item_title.py` (`title_of`, #542),
+    `markdown_render.py`, `roles.py` + `policy.py` (who may use a door / see an item; `access_log.py`
+    records opens of sensitive items), `physical_piece.py` (made-by-hand item fields).
+  - *The upload pipeline:* `ingest.py` (one pipeline for web and MCP uploads), `automatch.py`
+    (filename-based project/tag matching, queues `project_match`), `embedded_metadata.py`,
+    `thumbnails.py`, `ocr.py`, `similarity.py`, `captions.py`.
+  - *Curator:* `curator.py` (completeness scoring), `curator_needs.py` (derived nudges),
+    `curation_queue.py` (the one queue). See "Decisions and the Curator".
+  - *Install, files, export:* `paths.py`, `storage.py`, `backup.py`, `install_token.py`, `version.py`,
+    `site_export.py` + `project_export.py` (see "Static export"), `card_migration.py` (the V2 card
+    migration run from `init_db()`).
 - **`core/storage.py`** — file storage on local disk under `storage/`
   (gitignored; not baked into the Docker image). Random unguessable slugs
   (`secrets.token_urlsafe`), not sequential IDs.
@@ -104,9 +148,6 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
   (tesseract via `pytesseract`) and "related items" (perceptual hash +
   sentence-transformers embedding similarity, `all-MiniLM-L6-v2`, baked
   into the Docker image at build time — see Dockerfile).
-- **`core/pdf.py`, `core/stl.py`, `core/psd.py`, `core/svg.py`,
-  `core/eps.py`** — per-format thumbnail/preview rendering, one module per
-  exotic upload type, plugged into `object_types.py`'s registry.
 - **`core/captions.py`** (#239) — auto-caption *suggestions* from a local
   Ollama vision model (`moondream`) on the TrueNAS box's GPU, written to
   `type_metadata.auto_caption` (never into `description` on its own).
@@ -155,13 +196,28 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
   "MCP server: `constructicon-mcp`" below for the tool surface and how it
   runs alongside `constructicon-web`). Tool names are `constructicon_*`;
   the old imagerepo vocabulary is gone from here.
-- **`scripts/`** — one-off/maintenance scripts (YouTube channel sync,
-  backfill from the old static site, project-grouping fixups). These talk
-  to a running instance over HTTP (`--base-url`), the same discipline the
-  app's own UI would use, rather than writing to the DB directly — see
-  individual script docstrings for the reasoning and any exceptions.
-  Since #467 step 2 each one calls `_http.install(<base url>)` (`scripts/_http.py`) so its
-  requests carry the install token; see "Auth enforcement".
+- **`scripts/`** — four kinds of file; the folder says which is which (#552):
+  - *Tests and checks* (`test_*.py`, `test_*.js`, `check_*.py`): run them with `scripts/run_checks.py`,
+    see "Build / test / run".
+  - *Live tools* (not retired): `run_checks.py`, `deploy.sh`, `release.py`, `mcp_token.py`, `reset_password.py`,
+    `golden_master.py`, `seed_test_from_production.py`, `full_youtube_channel_sync.py`,
+    `backfill_content_dates.py`, `regenerate_thumbnails.py`, and the helpers `_http.py` and `_testenv.py`.
+    The ones that talk to a running instance do it over HTTP (`--base-url`), the same discipline the
+    app's own UI would use, rather than writing to the DB directly; see each docstring for the reasoning
+    and any exceptions. Since #467 step 2 each calls `_http.install(<base url>)` (`scripts/_http.py`) so
+    its requests carry the install token; see "Auth enforcement".
+  - *Spent one-shots:* `scripts/archive/`. Each file starts with a "Retired: ran on prod around ...; do
+    not re-run. Kept for reference." line. Nothing imports them and no doc tells anyone to run them.
+    **Moving them did not make them safe to run:** six (`apply_project_groupings`,
+    `backfill_from_hooptiej_site`, `backfill_project_writeups`, `import_new_youtube_from_channel_rss`,
+    `seed_example_projects`, `sync_free_text_tags_to_tag_tree`) no longer find `core` from `archive/`
+    (they assume they sit in `scripts/`), but `cleanup_delete_orphans.py` (`--execute` deletes rows),
+    `link_lil_dragon_brand.py` (`--execute` writes) and `apply_curation_suggestions.py` still start
+    from there, so the header line is the only guard. A new one-shot goes in `scripts/` while it is
+    live and moves to `archive/` once it has run.
+  - `scripts/data/`: input files for scripts (the V2 curation suggestions JSON).
+  - Outside `scripts/`: `sync_clients.py` at the repo root seeds the vestigial `clients` tables (see
+    "Data model"); it stays until the owner decides whether those tables go.
 - **The details panel (#515)** — the project and item pages edit through one
   grouped panel: `templates/_details_group.html` (the `dp_group` macro: a
   fact-sheet view plus a per-group edit form), `static/js/details.js` (edit /
@@ -575,7 +631,8 @@ fixture next to the certificate.
   `core/embedded_metadata.py` and `core/object_types/youtube.py` (upload-time file metadata, a
   YouTube publish date), `core/automatch.py` (upload-time automatch tagging), `core/ocr.py` (OCR
   client tags), `core/card_migration.py` (migrations), the one-off scripts
-  `scripts/{apply_project_groupings,seed_example_projects,backfill_from_hooptiej_site,link_lil_dragon_brand}.py`,
+  `scripts/archive/{apply_project_groupings,seed_example_projects,backfill_from_hooptiej_site,link_lil_dragon_brand}.py`
+  (retired, kept readable),
   and `scripts/test_*.py` (throwaway-DB fixtures);
 - anything uses an old public writer name (`RETIRED_PUBLIC`: `db.create_project`, `update_project`,
   `get_or_create_tag`, `attach_tags`, `add_item_to_project`, `mark_tag_as_hobby`,
@@ -815,6 +872,67 @@ already ranks first), so it is the same field as the item page's DATES group.
   (throwaway DB: write, undo, reset, roles, policy, span).
 - Not built: dragging the axis end caps to set the card's Timeline start/end, dragging a whole stack.
 
+## Static export, preview and publish
+
+The dynamic app freezes into a self-contained static site (relative links, media bundled), which can
+be previewed in the app and pushed to a GitHub Pages repo. All of it is admin-only.
+- **Build** (`core/site_export.py` `build_site(config, out_dir=None)`, `POST /api/export/build`):
+  renders `web/export_templates/` for the chosen cards (default: `card_rules.export_included_by_default`)
+  and `ready` blog entries, copies each item's media and thumbnail once, and returns a report with
+  counts and `warnings`. What may leave the install is `policy.filter_exportable` (restricted and
+  sensitive items never do, whoever asks), and only the current revision of a chain goes in. The
+  footer carries "Built with Constructicon <version>". The submitted config is saved to the
+  `export_config` setting (`GET /api/export/config`). A build with no `out_dir` writes
+  `<exports>/<timestamp>/`, refreshes `<exports>/current` and prunes to the newest two builds; a build
+  with an `out_dir` touches nothing else (#576).
+- **Preview:** `/preview` is a mount over `<exports>/current` (`web/app.py` `_CurrentExportFiles`), so it
+  serves the latest default build. It needs at least viewer; the bundled `media/` files get the same
+  safe-serving headers as `/f/` (#610).
+- **Publish** (`POST /api/export/publish`, body `{"target": "<name>"}`): `site_export.publish_build`
+  commits `exports/current` into a work checkout (`<exports>/.publish/<target>`) and pushes it. The
+  targets are install config (`GET /api/export/targets`; none configured = 400 `no_publish_target`,
+  never someone else's repo, see "Install config"); the token is the write-only `pages_publish_token`
+  setting, used only for the push URL and scrubbed from errors and from `.git/config`.
+- **One lock:** build and publish share one lock; a second one while one runs is 409 `export_busy`.
+- **UI:** the **Export** tab in the nav rail opens the export builder drawer
+  (`web/templates/_export_builder.html`). Live pages only: the static site's own templates are
+  `web/export_templates/`, not `web/templates/`.
+- **Separate and older:** `core/project_export.py` / `GET /api/projects/{id}/export.zip` bundles one
+  card's contents as a zip for offline or agent analysis; it is not the site export.
+- There is no test file of its own for the export. Its lock and failure paths are covered by
+  `scripts/test_async_blocking_550.py` and the `/preview` mount's headers by
+  `scripts/test_f_sandbox_610.py`.
+
+## Decisions and the Curator
+
+Two ideas share the nav rail's "Curator" tab and one queue:
+- **Decisions** (`core/decisions.py`, table `pending_decisions`): stored questions the app will not
+  answer for itself. The kinds are listed under "Data model" (`project_match`, `retype`,
+  `item_supersedes`, and the four `card_*` kinds). `list_open()` / `count_open()` read, `resolve()`
+  answers, `sweep_stale()` closes the ones nothing can answer any more (see "Service layer").
+- **The Curator** (`core/curator.py` scoring, `core/curator_needs.py` nudges, `core/curation_queue.py`
+  the queue; #519): `curator.py` scores a card's completeness from declarative `SCORING_RULES`;
+  `curator_needs.py` derives **nudges** from the unmet checks (missing cover, missing write-up, thin
+  captions, ...), never stored; `cards.list_needs_decision` supplies **needs** (missing provenance, a
+  blank write-up, an untyped link, hobby flags). `curation_queue.py` merges questions, nudges and needs
+  into ONE list grouped by card (order rules in its docstring). Only the owner's **Defer** / **Dismiss**
+  is persisted (`curator_dismissals`, keyed by the item's `key`; a question can be deferred, never
+  dismissed).
+- **Where it surfaces:** the **Curator tab in the nav rail** (`_nav_tabs.html`) opens the Curator drawer
+  (`_nudges_drawer.html`, rendered by `static/js/curator-queue.js`); its count badge is
+  `GET /api/curator/queue?summary=1` and refreshes on the `pending-decisions-changed` /
+  `needs-changed` events; `/curator` is the full page; `/admin` ("Needs your input") now only shows the
+  open count and a link. The old header gear badge and the admin-page list are gone (#345, #519).
+- **Routes** (`web/routes/curator.py`): `GET /api/pending-decisions`, `POST
+  /api/pending-decisions/{id}/resolve` (editor); `GET /api/curator/dashboard`, `/needs`, `/queue`,
+  `/queue/html`; `POST /api/curator/needs/dismiss`, `/queue/defer`, `/queue/bring-back` (editor). The whole
+  queue is built once as actor `system` and cached until the database changes
+  (`db.change_fingerprint`) or `CACHE_TTL` (120 s) passes, then filtered per actor on read
+  (`curation_queue.for_actor`, see "Ownership and sensitive items").
+- Checks: `scripts/test_bulk_decisions.py` (bulk-accepting card decisions) and
+  `scripts/test_ownership_sensitive.py` (the queue as each role sees it), both on a throwaway DB, and, against a
+  live instance, `scripts/check_curator_queue.py`.
+
 ## Adding an object type
 
 To add a new object type (issue #448 contract v2):
@@ -878,12 +996,12 @@ To add a new object type (issue #448 contract v2):
 - **`capture_events`** — the core item table. Despite the name (a holdover
   from imagerepo's screenshot-capture origins), this holds *every* kind of
   object: images, PDFs, STLs, PSDs, SVGs, EPS, audio, YouTube links,
-  whatever else `object_types.py` registers. Key columns:
+  whatever else the `core/object_types/` registry holds. Key columns:
   - `slug` — unique, unguessable, used in URLs.
   - `media_type` — loose classifier (`'image' | 'video' | 'youtube' |
     'document' | 'any'`, ...). **Deliberately no CHECK constraint** — not a
     rigid enum, a new value just needs a registry entry in
-    `object_types.py`.
+    the `core/object_types/` registry.
   - `source` — upload-pipeline metadata (e.g. `'screenshot'`,
     `'external'`), distinct from `tech`.
   - `tech` — repurposed. Originally "which technician uploaded this" in
@@ -920,7 +1038,7 @@ To add a new object type (issue #448 contract v2):
     fit a generic column (e.g. YouTube view/like/comment counts; an audio
     file's ID3 artist/album/track/year/genre, #255). One
     shared column so a new object type never needs a schema migration; see
-    `object_types.py`'s `MetadataField` for the documented shape per type.
+    `core/object_types/__init__.py`'s `MetadataField` for the documented shape per type.
   - `extracted_text`, `perceptual_hash`, `embedding`, `ocr_status` —
     OCR/similarity pipeline state.
   - `redacted` — "file removed, metadata kept" (the detail page's "Remove
@@ -952,42 +1070,50 @@ To add a new object type (issue #448 contract v2):
   *distinct* from the tag tree (auto-grouping by tag was the original plan
   and was rejected in favor of manual curation — "projects are how the
   other objects come together"). Has an optional `tag_id` linking the
-  project to a root-level `blog_tags` row of the same name, so tagging into
-  a project also surfaces it via ordinary tag browsing.
+  project to a `blog_tags` row. `cards.create` sets it at creation time: it reuses the root tag of
+  the same name or makes one (`link_tag=False` makes none; a hobby -> card conversion reuses the
+  hobby's tag), so tagging into a project also surfaces it via ordinary tag browsing. The link is the
+  id, **not** the name: nothing renames the tag when the card is retitled (or the reverse), so the two
+  names drift (7 of 75 prod cards had, per #552) and older cards have `tag_id` NULL.
 - **`project_items`** — many-to-many join, `(project_id, post_slug,
   sort_order)`, with a manual `sort_order` for deliberate (non-chronological)
   ordering within a project.
 - **`clients`, `client_domains`** — vestigial imagerepo IT-client list
-  (Hudu-synced company names, used for OCR auto-tagging). Not part of
-  Constructicon's actual personal-gallery use case; present because it
-  rode along with the fork. The three 'special' rows are no longer seeded at boot (#562).
+  (Hudu-synced company names). Not part of Constructicon's actual personal-gallery use case; present
+  because it rode along with the fork. **Both tables are empty on prod (per #552)**, so nothing is
+  auto-tagged in practice, although the code path is still there (`core/ocr.py` reads
+  `db.list_client_domains()` to tag OCR text by client domain). They are in `reset.KEPT_TABLES`.
+  The three 'special' rows are no longer seeded at boot (#562). #628 deliberately left the tables and
+  the repo-root `sync_clients.py` in place pending an owner decision on whether they go.
 - **`app_settings`** — generic key/value store for app-level secrets (e.g.
   the YouTube Data API key), so new integrations don't need a
   docker-compose env var wired in from outside. `GET /api/settings` only
   ever reports *presence* of a key, never its value.
 - **`pending_decisions`** (#240) — a small generic "don't auto-decide, ask
   the owner" queue: `{id, kind, post_slug, payload JSON, created_at,
-  resolved_at}`. Only `kind='project_match'` exists today — written by
-  `core/automatch.py` when an upload's filename/folder name matches more
-  than one project title (one match auto-adds, tag-name matches always
-  auto-apply). Surfaces on the admin page (`/admin`, "Needs your input";
-  the header's gear link carries the count badge on every page — it was a
-  bottom-right pop-out until #295) via `GET /api/pending-decisions`;
-  resolved with checkboxes
-  via `POST /api/pending-decisions/{id}/resolve`. Resolved rows are kept
-  (resolution stored in `payload.resolution`). A future "ask, don't guess"
-  case adds a new `kind` + payload shape, not a table.
-  **V2 card decisions** (`card_status`, `card_built_for`, `card_kind`; spec
-  `docs/design/v2-cards.md` 4.3) use `post_slug = "card:<project slug>"`, NOT a
-  `capture_events` slug — `decisions.stale_reason()` branches on that prefix
-  (validating against `projects`), because the file-row stale check would
-  otherwise call every card question stale. Since #551 item 3 no read
-  resolves anything: stale questions are left out of `list_open()` and
-  resolved only by the explicit, logged `decisions.sweep_stale()` (see
-  "Service layer").
+  resolved_at}`. Resolved rows are kept (resolution stored in `payload.resolution`). A new "ask, don't
+  guess" case adds a new `kind` + payload shape, not a table. The kinds that exist, who queues them
+  and who answers (see "Decisions and the Curator" for how they surface):
+  - `project_match` (`core/automatch.py`): an upload's filename/folder name matches more than one card
+    title (one match auto-adds, tag-name matches always auto-apply).
+  - `retype` (`core/ingest.py`): a type's pre-store hook answered `needs_decision`, so the file is stored
+    under a provisional type and the owner picks the real one.
+  - `item_supersedes` (`core/revisions.py`, via `ingest.auto_match`): see "Revision chains" below.
+  - `card_status`, `card_kind`, `card_built_for`, `card_family_members` (the "four `card_*` kinds",
+    `core/cards.py`'s `CARD_DECISION_KINDS`): V2 card questions. `post_slug = "card:<project slug>"`,
+    NOT a `capture_events` slug, so `decisions.stale_reason()` branches on that prefix (validating
+    against `projects`); the file-row stale check would otherwise call every card question stale.
+    `core/card_migration.py` queues the first three; `card_family_members` was queued only by the
+    one-time v2c_3 step, now `scripts/archive/v2c_owner_questions.py` (#562; never moves anything).
+    Resolving a family question runs unnest -> set_kind family -> add_to_family in one change-log batch.
+  Answering is `POST /api/pending-decisions/{id}/resolve` (editor; `core/decisions.py` `resolve`). Since
+  #551 item 3 no read resolves anything: stale questions are left out of `list_open()` and resolved only
+  by the explicit, logged `decisions.sweep_stale()` (see "Service layer").
 - **Card kind + status (V2, piece 1)** — `projects.kind` plus
   `activity`/`stage`/`stop_reason` are the *live* status; legacy
-  `projects.status` is **frozen** (the static export still filters on it).
+  `projects.status` is **frozen** (the static export's default card selection,
+  `card_rules.export_included_by_default`, #512, still reads it for a card whose stage never changed,
+  and the live stage once it has).
   Rules live in `core/card_rules.py` (pure), operations in `core/cards.py`,
   every core write is logged with row images in `audit_log` via
   `core/changes.py`, and the v1 -> v2 mapping is `core/card_migration.py`
@@ -1250,9 +1376,71 @@ anything that must happen "only once" cannot live in process-local state.
 
 ## Build / test / run
 
-No test suite exists in this repo today (no `tests/`, no CI config) —
-verification is manual, via `scripts/*.py` hitting a running instance's
-HTTP API, plus the `constructicon-test` container described below.
+### Tests and checks: `scripts/run_checks.py` is the pre-merge step (#552)
+
+There is no pytest, no `tests/` folder and no CI config (no `.github/`). The suite is the
+self-contained scripts in `scripts/` (`test_*.py`, `check_*.py`, `test_*.js`), and **one runner runs
+all of them and prints a table** (script / result / passed / failed / time) and an overall `RESULT:`
+line. **Run it before you open or merge a PR**, in a throwaway container with the checkout mounted
+read-only and no network (nothing in it can reach a real install):
+
+```
+docker build -t constructicon:pr-NNN .        # layers are cached; code is mounted, not baked in
+docker run --rm --network none -v "$PWD":/app:ro -w /app constructicon:pr-NNN python scripts/run_checks.py
+docker image rm constructicon:pr-NNN          # untag it afterwards
+```
+
+(`python scripts/run_checks.py -j 2` runs two at a time; `-k text` selects by file name; `--list`
+shows what would run; `--show-output` prints the whole output of anything that did not pass;
+`--selftest` checks the output reader.) On the shared dev box, name any container you start
+`pr<NNN>-*` or use `--rm`, and never touch `constructicon-web` / `constructicon-mcp`.
+- **Exit codes are not used, on purpose.** The runner decides each script's result from what it
+  prints (`PASS` / `ok` / `FAIL` lines, `FAILED: <names>`, a final "all checks passed" / "ALL PASS" /
+  "OK: ..." / "0 failure(s)" / "N/M passed" line) and never reads its exit status, because several
+  tests never call `sys.exit(1)` (`test_attic_546.py` prints `FAILED: <names>` and ends normally) and a
+  bare code says nothing about what failed. It prints the failing check names. A script whose output
+  matches nothing is reported `UNKNOWN: <its last lines>`, never as a pass; a traceback with no verdict
+  after it is a FAIL ("crashed: ..."); a timeout is a FAIL. The runner itself ends with the `RESULT:`
+  line and sets no exit status either. **A new test must print one of those verdict lines at the end**
+  (copy `scripts/test_actor_errors.py`'s `check()` + final `FAILED: ...` / `ALL PASS`).
+- **What it skips, with the reason printed:** the two **live-server** scripts, which talk to a running
+  instance and write to it: `test_office.py` (give `--live-url http://host:port` to run it, against
+  `constructicon-test`, never production) and `check_curator_queue.py` (it uses localhost:80, so run it
+  inside the test instance: `docker exec constructicon-test python3 scripts/check_curator_queue.py`;
+  the runner always skips it). It also skips the
+  **JS** tests (`test_*.js`, plus `check_item_cards.py`, which drives node) when `node` is not on PATH,
+  which is the case in the app image. Run those in a Node container:
+  `docker run --rm --network none -v "$PWD":/app:ro -w /app node:22-alpine sh -c 'for f in scripts/test_*.js; do echo "== $f"; node "$f"; done'`
+  (`check_item_cards.py` needs Python with the app's packages AND node together; neither image has
+  both, so in this container route it stays SKIP: run it on a machine that has both.
+  `golden_master.py` is a before/after snapshot tool, not a check, and is not collected.)
+- **Environment:** for each script the runner points `CONSTRUCTICON_DB_PATH`, `CONSTRUCTICON_STORAGE_DIR`
+  and `CONSTRUCTICON_EXPORTS_DIR` at fresh temp directories (unless you already set them) and sets
+  `PYTHONDONTWRITEBYTECODE`, so it works from a read-only mount. The tests also call
+  `_testenv.isolate()` themselves (see "paths" above).
+- **Known failure (2026-10-08):** `scripts/test_timeline_dates.py` fails 1 of 9,
+  `test_project_span_excludes_writeup`; it fails the same way on `main` (not caused by any PR). The
+  runner shows it as FAIL; do not hide it, fix it or file it.
+- **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
+  - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
+    `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
+    `test_replace_file_617`, `test_card_faces`, `test_install_config`, `check_layering`;
+  - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_role_policy`,
+    `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
+    `test_f_sandbox_610`, `check_routes_roles`, `check_policy_doors`;
+  - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,
+    `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`;
+  - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
+    `test_email_type`, `test_traditional_media`, `test_office` (live);
+  - pages, search, dates, UI: `test_search_543`, `test_item_title_542`, `test_mountain_time_544` (`.py` and
+    `.js`), `test_home_paging_624` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
+    `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
+    `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
+  - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `test_live_bugs_563`,
+    `test_round2` and `test_round3a` (the work-install shakedown rounds: several small fixes each),
+    `test_release` (the CalVer logic).
+- Besides the runner, **the `constructicon-test` container** (below) is where a change is exercised
+  against a copy of real data before prod.
 
 Local run (Python 3.14, per the Dockerfile's base image):
 
@@ -1277,8 +1465,8 @@ uvicorn web.app:app --host 0.0.0.0 --port 8000 --reload
   footprint, not the box's actual hardware.
 - `imagerepo.db` (SQLite file) and `storage/` are created at the repo root
   on first run, gitignored, not baked into the image.
-- `scripts/seed_example_projects.py` seeds a few real example Projects
-  from already-backfilled content; not auto-run.
+- `scripts/archive/seed_example_projects.py` (retired, #552) once seeded a few example Projects
+  on an empty dev DB; to fill a test box now use `scripts/seed_test_from_production.py`.
 
 There's no linter/formatter config checked in (no `.flake8`, `pyproject.toml`
 lint section, etc.) — match the surrounding file's style.
@@ -1289,7 +1477,11 @@ Runs on a shared TrueNAS box at `10.0.1.78` as a **plain `docker compose`
 checkout** — this is *not* deployed via TrueNAS's "Apps"/catalog system.
 There is no `docker-compose.yml` committed to this repo; the compose file
 lives only on the TrueNAS box itself (outside this checkout), which is why
-you won't find one here.
+you won't find one here. `docker-compose.yml.example` is the committed template
+(web, mcp, and the test pair); note it bind-mounts `core/`, `web/`, `mcp_server/`
+and `assets/` but **not `scripts/`**, and the image (the Dockerfile `COPY`s nothing)
+holds no repo code at all, so an install that runs `docker exec <web> python3
+scripts/...` has to mount `./scripts` in its own compose.
 
 **`git pull`/`git fetch` work again on both checkouts** (#71, fixed
 2026-09-06). Each checkout's `origin` remote points at
@@ -1314,6 +1506,19 @@ from inside either checkout —
 ./scripts/deploy.sh --build    # same, but `up -d --build` -- only needed when
                                 # requirements.txt or the Dockerfile changed
 ```
+
+**What `scripts/deploy.sh` does, in order (read from the script, #552):** (1) unless
+`--no-snapshot`, takes the ZFS snapshot described below (aborts the deploy if the snapshot fails);
+(2) `git fetch origin --tags`; (3) `git reset --hard origin/main` (nothing if already there);
+(4) writes the gitignored `core/VERSION.json`; (5) **default:** `sudo docker compose restart`,
+**with `--build`:** `sudo docker compose up -d --build`; (6) waits 3 s and prints `docker compose ps`.
+`--write-version-only` runs step 4 alone. The two restart modes are not interchangeable:
+`restart` always restarts the running containers, which re-reads the bind-mounted `core/` / `web/` /
+`mcp_server/`, but never applies a compose-file or image change; `up -d --build` rebuilds the
+image and recreates only the containers whose image or config changed, so with nothing but code
+changed it can leave the old processes running (see the warning below).
+**So: a code-only change is `./scripts/deploy.sh`; a `requirements.txt` / Dockerfile / compose change
+is `./scripts/deploy.sh --build`; either way, verify the running process has the change.**
 
 This replaces `git pull` (still stuck on the old HTTPS-with-no-creds
 failure mode if anyone reverts the remote) and replaces routinely
@@ -1572,20 +1777,18 @@ the module was actually imported with real dependencies.
    mount snapshot.
 - The Dockerfile comments confirm `core/`, `web/`, and `mcp_server/` are
   **bind-mounted at run time, not baked into the image** — an ordinary code
-  deploy is a `git pull` + container restart, not a rebuild. Only changes
-  to `requirements.txt` or system packages (the `apt-get install` line)
-  require an actual `docker compose up --build`.
+  deploy is `./scripts/deploy.sh` (reset to `origin/main` + `docker compose restart`), not a rebuild.
+  Only changes to `requirements.txt` or system packages (the `apt-get install` line)
+  need `./scripts/deploy.sh --build`.
 
-Typical redeploy from a checkout on the TrueNAS box:
+Typical redeploy from a checkout on the TrueNAS box (the same two commands as "Deploy with
+`scripts/deploy.sh`" above; this used to say `git pull` + `docker compose up -d --build` "always",
+which contradicted it and is what the warning below was about):
 
 ```
-git pull
-sudo docker compose up -d --build
+./scripts/deploy.sh            # code only
+./scripts/deploy.sh --build    # requirements.txt / Dockerfile / compose changed
 ```
-
-(`--build` is cheap/fast when only bind-mounted code changed, since the
-image layers are unchanged and get cached — but always include it rather
-than guessing whether this particular change needs a rebuild.)
 
 **`scripts/deploy.sh --build` can report success without actually
 restarting the containers** (confirmed 2026-09-07, deploying #197/#198):
@@ -1619,7 +1822,7 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
 
 - **`media_type` has no CHECK constraint on purpose.** It's a loose
   classifier, not an enum — don't add one. New types are registered in
-  `object_types.py`, not validated at the DB layer.
+  the `core/object_types/` registry, not validated at the DB layer.
 - **`description` vs. `content_description`, `timestamp` vs.
   `content_date`.** Easy to grab the wrong one of each pair — they mean
   different things (uploader metadata vs. the content's own
@@ -1647,7 +1850,8 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
   explicitly rejected in favor of manual curation via the `projects` /
   `project_items` tables.
 - **`clients`/`client_domains`/`ticket_id` are imagerepo-era vestiges.**
-  They still work (e.g. OCR auto-tagging by client domain) but aren't part
+  The code paths still exist (OCR auto-tagging by client domain, the `client` field, `/api/clients`)
+  but the client tables are empty on prod and none of it is part
   of Constructicon's actual personal-use case — don't build new features
   assuming they're a live, meaningful concept for this app the way they
   were for imagerepo.

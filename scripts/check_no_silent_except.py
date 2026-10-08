@@ -75,7 +75,10 @@ def _is_silent(body) -> bool:
 
 
 def find_silent(path: Path):
-    rel = path.relative_to(ROOT).as_posix()
+    try:
+        rel = path.relative_to(ROOT).as_posix()
+    except ValueError:  # a file outside the checkout (test_swallowed_errors probes a temp dir: the checkout may be read-only)
+        rel = path.name
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     tree = ast.parse(text, filename=rel)

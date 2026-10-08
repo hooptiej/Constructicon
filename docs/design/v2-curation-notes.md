@@ -3,7 +3,7 @@
 Claude reviewed all 122 open card decisions on 2026-10-03, using the constructicon-test copy of production. Each decision now has a reviewed suggestion, a confidence (high/medium/low) and a one-line evidence note. Nothing has been answered: these are only the pre-ticked boxes in the queue.
 
 - **Source:** `scripts/data/v2c_curation_suggestions.json`.
-- **Applied with:** `scripts/apply_curation_suggestions.py`, which is dry-run by default and changes only the `suggested`, `suggested_reason` and `confidence` fields of open decisions.
+- **Applied with:** `scripts/archive/apply_curation_suggestions.py`, which is dry-run by default and changes only the `suggested`, `suggested_reason` and `confidence` fields of open decisions.
 - **For prod:** run the script after the V2 stack merges.
 
 ## The suggestions, counted

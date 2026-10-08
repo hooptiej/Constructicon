@@ -317,7 +317,7 @@ SOURCE_AUTHORED = "Claude — authored"  # Not written by anything yet — reser
 def source_migrated_from(source):
     """"Claude — migrated from <source>" — for automated migration scripts
     that bring in existing content from elsewhere (e.g. source="hooptiej.github.io"
-    for scripts/backfill_from_hooptiej_site.py)."""
+    for scripts/archive/backfill_from_hooptiej_site.py)."""
     return f"Claude — migrated from {source}"
 
 
@@ -854,12 +854,13 @@ def init_db(migrate=True):
         existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
         if "nickname" not in existing_client_columns:
             conn.execute("ALTER TABLE clients ADD COLUMN nickname TEXT")
-        # tag_id: links a project to a root-level blog_tags row of the same name
-        # (see create_project's tag_id param) so tagging an object with a project
-        # also surfaces it through the site's ordinary tag-based browsing (the
-        # home page's ?tag=<slug> filter over the Projects column, and any future
-        # consumer of list_posts_for_tag). Existing pre-#1 projects (e.g. the ones
-        # from scripts/seed_example_projects.py) predate this and simply have
+        # tag_id: links a project to a blog_tags row (cards.create links the root
+        # tag of the same name at creation; the link is the id, so the names can
+        # drift apart afterwards) so tagging an object with a project
+        # also surfaces it through the site's ordinary tag-based browsing (any
+        # consumer of list_posts_for_tag; the home page's old ?tag=<slug> filter is
+        # gone, its pills filter by ?hobby= since #370). Existing pre-#1 projects (e.g. the ones
+        # from scripts/archive/seed_example_projects.py) predate this and simply have
         # tag_id = NULL — they still work everywhere, they just aren't reachable
         # via a tag filter until someone links one up by hand.
         existing_project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
@@ -2532,7 +2533,8 @@ def _add_relation(slug_a, slug_b):
     two slugs but did nothing about either side's categorization. That let
     a related item carry zero tags and zero project membership, which made
     it invisible everywhere tag/project browsing is the only way in (the
-    home page's Projects column, any /?tag= filter, a project's own detail
+    home page's Projects column, a /?tag= filter (since #370 the home pills
+    filter by ?hobby= instead), a project's own detail
     page) — it would only ever surface again via a direct /object/<slug>
     link or the raw uploader-grouped Gallery pane on the left of the home
     page, which lists every row unfiltered regardless of tags (see

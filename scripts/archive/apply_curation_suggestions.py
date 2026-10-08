@@ -1,3 +1,4 @@
+# Retired: ran on prod around 2026-10-03 (#503); do not re-run. Kept for reference.
 """Issue #503: rewrite the SUGGESTED answer of open V2 card decisions from a reviewed file.
 
 The V2 card migration (#486) queues owner decisions (card_status, card_kind,
@@ -31,9 +32,9 @@ Idempotent: a second run finds nothing to change.
 
 Usage
 -----
-    python scripts/apply_curation_suggestions.py              # dry run
-    python scripts/apply_curation_suggestions.py --execute    # apply (take a backup first)
-    python scripts/apply_curation_suggestions.py --file other.json --db /path/to/imagerepo.db
+    python scripts/archive/apply_curation_suggestions.py              # dry run
+    python scripts/archive/apply_curation_suggestions.py --execute    # apply (take a backup first)
+    python scripts/archive/apply_curation_suggestions.py --file other.json --db /path/to/imagerepo.db
 
 The DB path is --db, else $CONSTRUCTICON_DB_PATH, else core.db's default.
 """

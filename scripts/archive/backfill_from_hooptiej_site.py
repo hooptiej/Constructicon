@@ -1,3 +1,4 @@
+# Retired: ran on prod around 2026-09-01 (#21); do not re-run. Kept for reference.
 """One-off migration: backfill capture_events + blog_tags/post_tags from the
 real content on hooptiej.github.io (the live hooptiej.com static site).
 
@@ -83,13 +84,13 @@ What it does:
      sanity-check the counts against the site.
 
 Usage:
-    python scripts/backfill_from_hooptiej_site.py /path/to/hooptiej-site-clone \\
+    python scripts/archive/backfill_from_hooptiej_site.py /path/to/hooptiej-site-clone \\
         --base-url http://localhost:8000
 
     --base-url must point at the SAME running Constructicon instance whose
     database this process can also see at core.db.DB_PATH (the default,
     repo-relative imagerepo.db) — e.g. run this from inside the app's own
-    container (`docker exec <container> python3 scripts/backfill_from_hooptiej_site.py ...
+    container (`docker exec <container> python3 scripts/archive/backfill_from_hooptiej_site.py ...
     --base-url http://localhost:80`, matching whatever port/host the app's
     own `uvicorn` command binds), not from an unrelated machine pointed at
     the instance over the network, since the tag-tree calls bypass HTTP

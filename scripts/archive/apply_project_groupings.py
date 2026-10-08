@@ -1,3 +1,4 @@
+# Retired: ran on prod around 2026-09-01 (#51); do not re-run. Kept for reference.
 """Issue #51: create the 8 confirmed projects from issue #10 and attach the
 correct re-imported content rows (#21/#22) to each.
 
@@ -89,7 +90,7 @@ import has happened; already-applied groupings are unaffected.
 
 Usage
 -----
-    python scripts/apply_project_groupings.py --base-url http://localhost:80
+    python scripts/archive/apply_project_groupings.py --base-url http://localhost:80
 
     Must run somewhere that can also see the target's database at
     core.db.DB_PATH (e.g. docker exec into the app's own container) --
@@ -104,7 +105,7 @@ Usage
     approach as the two scripts before it.
 
     To run this against production once #22 has also been applied there:
-        python scripts/apply_project_groupings.py --base-url http://<prod-host>
+        python scripts/archive/apply_project_groupings.py --base-url http://<prod-host>
 
     (No production run is performed by this script's author -- see the PR
     description for the review/merge process this should go through first.)

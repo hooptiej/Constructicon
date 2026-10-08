@@ -1,3 +1,4 @@
+# Retired: ran on prod around 2026-09-06 (#156); do not re-run. Kept for reference.
 """Issue #156: backfill empty writeup documents for existing projects.
 
 Background
@@ -34,10 +35,10 @@ Safe to re-run:
 Usage
 -----
 Run against a running instance:
-    python scripts/backfill_project_writeups.py --base-url http://localhost:8000
+    python scripts/archive/backfill_project_writeups.py --base-url http://localhost:8000
 
 Or against the production instance on TrueNAS:
-    python scripts/backfill_project_writeups.py --base-url http://10.0.1.250
+    python scripts/archive/backfill_project_writeups.py --base-url http://10.0.1.250
 
 (see docker logs to find the actual internal port if the public port differs)
 """

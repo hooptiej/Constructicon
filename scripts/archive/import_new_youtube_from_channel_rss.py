@@ -1,3 +1,4 @@
+# Retired: ran on prod around 2026-09-01 (#22); do not re-run. Kept for reference.
 """Issue #22: import any hooptiej YouTube channel videos that exist on the
 real channel but are NOT already represented in Constructicon, using the
 new object-type content path (POST /api/content) rather than any legacy
@@ -6,7 +7,7 @@ backfill shortcut.
 Why this exists / what it deliberately does NOT do
 ----------------------------------------------------
 #22 asked for a full re-harvest of "the YouTube channel", separate from
-#21's site-sourced backfill (scripts/backfill_from_hooptiej_site.py), which
+#21's site-sourced backfill (scripts/archive/backfill_from_hooptiej_site.py), which
 only imports videos that happen to be referenced on hooptiej.github.io
 (embedded in blog posts, or listed under a project category's "Where to
 look"/standalone-video sections) -- a curated subset the site's owner chose
@@ -65,7 +66,7 @@ What it does
    existed, how many were newly imported (and their slugs).
 
 Usage:
-    python scripts/import_new_youtube_from_channel_rss.py \\
+    python scripts/archive/import_new_youtube_from_channel_rss.py \\
         --base-url http://localhost:80
 
     Must run somewhere that can also see the target's database at

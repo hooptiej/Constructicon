@@ -190,7 +190,7 @@
     <div class="home-widget home-widget-compact" data-widget="files">
       <div class="home-col-header">
         <h2>Files</h2>
-        {% if unfiled_slugs %}
+        {% if files_meta.unfiled_total %}
         <a class="see-all" href="/unfiled">Bulk file &amp; tag →</a>
         {% endif %}
         <div class="filed-seg" id="files-filed" role="group" aria-label="Filter files by project filing">
@@ -218,19 +218,22 @@
       }
       // #514: item tiles are the shared asset card (static/js/cards.js), same markup as
       // _card.html at mini size. Lamps, badges, tags and the unfiled marker sit under it.
-      // #256: true project-membership marker, NOT the free-text `client` field.
-      const UNFILED_SLUGS = new Set({{ unfiled_slugs | tojson }});
+      // #256: true project-membership marker, NOT the free-text `client` field. #624: it holds the
+      // unfiled slugs of the items the page has received so far (each page from the server adds its own).
+      const FILES = {{ files_meta | tojson }};
+      const UNFILED_SLUGS = new Set(FILES.unfiled_slugs);
       function cardHtml(item) {
         return ItemCards.html(item, { unfiledSlugs: UNFILED_SLUGS });
       }
-      // Per-type dict, keyed by media_type; each value is that type's full item list (#256)
+      // #624: the page embeds only the first batch of each type (the default view); everything else
+      // comes from GET /api/home/files a page at a time. Per-type dict, keyed by media_type.
       const filesByType = {{ files_by_type | tojson }};
       const filesGrid = document.getElementById('files-grid');
       const filesSort = document.getElementById('files-sort');
       const filesTabs = document.getElementById('files-tabs');
 
       // Build tabs from every type that has data, plus "All" for merged view
-      const mediaTypes = Object.keys(filesByType).sort();
+      const mediaTypes = Object.keys(FILES.counts).sort();
       const tabs = ['all', ...mediaTypes];
       let activeTab = 'all';
       // #536: All / Unfiled / Filed over the full list. "Unfiled" is exactly the amber lamp's
@@ -242,10 +245,6 @@
         const saved = localStorage.getItem(FILED_KEY);
         if (saved === 'unfiled' || saved === 'filed') activeFiled = saved;
       } catch (e) { /* no storage: default All */ }
-      function matchesFiled(item, mode) {
-        if (mode === 'all') return true;
-        return (mode === 'unfiled') === UNFILED_SLUGS.has(item.slug);
-      }
 
       // Render tabs as buttons
       function renderTabs() {
@@ -265,38 +264,80 @@
         });
       }
 
-      // #517: only the first batch of cards is in the DOM; more are added on scroll.
-      const filesPager = ItemCards.pager(filesGrid, cardHtml);
-      const FILES_SORTERS = {
-        newest: (a, b) => b.uploaded_at - a.uploaded_at,
-        oldest: (a, b) => a.uploaded_at - b.uploaded_at,
-        az: (a, b) => a.display_name.localeCompare(b.display_name),
-      };
-
-      function render() {
-        let items;
-        if (activeTab === 'all') {
-          // Merge all types' items and sort by recency
-          items = [];
-          for (const type of mediaTypes) {
-            items = items.concat(filesByType[type]);
-          }
-        } else {
-          // Show only this type's items
-          items = filesByType[activeTab] || [];
+      // #624: one feed per view (tab + filed mode + sort), kept so going back to a view is instant.
+      // The default view (the page's embedded items) starts full of them; any other view starts empty
+      // and fetches its first page, then more pages as the scroll sentinel is reached.
+      const feeds = new Map();
+      function viewCount(tab, filed) {
+        let n = 0;
+        for (const type of (tab === 'all' ? mediaTypes : [tab])) n += (FILES.counts[type] || {})[filed] || 0;
+        return n;
+      }
+      function filesUrl(tab, filed, sort, cursor) {
+        const q = new URLSearchParams({ type: tab, filed: filed, sort: sort, limit: String(FILES.batch) });
+        if (FILES.rev) q.set('rev', FILES.rev);
+        if (cursor) q.set('cursor', cursor);
+        return '/api/home/files?' + q.toString();
+      }
+      function feedFor(tab, filed, sort) {
+        const key = [tab, filed, sort].join('|');
+        if (feeds.has(key)) return feeds.get(key);
+        const seeded = filed === FILES.seed.filed && sort === FILES.seed.sort;
+        let seed = [];
+        if (seeded) {
+          // The server's own order for "All": types merged alphabetically, then newest first (stable).
+          const embedded = tab === 'all' ? mediaTypes.flatMap(type => filesByType[type] || []) : (filesByType[tab] || []);
+          seed = embedded.slice().sort((x, y) => y.uploaded_at - x.uploaded_at).slice(0, FILES.batch);
         }
+        const feed = ItemCards.feed({
+          items: seed,
+          cursor: seeded ? (FILES.cursors[tab] || null) : (viewCount(tab, filed) ? '' : null),
+          total: viewCount(tab, filed),
+          fetchPage: (cursor) => ItemCards.getJson(filesUrl(tab, filed, sort, cursor)),
+          onPage: (page) => page.unfiled_slugs.forEach(slug => UNFILED_SLUGS.add(slug)),
+        });
+        feeds.set(key, feed);
+        return feed;
+      }
+
+      // #517: only the first batch of cards is in the DOM; more are added on scroll, and when the
+      // fetched cards run out the pager asks the feed for the next page (#624).
+      let currentFeed = null;
+      const filesPager = ItemCards.pager(filesGrid, cardHtml, {
+        batch: FILES.batch,
+        loadMore: () => {
+          const feed = currentFeed;
+          return feed.next().then(fresh => ({ items: fresh, total: feed.total, done: feed.done }));
+        },
+      });
+
+      function showStatus(html) {
+        filesGrid.innerHTML = '<div class="cx-status" style="grid-column:1/-1;text-align:center;padding:8px 0">' + html + '</div>';
+      }
+      function render() {
         // Counts reflect the active type tab, so they match what the panel can show.
-        const counts = { all: items.length, unfiled: 0, filed: 0 };
-        for (const it of items) counts[UNFILED_SLUGS.has(it.slug) ? 'unfiled' : 'filed']++;
         filedBox.querySelectorAll('.filed-seg-btn').forEach(btn => {
           const mode = btn.dataset.filed;
           const on = mode === activeFiled;
           btn.classList.toggle('active', on);
           btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-          btn.querySelector('.filed-count').textContent = '(' + counts[mode] + ')';
+          btn.querySelector('.filed-count').textContent = '(' + viewCount(activeTab, mode) + ')';
         });
-        const sorted = items.filter(it => matchesFiled(it, activeFiled)).sort(FILES_SORTERS[filesSort.value]);
-        filesPager.set(sorted);  // set() without keep: pager resets to the first batch
+        const feed = feedFor(activeTab, activeFiled, filesSort.value);
+        currentFeed = feed;
+        if (feed.items.length || feed.done) {
+          filesPager.set(feed.items.slice(), false, feed.total);  // a copy: the pager appends pages to its own list. No keep: back to the first batch
+          return;
+        }
+        // Not fetched yet: ask for the first page (the cards on screen would be the wrong view).
+        showStatus('Loading files…');
+        feed.next().then(() => {
+          if (currentFeed === feed) filesPager.set(feed.items.slice(), false, feed.total);
+        }, (err) => {
+          if (currentFeed !== feed) return;
+          showStatus('<button type="button" class="btn-secondary cx-retry-btn">Could not load files: ' + escapeHtml(err.message) + ' (click to retry)</button>');
+          filesGrid.querySelector('.cx-retry-btn').addEventListener('click', render);
+        });
       }
 
       filedBox.addEventListener('click', (e) => {

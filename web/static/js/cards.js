@@ -139,21 +139,30 @@
 
   /* Incremental rendering (#517). A grid of ~1,700 cards is thousands of DOM nodes and
      image slots; this draws the first `batch` and appends more as the "Show more" row nears
-     the viewport (or is clicked). Sorting and filtering stay over the FULL list: callers hand
-     pager.set() the whole sorted/filtered array each time.
-       var pager = ItemCards.pager(gridEl, cardFn, { batch: 120 });
-       pager.set(list)        redraw from the top
-       pager.set(list, true)  redraw but keep as many cards as were already showing
+     the viewport (or is clicked). Callers hand pager.set() the whole list of the current view
+     (already sorted and filtered, or the part of it the server has sent so far).
+       var pager = ItemCards.pager(gridEl, cardFn, { batch: 120, loadMore: fn });
+       pager.set(list)          redraw from the top
+       pager.set(list, true)    redraw but keep as many cards as were already showing
+       pager.set(list, false, n)  the view has n items in all; list holds the first ones (#624)
+     When the drawn cards use up `list` but n says there are more, the row asks
+     opts.loadMore() for them: it returns a Promise of { items, total, done }; the pager appends
+     the items and draws the next batch. A failed load leaves the row as a retry button that
+     says why. A set() while a load is running discards that load's result.
      The "Show more" row is a child of the grid (full-width), so it scrolls with the cards
      even when the grid itself is the scroll container (home Files panel). */
   function pager(grid, cardFn, opts) {
     var batch = (opts && opts.batch) || 120;
+    var loadMore = opts && opts.loadMore;
     var list = [];
+    var total = 0;
     var shown = 0;
     var io = null;
+    var loading = false;
+    var generation = 0;
 
     function moreRow() {
-      var left = list.length - shown;
+      var left = total - shown;
       return '<div class="cx-more" style="grid-column:1/-1;text-align:center;padding:8px 0">' +
         '<button type="button" class="btn-secondary cx-more-btn">Show ' + Math.min(batch, left) +
         ' more (' + left + ' left)</button></div>';
@@ -171,21 +180,50 @@
       }
     }
     function draw() {
-      grid.innerHTML = list.slice(0, shown).map(cardFn).join('') + (shown < list.length ? moreRow() : '');
+      grid.innerHTML = list.slice(0, shown).map(cardFn).join('') + (shown < total ? moreRow() : '');
       watch();
+    }
+    function fetchMore(row) {
+      if (!loadMore || loading) return;
+      var btn = row.querySelector('.cx-more-btn');
+      var mine = generation;
+      loading = true;
+      btn.textContent = 'Loading more…';
+      btn.disabled = true;
+      loadMore().then(function (r) {
+        if (mine !== generation) return;
+        loading = false;
+        list = list.concat(r.items);
+        // A page that brings nothing new ends the list, so a short or stale total can't make the row spin.
+        total = (r.done || !r.items.length) ? list.length : Math.max(r.total || 0, list.length);
+        more();
+      }, function (err) {
+        if (mine !== generation) return;
+        loading = false;
+        btn.disabled = false;
+        btn.textContent = 'Could not load more: ' + ((err && err.message) || String(err)) + ' (click to retry)';
+      });
     }
     function more() {
       var row = grid.querySelector('.cx-more');
       if (!row) return;
+      if (shown >= list.length) {
+        if (shown >= total) { row.remove(); watch(); return; }  // nothing left, local or remote
+        fetchMore(row);
+        return;
+      }
       var from = shown;
       shown = Math.min(list.length, shown + batch);
       row.remove();
-      grid.insertAdjacentHTML('beforeend', list.slice(from, shown).map(cardFn).join('') + (shown < list.length ? moreRow() : ''));
+      grid.insertAdjacentHTML('beforeend', list.slice(from, shown).map(cardFn).join('') + (shown < total ? moreRow() : ''));
       watch();
     }
     return {
-      set: function (next, keep) {
+      set: function (next, keep, count) {
+        generation++;
+        loading = false;
         list = next;
+        total = typeof count === 'number' ? Math.max(count, list.length) : list.length;
         shown = Math.min(list.length, keep ? Math.max(batch, shown) : batch);
         draw();
       },
@@ -193,5 +231,60 @@
     };
   }
 
-  window.ItemCards = { html: html, face: face, esc: esc, pager: pager };
+  /* Reading a JSON API (#624). Resolves with the parsed body; rejects with an Error whose
+     message says what failed: the app's error code and message (the shared error shape), or the
+     HTTP status when the body wasn't that shape. `fetchFn` is for tests. */
+  function getJson(url, fetchFn) {
+    return (fetchFn || fetch)(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(function (resp) {
+      return resp.text().then(function (text) {
+        var body = null;
+        try { body = JSON.parse(text); } catch (e) { /* not JSON: reported below */ }
+        if (resp.ok && body !== null) return body;
+        var err = body && body.error;
+        var why = err && err.message ? (err.code ? err.code + ': ' : '') + err.message
+          : (body && body.detail ? String(body.detail) : (resp.ok ? 'the reply was not JSON' : 'the reply was not the app\'s error shape: ' + text.slice(0, 120)));
+        throw new Error(why + ' (HTTP ' + resp.status + ' for ' + url.split('?')[0] + ')');
+      });
+    }, function (e) {
+      throw new Error('network error for ' + url.split('?')[0] + ': ' + ((e && e.message) || e));
+    });
+  }
+
+  /* One view's list plus where the server left off (#624). `cursor`: '' = nothing fetched yet
+     (the first page), a token = continue there, null = the whole view is in `items`.
+     fetchPage(cursor) -> Promise of { items, next_cursor, total }; opts.onPage sees each page
+     before next() resolves. next() resolves with the NEW items; calls made while one is in
+     flight share it; an item already held (an upload shifted the pages) is dropped. */
+  function feed(opts) {
+    var f = {
+      items: opts.items || [],
+      cursor: opts.cursor === undefined ? '' : opts.cursor,
+      total: opts.total,
+      inflight: null,
+      get done() { return f.cursor === null; },
+      next: function () {
+        if (f.cursor === null) return Promise.resolve([]);
+        if (f.inflight) return f.inflight;
+        var asked = f.cursor;
+        f.inflight = opts.fetchPage(asked).then(function (page) {
+          f.inflight = null;
+          var have = {};
+          f.items.forEach(function (it) { have[it.slug] = true; });
+          var fresh = page.items.filter(function (it) { return !have[it.slug]; });
+          f.items.push.apply(f.items, fresh);
+          f.cursor = page.next_cursor && page.next_cursor !== asked ? page.next_cursor : null;
+          if (typeof page.total === 'number') f.total = page.total;
+          if (opts.onPage) opts.onPage(page);
+          return fresh;
+        }, function (err) {
+          f.inflight = null;
+          throw err;
+        });
+        return f.inflight;
+      }
+    };
+    return f;
+  }
+
+  window.ItemCards = { html: html, face: face, esc: esc, pager: pager, getJson: getJson, feed: feed };
 })();

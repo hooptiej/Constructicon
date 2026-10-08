@@ -67,6 +67,16 @@
     return MT.toEpoch(p.year, p.month, p.day + n, p.hour, p.minute, p.second);
   }
 
+  // Can a plain (day-step) drag change ANY date on an axis running min..max? A plain drag lands on the
+  // Mountain calendar day under the pointer (snapDay), so it only has somewhere to go when the axis
+  // touches at least two Mountain days. When the whole axis sits inside one day (#631: a project whose
+  // items all fall in the same minute) every drop snaps back to where the item started.
+  function dragCanMove(min, max) {
+    const a = MT.parts(min);
+    const b = MT.parts(max);
+    return a.year !== b.year || a.month !== b.month || a.day !== b.day;
+  }
+
   // The date a key press moves a marker to, or null when the key isn't a move.
   // Left/Down = earlier, Right/Up = later. Arrow = a day, Shift+arrow = a month; PageUp/PageDown = a month.
   function keyStep(epoch, key, shift) {
@@ -104,5 +114,5 @@
   }
 
   return { FINE_MINUTES, MAX_EPOCH, MIN_EPOCH, pxToEpoch, epochToPercent, clamp, snapDay, snapFine, snap,
-    addMonths, addDays, keyStep, stackGroups, formatReadout };
+    addMonths, addDays, dragCanMove, keyStep, stackGroups, formatReadout };
 });

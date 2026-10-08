@@ -482,6 +482,8 @@
       canEdit,
       onSave: saveDate,
       onSaved: afterSave,
+      // #631: a drag that could not change the date says why, in the same bar as a re-date (no Undo: nothing changed).
+      onNoMove: (message) => window.showUndoBar(message, null, null),
       blocks: timelineChildren.map((c) => ({
         id: c.id,
         label: c.title,

@@ -6,13 +6,13 @@ import logging
 import time
 from datetime import datetime
 
-from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from core import access_log, besteffort, captions, db, ingest, item_title, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
 from core import tags as tags_svc, timeline
-from web import content_security
+from web import content_security, files_feed
 from web.common import from_request_thread
 from web.shapes import _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
 from core import policy, roles
@@ -809,6 +809,23 @@ def api_gallery(request: Request, query: str = "", client: str = "", per_user: i
             "items": [_to_public(r) for r in policy.filter_visible(items)],  # #557 (+ the browse clause in db.search)
         })
     return JSONResponse(groups)
+
+
+@router.get("/api/home/files", dependencies=requires(roles.VIEWER))
+def api_home_files(media_type: str = Query("all", alias="type"), filed: str = "all", sort: str = "newest",
+                   cursor: str = "", limit: str = "", rev: str = ""):
+    """(#624) One page of the home Files panel, in the card payload the page embeds
+    (core/card_payload.py). `type` is "all" or a media type; `filed` all | unfiled | filed; `sort`
+    newest | oldest | az (web/files_feed.SORTS); `rev=all` lists older revisions too, like the page's
+    ?rev=all. `cursor` is the previous page's next_cursor (none = the first page); `limit` 1..500,
+    default 120. Answers {items, unfiled_slugs, total, next_cursor} (next_cursor null = the end).
+    The visible list is built exactly as the page builds it (browse clause, policy.filter_visible,
+    revision split), so a restricted item never appears. Bad parameters: 400 with a specific code
+    (bad_type, bad_filed, bad_sort, bad_limit, bad_cursor, cursor_view_mismatch). /unfiled, the user
+    gallery and the hobby page can reuse it."""
+    with db.read_session():
+        by_type, _, unfiled = files_feed.load(rev == "all")
+        return JSONResponse(files_feed.page(by_type, unfiled, rev == "all", media_type, filed, sort, cursor, limit))
 
 
 @router.get("/api/clients", dependencies=requires(roles.VIEWER))

@@ -9,6 +9,7 @@ from pathlib import Path
 from core import card_rules, cards, curation_queue, curator, db, install_config, item_title, markdown_render, object_types, revisions, timeline
 from core import hobbies, physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
+from web import files_feed
 from web.common import _build_breadcrumbs, _rev_note, templates
 from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_object_detail, _to_public, _to_timeline_project
 from core import access_log, actor as actor_ctx, policy, roles, users
@@ -22,6 +23,12 @@ router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own
 
 @router.get("/", response_class=HTMLResponse)
 def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
+    # #624: the page's reads share one connection (db.read_session) instead of opening one per call.
+    return templates.TemplateResponse(request, "home.html", _home_context(request, hobby, ref, rev))
+
+
+@db.in_read_session
+def _home_context(request, hobby, ref, rev):
     """Home is the gallery itself (left third) plus a curated Projects
     section (right two-thirds) — see README's Projects/tag-tree note for why
     projects and blog_tags are separate concepts. The pill row filters by
@@ -90,25 +97,16 @@ def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
     # (#41 and #107) — merged into one "Files" widget covering every upload,
     # type-tabbed, with unfiled items marked inline (see the lamp next to
     # each card's filename in home.html) rather than isolated in their own
-    # section. unfiled_slugs is still sourced from db.list_unfiled_items
-    # (project-membership based — NOT the same thing as the free-text
-    # `client` field, which several past widget versions conflated with
-    # "no project"), just reduced to slugs since that's all the merged
-    # card's per-item marking needs.
+    # section. "Unfiled" is project membership (db.list_unfiled_slugs) — NOT the
+    # same thing as the free-text `client` field, which several past widget
+    # versions conflated with "no project".
     show_all_revs = rev == "all"  # #477: Files panel lists current revisions only unless ?rev=all
-    unfiled_slugs = [r["slug"] for r in db.list_unfiled_items(include_superseded=True)]
-    # #107/#256: every uploaded item, independent per media_type (each type
-    # contributes its own full list rather than competing within one global
-    # pool), so every type that has uploads gets a tab and "all files" really
-    # means all of them — same unbounded-limit precedent db.list_unfiled_items
-    # already set for the old Unfiled widget, not a new perf tradeoff.
-    files_by_type = {}
-    older_revs = 0
-    for mt, rows in db.list_recent_items_by_type(limit_per_type=10000, include_superseded=True).items():
-        rows, n_sup = _split_revisions(policy.filter_visible(rows), show_all_revs)  # #557 (+ the browse clause in db)
-        older_revs += n_sup
-        if rows:
-            files_by_type[mt] = _card_items(rows)
+    # #107/#256/#624: every uploaded item, independent per media_type, so every type that has
+    # uploads gets a tab and "all files" really means all of them. The page embeds only the first
+    # batch of the default view plus the counts and the cursor for more; the rest is served a page at a
+    # time by GET /api/home/files (web/files_feed.py, which also keeps the visibility rules).
+    by_type, older_revs, unfiled = files_feed.load(show_all_revs)
+    files_seed, files_meta = files_feed.initial(by_type, unfiled, show_all_revs)
     # Timeline feature: the gallery rail shows every project (including
     # children, with an is_child flag) in date order -- deliberately built
     # from all_projects, not the top-level-only `projects` local above that
@@ -130,27 +128,24 @@ def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
         active_cards = [c for c in active_cards if c is not featured_card]
     active_cards.sort(key=lambda c: c["effective_start"] or c["created_at"], reverse=True)
     inactive_cards.sort(key=lambda c: c["effective_start"] or c["created_at"], reverse=True)
-    return templates.TemplateResponse(
-        request, "home.html",
-        {
-            "active": "home",
-            "top_tags": hobby_pills,  # #370: hobby pills, kept as top_tags for template reuse
-            "selected_tag_slug": selected_hobby_slug,  # #370: selected hobby slug for pill highlighting
-            "show_reference_pill": True,  # #370: always show Reference pill
-            "show_reference_selected": bool(ref),  # #370: highlight if ?ref=1
-            "featured_card": featured_card,
-            "active_cards": active_cards,
-            "inactive_cards": inactive_cards,
-            "has_cards": bool(cards_all),
-            "reference_objects": reference_objects,  # #370 follow-up: loose reference objects
-            "owner_name": _owner_label,
-            "owner_initials": _owner_initials,
-            "unfiled_slugs": unfiled_slugs,
-            "files_by_type": files_by_type,
-            "rev_note": _rev_note(request, older_revs, show_all_revs),
-            "timeline_projects": timeline_projects,
-        },
-    )
+    return {
+        "active": "home",
+        "top_tags": hobby_pills,  # #370: hobby pills, kept as top_tags for template reuse
+        "selected_tag_slug": selected_hobby_slug,  # #370: selected hobby slug for pill highlighting
+        "show_reference_pill": True,  # #370: always show Reference pill
+        "show_reference_selected": bool(ref),  # #370: highlight if ?ref=1
+        "featured_card": featured_card,
+        "active_cards": active_cards,
+        "inactive_cards": inactive_cards,
+        "has_cards": bool(cards_all),
+        "reference_objects": reference_objects,  # #370 follow-up: loose reference objects
+        "owner_name": _owner_label,
+        "owner_initials": _owner_initials,
+        "files_seed": files_seed,
+        "files_meta": files_meta,
+        "rev_note": _rev_note(request, older_revs, show_all_revs),
+        "timeline_projects": timeline_projects,
+    }
 
 
 @router.get("/upload")

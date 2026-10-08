@@ -768,6 +768,22 @@ matching the V2 mockup's Card template:
 - Item grids embed `stacked` (the title of the card a file is on, `db.first_card_titles()`, one query per
   grid) in the slim payload (`core/card_payload.py`); `provenance` left it. Check with
   `scripts/test_card_faces.py` (throwaway DB), `check_item_cards.py`, `test_home_payload.py`.
+- **The home Files panel is paged (#624).** The page embeds only the first batch (120) of each type in
+  the default view (All files, Newest), plus per-type counts and a cursor per tab (`FILES` in `home.html`);
+  `GET /api/home/files` (viewer; `web/files_feed.py`) serves any other view and every later page:
+  `type` (all | a media type), `filed` (all | unfiled | filed), `sort` (newest | oldest | az, the
+  `files_feed.SORTS` registry: **to add a sort, e.g. `card_date` for #622, add one entry there and one
+  `<option>` in `home.html`**, the client passes the name through), `cursor`, `limit` (1..500), `rev=all`.
+  The answer is `{items (the card payload), unfiled_slugs (of this page), total, next_cursor}`. The
+  visible list is built exactly as the page used to (browse clause, `policy.filter_visible`,
+  `_split_revisions`), so restricted items never appear. A cursor is opaque (view + offset + last slug;
+  it survives an upload at the top between pages) and only continues its own view. Errors are 400 in the
+  shared shape with a specific code: `bad_type`, `bad_filed`, `bad_sort`, `bad_limit`, `bad_cursor`,
+  `cursor_view_mismatch`. Client: `ItemCards.pager` takes `loadMore` and a total, `ItemCards.feed` keeps
+  one view's items and cursor, `ItemCards.getJson` reports failures with code, message and status.
+  `/unfiled`, the user gallery and the hobby page still embed their whole list and can reuse this
+  endpoint the same way. Check with `scripts/test_home_paging_624.py` (and `--bench`) and
+  `node scripts/test_home_paging_624.js [--compare DIR]`.
 - Not done (no data for it): the mockup's "From: <item>, <date>." line on a file derived from another
   file (there is no derived-from relation), and image dimensions in a file's stat box (not stored).
 

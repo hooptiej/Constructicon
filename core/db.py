@@ -3556,6 +3556,22 @@ def list_unfiled_items(limit=10000, include_brand=False, include_superseded=Fals
         conn.close()
 
 
+def list_unfiled_slugs(include_brand=False, include_superseded=False):
+    """(#624) The slugs list_unfiled_items would return, without the rows: the home Files panel only
+    needs to know WHICH items are unfiled (the amber lamp, the Unfiled/Filed toggle and its counts),
+    and no longer carries a full row for each. Same filter as list_unfiled_items, no LIMIT."""
+    conn = get_conn()
+    try:
+        brand_clause = "" if include_brand else "AND ce.is_brand_asset = 0 "
+        if not include_superseded:
+            brand_clause += _not_superseded("ce.").lstrip() + " "
+        return [r[0] for r in conn.execute(
+            "SELECT ce.slug FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
+            "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + policy.sql_browse_clause("ce.") + " " + brand_clause)]
+    finally:
+        conn.close()
+
+
 def count_unfiled_items(include_brand=False, include_superseded=False):
     """(#524) len(list_unfiled_items(limit=huge)) without building a dict per row: the same
     WHERE clause, counted in SQL. For callers that only want the number (the Curator's

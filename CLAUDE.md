@@ -404,6 +404,19 @@ included routers expanded; an unknown path counts as viewer, so a stranger can't
   or `X-Forwarded-For`. The old `X-Constructicon-Client: desktop-app` header grants nothing (it only
   picks the upload's Source label).
 
+**User files are never served as active content on the app origin (#610).** Browsers carry the
+session cookie for this origin, so an uploaded `.html` / `.svg` rendered as a page from `/f/<slug>`
+would be stored XSS against whoever opens it (an admin included). `web/content_security.py` is the one
+place that decides: every user-file response (`/f/<slug>`, `/f/<slug>/thumb`, the `media/` files under
+`/preview`) carries `X-Content-Type-Options: nosniff`; active content (HTML, XHTML, SVG, XML, by media
+type, extension or a sniff of the first bytes) also carries the sandbox CSP (`RENDERED_HTML_CSP`, shared
+with the Rendered view: opaque origin, no script, no network); HTML/XHTML is also
+`Content-Disposition: attachment` (look at it in the in-app Rendered view); SVG stays inline so a hotlinked
+`<img>` keeps working. **Any new route that streams a stored file must go through
+`content_security.serve_file` (or add `file_headers`)**, never a bare `FileResponse` on a user file.
+Thumbnails are generated JPEGs (nosniff only). Check with `scripts/test_f_sandbox_610.py`. Longer term: a
+separate user-content origin.
+
 **The install token (`core/install_token.py`).** One secret, two containers:
 - **MCP** (`mcp_server/auth.py`): every request needs `Authorization: Bearer <token>` (401 otherwise;
   only `GET /healthz` is exempt). Role **admin**, actor `mcp`. **With roles enforced and no token

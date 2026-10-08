@@ -9,6 +9,7 @@ from fastapi import Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from core import db, object_types, storage, thumbnails
+from web import content_security
 from web.common import DESKTOP_APP_BUILD_PATH, DESKTOP_APP_DIR
 from core import access_log, policy, roles
 from core.errors import AppError
@@ -46,7 +47,8 @@ def download_desktop_app_source(request: Request):
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=constructicon-uploader-source.zip"},
+        headers={"Content-Disposition": "attachment; filename=constructicon-uploader-source.zip",
+                 **content_security.NOSNIFF},
     )
 
 
@@ -58,7 +60,8 @@ def download_desktop_app_build(request: Request):
             detail="No built app has been uploaded yet — download the source zip and build it with Build.command, "
                    "or ask whoever last built one to upload it from account settings.",
         )
-    return FileResponse(DESKTOP_APP_BUILD_PATH, media_type="application/zip", filename="Constructicon Uploader.zip")
+    return FileResponse(DESKTOP_APP_BUILD_PATH, media_type="application/zip", filename="Constructicon Uploader.zip",
+                        headers=content_security.NOSNIFF)
 
 
 # --- Brand Assets (#350) ---
@@ -122,7 +125,8 @@ def get_file(slug: str):
     path = storage.path_for(row["stored_filename"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="file missing on disk")
-    return FileResponse(path, filename=row["filename"])
+    # #610: never active content on the app origin (nosniff; HTML/SVG/XML sandboxed, HTML a download)
+    return content_security.serve_file(path, filename=row["filename"])
 
 
 @router.get("/f/{slug}/thumb", dependencies=requires(roles.PUBLIC))
@@ -154,4 +158,7 @@ def get_thumbnail(slug: str):
     path = storage.thumb_path_or_original(slug, row["stored_filename"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="file missing on disk")
-    return FileResponse(path)
+    # #610: a thumbnail is a generated raster (nosniff only); if it fell back to the original file,
+    # that file gets the full active-content treatment, typed by the original's name.
+    is_generated = path == storage.thumb_path_for(slug)
+    return content_security.serve_file(path, type_name=None if is_generated else row.get("filename"))

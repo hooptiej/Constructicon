@@ -99,10 +99,13 @@ async function main() {
   ok('plain click opens the item', win.location.href === '/object/z', win.location.href);
   win.location.href = '';
 
-  // 3. a stack asks which one
+  // 3. a stack asks which one: the PRESS opens the chooser at once (no wait for the release),
+  // and the click that follows the release neither closes it nor navigates.
+  events[1]._el.fire('pointerdown', { button: 0, clientX: 250, pointerId: 9 });
+  ok('pressing a stack opens the chooser immediately', bodyEl.qa('timeline-chooser').length === 1);
   events[1]._el.fire('click', {});
   const chooser = bodyEl.qa('timeline-chooser')[0];
-  ok('click on a stack opens the chooser', !!chooser && chooser.qa('timeline-chooser-row').length === 2);
+  ok('the click after the press keeps the chooser open', !!chooser && chooser.qa('timeline-chooser-row').length === 2);
   ok('chooser lists names', /Bravo/.test(chooser.textContent) && /Charlie/.test(chooser.textContent));
   ok('the hand-set member has a Reset button, the other does not', chooser.qa('timeline-chooser-reset').length === 1);
   ok('click on a stack did not navigate', win.location.href === '');

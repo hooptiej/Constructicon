@@ -327,6 +327,9 @@ class ProjectVideoTimeline {
   _onClick(ev, event) {
     if (this._suppressClick) { this._suppressClick = false; ev.preventDefault(); return; }
     const stack = this._stackOf(event);
+    // The press already opened this stack's chooser (editors, see _onPointerDown): the click that
+    // follows the release must neither reopen it nor navigate.
+    if (this._chooserFromPress === event.id) { this._chooserFromPress = null; ev.preventDefault(); return; }
     // A picked marker opens like any other; an unpicked stack member asks which one you mean.
     if (stack.length > 1 && this._picked !== event.id) {
       ev.preventDefault();
@@ -339,7 +342,14 @@ class ProjectVideoTimeline {
   _onPointerDown(ev, event) {
     if (ev.button !== 0 || this._busy) return;
     const stack = this._stackOf(event);
-    if (stack.length > 1 && this._picked !== event.id) return; // the click opens the chooser
+    if (stack.length > 1 && this._picked !== event.id) {
+      // Open the chooser on the PRESS, not the click: waiting for the release made a press-and-drag on
+      // a pile feel dead for a moment (owner, 2026-10-08).
+      ev.preventDefault();
+      this._chooserFromPress = event.id;
+      this._openChooser(stack, event._el);
+      return;
+    }
     this._closeChooser();
     const el = event._el;
     const startX = ev.clientX;

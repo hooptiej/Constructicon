@@ -21,8 +21,7 @@ Three pure-ASGI middlewares (no body buffering, so streaming uploads are untouch
         token is refused, 401 `invalid_token`, on every path (a misconfigured script fails loudly
         instead of silently browsing as anonymous). Other Authorization schemes are ignored.
       - No trust for loopback or LAN addresses: no session and no token = anonymous, whatever the
-        client IP. The old `X-Constructicon-Client: desktop-app` header grants nothing (it only
-        picks the upload's Source label).
+        client IP.
       - The gate: the request's route or mount label (web/roles.required_role_for) against the
         actor's role (core/roles.role_of). Public passes (/f hotlinks, /healthz, /login, /setup,
         /logout, /api/auth/*, /static, /brand). An anonymous request for anything else: a page
@@ -34,8 +33,8 @@ Three pure-ASGI middlewares (no body buffering, so streaming uploads are untouch
   * CsrfMiddleware (innermost, inside the audit logger, so a refusal is in the request log). A
     state-changing request (POST/PUT/PATCH/DELETE) that is signed in, i.e. carries a cookie that
     resolved to a live session, must send that session's token in the `X-CSRF-Token` header,
-    else 403 `csrf_failed`. Requests without a session cookie (scripts, the MCP, the desktop
-    uploader, anonymous pages) are not affected. The origin guard (#558) still runs first for
+    else 403 `csrf_failed`. Requests without a session cookie (scripts, the MCP,
+    anonymous pages) are not affected. The origin guard (#558) still runs first for
     every mutating request. base.html injects the token for signed-in pages (a meta tag plus
     static/js/csrf.js, which wraps fetch and XMLHttpRequest); there are no plain HTML POST forms.
 

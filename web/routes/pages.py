@@ -565,11 +565,6 @@ def image_detail_redirect(slug: str):
     return RedirectResponse(f"/object/{slug}", status_code=308)
 
 
-@router.get("/account", response_class=HTMLResponse)
-def account_page(request: Request):
-    return templates.TemplateResponse(request, "account.html", {})
-
-
 @router.get("/admin", response_class=HTMLResponse, dependencies=requires(roles.ADMIN))
 def admin_page(request: Request, embed: int = 0):
     """#295: the admin surface as its own full page. It was a bottom-right

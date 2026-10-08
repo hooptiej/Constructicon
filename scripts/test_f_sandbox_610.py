@@ -162,13 +162,6 @@ check("preview: a user .png is nosniff only", r.status_code == 200 and hdr(r).ge
       and "content-security-policy" not in hdr(r))
 check("preview: anonymous turned away (unchanged)", anon.get("/preview/media/u1.html", follow_redirects=False).status_code in (302, 401))
 
-print("\n--- /downloads/* ---")
-r = client.get("/downloads/constructicon-uploader-source.zip")
-check("downloads: source zip is a nosniff attachment (or the 503 explanation)",
-      (r.status_code == 200 and hdr(r).get("content-disposition", "").startswith("attachment") and hdr(r).get("x-content-type-options") == "nosniff")
-      or r.status_code == 503, r.status_code)
-check("downloads: anonymous turned away (unchanged)", anon.get("/downloads/constructicon-uploader-source.zip", follow_redirects=False).status_code in (302, 401))
-
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: " + "; ".join(FAILS))

@@ -110,7 +110,7 @@ from web import request_guard  # noqa: E402
 check("583: redact_audit_error: 'name_only' route keeps the code only",
       request_guard.redact_audit_error("/api/settings", "bad_request: key=SECRET123 is wrong") == "bad_request")
 check("583: redact_audit_error: 'none' route with no code -> [REDACTED]",
-      request_guard.redact_audit_error("/api/account/desktop-app-build", "oops SECRET") == request_guard.REDACTED)
+      request_guard.redact_audit_error("/api/auth/login", "oops SECRET") == request_guard.REDACTED)
 check("583: redact_audit_error: ordinary route unchanged",
       request_guard.redact_audit_error("/api/upload", "bad_request: Unsupported file type: .xyz")
       == "bad_request: Unsupported file type: .xyz")

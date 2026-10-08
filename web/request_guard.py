@@ -11,7 +11,7 @@ Policy for the headers, deliberately:
     CONSTRUCTICON_ALLOWED_ORIGINS). Same-origin is install-agnostic: constructicon.local,
     the bare LAN IP, the test box and a work install all just work, with no config.
   * Origin absent   -> fall back to Referer with the same rule.
-  * Both absent     -> ALLOWED. Non-browser clients (curl, scripts, the desktop uploader,
+  * Both absent     -> ALLOWED. Non-browser clients (curl, scripts,
     urllib verification scripts) send neither header. Every modern browser sends Origin
     on a cross-origin POST and a page cannot suppress it, so a browser-borne forgery
     can't use the no-header path. #561 (MCP/install token) will tighten this case later.
@@ -106,7 +106,6 @@ REDACTED = "[REDACTED]"
 #  "name_only":  the setting's *name* (field `key`) is kept, every other value is redacted.
 AUDIT_ROUTE_RULES = {
     "/api/settings": "name_only",
-    "/api/account/desktop-app-build": "none",
     # #467 step 1: everything that carries a password (sign-in, first-run setup, my password,
     # creating a user) logs no body values at all.
     "/api/auth/login": "none",

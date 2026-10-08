@@ -1,67 +1,15 @@
-"""File routes (#547): /f/{slug} hotlinks + thumbnails, /downloads/*, and the brand-asset
+"""File routes (#547): /f/{slug} hotlinks + thumbnails, and the brand-asset
 and wallpaper listings."""
 
-import io
-import zipfile
-from pathlib import Path
-
 from fastapi import Request, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse
 
 from core import db, object_types, storage, thumbnails
 from web import content_security
-from web.common import DESKTOP_APP_BUILD_PATH, DESKTOP_APP_DIR
 from core import access_log, policy, roles
-from core.errors import AppError
 from web.roles import RoleRouter, requires
 
 router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own label are viewer
-
-
-@router.get("/downloads/constructicon-uploader-source.zip")
-def download_desktop_app_source(request: Request):
-    """Source only, not a built .app — py2app has to run on an actual Mac,
-    which this server can't do (it's the same Linux/Docker box everything
-    else runs on). Zipped fresh from disk on every request rather than a
-    pre-built artifact, so it's never out of sync with what's actually in
-    the repo.
-
-    #601: the app image must carry desktop_app/ (mounted read-only by compose, or the copy baked
-    into the image). Before this, a container without it served a valid but EMPTY zip. Now a
-    source tree that doesn't hold the uploader package is a 503 with the reason, never an empty
-    download."""
-    files = [p for p in sorted(DESKTOP_APP_DIR.rglob("*"))
-             if p.is_file() and "__pycache__" not in p.parts] if DESKTOP_APP_DIR.is_dir() else []
-    if not any(p.relative_to(DESKTOP_APP_DIR).as_posix() == "constructicon_uploader/api.py" for p in files):
-        raise AppError(
-            "uploader_source_missing",
-            "The uploader source isn't installed on this server (desktop_app/ is missing from the app "
-            "container). Ask the administrator to mount ./desktop_app into the web service.",
-            status=503,
-        )
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in files:
-            arcname = Path("constructicon-uploader-source") / path.relative_to(DESKTOP_APP_DIR)
-            zf.write(path, arcname=str(arcname))
-    return Response(
-        content=buf.getvalue(),
-        media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=constructicon-uploader-source.zip",
-                 **content_security.NOSNIFF},
-    )
-
-
-@router.get("/downloads/constructicon-uploader.zip")
-def download_desktop_app_build(request: Request):
-    if not DESKTOP_APP_BUILD_PATH.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="No built app has been uploaded yet — download the source zip and build it with Build.command, "
-                   "or ask whoever last built one to upload it from account settings.",
-        )
-    return FileResponse(DESKTOP_APP_BUILD_PATH, media_type="application/zip", filename="Constructicon Uploader.zip",
-                        headers=content_security.NOSNIFF)
 
 
 # --- Brand Assets (#350) ---

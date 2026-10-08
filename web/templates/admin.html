@@ -233,8 +233,7 @@
          left blank on load/save, same as a normal password field never
          redisplaying what you last typed. Add another labeled row here (and
          to web/app.py's KNOWN_SETTINGS, and the JS API_KEY_SETTINGS array
-         below) for each additional integration that needs a key — see the
-         thingiverse_app_token row (#62) for the second one. -->
+         below) for each additional integration that needs a key. -->
     <section class="admin-panel">
       <div class="admin-panel-header">
         <div>
@@ -256,22 +255,6 @@
           <button type="button" class="btn-ms admin-apikey-save" data-key="youtube_data_api_key">Save</button>
         </div>
         <span id="admin-apikey-msg-youtube_data_api_key" class="backup-status"></span>
-      </div>
-      <div class="admin-divider"></div>
-      <div class="admin-row admin-apikey-row">
-        <div class="admin-apikey-label-row">
-          <div>
-            <div class="admin-row-label">Thingiverse App Token</div>
-            <div class="admin-row-hint">Read-only access to the owner's own Thingiverse models</div>
-          </div>
-          <span id="admin-apikey-status-thingiverse_app_token" class="apikey-status">…</span>
-        </div>
-        <div class="admin-apikey-input-row">
-          <input type="password" class="input admin-apikey-input" id="admin-apikey-input-thingiverse_app_token"
-                 placeholder="Enter to set" autocomplete="off">
-          <button type="button" class="btn-ms admin-apikey-save" data-key="thingiverse_app_token">Save</button>
-        </div>
-        <span id="admin-apikey-msg-thingiverse_app_token" class="backup-status"></span>
       </div>
       <div class="admin-divider"></div>
       <div class="admin-row admin-apikey-row">
@@ -903,7 +886,7 @@
   // real value back. KNOWN_SETTINGS is web/app.py's allowlist; this array is
   // just this page's UI-side list of which of those keys get a labeled row —
   // add an entry here (plus the matching markup above) for a future key.
-  const API_KEY_SETTINGS = ['youtube_data_api_key', 'thingiverse_app_token', 'pages_publish_token'];
+  const API_KEY_SETTINGS = ['youtube_data_api_key', 'pages_publish_token'];
 
   function setApiKeyStatus(key, isSet) {
     const status = document.getElementById(`admin-apikey-status-${key}`);

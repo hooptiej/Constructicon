@@ -40,11 +40,4 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
 # deploys are a file copy + container restart, not a rebuild; only changes
 # to requirements.txt or system packages need `docker build` again.
 
-# #601: the desktop uploader's source (served as /downloads/constructicon-uploader-source.zip)
-# is NOT in the bind-mounted trees above, so without this the container had no desktop_app/ and the
-# download was an empty zip. This baked copy is the fallback; docker-compose mounts the checkout's
-# ./desktop_app over it read-only (like core/ and web/), so a code deploy keeps it current without
-# a rebuild.
-COPY desktop_app /app/desktop_app
-
 EXPOSE 8000 8100

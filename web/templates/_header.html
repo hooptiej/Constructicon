@@ -23,9 +23,6 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M19 9l-7 7-7-7M12 16V4" stroke="#ECE8DA" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Export
     </button>
-    {# #347: Desktop uploader hidden for now — untested, no Windows build, unclear fit.
-       Route/page (/account) still exist (reachable by direct URL); just unadvertised.
-       Re-evaluation tracked in #348. #}
     {#- #467 step 1: who is signed in (name -> "Change my password", plus Sign out), or "Sign in". -#}
     {% set _me = current_user() %}
     <div class="user-chip" id="user-chip">

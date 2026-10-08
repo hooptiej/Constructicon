@@ -1,5 +1,5 @@
 """Request-scoped helpers shared by the routers (#547): the Jinja templates object and its
-globals, the desktop-uploader constants, and the breadcrumb / revision-note helpers.
+globals, and the breadcrumb / revision-note helpers.
 Moved verbatim from web/app.py."""
 
 import logging
@@ -73,24 +73,6 @@ templates.env.globals["csrf_token"] = web_auth.csrf_token
 # and web/templates/_gallery_drawer.html stay in sync with newly added types.
 templates.env.globals["upload_accept"] = ",".join(object_types.accepted_extensions())
 templates.env.globals["upload_max_mb"] = storage.MAX_MB
-
-# Source (capture_events.tech): who or what actually added a row, and how —
-# see core/db.py's source_*() / SOURCE_* and source_group() for the full vocabulary
-# and grouping logic. The web upload drawer and the desktop uploader app both
-# POST to /api/upload with no client-supplied identity (this is a
-# single-owner site, not a multi-tech tool) — the server tells them apart by
-# the desktop app's identifying request header (see api_upload below) and
-# stamps the right Source string itself rather than trusting a client field.
-DESKTOP_APP_CLIENT_HEADER = "X-Constructicon-Client"
-DESKTOP_APP_CLIENT_VALUE = "desktop-app"
-
-DESKTOP_APP_DIR = Path(__file__).resolve().parent.parent / "desktop_app"
-# Separate from both desktop_app/ (source) and storage/ (capture-event
-# files) on purpose — this is neither. One file, whoever uploads last wins;
-# there's no versioning, just the current build.
-DESKTOP_APP_BUILD_DIR = Path(__file__).resolve().parent.parent / "desktop_app_build"
-DESKTOP_APP_BUILD_PATH = DESKTOP_APP_BUILD_DIR / "Constructicon-Uploader.zip"
-
 
 def _rev_note(request, count, show_all):
     """The small "N older revisions hidden / Show older revisions" line under a grid (templates/

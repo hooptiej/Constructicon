@@ -15,8 +15,8 @@ below).
 It started as a single-owner tool on a LAN-only server with no port forward, where the network
 perimeter was the security boundary. Auth is on (#467; owner decisions 2026-10-07): **step 1**
 added users, sign-in and first-run setup; **step 2 enforces it**: every page and API needs at least
-a viewer, roles are checked, restricted items are admin-only, and scripts / the desktop uploader /
-the MCP send the install token. See "Users and sessions" and "Auth enforcement" below.
+a viewer, roles are checked, restricted items are admin-only, and scripts / the MCP send the
+install token. See "Users and sessions" and "Auth enforcement" below.
 
 Long-term goal (see `README.md` for the full writeup): this is the dynamic
 backend for a future blog-driven personal site. A future static-export step
@@ -45,12 +45,12 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
     (`/api/curator/*`, `/api/pending-decisions*`), `blog_export.py`
     (`/api/blog-entries*`, `/api/export/*`), `admin.py` (settings, backup,
     delete-all, audit log, redacted/restricted, storage stats, provenance
-    options, caption tuning/breaker, desktop-app build), `files.py` (`/f/*`,
-    `/downloads/*`, brand-asset and wallpaper listings) and `meta.py`
+    options, caption tuning/breaker), `files.py` (`/f/*`,
+    brand-asset and wallpaper listings) and `meta.py`
     (`/healthz`, `/api/version`).
   - `web/shapes.py`: the `_to_*` response shapers and the pure helpers they
     share. `web/common.py`: the `templates` object and its Jinja globals,
-    desktop-uploader constants, breadcrumbs / `?rev=` note helpers.
+    breadcrumbs / `?rev=` note helpers.
     `web/middleware.py`: the actor middleware and audit logging. Routers import from `common` and
     `shapes`, never from `web.app` or from each other.
   - **Adding a route:** put it in the router for its area, decorated
@@ -143,15 +143,6 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
 - **`core/backup.py`** — standalone `POST /api/backup` backup-to-zip
   (DB snapshot + `storage/`). Deliberately **not** wired into any delete
   path (a past incident wiped storage while only the DB got backed up).
-- **`desktop_app/`** — a separate desktop uploader app (own README), built
-  and distributed as a downloadable zip from `/downloads/...`. Talks to the
-  web app over the same `/api/upload`/`/api/content` HTTP API. It sends the
-  install token (`Authorization: Bearer`, menu "Set Install Token…", #467 step 2);
-  its `X-Constructicon-Client: desktop-app` header only picks the upload's Source
-  label and grants nothing. The source zip is built from `/app/desktop_app` at request time (#601):
-  compose mounts `./desktop_app:/app/desktop_app:ro` into the web service (the Dockerfile also bakes
-  a fallback copy), and a tree without `constructicon_uploader/api.py` answers 503
-  `uploader_source_missing` instead of an empty zip. Check with `scripts/test_types_602.py`.
 - **`mcp_server/server.py`** — the live `constructicon-mcp` sidecar (see
   "MCP server: `constructicon-mcp`" below for the tool surface and how it
   runs alongside `constructicon-web`). Tool names are `constructicon_*`;
@@ -344,7 +335,7 @@ request-log rows record `user:<name>`.
 
 **CSRF.** On top of the origin guard (#558): a POST/PUT/PATCH/DELETE **that carries a live session
 cookie** must send that session's token in `X-CSRF-Token`, else 403 `csrf_failed` (in the request
-log). Install-token requests (scripts, the desktop uploader; `Authorization: Bearer`) never need it:
+log). Install-token requests (scripts; `Authorization: Bearer`) never need it:
 a browser can't attach that header cross-site without a CORS preflight the app never grants, and a
 token request carries no session even when a cookie rides along. Injection: `base.html` renders `<meta name="csrf-token">` plus
 `static/js/csrf.js` (loaded before every other script) only on a signed-in page; csrf.js wraps
@@ -401,8 +392,7 @@ included routers expanded; an unknown path counts as viewer, so a stranger can't
 - signed in but below a MOUNT's label -> 403 `forbidden`; below a ROUTE's label -> 403 `forbidden`
   from `web.roles.require_role` (the labels from #557; a page answers the same JSON 403).
 - **No trust for loopback or LAN addresses**: no session and no token = anonymous, whatever the IP
-  or `X-Forwarded-For`. The old `X-Constructicon-Client: desktop-app` header grants nothing (it only
-  picks the upload's Source label).
+  or `X-Forwarded-For`.
 
 **User files are never served as active content on the app origin (#610).** Browsers carry the
 session cookie for this origin, so an uploaded `.html` / `.svg` rendered as a page from `/f/<slug>`
@@ -450,9 +440,6 @@ separate user-content origin.
   per run (dropping the container's token variables); `_testenv.client(app)` is a TestClient that
   sends it (admin, actor `token`); a bare `TestClient` is anonymous. `_testenv.use_token()` for a
   test that builds its own temp DB.
-- **Desktop uploader:** menu "Set Install Token…" (stored in its config.json, written mode 600, never
-  shown back in full); every upload sends the Bearer header; a 401 shows "The server needs the
-  install token: set it in the menu, Set Install Token...".
 
 **Rollout for an install (order matters; prod is the main session's job).**
 1. Deploy the code (`./scripts/deploy.sh`). Until step 3, the MCP container keeps running its old
@@ -466,11 +453,10 @@ separate user-content origin.
    (expects 401 without, 200 with the token) and the MCP log line "bearer token auth ENABLED".
 5. First admin: open the site, it redirects to `/setup` (or `docker exec <web> python3
    scripts/reset_password.py --create-admin <name> --generate`).
-6. Clients: every MCP client's config gets the `headers` block; the uploader gets the token; scripts
+6. Clients: every MCP client's config gets the `headers` block; scripts
    run elsewhere get `CONSTRUCTICON_TOKEN_FILE`.
 **What breaks if a client isn't updated:** an MCP client without the header gets 401 on every call
-(Claude Code shows the server as failed); the uploader's uploads fail with the "install token"
-notification; an HTTP script gets 401 (or a 302 to `/login` on a page); a hotlink to a restricted or
+(Claude Code shows the server as failed); an HTTP script gets 401 (or a 302 to `/login` on a page); a hotlink to a restricted or
 redacted item 404s; an open browser tab is sent to `/login`.
 
 **Rotate:** `python3 scripts/mcp_token.py generate secrets/constructicon_token --force`, restart BOTH
@@ -478,8 +464,8 @@ containers (`sudo docker restart <web> <mcp>`), update every client. **Lost admi
 `sudo docker exec -it <web> python3 scripts/reset_password.py <user>` (or `--create-admin`), see above.
 
 Check with `scripts/test_auth_step2.py` (throwaway DB: the whole matrix per role and for the token,
-mounts, `next`, the decision queue, the MCP refusing to start, the uploader's API module, no secrets
-in the audit log). Later (not built): HTTPS (Caddy), per-user MCP tokens, a separate uploader token.
+mounts, `next`, the decision queue, the MCP refusing to start, no secrets
+in the audit log). Later (not built): HTTPS (Caddy), per-user MCP tokens.
 
 ## Ownership and sensitive items (#604 build steps 1-2, #603)
 
@@ -876,7 +862,7 @@ To add a new object type (issue #448 contract v2):
     what added this row, and how"). See `source_manual_upload()` /
     `source_automated_upload()` (the owner label is install config, #562), `SOURCE_AUTHORED`,
     `source_migrated_from()`/`source_group()` for the fixed vocabulary
-    (manual web upload, automated desktop-uploader upload, migrated by
+    (manual web upload, the legacy automated-upload label, migrated by
     Claude from a named source, or authored by Claude directly).
   - `client`, `ticket_id` — also vestigial imagerepo IT-ticketing fields;
     still present in the schema/API but not meaningful to Constructicon's
@@ -1268,8 +1254,7 @@ This replaces `git pull` (still stuck on the old HTTPS-with-no-creds
 failure mode if anyone reverts the remote) and replaces routinely
 tar-over-ssh'ing files in by hand. **Tar-over-ssh is now a fallback, not
 the default** — reach for it only if `scripts/deploy.sh` itself can't run
-(e.g. git credentials break again) or for the desktop app's own build
-artifacts, which aren't part of this repo's git history. If you do fall
+(e.g. git credentials break again). If you do fall
 back to it: `tar czf - core web mcp_server scripts assets | ssh ... 'cd
 .../constructicon && tar xzf -'`, confirmed working 2026-09-03 deploying
 #103/#95/#88+#90/#92+#93 this way.

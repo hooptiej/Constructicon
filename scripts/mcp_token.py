@@ -2,7 +2,7 @@
 
 The install token is ONE secret used by both containers: the MCP sidecar requires it on every
 call (role admin, actor `mcp`) and the web app accepts it as `Authorization: Bearer <token>` from
-non-browser clients (scripts, the desktop uploader; role admin, actor `token`). Keep it in one
+non-browser clients (scripts; role admin, actor `token`). Keep it in one
 file and mount that file read-only into BOTH services with
 CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token (see docker-compose.yml.example
 and CLAUDE.md "Auth enforcement"). The older CONSTRUCTICON_MCP_TOKEN(_FILE) names still work.

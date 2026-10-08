@@ -275,7 +275,7 @@ def resolution_urls(routes, v):
 
 def snapshot_urls(v):
     u = ["/", "/?rev=all", "/unfiled", "/unfiled?rev=all", "/gallery", "/upload", "/hobbies",
-         "/brand", "/wallpaper", "/account", "/admin", "/admin?embed=1", "/curator", "/captions/review",
+         "/brand", "/wallpaper", "/admin", "/admin?embed=1", "/curator", "/captions/review",
          "/object/does-not-exist", "/project/does-not-exist", "/hobby/does-not-exist",
          "/healthz", "/api/version", "/api/settings", "/api/pending-decisions", "/api/audit-log?limit=25",
          "/api/redacted", "/api/restricted", "/api/admin/storage-stats", "/api/processing",
@@ -285,9 +285,8 @@ def snapshot_urls(v):
          "/api/curator/queue?summary=1", "/api/curator/queue/html", "/api/hobbies", "/api/hobby/does-not-exist",
          "/api/brand-assets", "/api/wallpapers", "/api/blog-entries", "/api/blog-entries?status=draft",
          "/api/tags", "/api/search?query=kerbal", "/api/search?query=build", "/api/export/config",
-         "/api/export/targets", "/api/account/desktop-app-build", "/api/image/does-not-exist",
-         "/f/does-not-exist", "/downloads/constructicon-uploader-source.zip",
-         "/downloads/constructicon-uploader.zip", "/openapi.json", "/docs"]
+         "/api/export/targets", "/api/image/does-not-exist",
+         "/f/does-not-exist", "/openapi.json", "/docs"]
     for h in v["hobbies"]:
         u += [f"/hobby/{h}", f"/api/hobby/{h}", f"/?hobby={h}"]
     for kind, (pid, slug) in v["projects_by_kind"].items():

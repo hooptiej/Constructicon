@@ -91,11 +91,10 @@ check("fresh: neutral labels", db.source_manual_upload() == "Owner — manual up
 
 r = client.post("/api/upload", files={"file": ("note.txt", b"hello", "text/plain")})
 check("fresh: web upload ok", r.status_code == 200, (r.status_code, r.text[:200]))
-r2 = client.post("/api/upload", files={"file": ("note2.txt", b"hello again", "text/plain")},
-                 headers={"X-Constructicon-Client": "desktop-app"})
+r2 = client.post("/api/upload", files={"file": ("note2.txt", b"hello again", "text/plain")})
 techs = [t for (t,) in q("SELECT tech FROM capture_events ORDER BY id")]
 check("fresh: uploads stamped with the neutral label",
-      techs == ["Owner — manual upload", "Owner — automated upload"], techs)
+      techs == ["Owner — manual upload", "Owner — manual upload"], techs)
 check("fresh: the gallery groups them under 'Owner'", db.source_group(techs[0]) == "Owner")
 
 home = client.get("/").text

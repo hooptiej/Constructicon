@@ -26,11 +26,9 @@ The whole pipeline, from a dropped file to a published page:
 flowchart TD
     subgraph ingest [Ingest]
         U[Web upload / drag-drop or folder]
-        D[Desktop uploader app]
         L[Paste any URL — YouTube / web]
     end
     U --> CE
-    D --> CE
     L --> CE
     CE[("capture_events — every object<br/>image, video, STL, PDF, PSD, SVG,<br/>audio, YouTube link, …")]
     CE --> ENRICH[OCR · perceptual/embedding similarity · auto-caption · thumbnail]
@@ -103,8 +101,7 @@ erDiagram
 
 ## Features
 
-- **Ingest** — drag-and-drop upload (a folder drop becomes a Project), a
-  separate **desktop uploader app** (`desktop_app/`), and pasting any URL
+- **Ingest** — drag-and-drop upload (a folder drop becomes a Project) and pasting any URL
   (YouTube / generic web page, classified server-side).
 - **OCR & search** — images are OCR'd (`tesseract`), PDFs use their text layer;
   everything is searchable.

@@ -5,8 +5,8 @@
   * public  anyone, no login: the /f/<slug> hotlinks, /healthz, static assets.
   * viewer  read the archive: pages and GET reads.
   * editor  curate: the writes (upload, edit, file, tag, link, undo, ...).
-  * admin   run the install: settings, backup, delete-all, audit log, publish, the desktop-app
-            build, provenance-option management, caption tuning, emptying the trash, permanent
+  * admin   run the install: settings, backup, delete-all, audit log, publish,
+            provenance-option management, caption tuning, emptying the trash, permanent
             deletes and the whole-card/hobby conversions.
 
 Web routes carry their label through `web.roles.requires(...)` (see web/roles.py and

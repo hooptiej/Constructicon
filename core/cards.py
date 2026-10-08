@@ -2563,7 +2563,7 @@ def undo(target, *, force=False, dry_run=False, actor=None):
         install_config.clear_cache()
     if file_plan and not dry_run:
         _items.after_undo(rows, file_plan)
-    elif not dry_run and any(r.get("op") == _items.OP_RETYPE for r in rows):
+    elif not dry_run and _items.needs_after_undo(rows):  # a retype, or a replaced file (#617)
         _items.after_undo(rows, [])
     flat = _changes_from_log([{"op": "undo", "affected_slugs": sorted(set(slugs)), "mutations": applied}])
     return Result(True, flat, [], batch_id, dry_run,

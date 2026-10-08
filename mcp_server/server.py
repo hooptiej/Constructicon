@@ -18,6 +18,7 @@ Conventions shared by every tool (#560, #548; enforced by the `@mcp.tool()` wrap
 """
 
 import base64
+import binascii
 import functools
 import io
 import json
@@ -329,6 +330,56 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
     content = base64.b64decode(content_base64)
     return _ingest(filename, io.BytesIO(content), len(content), description, tags, uploaded_by, source_modified_at,
                    sensitive=sensitive)
+
+
+@mcp.tool()
+def constructicon_replace_file(slug: str, content_base64: str, filename: str | None = None) -> dict:
+    """Replace an existing item's file bytes and KEEP the item (#617): same slug (so /f/<slug> and
+    every link keep working), cards, tags, title, captions, relations and revision chain. Use this
+    to revise a file instead of uploading a new item, adding it to the card and trashing the old one.
+
+    content_base64: the new file's raw bytes, standard base64 (same convention as
+      constructicon_upload; whitespace/newlines are ignored, a data: prefix is not accepted).
+      The whole payload rides one MCP message, so the limit is the server's upload cap
+      (constructicon_list_import reports it as max_upload_mb; default 25 MB). Over it the call
+      is refused with file_too_large before anything is decoded or written; for a larger file
+      upload it with constructicon_import and link it with constructicon_mark_superseded.
+    filename: optional, the NEW file's name (it decides the type check, e.g. "notes-v3.md"). Omit
+      it to keep the item's own name. The item keeps its name (so its title stays) unless the
+      extension differs, in which case the stem is kept and the extension swapped.
+
+    Re-processing is the same as an upload: type check (a different TYPE is refused, see below),
+    embedded metadata (fill-only), thumbnail, text extraction / OCR (runs in the background:
+    ocr_status is "pending" until it finishes, extracted_text is empty meanwhile), perceptual hash,
+    captions, and the search index (by trigger). Sensitive / restricted items stay so; the item
+    must be one the caller may see.
+
+    UNDOABLE: the previous bytes go to the trash (reason "replace", kept 7 days) in the same change
+    as the row update, so constructicon_undo(batch_id) restores the old file, size and name.
+    Returns the object plus {replaced: true, batch_id, previous_size, new_size, trash_days}.
+
+    Errors ({"ok": false, "error": {code, message}}): not_found; forbidden (needs editor+);
+    replace_redacted (a redacted item has no file: recover it first); no_file (a content-only item);
+    bad_base64 (not valid base64); empty_file (0 bytes); file_too_large; unsupported_type /
+    content_mismatch (as an upload); replace_type_mismatch (the bytes are another type than the
+    item, e.g. a .md replaced with a .pdf: upload a new item and use constructicon_mark_superseded);
+    replace_needs_decision / replace_rejected (the type's upload hook would not simply accept it);
+    file_unchanged (identical bytes).
+    """
+    encoded = "".join((content_base64 or "").split())
+    if len(encoded) * 3 // 4 > storage.MAX_BYTES + 3:
+        raise errors.AppError("file_too_large", f"The replacement is about {len(encoded) * 3 // 4 / 1048576:.0f} MB "
+                              f"as sent, over the {storage.MAX_MB} MB upload limit. Nothing was changed.", status=413,
+                              details={"max_bytes": storage.MAX_BYTES})
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise InvalidInput(f"content_base64 is not valid base64 ({e}). Send the raw file bytes, standard base64, "
+                           "no data: prefix. Nothing was changed.", code="bad_base64") from e
+    result = items.replace_file(slug, content, filename, run_background=_run_in_thread)
+    return {**_to_public(result.item), "replaced": True, "batch_id": result.batch_id,
+            "previous_size": result.data["previous_size"], "new_size": result.data["new_size"],
+            "trash_days": result.data["trash_days"], "expires_at": result.data["expires_at"]}
 
 
 @mcp.tool()

@@ -546,7 +546,7 @@ def object_detail_page(request: Request, slug: str):
     }
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "redact_hold": redact_hold, "sensitive_ctl": sensitive_ctl, "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
+        {"item": item, "redact_hold": redact_hold, "sensitive_ctl": sensitive_ctl, "can_replace_file": roles.at_least(my_role, roles.EDITOR), "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
     )
 
 

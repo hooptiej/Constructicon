@@ -196,7 +196,6 @@ def _split_revisions(rows, show_all):
     return (rows if show_all else [r for r in rows if r["slug"] not in sup]), n
 
 
-
 def _friendly_date(epoch):
     """`Sep 30, 2026` in Mountain Time (core/datefmt.py is the one implementation, #544)."""
     return datefmt.day(epoch)
@@ -435,10 +434,6 @@ def _to_timeline_project(project):
         "effective_end": effective_end,
         "is_child": project.get("parent_id") is not None,
     }
-
-
-def _project_has_tag(project, member_slugs):
-    return any(item["slug"] in member_slugs for item in db.list_project_items(project["id"]))
 
 
 def _to_content_public(row, project_slug=None):

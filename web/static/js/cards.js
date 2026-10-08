@@ -38,14 +38,6 @@
     failed:  { color: '#E24B4A', title: 'Captioning failed' },
     none:    { color: '#6E6B57', title: 'No caption yet' }
   };
-  var CLIENT_COLORS = {};
-  var PALETTE = ['#B98B5E', '#8B7355', '#C9A66B', '#7FA37C', '#9CAD5E'];
-  function colorFor(client) {
-    if (!client) return '#6E6B57';
-    if (!CLIENT_COLORS[client]) CLIENT_COLORS[client] = PALETTE[Object.keys(CLIENT_COLORS).length % PALETTE.length];
-    return CLIENT_COLORS[client];
-  }
-
   function lamp(color, title) {
     return '<span class="ocr-lamp" style="background:' + esc(color) + '" title="' + esc(title) + '"></span>';
   }

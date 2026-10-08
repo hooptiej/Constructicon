@@ -399,26 +399,6 @@ def sync_hudu_clients(companies):
         conn.close()
 
 
-def add_test_client(name, nickname=None, domains=None):
-    """A fake client for exercising the pipeline (OCR auto-tag matching,
-    similarity, dropdowns) without mixing invented data into the real
-    Hudu-synced list. Deliberately its own category, not 'hudu' — that
-    category gets wiped and rebuilt wholesale on every sync_hudu_clients()
-    call, which would silently delete a fake client the next time a real
-    sync runs."""
-    conn = get_conn()
-    try:
-        conn.execute("INSERT OR IGNORE INTO clients (name, category, nickname) VALUES (?, 'test', ?)", (name, nickname))
-        if domains:
-            conn.executemany(
-                "INSERT OR IGNORE INTO client_domains (client_name, domain) VALUES (?, ?)",
-                [(name, d.strip().lower()) for d in domains if d],
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def list_client_domains():
     """(client_name, domain) pairs — a client can have more than one, so this
     is flat rows rather than one-per-client like list_client_aliases."""
@@ -2259,7 +2239,7 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, inclu
     applied in SQL.
 
     #282: redacted rows are excluded by default, same as every other
-    list/browse query here (list_recent_posts, list_unfiled_items, ...) --
+    list/browse query here (list_unfiled_items, list_recent_items_by_type, ...) --
     a redacted item is reachable only by its direct /object/<slug> link
     and the admin pane's list_redacted() view. `include_redacted=True` is
     the escape hatch for a caller that uses this as "enumerate every row"
@@ -2743,16 +2723,6 @@ def list_project_link_rows(slug=None, pair=None):
         conn.close()
 
 
-def count_project_links_by_type():
-    """{type: row_count}: the before/after snapshot used to verify the rebuild."""
-    conn = get_conn()
-    try:
-        return {r["type"]: r["n"] for r in conn.execute(
-            "SELECT type, COUNT(*) AS n FROM project_relations GROUP BY type")}
-    finally:
-        conn.close()
-
-
 def connected_project_ids():
     """(#534) Ids of every card with at least one real connection: a hobby membership, a
     family/collection membership (as member or as the family), nesting (a parent or at least
@@ -3078,19 +3048,6 @@ def list_posts_for_tag(tag_id, include_descendants=True, limit=50):
         conn.close()
 
 
-def list_recent_posts(limit=10):
-    """Chronological feed — the Blog page uses this with a high limit, Home's
-    highlights strip uses it with a small one. Same query either way."""
-    conn = get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM capture_events WHERE redacted = 0" + policy.sql_browse_clause() + " ORDER BY timestamp DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [_row_to_dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
 # --- Projects ---
 # A curated collection of posts an owner deliberately assembles into one
 # card — distinct from blog_tags/post_tags, which is automatic grouping by
@@ -3394,34 +3351,6 @@ def list_child_projects(project_id):
             (project_id,),
         ).fetchall()
         return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def list_project_ancestors(project_id):
-    """Walk up the parent chain from a project to the root, returning a list
-    of ancestor project dicts in reverse order (root first). Used to build
-    breadcrumb navigation. Returns empty list if the project has no parent."""
-    ancestors = []
-    current_id = project_id
-    visited = set()
-    conn = get_conn()
-    try:
-
-        while current_id is not None:
-            if current_id in visited:
-                # Cycle detected — shouldn't happen if set_project_parent's guard works
-                break
-            visited.add(current_id)
-            row = conn.execute("SELECT * FROM projects WHERE id = ?", (current_id,)).fetchone()
-            if row is None:
-                break
-            project = dict(row)
-            ancestors.append(project)
-            current_id = project.get("parent_id")
-
-        # Reverse so root is first, and exclude the current project (first in list before reversing)
-        return list(reversed(ancestors))[:-1] if len(ancestors) > 1 else []
     finally:
         conn.close()
 
@@ -4023,15 +3952,6 @@ def _clear_tables(tables):
             counts[t] = conn.execute(f"DELETE FROM {t}").rowcount
         conn.commit()
         return counts
-    finally:
-        conn.close()
-
-
-def count_table_rows(tables):
-    """{table: row_count}: used to prove a dry run wrote nothing."""
-    conn = get_conn()
-    try:
-        return {t: conn.execute(f"SELECT COUNT(*) AS n FROM {t}").fetchone()["n"] for t in tables}
     finally:
         conn.close()
 

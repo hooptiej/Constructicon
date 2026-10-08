@@ -213,7 +213,6 @@
 .cx-item-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px; background: rgba(20, 23, 15, .72); border: 1px solid rgba(226, 214, 150, .14); font-size: 12px; line-height: 1; }
 .cx-item-redacted-badge { font-size: 10px; color: var(--text-3); }
 .cx-item-tags { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
-.cx-item-tools .client-badge { font-size: 10.5px; max-width: 100%; }
 .cx-item-tools .chip { font-size: 10px; padding: 1px 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cx-item-tools .card-select-row { margin-left: auto; }
 .cx-item-redacted .cx-art { opacity: .8; }

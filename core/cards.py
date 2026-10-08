@@ -2086,7 +2086,6 @@ def file_face(*, slug, title, dates, type_line, cover_url, href, codes=(), highl
     }
 
 
-STACK_UNDER = 3     # tilted cards under the flat top card in a pile
 STACK_FAN_MAX = 7   # cards shown when a pile is fanned out (then "+N")
 
 
@@ -2213,11 +2212,6 @@ def file_stacks(card, items=None, thumb_fn=None):
         })
     piles.sort(key=lambda p: (-p["count"], p["label"]))
     return piles
-
-
-def card_json(card):
-    """GET /api/cards/{slug}: the card face for one card."""
-    return card_face(card)
 
 
 # --- Bulk (6) ---------------------------------------------------------------------

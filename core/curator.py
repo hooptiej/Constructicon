@@ -71,7 +71,6 @@ STATUS_APPLICABILITY = {
 }
 
 
-
 def _auto_caption(item):
     """#532: the item's moondream auto-caption, if any (type_metadata may be a dict or JSON text)."""
     tm = item.get("type_metadata") or {}
@@ -512,32 +511,6 @@ def _get_project_tags(project, items=None):
     tags.update(db.tag_ids_for_posts([item["slug"] for item in items]))
 
     return list(tags)
-
-
-def _get_related_projects(project):
-    """Get related projects: the parent/siblings via parent_id, plus explicit
-    project-to-project relations (#408, project_relations table)."""
-    related = []
-    seen = set()
-
-    # Parent project
-    if project.get("parent_id"):
-        parent = db.get_project(project["parent_id"])
-        if parent and parent["id"] not in seen:
-            related.append(parent); seen.add(parent["id"])
-
-    # Sibling/child projects via parent
-    if project.get("parent_id"):
-        for s in db.list_child_projects(project["parent_id"]):
-            if s["id"] != project["id"] and s["id"] not in seen:
-                related.append(s); seen.add(s["id"])
-
-    # Explicit peer links (#408)
-    for rp in db.list_linked_projects(project["slug"]):  # any link type (V2 3.8)
-        if rp["id"] != project["id"] and rp["id"] not in seen:
-            related.append(rp); seen.add(rp["id"])
-
-    return related
 
 
 @db.in_read_session

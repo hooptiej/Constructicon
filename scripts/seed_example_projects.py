@@ -13,7 +13,7 @@ db._add_item_to_project rather than derived from tag membership.
 
 This is deliberately NOT wired into app startup or the backfill script —
 `projects`/`project_items` are curated by hand, not derived data, same as
-seed_test_data.py's fake gallery uploads being opt-in rather than automatic.
+any other example data being opt-in rather than automatic.
 
 Sourcing note (see the PR description for the full writeup): the real
 hooptiej.com content lives in two places with different reliability for

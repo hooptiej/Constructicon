@@ -19,6 +19,8 @@ import re
 import xml.etree.ElementTree as ET
 import zipfile
 
+from .. import datefmt
+
 MAX_PART_BYTES = 32 * 1024 * 1024
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
@@ -172,7 +174,7 @@ def numbered(names, pattern):
 
 
 def date_label(ts):
-    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%d") if ts else None
+    return datefmt.iso_day(ts)
 
 
 def common_props(stats):

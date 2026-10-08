@@ -20,7 +20,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import actor as actor_ctx, card_rules, changes, db, markdown_render, timeline
+from . import actor as actor_ctx, card_rules, changes, datefmt, db, markdown_render, timeline
 from .card_rules import CardError
 from .errors import AppError, InvalidInput
 
@@ -1934,24 +1934,18 @@ def explain_card(card):
 
 FACE_REL_LINES = 2          # relationship lines on a face, then "+N more"
 FACE_PROJECT_LIST_MAX = 160  # characters of a hobby face's project list, then "+N more"
-_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 _DOT = " · "
-
-
-def _month_year(ts):
-    t = time.gmtime(ts)
-    return f"{_MONTHS[t.tm_mon - 1]} {t.tm_year}"
 
 
 def date_range_label(start, end, active=False, now=None):
     """`Nov 2025 - Jul 2026`; a single moment `Jul 2026`; an active card whose end is in
-    the past `Nov 2025 - now` (8.1). Month granularity, UTC."""
+    the past `Nov 2025 - now` (8.1). Month granularity, Mountain Time (#544)."""
     if start is None:
         return ""
-    first = _month_year(start)
-    last = _month_year(end if end is not None else start)
+    first = datefmt.month(start)
+    last = datefmt.month(end if end is not None else start)
     if active:
-        now_label = _month_year(now if now is not None else time.time())
+        now_label = datefmt.month(now if now is not None else time.time())
         if last != now_label:
             return f"{first} - now"
     return first if first == last else f"{first} - {last}"
@@ -2097,8 +2091,7 @@ STACK_FAN_MAX = 7   # cards shown when a pile is fanned out (then "+N")
 
 
 def _day_label(ts):
-    d = timeline.epoch_to_local(ts)
-    return f"{_MONTHS[d.month - 1]} {d.day}, {d.year}"
+    return datefmt.day(ts)
 
 
 def _asset_card(r, ts, spec, card_row, thumb_fn):

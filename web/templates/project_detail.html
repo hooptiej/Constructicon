@@ -432,6 +432,7 @@
   <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 
   {% if timeline_children or timeline_items %}
+  <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
   <script src="/static/js/timeline-drag-math.js?v={{ static_version('js/timeline-drag-math.js') }}"></script>
   <script src="/static/js/project-video-timeline.js?v={{ static_version('js/project-video-timeline.js') }}"></script>
   <script>
@@ -471,7 +472,7 @@
     function afterSave({ event, result, reset }) {
       refreshDates(result.span);
       if (!result.batch_id) return;
-      const when = new Date(result.effective_date * 1000).toLocaleDateString();
+      const when = MountainTime.formatDate(result.effective_date);
       const msg = reset
         ? `"${event.label}" is back on its computed date (${when}).`
         : `"${event.label}" re-dated to ${when}. The date is now set by hand.`;
@@ -486,7 +487,7 @@
         label: c.title,
         start: c.effective_start,
         end: c.effective_end,
-        dateLabel: `${new Date(c.effective_start * 1000).toLocaleDateString()} – ${new Date(c.effective_end * 1000).toLocaleDateString()}`,
+        dateLabel: `${MountainTime.formatDate(c.effective_start)} – ${MountainTime.formatDate(c.effective_end)}`,
         openUrl: `/project/${c.slug}`,
       })),
       events: timelineItems.map((it) => ({
@@ -495,7 +496,7 @@
         date: it.effective_date,
         thumbUrl: it.thumb_url,
         setByHand: it.set_by_hand,
-        dateLabel: new Date(it.effective_date * 1000).toLocaleDateString(),
+        dateLabel: MountainTime.formatDate(it.effective_date),
         openUrl: `/object/${it.slug}?from=project:{{ project.slug }}`,
       })),
     });

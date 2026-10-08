@@ -25,7 +25,7 @@ when plausible, also seeds content_date. Nothing is executed.
 import datetime
 import logging
 
-from .. import besteffort, storage
+from .. import besteffort, datefmt, storage
 from . import _pe, _preview, register, ObjectTypeSpec, PreStore, ThumbnailSource, TypeAction
 
 STATS_KEY = "application_stats"
@@ -123,8 +123,7 @@ def get_properties(row):
             # signature" is the honest wording, not "unsigned".
             props["Signed"] = "Yes (Authenticode)" if stats["signed"] else "No embedded signature"
         if stats.get("built"):
-            props["Built"] = datetime.datetime.fromtimestamp(
-                stats["built"], datetime.timezone.utc).strftime("%Y-%m-%d")
+            props["Built"] = datefmt.iso_day(stats["built"])
         return props
     except Exception as e:
         print(f"Application properties failed for {row.get('slug')}: {e!r}")

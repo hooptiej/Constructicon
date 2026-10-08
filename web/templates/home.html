@@ -138,6 +138,7 @@
       {% endif %}
 
       {% if timeline_projects %}
+      <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
       <script src="/static/js/timeline-rail.js?v={{ static_version('js/timeline-rail.js') }}"></script>
       <script>
       (function () {
@@ -153,7 +154,7 @@
               date: p.effective_start,
               endDate: p.effective_end,
               isChild: p.is_child,
-              dateLabel: new Date(p.effective_start * 1000).toLocaleDateString(),
+              dateLabel: MountainTime.formatDate(p.effective_start),
               openUrl: `/project/${p.slug}`,
             })),
             {

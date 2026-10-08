@@ -30,7 +30,7 @@ import json
 import re
 from pathlib import Path
 
-from .. import storage
+from .. import datefmt, storage
 from . import _preview, register, ObjectTypeSpec, ThumbnailSource
 
 STATS_KEY = "vpptoken_stats"
@@ -114,7 +114,7 @@ def get_embedded_metadata(path):
 # ---------------------------------------------------------------- display
 
 def _date(ts):
-    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%d")
+    return datefmt.iso_day(ts)
 
 
 def expiry_status(expires, now=None):

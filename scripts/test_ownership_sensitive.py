@@ -260,7 +260,8 @@ check("an ordinary item is untouched for V (page 200)", C["V"].get(f"/object/{TO
 # ---- 3. who may flip it, undo, bulk --------------------------------------------------------------
 print("--- 3. flipping, undo, bulk ---")
 r = C["E2"].post(f"/api/image/{E1_ITEM}/sensitive", data={"sensitive": "false"}, headers=H["E2"])
-check("E2 clearing -> 403 forbidden", r.status_code == 403 and err_code(r) == "forbidden", f"{r.status_code} {r.text[:120]}")
+check("E2 clearing -> 404 not_found (E2 can't see E1's sensitive item, so it doesn't exist for them)",
+      r.status_code == 404 and err_code(r) == "not_found", f"{r.status_code} {r.text[:120]}")
 check("can_unmark: the uploader E1 and an admin yes; E2 and V no (owner decision on #603)",
       [policy.can_unmark_sensitive(a, row(E1_ITEM)) for a in ("user:os_ed1", "user:os_admin", "user:os_ed2", "user:os_view")]
       == [True, True, False, False])

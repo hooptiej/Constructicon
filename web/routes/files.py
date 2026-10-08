@@ -160,4 +160,5 @@ def get_thumbnail(slug: str):
         raise HTTPException(status_code=404, detail="file missing on disk")
     # #610: a thumbnail is a generated raster (nosniff only); if it fell back to the original file,
     # that file gets the full active-content treatment, typed by the original's name.
-    return content_security.serve_file(path, type_name=row.get("filename"))
+    is_generated = path == storage.thumb_path_for(slug)
+    return content_security.serve_file(path, type_name=None if is_generated else row.get("filename"))

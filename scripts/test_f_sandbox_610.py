@@ -121,6 +121,13 @@ check("svg thumb is never the raw SVG", svg_thumb.status_code == 404 or (svg_thu
                                                                          and hdr(svg_thumb).get("content-type", "").startswith("image/jpeg")),
       (svg_thumb.status_code, hdr(svg_thumb).get("content-type")))
 
+from core import storage  # noqa: E402
+storage.save_thumbnail_from_bytes(S["svg"], png.getvalue())  # what the SVG type's rasteriser would leave behind
+svg_thumb = anon.get(f"/f/{S['svg']}/thumb")
+check("svg thumb (generated raster): 200 image/jpeg, nosniff, no CSP, no markup",
+      svg_thumb.status_code == 200 and hdr(svg_thumb).get("content-type") == "image/jpeg" and hdr(svg_thumb).get("x-content-type-options") == "nosniff"
+      and "content-security-policy" not in hdr(svg_thumb) and b"<svg" not in svg_thumb.content, (svg_thumb.status_code, hdr(svg_thumb)))
+
 print("\n--- the helper itself ---")
 check("RENDERED view uses the shared policy", client.get(f"/api/image/{S['html']}/rendered").headers.get("content-security-policy") == CSP)
 check("CSP is a sandbox with no tokens", CSP.startswith("sandbox;") and "default-src 'none'" in CSP and "allow-scripts" not in CSP)

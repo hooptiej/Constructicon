@@ -333,7 +333,11 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
 
 @mcp.tool()
 def constructicon_search(query: str | None = None, tags: list[str] | None = None) -> list[dict]:
-    """Search objects by description, filename, or tags.
+    """Search objects by name (display name, title, any filename it has had), tags, card titles,
+    description or extracted text.
+
+    Each word you type matches the START of a word ("tun" finds "Tuning"), all words are
+    required, best match first. It is not a substring search.
 
     Returns a JSON list of matching objects. If both query and tags are
     provided, filters by both (AND logic). Redacted objects are excluded

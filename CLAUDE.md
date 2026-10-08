@@ -350,9 +350,14 @@ have to submit through fetch, since the server reads only the header.
 `POST /api/account/password` (`current_password`, `new_password`; 401 `not_signed_in` /
 `wrong_password`). Admin: `GET/POST /api/users`, `POST /api/users/{id}/role|password|disable|enable|delete`
 (Admin > Users panel). The header's user chip shows the name (-> Change my password) and Sign out,
-or "Sign in". **No secrets in logs:** `request_guard.AUDIT_ROUTE_RULES` / `AUDIT_ROUTE_PATTERNS`
-log no body values for login, setup, my password, user create and the admin reset; error reasons on
-those keep only the code.
+or "Sign in". **No secrets in logs (#559):** `request_guard.AUDIT_ROUTE_RULES` / `AUDIT_ROUTE_PATTERNS`
+log no body values for login, setup, my password, user create and the admin reset, and only the
+setting's name for `POST /api/settings`; error reasons on those keep only the code. Rules match by
+route path (trailing slashes ignored), and the field-name backstop (also inside nested JSON) covers
+the rest; a route whose plain field merely *looks* secret (`key`) goes in `AUDIT_PLAIN_FIELDS`.
+**A new route that takes a secret must get a rule;** `scripts/test_audit_secrets_559.py` fails when
+a Form field named like a secret has none. Migration `audit_scrub_secret_routes_559` scrubbed the
+old rows.
 
 **First run.** While `users` is empty, every page (and `/login`) redirects to `/setup` (step 2),
 which creates the first admin, signs them in and fills `install_config.owner_name` if unset (that

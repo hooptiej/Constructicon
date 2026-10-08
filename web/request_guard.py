@@ -100,8 +100,12 @@ class OriginGuardMiddleware:
 # --- Audit body redaction (#559): by route, with the field-name heuristic as backstop ---
 
 REDACTED = "[REDACTED]"
+NOT_LOGGED_BODY = "not logged: this route carries secrets or file bodies"
 
-# Routes whose request bodies carry (or may carry) secrets or nothing worth logging.
+# Routes whose request bodies carry (or may carry) secrets or nothing worth logging. A rule
+# applies to every mutating method on the path (stricter, never looser). Every route that
+# accepts a secret MUST be listed here: scripts/test_audit_secrets_559.py fails when a route
+# with a secret-looking form field is missing.
 #  "none":       no body values logged at all.
 #  "name_only":  the setting's *name* (field `key`) is kept, every other value is redacted.
 AUDIT_ROUTE_RULES = {
@@ -119,25 +123,42 @@ AUDIT_ROUTE_PATTERNS = (
     (re.compile(r"^/api/users/[^/]+/password$"), "none"),
 )
 
+# Routes where a field that merely *looks* secret by name is known to be plain data:
+# provenance-options send `key` = an option slug; the curator queue sends `key` / `nudge_key` =
+# a queue item's id.
+AUDIT_PLAIN_FIELDS = (
+    ("/api/provenance-options/", {"key"}),
+    ("/api/curator/", {"key", "nudge_key"}),
+)
+
+_SECRET_KEYWORDS = ("key", "secret", "token", "password", "api", "auth")
+
+# A setting's name is a short slug (youtube_data_api_key). Anything else in the `key` field of a
+# name_only route (say, a secret pasted into the wrong box) is redacted like a value.
+_SETTING_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def normalize_audit_path(path):
+    """The path a rule is looked up under. A request to `/api/settings/` is answered with a 307
+    to `/api/settings` and is audited under the slashed spelling first, so trailing slashes must
+    not dodge the rule (found live on main: that spelling logged the value in the clear)."""
+    p = path or ""
+    while "//" in p:
+        p = p.replace("//", "/")
+    return p.rstrip("/") or "/"
+
 
 def audit_route_rule(path):
     """The redaction rule for a request path: exact match first, then the patterns; None = the
     field-name backstop only."""
+    path = normalize_audit_path(path)
     rule = AUDIT_ROUTE_RULES.get(path)
     if rule:
         return rule
     for pattern, pat_rule in AUDIT_ROUTE_PATTERNS:
-        if pattern.match(path or ""):
+        if pattern.match(path):
             return pat_rule
     return None
-
-# Routes where a field that merely *looks* secret by name is known to be plain data.
-# provenance-options send `key` = an option slug.
-AUDIT_PLAIN_FIELDS = (
-    ("/api/provenance-options/", {"key"}),
-)
-
-_SECRET_KEYWORDS = ("key", "secret", "token", "password", "api", "auth")
 
 
 def redact_audit_error(path, reason):
@@ -150,31 +171,38 @@ def redact_audit_error(path, reason):
     return reason
 
 
+def _redact_value(k, v, plain):
+    """One field of the backstop pass. Looks inside nested JSON objects and lists too: a secret
+    in {"config": {"token": ...}} is as much a secret as a top-level one."""
+    if k not in plain and any(w in str(k).lower() for w in _SECRET_KEYWORDS):
+        return REDACTED
+    if hasattr(v, "filename"):
+        return f"<file: {v.filename}>"
+    if isinstance(v, dict):
+        return {ik: _redact_value(ik, iv, plain) for ik, iv in v.items()}
+    if isinstance(v, list):
+        return [_redact_value(k, i, plain) if isinstance(i, (dict, list)) else i for i in v]
+    return v
+
+
 def redact_audit_body(path, form_data):
     """Return a copy of form_data that is safe to write to audit_log."""
     if not form_data:
         return {}
     rule = audit_route_rule(path)
     if rule == "none":
-        return {"_body": "not logged: this route carries secrets or file bodies"}
+        return {"_body": NOT_LOGGED_BODY}
     if rule == "name_only":
         out = {}
         for k, v in form_data.items():
-            if k == "key" and isinstance(v, str):
+            if k == "key" and isinstance(v, str) and _SETTING_NAME.match(v):
                 out[k] = v  # the setting's name (a slug like youtube_data_api_key), not a secret
             else:
                 out[k] = REDACTED
         return out
+    norm = normalize_audit_path(path)
     plain = set()
     for prefix, fields in AUDIT_PLAIN_FIELDS:
-        if path.startswith(prefix):
+        if norm.startswith(prefix.rstrip("/") + "/"):
             plain |= fields
-    out = {}
-    for k, v in form_data.items():
-        if k not in plain and any(w in k.lower() for w in _SECRET_KEYWORDS):
-            out[k] = REDACTED
-        elif hasattr(v, "filename"):
-            out[k] = f"<file: {v.filename}>"
-        else:
-            out[k] = v
-    return out
+    return {k: _redact_value(k, v, plain) for k, v in form_data.items()}

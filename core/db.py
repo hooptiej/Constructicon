@@ -969,6 +969,77 @@ def _mig_audit_scrub_559():
         conn.execute("UPDATE audit_log SET form_body = ? WHERE id = ?", (json.dumps(body), row["id"]))
 
 
+# #559: the paths whose audit rows may hold a secret (see web/request_guard.py AUDIT_ROUTE_RULES;
+# core can't import web, so the list is repeated here and scripts/test_audit_secrets_559.py checks
+# the two stay in step). Matched after stripping trailing slashes.
+_AUDIT_SECRET_NAME_ONLY_559 = {"/api/settings"}
+_AUDIT_SECRET_NO_BODY_559 = {"/api/auth/login", "/api/auth/setup", "/api/account/password", "/api/users"}
+_AUDIT_SECRET_NO_BODY_RE_559 = re.compile(r"^/api/users/[^/]+/password$")
+_AUDIT_SETTING_NAME_559 = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_AUDIT_MARKER_FIELDS_559 = {"_unparsed", "content_type", "bytes", "_body"}
+_AUDIT_NOT_LOGGED_559 = "not logged: this route carries secrets or file bodies"
+_AUDIT_CODE_559 = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def _scrubbed_audit_body_559(path, raw):
+    """The form_body to store for an old audit row on a secret-bearing path, or None to leave the
+    row alone. Idempotent: scrubbing a scrubbed body returns None."""
+    try:
+        body = json.loads(raw) if raw else {}
+    except (ValueError, TypeError):  # silent-ok: an unreadable body on a secret route is replaced whole below
+        body = None
+    if isinstance(body, dict) and not body:
+        return None  # nothing was sent
+    if isinstance(body, dict) and set(body) <= _AUDIT_MARKER_FIELDS_559:
+        return None  # already a marker (unparsed / not logged / redacted): holds no field values
+    if path in _AUDIT_SECRET_NAME_ONLY_559 and isinstance(body, dict):
+        new = {k: (v if k == "key" and isinstance(v, str) and _AUDIT_SETTING_NAME_559.match(v) else "[REDACTED]")
+               for k, v in body.items()}
+    elif path in _AUDIT_SECRET_NAME_ONLY_559:
+        new = {"_body": "[REDACTED]"}
+    else:
+        new = {"_body": _AUDIT_NOT_LOGGED_559}
+    return None if new == body else json.dumps(new)
+
+
+def _scrubbed_audit_error_559(raw):
+    """A refused request's reason on a secret-bearing path keeps only its code (what the live
+    middleware does since #583); None = leave it. A bare code-like word is already just a code."""
+    if not raw or raw == "[REDACTED]":
+        return None
+    code, sep, _ = raw.partition(": ")
+    if sep:
+        return code
+    return None if _AUDIT_CODE_559.match(raw) else "[REDACTED]"
+
+
+def _mig_audit_scrub_secret_routes_559():
+    # #559: the first scrub (audit_scrub_settings_559) only looked at the exact path
+    # '/api/settings' and only rewrote the `value` field. This one covers every secret-bearing
+    # route and its trailing-slash spelling, and every field. Rewrites ONLY audit_log.form_body
+    # and audit_log.error_detail of rows on those paths. Never prints a value, only a count.
+    conn = get_conn()
+    scrubbed = 0
+    rows = conn.execute(
+        "SELECT id, path, form_body, error_detail FROM audit_log "
+        "WHERE path LIKE '/api/settings%' OR path LIKE '/api/auth/%' OR path LIKE '/api/account/password%' "
+        "OR path LIKE '/api/users%'").fetchall()
+    for row in rows:
+        path = (row["path"] or "").rstrip("/")
+        if path not in _AUDIT_SECRET_NAME_ONLY_559 and path not in _AUDIT_SECRET_NO_BODY_559 \
+                and not _AUDIT_SECRET_NO_BODY_RE_559.match(path):
+            continue
+        new_body = _scrubbed_audit_body_559(path, row["form_body"])
+        new_error = _scrubbed_audit_error_559(row["error_detail"])
+        if new_body is None and new_error is None:
+            continue
+        conn.execute("UPDATE audit_log SET form_body = ?, error_detail = ? WHERE id = ?",
+                     (row["form_body"] if new_body is None else new_body,
+                      row["error_detail"] if new_error is None else new_error, row["id"]))
+        scrubbed += 1
+    print(f"schema_migrations: audit_scrub_secret_routes_559 scrubbed {scrubbed} of {len(rows)} audit rows on secret-bearing paths", flush=True)
+
+
 def _mig_provenance_options_seed_529():
     # INSERT OR IGNORE only: never renames, un-retires or duplicates anything the owner changed.
     from . import provenance_options
@@ -1207,6 +1278,7 @@ MIGRATIONS = [
     ("reextract_utf16_text_607", _mig_reextract_utf16_text_607),
 
     ("ownership_backfill_604", _mig_ownership_backfill_604),
+    ("audit_scrub_secret_routes_559", _mig_audit_scrub_secret_routes_559),
 ]
 
 

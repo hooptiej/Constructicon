@@ -63,6 +63,15 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
     deeper than the old `web/app.py`. After a routing refactor, run
     `scripts/golden_master.py` before/after (route table, path resolution,
     OpenAPI, ~160 GET snapshots, write round-trips) on the same DB.
+  - **`def` or `async def` (#550):** a route is a plain `def` unless it truly awaits I/O. FastAPI runs a
+    `def` route in a worker thread; an `async def` route that calls `db.*`, `items.*`, a subprocess or
+    any other blocking work freezes the whole app for everyone. A route that needs the body
+    (`request.form()` / `.json()` / `.body()`) stays `def` and reads it with
+    `web.common.from_request_thread(request.form)`; one that must stay `async` wraps each blocking call in
+    `await run_in_threadpool(fn, ...)`. The actor ContextVar is copied into the worker thread either way.
+    Export build/publish share one lock (a second one is 409 `export_busy`). Check with
+    `scripts/test_async_blocking_550.py` (a static scan of every `async def` under `web/`, plus a live
+    `/healthz`-while-slow proof).
   - Page routes render Jinja2 templates from `web/templates/`; `/api/*` is
     the JSON/form API the templates' JS calls; `/f/{slug}` and
     `/f/{slug}/thumb` are the public hotlink + thumbnail routes (stable URLs

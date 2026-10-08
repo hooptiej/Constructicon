@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from core import besteffort, blog, db, install_config, paths, site_export
 from core.errors import AppError
+from web.common import from_request_thread
 from web.shapes import _to_blog_entry_detail
 from core import roles
 from web.roles import RoleRouter, requires
@@ -17,13 +19,13 @@ from web.roles import RoleRouter, requires
 log = logging.getLogger("constructicon.web")
 
 
-async def _json_body_or_400(request):
+def _json_body_or_400(request):
     """The request's JSON body: {} when it has none, a clean 400 when it isn't valid JSON (#551: it
     used to be silently treated as {}, so a garbled config built the site with the defaults)."""
-    if not await request.body():
+    if not from_request_thread(request.body):
         return {}
     try:
-        return await request.json()
+        return from_request_thread(request.json)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"request body is not valid JSON: {e}")
 
@@ -79,7 +81,7 @@ def api_create_blog_entry(
 
 
 @router.post("/api/blog-entries/{slug}")
-async def api_update_blog_entry(
+def api_update_blog_entry(
     request: Request,
     slug: str,
     title: str | None = Form(None),
@@ -99,7 +101,7 @@ async def api_update_blog_entry(
     if entry is None:
         raise HTTPException(status_code=404, detail="Blog entry not found")
 
-    form_data = await request.form()
+    form_data = from_request_thread(request.form)
 
     cover_slug = ...  # Ellipsis => leave unchanged (blog.update's sentinel)
     if "cover_slug" in form_data:
@@ -137,7 +139,7 @@ def _require_json_content_type(request: Request):
 
 
 @router.put("/api/blog-entries/{slug}/projects")
-async def api_set_blog_entry_projects(
+def api_set_blog_entry_projects(
     request: Request,
     slug: str,
 ):
@@ -149,7 +151,7 @@ async def api_set_blog_entry_projects(
 
     _require_json_content_type(request)
     try:
-        body = await request.json()
+        body = from_request_thread(request.json)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
@@ -173,7 +175,7 @@ async def api_set_blog_entry_projects(
 
 
 @router.put("/api/blog-entries/{slug}/items")
-async def api_set_blog_entry_items(
+def api_set_blog_entry_items(
     request: Request,
     slug: str,
 ):
@@ -185,7 +187,7 @@ async def api_set_blog_entry_items(
 
     _require_json_content_type(request)
     try:
-        body = await request.json()
+        body = from_request_thread(request.json)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
@@ -209,8 +211,37 @@ async def api_set_blog_entry_items(
 
 # --- Site export (generate static site for deployment) ---
 
+# #550: build and publish are plain `def` routes, so they run in a worker thread and no longer freeze
+# the app. That also means two of them can now overlap (before, the blocked event loop queued the second
+# one behind the first by accident). They share exports/current and the publish work dir, so one runs at
+# a time: a second request is refused with 409 export_busy rather than queued behind a git push.
+_EXPORT_JOB_LOCK = threading.Lock()
+_export_job_running = None
+
+
+class _export_job:
+    """`with _export_job("build"):` holds the export lock, or raises 409 export_busy naming the job in the way."""
+
+    def __init__(self, what):
+        self.what = what
+
+    def __enter__(self):
+        global _export_job_running
+        if not _EXPORT_JOB_LOCK.acquire(blocking=False):
+            raise AppError("export_busy",
+                           f"A site {_export_job_running or 'export job'} is already running; wait for it to "
+                           f"finish, then try the {self.what} again.", status=409)
+        _export_job_running = self.what
+        return self
+
+    def __exit__(self, *exc):
+        global _export_job_running
+        _export_job_running = None
+        _EXPORT_JOB_LOCK.release()
+        return False
+
 @router.post("/api/export/build", dependencies=requires(roles.ADMIN))
-async def api_export_build(request: Request):
+def api_export_build(request: Request):
     """Build a static website from the selected projects and blog entries.
 
     Request body (JSON):
@@ -227,13 +258,16 @@ async def api_export_build(request: Request):
     Saves the submitted config to app settings for next time.
     """
     _require_json_content_type(request)
-    body = await _json_body_or_400(request)
+    body = _json_body_or_400(request)
 
     try:
-        report = site_export.build_site(body)
-        # Persist the config for next time
-        db.set_setting("export_config", json.dumps(body))
+        with _export_job("build"):
+            report = site_export.build_site(body)
+            # Persist the config for next time
+            db.set_setting("export_config", json.dumps(body))
         return JSONResponse(report)
+    except AppError:
+        raise  # export_busy (409): another build/publish is running, not a build failure
     except Exception as e:
         print(f"Build failed: {e}")
         import traceback
@@ -268,7 +302,7 @@ def api_export_targets():
 
 
 @router.post("/api/export/publish", dependencies=requires(roles.ADMIN))
-async def api_export_publish(request: Request):
+def api_export_publish(request: Request):
     """Publish the current build to a GitHub Pages repository.
 
     Request body (JSON):
@@ -287,7 +321,7 @@ async def api_export_publish(request: Request):
     }
     """
     _require_json_content_type(request)
-    body = await _json_body_or_400(request)
+    body = _json_body_or_400(request)
 
     target = body.get("target")
 
@@ -332,15 +366,18 @@ async def api_export_publish(request: Request):
     work_dir = paths.publish_work_dir(target)
 
     try:
-        report = site_export.publish_build(
-            clean_url,
-            branch,
-            current_build,
-            work_dir,
-            auth_url=auth_url,
-            commit_message=f"Publish site {datetime.now().isoformat()}",
-            author=("Constructicon", "constructicon@localhost")
-        )
+        with _export_job("publish"):
+            report = site_export.publish_build(
+                clean_url,
+                branch,
+                current_build,
+                work_dir,
+                auth_url=auth_url,
+                commit_message=f"Publish site {datetime.now().isoformat()}",
+                author=("Constructicon", "constructicon@localhost")
+            )
+    except AppError:
+        raise  # export_busy (409): another build/publish is running, not a publish failure
     except Exception as e:
         error_msg = str(e)
         # Strip token from error message

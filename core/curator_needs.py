@@ -302,11 +302,6 @@ def list_needs():
     return nudges
 
 
-def count_active_needs():
-    """Return the count of active, non-deferred needs."""
-    return len([n for n in list_needs() if not n["deferred"]])
-
-
 def _count_unaccepted_captions():
     """Count capture_events rows with auto_caption in type_metadata that do NOT
     have a content_description (i.e., the caption was never accepted).

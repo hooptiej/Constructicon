@@ -8,7 +8,7 @@ from pathlib import Path
 
 from core import card_rules, cards, curation_queue, curator, db, install_config, item_title, markdown_render, object_types, revisions, timeline
 from core import hobbies, physical_piece, provenance_options
-from core.db import PROJECT_STATUSES, BRAND_ROLES
+from core.db import BRAND_ROLES
 from web import files_feed
 from web.common import _build_breadcrumbs, _rev_note, templates
 from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_object_detail, _to_public, _to_timeline_project
@@ -188,7 +188,6 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
     raw_items, n_sup = _split_revisions(policy.filter_visible(db.list_project_items(project["id"])), rev == "all")
     items = [_to_content_public(r, project_slug=slug) for r in raw_items]
     child_projects = db.list_child_projects(project["id"])
-    ancestors = db.list_project_ancestors(project["id"])
     # #156: fetch the writeup document and pass its body to the template
     writeup_body = None
     if project.get("writeup_slug"):
@@ -296,7 +295,6 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "project": project,
             "cover_url": _project_effective_cover_url(project),
             "grid_entries": grid_entries,
-            "ancestors": ancestors,
             "writeup_body": writeup_body,
             "start_date_input": _datetime_local_value(project.get("start_date_override")),
             "end_date_input": _datetime_local_value(project.get("end_date_override")),
@@ -306,7 +304,6 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "timeline_children": timeline_children,
             # #593: dragging a marker re-dates an item, an editor's door (the route enforces it too).
             "timeline_can_edit": roles.at_least(roles.role_of(actor_ctx.current_actor()), roles.EDITOR),
-            "PROJECT_STATUSES": PROJECT_STATUSES,
             # V2 cards: the kind / stage / stop-reason controls on the detail page.
             "card_kinds": [{"key": k, "label": card_rules.KIND_LABELS[k]} for k in card_rules.KINDS],
             "card_stages": [{"key": s, "label": card_rules.STAGE_LABELS[s], "activity": card_rules.ACTIVITY_OF[s]}

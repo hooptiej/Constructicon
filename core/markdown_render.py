@@ -50,11 +50,6 @@ def _inline_text(children):
     return " ".join("".join(words).split())
 
 
-def to_text(text):
-    """Plain text of a Markdown body (no #, **, link syntax): for excerpts."""
-    return " ".join(_inline_text(tok.children) for tok in parse(text) if tok.type == "inline").strip()
-
-
 def clamp(text, max_chars):
     """`text` cut to at most `max_chars` (plus the ellipsis) at a word boundary, newlines kept.
     For the card face (#596): the box is fixed, so the excerpt is too."""

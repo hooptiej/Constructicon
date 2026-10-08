@@ -13,7 +13,7 @@ rewrites it; this rewrites it in place, once, and is safe to re-run
 same result). The original file is never touched.
 
 Runs inside the app container and imports core directly -- like
-backfill_thumbnails.py at the repo root, and unlike most of scripts/, which
+the retired backfill script it replaced, and unlike most of scripts/, which
 go over HTTP -- because there is no HTTP route that regenerates an existing
 thumbnail, and adding one for a one-time repair is more surface than the
 job needs.

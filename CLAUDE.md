@@ -930,7 +930,7 @@ To add a new object type (issue #448 contract v2):
     redacted row is hidden from **every** list/browse/search query in
     `core/db.py` (`search`, `list_unfiled_items`,
     `list_recent_items_by_type`, `list_project_items`,
-    `list_posts_for_tag`, `list_recent_posts`, and `list_uploaders`'
+    `list_posts_for_tag`, and `list_uploaders`'
     totals) and reachable only by its direct `/object/<slug>` link, the
     admin page's (`/admin`) "Redacted items" list (`GET /api/redacted` /
     `db.list_redacted()`) or the MCP `constructicon_list_redacted` tool.
@@ -1277,11 +1277,6 @@ uvicorn web.app:app --host 0.0.0.0 --port 8000 --reload
   footprint, not the box's actual hardware.
 - `imagerepo.db` (SQLite file) and `storage/` are created at the repo root
   on first run, gitignored, not baked into the image.
-- `seed_test_data.py` seeds a handful of fake-upload rows for exercising
-  the gallery UI — note it still calls the old-style `db.insert_upload(...,
-  ticket_id, client)` signature and describes itself as "Computer Cats"
-  demo data; it's an imagerepo-era leftover, check it still matches
-  `db.insert_upload`'s current signature before relying on it.
 - `scripts/seed_example_projects.py` seeds a few real example Projects
   from already-backfilled content; not auto-run.
 
@@ -1665,9 +1660,6 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
   API key) must call `core.db.get_setting(...)` directly from a process
   that shares the DB (e.g. via `docker exec` into the app container), not
   through the HTTP API.
-- **`seed_test_data.py`'s old call signature** — see "Build / test / run"
-  above; don't assume it still runs cleanly against the current
-  `db.insert_upload` without checking.
 - **Two parallel local checkouts may exist on the owner's Windows
   machine** (`Constructicon/` and `constructicon-work/`, on different
   branches) — both are this same repo, not separate projects. If you're

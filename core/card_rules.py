@@ -30,7 +30,6 @@ KIND_LABELS = {
 
 # --- Status (3.2) ------------------------------------------------------------
 STAGES = ("in_progress", "in_use", "idea", "paused", "done", "stopped")
-ACTIVITIES = ("active", "inactive")
 STOP_REASONS = ("failed", "abandoned")
 ACTIVITY_OF = {
     "in_progress": "active",
@@ -71,7 +70,6 @@ WHEREABOUTS_KINDS = ("thing", "project", "collection")
 # #529: these constants are the SEED for the editable lists (core/provenance_options.py,
 # table provenance_options, managed in /admin) and the fallback if that table is
 # unreadable. Validation, pickers and labels read the table, not these.
-CARD_PROVENANCE = ("created", "found", "collected", "referenced", "client_owned")
 CARD_PROVENANCE_LABELS = {
     "created": "Created",
     "found": "Found",
@@ -612,7 +610,6 @@ def validate_group_code(value):
 
 # --- Piece 6: home, bulk, split (3.10, section 6) ----------------------------------
 HOME_KINDS = ("card", "hobby")
-HOME_SOURCES = ("override", "parent", "family", "hobby", "none")
 
 # Operations constructicon_bulk_edit may run (spec section 6, bulk). Allow-list: anything
 # else is refused with bad_bulk_op.

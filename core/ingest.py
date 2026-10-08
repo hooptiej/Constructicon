@@ -127,7 +127,7 @@ def ensure_capture_thumbnail(slug):
     only fires for content-only rows (stored_filename is None), so a
     file-backed CAPTURE type would silently serve the raw original file
     instead of a real thumbnail on every request until someone happened to
-    run backfill_thumbnails.py. Scheduled as its own background task,
+    run scripts/regenerate_thumbnails.py. Scheduled as its own background task,
     same spirit as OCR, so it doesn't block the upload response."""
     row = db.get_by_slug(slug)
     if row is not None:

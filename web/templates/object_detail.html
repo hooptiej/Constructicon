@@ -1106,7 +1106,7 @@ for (const [id, on] of [['sensitive-mark-btn', true], ['sensitive-unmark-btn', f
 const redactBtn = document.getElementById('redact-btn');
 if (redactBtn) {
   redactBtn.addEventListener('click', async () => {
-    if (!confirm('Remove the image file? The description, tags, ticket, and client info stay for future correlation. The file is held on the NAS, never deleted unless you choose "Delete file permanently" on this page. You can recover it any time.')) return;
+    if (!confirm('Remove the image file? The description, tags, and other details stay for future correlation. The file is held on the NAS, never deleted unless you choose "Delete file permanently" on this page. You can recover it any time.')) return;
     const res = await fetch('/api/image/{{ item.slug }}/redact', { method: 'POST' });
     if (res.ok) {
       const body = await res.json().catch(() => ({}));

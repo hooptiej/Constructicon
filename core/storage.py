@@ -155,25 +155,6 @@ def thumb_path_or_original(slug, stored_filename):
     return paths.storage_dir() / stored_filename if stored_filename else thumb
 
 
-AVATAR_SIZE = 256
-
-
-def normalize_avatar(content):
-    """Center-crop to square and resize to AVATAR_SIZE, regardless of what
-    the client sent — the client-side cropper already exports a square
-    AVATAR_SIZE PNG, but this makes that a server-enforced guarantee rather
-    than a trusted assumption. A no-op on already-correct input."""
-    img = exif_upright(Image.open(BytesIO(content)))
-    img = img.convert("RGBA") if img.mode in ("RGBA", "LA", "P") else img.convert("RGB")
-    w, h = img.size
-    side = min(w, h)
-    left, top = (w - side) // 2, (h - side) // 2
-    img = img.crop((left, top, left + side, top + side)).resize((AVATAR_SIZE, AVATAR_SIZE), Image.LANCZOS)
-    buf = BytesIO()
-    img.save(buf, "PNG")
-    return buf.getvalue()
-
-
 def delete_files(slug, stored_filename):
     """Remove the original and its thumbnail (if any) from disk. Used by both
     a full delete and a redact-file-keep-metadata action."""

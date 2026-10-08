@@ -89,7 +89,6 @@ PUBLIC_WRITERS = {
     "rebuild_search_index": "#543: refills the derived FTS5 search index (the search_index_543 migration; also the repair for drift)",
     "ensure_special_clients": "vestigial imagerepo client list, seeded by sync_clients.py (no longer at boot, #562)",
     "sync_hudu_clients": "vestigial imagerepo client sync (sync_clients.py)",
-    "add_test_client": "vestigial imagerepo client fixture",
     "insert_upload": "ingest pipeline: a new item row (upload / MCP upload / import)",
     "insert_content": "ingest pipeline: a new file-less item row (YouTube link, authored document)",
     "set_ocr_status": "OCR pipeline state (queue, watchdog, retry)",

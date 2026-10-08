@@ -280,9 +280,6 @@ def _arrange(items_by_group, groups):
 # place in the Curator's effort order); it takes on the need's more specific wording (how many
 # files the card has). Defer or Dismiss on either of the two applies to the merged item, so an
 # answer to one is never undone by the other reappearing.
-DEDUPE_PAIRS = (("missing_writeup", cards.NEED_BLANK_WRITEUP_WITH_FILES),)
-
-
 def _dedupe_keys(card):
     """(nudge key, need key) of the overlapping pair for one card."""
     return (f"missing_writeup:project:{card['id']}",
@@ -476,16 +473,6 @@ def cached_queue():
     """The queue for the actor asking (for_actor over the shared, cached whole queue). Treat the
     result as read-only: it may be the shared object."""
     return for_actor(_full_queue())
-
-
-def cached_counts():
-    """The Curator badge: {"open", "deferred", "questions", "nudges", "needs"}."""
-    return cached_queue()["counts"]
-
-
-def invalidate_cache():
-    with _cache_lock:
-        _cache.update(fp=None, at=0.0, q=None)
 
 
 def group_items(gid, section="open"):

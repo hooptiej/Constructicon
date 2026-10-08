@@ -765,6 +765,34 @@ matching the V2 mockup's Card template:
 - Not done (no data for it): the mockup's "From: <item>, <date>." line on a file derived from another
   file (there is no derived-from relation), and image dimensions in a file's stat box (not stored).
 
+## Project timeline: turn the dial (#593)
+
+The strip under the breadcrumb on a project page (`static/js/project-video-timeline.js`) lets an
+**editor** drag a marker to re-date its item. The date written is the item's **display-date override**
+("date set by hand", `capture_events.display_date_override`, which `core/timeline.py` `resolve_item_date`
+already ranks first), so it is the same field as the item page's DATES group.
+- **Write path:** `POST /api/image/{slug}/date` (editor): form `display_date` (unix seconds, 1970-2100) or
+  `reset=true`, optional `project=<card slug>`. It calls `items.set_display_date`, which is
+  `items.update(display_date_override=...)`: ONE imaged change-log row, undoable (the answer's `batch_id` feeds
+  `undo-bar.js`; null when nothing changed, e.g. a drop on the same date). Bad dates are 400 `bad_date`. The
+  item policy runs first (`policy.viewable_item`), so a sensitive item is 404 for an editor who can't see it.
+  With `project`, the answer also carries the card's recomputed `span` (start/end, plus `*_by_hand` for the
+  card's own Timeline start/end overrides, which still win), built from `policy.filter_visible` items.
+- **Read path:** the page's `timeline_items` come from `policy.filter_visible`, so a hidden item is not in the
+  timeline data at all; `timeline_can_edit` (editor+) gates the JS, the route enforces it too.
+- **Gestures:** drag a marker (mouse or touch, pointer events). A plain drag lands on a DAY and keeps the
+  item's time of day; hold **Shift** while dragging for 15-minute steps. A focused marker: **arrows** = a day,
+  **Shift+arrow** or **PageUp/PageDown** = a month, **Enter** saves, **Esc** cancels, **Delete** resets a
+  hand-set date. Markers within 12 px form a **stack**: pressing one opens a chooser (thumbnail + name, "Open",
+  "Reset date" for a hand-set one); pick one, then drag it. A hand-set marker has a yellow ring and its tooltip
+  says "date set by hand". The drag is clamped to the axis as drawn; use the arrows (or the item's DATES group)
+  to go beyond it.
+- **Date maths** is a pure module, `static/js/timeline-drag-math.js` (pixel to date, day / fine snapping,
+  key steps, stack grouping). Checks: `node scripts/test_timeline_drag.js` (the maths),
+  `node scripts/test_timeline_drag_ui.js` (the widget against a fake DOM), `scripts/test_timeline_drag_593.py`
+  (throwaway DB: write, undo, reset, roles, policy, span).
+- Not built: dragging the axis end caps to set the card's Timeline start/end, dragging a whole stack.
+
 ## Adding an object type
 
 To add a new object type (issue #448 contract v2):

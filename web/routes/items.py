@@ -14,7 +14,7 @@ from core import access_log, besteffort, captions, db, ingest, items, membership
 from core import tags as tags_svc, timeline
 from web import content_security
 from web.common import DESKTOP_APP_CLIENT_HEADER, DESKTOP_APP_CLIENT_VALUE
-from web.shapes import _friendly_datetime, _to_project_option, _to_public, actor_label as shapes_actor_label
+from web.shapes import _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
 from core import policy, roles
 from core.object_types import code as code_type
 from web.roles import RoleRouter, requires
@@ -543,6 +543,40 @@ async def api_update_image(
     else:
         row = db.get_by_slug(slug)
     return JSONResponse(_to_public(row))
+
+
+@router.post("/api/image/{slug}/date")
+def api_set_item_date(slug: str, display_date: float | None = Form(None), reset: bool = Form(False),
+                      project: str | None = Form(None)):
+    """(#593) The project timeline's drag: set the item's display-date override ("date set by
+    hand") to `display_date` (unix seconds, 1970-2100), or `reset=true` to go back to the computed
+    date. Editor role (the router default); `items.set_display_date` is one imaged change-log
+    row, so the answer's `batch_id` feeds the Undo bar (null when nothing changed). `project`
+    (a card slug, optional) adds that card's recomputed `span` (the same visible-items rule the
+    project page uses) so the page can refresh its DATES group without a reload."""
+    policy.viewable_item(slug)  # 404 if missing or not viewable (a sensitive item is not editable by others)
+    if reset:
+        epoch = None
+    elif display_date is None:
+        raise HTTPException(status_code=400, detail="display_date (unix seconds) or reset=true is required")
+    else:
+        epoch = display_date
+    res = items.set_display_date(slug, epoch)
+    out = {"ok": True, "slug": slug, "batch_id": res.batch_id if res.data["changed"] else None,
+           "changed": res.data["changed"], "effective_date": res.data["effective_date"],
+           "effective_date_display": _friendly_datetime(res.data["effective_date"]),
+           "set_by_hand": res.data["set_by_hand"]}
+    if project:
+        card = db.get_project(project)
+        if card is None:
+            raise HTTPException(status_code=404, detail="no such card")
+        rows, _ = _split_revisions(policy.filter_visible(db.list_project_items(card["id"])), False)
+        start, end = timeline.resolve_project_span(card, rows)
+        out["span"] = {"start": start, "end": end,
+                       "start_display": _friendly_datetime(start), "end_display": _friendly_datetime(end),
+                       "start_by_hand": card.get("start_date_override") is not None,
+                       "end_by_hand": card.get("end_date_override") is not None}
+    return JSONResponse(out)
 
 
 @router.post("/api/image/{slug}/redact")

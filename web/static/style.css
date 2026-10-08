@@ -1755,6 +1755,95 @@ body.delete-mode-on .card-select-row { display: flex; }
   transform: rotate(45deg) scale(1.3);
 }
 
+/* --- #593 "Turn the dial": draggable markers --- */
+.project-video-timeline-event--editable {
+  cursor: grab;
+  touch-action: none; /* a touch drag on the marker moves it instead of scrolling the page */
+  position: relative;
+}
+.project-video-timeline-event--editable::before {
+  /* a larger hit area than the 14px diamond, for fingers */
+  content: "";
+  position: absolute;
+  inset: -9px;
+}
+.project-video-timeline-event--dragging {
+  cursor: grabbing;
+  background: var(--hazard-yellow);
+  transform: rotate(45deg) scale(1.4);
+}
+.project-video-timeline-event--hand {
+  /* "date set by hand": a yellow ring, the same yellow as the dial's needle */
+  box-shadow: 0 0 0 2px var(--hazard-yellow);
+}
+.project-video-timeline-event:focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 3px;
+}
+.project-video-timeline-event-wrap--picked {
+  z-index: 5;
+}
+.project-video-timeline-event-wrap--picked .project-video-timeline-event {
+  background: var(--hazard-yellow);
+  transform: rotate(45deg) scale(1.3);
+}
+.timeline-drag-readout {
+  /* the live date under the marker while it moves */
+  position: fixed;
+  z-index: 60;
+  display: none;
+  padding: 5px 10px;
+  background: #0a0d12;
+  color: var(--accent-hover);
+  border: 1px solid var(--hazard-yellow);
+  border-radius: 5px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 0 4px rgba(166, 212, 119, 0.7);
+}
+.timeline-drag-readout.visible { display: block; }
+.timeline-chooser {
+  position: fixed;
+  z-index: 61;
+  width: min(380px, calc(100vw - 16px));
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--border-stronger);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+}
+.timeline-chooser-head { color: var(--text-2); padding: 2px 4px 6px; }
+.timeline-chooser-row { display: flex; align-items: center; gap: 6px; }
+.timeline-chooser-pick {
+  all: unset;
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+}
+.timeline-chooser-pick:hover, .timeline-chooser-pick:focus-visible { background: var(--bg); outline: 1px solid var(--accent); }
+.timeline-chooser-pick img, .timeline-chooser-noimg {
+  width: 32px; height: 32px; flex: none; border-radius: 4px; object-fit: cover; background: var(--bg);
+}
+.timeline-chooser-text { display: flex; flex-direction: column; min-width: 0; }
+.timeline-chooser-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-chooser-date { color: var(--text-2); font-size: 11px; }
+.timeline-chooser-open, .timeline-chooser-reset {
+  all: unset; cursor: pointer; font-size: 11px; color: var(--accent-hover); padding: 2px 4px;
+}
+.timeline-chooser-open:hover, .timeline-chooser-reset:hover { text-decoration: underline; }
+
 /* --- Blog builder (#313 stage 3) --- */
 .blog-builder-trigger {
   display: inline-flex; align-items: center; gap: 8px; background: var(--card);

@@ -310,6 +310,31 @@
         <div class="dp-row"><dt>Provenance</dt><dd>{% if item.provenance %}{{ file_provenance_label }}{% else %}<span class="dp-muted">Not set</span>{% endif %}</dd></div>
         <div class="dp-row"><dt>Highlight</dt><dd>{{ 'Yes' if item.highlight else 'No' }}</dd></div>
         <div class="dp-row"><dt>Brand asset</dt><dd>{{ 'Yes' if item.is_brand_asset else 'No' }}{% if item.is_brand_asset and item.brand_role %} <span class="dp-muted">&middot; {{ item.brand_role }}</span>{% endif %}</dd></div>
+        {# #604 step 1: who uploaded it. None recorded = the install token, the MCP or a script (admin-owned). #}
+        <div class="dp-row"><dt>Uploaded by</dt><dd>{% if item.uploaded_by_user %}{{ item.uploaded_by_user.name }}{% else %}<span class="dp-muted">Admin (no user recorded)</span>{% endif %}</dd></div>
+        {# #603: the sensitive lock. Mark = editor or above; clear = admin only. #}
+        <div class="dp-row" id="sensitive-row"><dt>Sensitive</dt><dd>
+          {% set reason = item.sensitive_reason %}
+          {% if reason and reason.kind == 'flag' %}
+            Yes <span class="dp-muted">&middot; marked by {{ reason.by_label }}{% if reason.at_display %} on {{ reason.at_display }}{% endif %}. Only {% if item.uploaded_by_user %}{{ item.uploaded_by_user.name }} and {% endif %}admins can see it.</span>
+          {% elif reason %}
+            Yes <span class="dp-muted">&middot; type: {{ reason.type }}. Only {% if item.uploaded_by_user %}{{ item.uploaded_by_user.name }} and {% endif %}admins can see it.</span>
+          {% else %}
+            No
+          {% endif %}
+          {% if reason and reason.kind == 'flag' and sensitive_ctl.can_unmark %}
+            <button type="button" class="dp-btn" id="sensitive-unmark-btn" title="Let everyone who can see ordinary items see this one again">Clear sensitive</button>
+          {% elif not reason and sensitive_ctl.can_mark %}
+            <button type="button" class="dp-btn" id="sensitive-mark-btn" title="Lock it: only you, its uploader and admins can see it">This is sensitive</button>
+          {% endif %}
+          <p class="dp-error" id="sensitive-error" role="alert"></p>
+        </dd></div>
+        {% if sensitive_ctl.access_log is not none %}
+        {# #604 follow-up 7: who opened this sensitive item (admins only) #}
+        <div class="dp-row"><dt>Opened by</dt><dd>
+          {% for e in sensitive_ctl.access_log %}<div class="dp-muted">{{ e.who }} &middot; {{ e.how }} &middot; {{ e.at_display }}</div>{% else %}<span class="dp-muted">Nobody yet</span>{% endfor %}
+        </dd></div>
+        {% endif %}
       </dl>
       {% endset %}
       {% set origin_edit %}
@@ -1056,6 +1081,25 @@ if (recoverBtn && eraseBtn) {
     recoverBtn.disabled = eraseBtn.disabled = true;
     const res = await fetch('/api/image/{{ item.slug }}/delete-redacted-file', { method: 'POST', body: new URLSearchParams({ confirm: 'true' }) });
     if (res.ok) window.location.reload(); else holdFail(res, 'Delete failed');
+  });
+}
+
+// #603: "This is sensitive" (editor+) and "Clear sensitive" (admin). One undoable change each.
+for (const [id, on] of [['sensitive-mark-btn', true], ['sensitive-unmark-btn', false]]) {
+  const btn = document.getElementById(id);
+  if (!btn) continue;
+  btn.addEventListener('click', async () => {
+    if (on && !confirm('Mark this item sensitive? From now on only its uploader and admins can see it, on every page, link and search. Only an admin can clear it.')) return;
+    btn.disabled = true;
+    const res = await fetch('/api/image/{{ item.slug }}/sensitive', { method: 'POST', body: new URLSearchParams({ sensitive: on ? 'true' : 'false' }) });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      window.showUndoBar(on ? 'Marked sensitive.' : 'Sensitive flag cleared.', body.batch_id, () => window.location.reload());
+    } else {
+      const err = document.getElementById('sensitive-error');
+      err.textContent = (body.error && body.error.message) || body.detail || 'That did not work';
+      btn.disabled = false;
+    }
   });
 }
 

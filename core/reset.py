@@ -37,7 +37,8 @@ CLEARED_TABLES = (
     "capture_events", "projects", "blog_tags",
 )
 KEPT_TABLES = ("app_settings", "audit_log", "clients", "client_domains", "install_config", "provenance_options",
-               "schema_migrations", "users", "sessions")
+               "schema_migrations", "users", "sessions",
+               "item_access_log")  # #604 follow-up 7: a log, like audit_log (who opened sensitive items)
 
 
 def delete_everything(confirm="", *, actor=None):

@@ -37,7 +37,7 @@ os.environ["CONSTRUCTICON_ROLE"] = "mcp"
 from mcp.server.mcpserver import Image as McpImage, MCPServer
 from mcp.types import CallToolResult, TextContent
 
-from core import actor as actor_ctx, policy, roles
+from core import access_log, actor as actor_ctx, policy, roles, users
 from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
@@ -151,7 +151,7 @@ def _run_in_thread(fn, *args):
     actor_ctx.spawn(fn, *args)
 
 
-def _ingest(filename, fileobj, file_size, description, tags, uploaded_by, source_modified_at) -> dict:
+def _ingest(filename, fileobj, file_size, description, tags, uploaded_by, source_modified_at, sensitive=False) -> dict:
     """Private helper for file ingestion: delegates to core/ingest.py.
 
     All post-validation logic is now centralized in the ingest module — this tool
@@ -171,6 +171,7 @@ def _ingest(filename, fileobj, file_size, description, tags, uploaded_by, source
         description=description,
         tags=tags,
         source_modified_at=source_modified_at,
+        sensitive=sensitive,  # #603: set in the INSERT itself
     )
 
     if result.error:
@@ -230,6 +231,11 @@ def _to_public(row):
         # #448: per-type actions available on this object (e.g. YouTube's "fetch real date" moves here in PR 2).
         # The type file owns the handler; actions are declared in ObjectTypeSpec.actions.
         "actions": [a.key for a in spec.actions],
+        # #604 step 1: the user who uploaded it ({id, username, name}); null = admin-owned (the
+        # install token, the MCP, a script). #603: the sensitive lock and why (type or flag).
+        "uploaded_by_user": users.owner_info(row.get("uploaded_by_user_id")),
+        "sensitive": policy.restriction_reason(row) is not None,
+        "sensitive_reason": policy.restriction_reason(row),
     }
 
 
@@ -250,6 +256,7 @@ def _to_public_project(project):
         "writeup_slug": project.get("writeup_slug"),
         "parent_id": project.get("parent_id"),
         "created_at": project["created_at"],
+        "created_by_user": users.owner_info(project.get("created_by_user_id")),  # #604 step 1 (null = admin-owned)
         "start_date_override": project.get("start_date_override"),
         "end_date_override": project.get("end_date_override"),
         "effective_start": effective_start,
@@ -290,7 +297,7 @@ def constructicon_version() -> dict:
 @mcp.tool()
 def constructicon_upload(filename: str, content_base64: str, description: str = "", tags: list[str] | None = None,
                       uploaded_by: str = db.SOURCE_AUTHORED,
-                      source_modified_at: float | None = None) -> dict:
+                      source_modified_at: float | None = None, sensitive: bool = False) -> dict:
     """Upload an image, document, or other file to Constructicon.
 
     Returns a JSON object with the new object's metadata, including a stable hotlink URL.
@@ -305,6 +312,8 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
       an external source, pass db.source_migrated_from("<source>") instead.
     source_modified_at: the source file's own last-modified time (unix seconds), if known.
       Used for duplicate detection; omit to skip checking for re-uploads of the same file.
+    sensitive: #603: lock it from the start (only admins see it; an MCP upload has no user
+      uploader). Same as the upload dialog's checkbox.
 
     If filename, file size, and source_modified_at all match an existing upload, returns
     the existing object instead with "duplicate": true.
@@ -319,7 +328,8 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
     already reflects them. A tagless file simply gets none of that.
     """
     content = base64.b64decode(content_base64)
-    return _ingest(filename, io.BytesIO(content), len(content), description, tags, uploaded_by, source_modified_at)
+    return _ingest(filename, io.BytesIO(content), len(content), description, tags, uploaded_by, source_modified_at,
+                   sensitive=sensitive)
 
 
 @mcp.tool()
@@ -346,6 +356,7 @@ def constructicon_get(slug: str) -> dict | None:
     if row is None:
         raise NotFound(f"No item {slug!r}.")
     policy.require_view(row, message=f"No item {slug!r}.")  # #557
+    policy.note_access(row, access_log.HOW_MCP_GET)  # #604 follow-up 7: sensitive items only
     return revisions.decorate([_to_public(row)])[0]
 
 
@@ -369,6 +380,7 @@ def constructicon_download(slug: str) -> dict | None:
     policy.require_view(row, message=f"No item {slug!r}.")  # #557 (the #561 note: restricted downloads are the policy's call)
     if not row.get("stored_filename"):
         raise InvalidInput("This object has no uploaded file to download", code="no_file")
+    policy.note_access(row, access_log.HOW_MCP_DOWNLOAD)  # #604 follow-up 7: sensitive items only
     path = storage.path_for(row["stored_filename"])
     if not path.exists():
         raise NotFound("File missing on disk", code="file_missing")
@@ -396,7 +408,7 @@ def constructicon_download(slug: str) -> dict | None:
 @mcp.tool()
 def constructicon_import(path: str, description: str = "", tags: list[str] | None = None,
                         uploaded_by: str = db.SOURCE_AUTHORED,
-                        source_modified_at: float | None = None) -> dict:
+                        source_modified_at: float | None = None, sensitive: bool = False) -> dict:
     """Import a file already sitting in the server-side import inbox.
 
     Use this for large files (up to the server's upload limit, e.g. hundreds of MB)
@@ -407,7 +419,7 @@ def constructicon_import(path: str, description: str = "", tags: list[str] | Non
     The stored filename is the file's basename. source_modified_at defaults to the
     file's own mtime, so re-importing the same unchanged file returns the existing
     object with duplicate: true. Same OCR/metadata behavior and return shape as
-    constructicon_upload.
+    constructicon_upload; `sensitive` (#603) locks it from the start.
     """
     if not IMPORT_DIR.is_dir():
         raise errors.AppError("import_unavailable", f"Import inbox {IMPORT_DIR} is not mounted on this server",
@@ -418,7 +430,7 @@ def constructicon_import(path: str, description: str = "", tags: list[str] | Non
     st = p.stat()
     with p.open("rb") as f:
         return _ingest(p.name, f, st.st_size, description, tags, uploaded_by,
-                      source_modified_at if source_modified_at is not None else st.st_mtime)
+                      source_modified_at if source_modified_at is not None else st.st_mtime, sensitive=sensitive)
 
 
 @mcp.tool()
@@ -592,6 +604,7 @@ def constructicon_view(slug: str, size: str = "preview") -> list[McpImage | str]
     if rendered is None:
         raise InvalidInput(f"{object_types.get_object_type(row.get('media_type')).label} items have no picture to view.",
                            code="not_viewable")
+    policy.note_access(row, access_log.HOW_MCP_VIEW)  # #604 follow-up 7: sensitive items only
     data, mime, (width, height) = rendered
     tm = row.get("type_metadata") or {}
     lines = [f"{items.title_of(row)} [{slug}]",
@@ -692,13 +705,14 @@ def constructicon_list_redacted() -> list[dict]:
 
 @mcp.tool()
 def constructicon_list_restricted() -> list[dict]:
-    """List every restricted object: private keys, certificates, CSRs (#443).
+    """List every sensitive object: private keys, certificates, CSRs (#443), plus every item flagged
+    "This is sensitive" (#603, constructicon_set_sensitive).
 
-    Restricted objects are the owner's private reference. They're kept out
-    of constructicon_search and tag walks and never exported to the public
-    site, but DO appear in constructicon_get_project for projects they're
-    attached to (e.g. a repo's deploy key). This is the full list. Each
-    entry adds "projects" (titles and slugs it's attached to).
+    Restricted types stay out of constructicon_search and tag walks (flagged items are found there
+    by admins and their uploader only), and none is ever exported to the public site, but they DO
+    appear in constructicon_get_project for projects they're attached to (e.g. a repo's deploy key).
+    This is the full list. Each entry adds "projects" (titles and slugs it's attached to) and
+    `sensitive_reason` ({kind: "type", type} or {kind: "flag", by, at}).
     """
     return [
         {**_to_public(r), "projects": [{"title": p["title"], "slug": p["slug"]} for p in db.list_projects_for_post(r["slug"])]}
@@ -775,10 +789,11 @@ def constructicon_backup() -> dict:
 @mcp.tool()
 def constructicon_add_content(media_type: str, external_url: str | None = None, content_description: str | None = None,
                            description: str = "", tags: list[str] | None = None,
-                           uploaded_by: str = db.SOURCE_AUTHORED) -> dict:
+                           uploaded_by: str = db.SOURCE_AUTHORED, sensitive: bool = False) -> dict:
     """Create an object with no uploaded file (e.g., a YouTube link or external document).
 
-    Use constructicon_upload instead for file-backed content.
+    Use constructicon_upload instead for file-backed content. sensitive (#603) locks it from
+    the start (only admins see it).
 
     For OCR-capable types, OCR runs in the background (#225) -- the returned
     object has ocr_status "pending"; read it back with constructicon_get later.
@@ -795,6 +810,7 @@ def constructicon_add_content(media_type: str, external_url: str | None = None, 
         content_description=content_description,
         description=description,
         tags=tags,
+        sensitive=sensitive,
     )
 
     if result.error:
@@ -803,6 +819,24 @@ def constructicon_add_content(media_type: str, external_url: str | None = None, 
             error_msg += " — use constructicon_upload"
         raise InvalidInput(error_msg, code="content_refused")
     return _to_public(result.row)
+
+
+@mcp.tool()
+def constructicon_set_sensitive(slug: str, sensitive: bool = True, dry_run: bool = False) -> dict:
+    """Mark an item "This is sensitive" (#603), or clear that flag.
+
+    A flagged item is locked exactly like a key or a certificate: only admins and the user who
+    uploaded it see it, on every page, hotlink, thumbnail, search, export and MCP read; it is never
+    offered by constructicon_list_needs_caption. Marking is any editor; clearing is admin only (the
+    MCP acts as admin with the install token). One change-log entry: constructicon_undo(batch_id)
+    reverses it. Opening a sensitive item (get / download / view) is recorded in its access log.
+    Returns {ok, dry_run, batch_id, slug, sensitive, changed: [slugs actually changed], item}.
+    Errors: not_found (no such item, or one you may not see), forbidden (clearing without admin).
+    """
+    result = items.set_sensitive(slug, sensitive, dry_run=dry_run)
+    return {"ok": True, "dry_run": dry_run, "batch_id": result.batch_id, "slug": slug,
+            "sensitive": result.data["sensitive"], "changed": result.data["changed"],
+            "item": _to_public(result.item) if result.item else None}
 
 
 @mcp.tool()

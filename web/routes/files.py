@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from core import db, object_types, storage, thumbnails
 from web.common import DESKTOP_APP_BUILD_PATH, DESKTOP_APP_DIR
-from core import policy, roles
+from core import access_log, policy, roles
 from core.errors import AppError
 from web.roles import RoleRouter, requires
 
@@ -112,6 +112,7 @@ def get_file(slug: str):
     policy.require_file(row)  # #467 step 2: public, except restricted/redacted items (admin only, else 404)
     if row["redacted"]:
         raise HTTPException(status_code=410, detail="file was redacted (sensitive content) — metadata is still on the image page")
+    policy.note_access(row, access_log.HOW_FILE)  # #604 follow-up 7: sensitive items only
     if not row.get("stored_filename"):
         # Content-only row (youtube/url/document — see core/db.py's
         # insert_content): there is no local file to serve. Without this
@@ -132,6 +133,7 @@ def get_thumbnail(slug: str):
     policy.require_file(row)  # #467 step 2: public, except restricted/redacted items (admin only, else 404)
     if row["redacted"]:
         raise HTTPException(status_code=410, detail="file was redacted (sensitive content)")
+    policy.note_access(row, access_log.HOW_THUMB)  # #604 follow-up 7: sensitive items only
     if not storage.thumb_path_for(slug).exists() and not row.get("stored_filename"):
         # Content-only row (youtube and friends — see core/db.py's
         # insert_content) whose thumbnail hasn't been fetched/captured yet,

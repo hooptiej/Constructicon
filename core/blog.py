@@ -20,7 +20,7 @@ page can show.
 
 import time
 
-from . import changes, db
+from . import actor as actor_ctx, changes, db, users
 from .cards import Result, _changes_from_log
 from .errors import InvalidInput, NotFound
 
@@ -76,7 +76,9 @@ def create(title, subtitle="", body="", status="draft", cover_slug=None, content
             entry_id = log.insert_auto("blog_entries", {
                 "slug": slug, "title": title, "subtitle": subtitle or "", "body": body or "",
                 "status": status or "draft", "cover_slug": cover_slug, "content_date": content_date,
-                "created_at": now, "updated_at": now})
+                "created_at": now, "updated_at": now,
+                # #604 step 1: the signed-in creator (NULL = token / MCP / script = admin-owned).
+                "created_by_user_id": users.user_id_for_actor(actor_ctx.resolve(actor))})
             log.slugs.append(f"blog:{slug}")
         rows, entry = _done(entry_id, batch_id)
     return Result(True, _changes_from_log(rows), [], batch_id, dry_run, {"entry": entry})

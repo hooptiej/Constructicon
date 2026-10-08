@@ -660,6 +660,12 @@ function createIngestController({ onOpen }) {
     return `${pct}% · ${mbLoaded} / ${mbTotal} MB${speedStr}${stalledStr}`;
   }
 
+  // #603: the upload drawer's "This is sensitive" checkbox (absent on pages without the drawer).
+  function uploadSensitive() {
+    const cb = document.getElementById('upload-sensitive-checkbox');
+    return !!(cb && cb.checked);
+  }
+
   // XHR-based upload with progress tracking
   function xhrUpload(form, onProgress) {
     return new Promise((resolve, reject) => {
@@ -708,6 +714,7 @@ function createIngestController({ onOpen }) {
     form.append('project_id', projectId || '');
     form.append('modified_at', file.lastModified);
     form.append('folder_name', droppedFolderName || '');
+    form.append('sensitive', uploadSensitive() ? 'true' : '');  // #603: set at insert time
 
     let lastRenderTime = 0;
     const renderThrottled = () => {
@@ -772,6 +779,7 @@ function createIngestController({ onOpen }) {
     form.append('description', description);
     form.append('tags', JSON.stringify(tagList));
     form.append('project_id', projectId || '');
+    form.append('sensitive', uploadSensitive() ? 'true' : '');  // #603
 
     let res;
     try {

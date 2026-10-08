@@ -10,10 +10,10 @@ from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTa
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from core import besteffort, captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
+from core import access_log, besteffort, captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
 from core import tags as tags_svc, timeline
 from web.common import DESKTOP_APP_CLIENT_HEADER, DESKTOP_APP_CLIENT_VALUE
-from web.shapes import _friendly_datetime, _to_project_option, _to_public
+from web.shapes import _friendly_datetime, _to_project_option, _to_public, actor_label as shapes_actor_label
 from core import policy, roles
 from core.object_types import code as code_type
 from web.roles import RoleRouter, requires
@@ -30,6 +30,11 @@ def _parse_tags_form(tags):
         return json.loads(tags)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="tags must be a JSON list of tag names")
+
+def _form_bool(value):
+    """A checkbox-ish form field: "1" / "true" / "on" / "yes" (any case) = True; empty = False."""
+    return str(value or "").strip().lower() in ("1", "true", "on", "yes")
+
 
 router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
@@ -61,6 +66,7 @@ async def api_upload(
     project_id: str = Form(""),
     modified_at: str = Form(""),
     folder_name: str = Form(""),
+    sensitive: str = Form(""),
 ):
     # Which Source string a browser upload gets is decided server-side, not
     # by a client-supplied field — the desktop uploader app (see
@@ -101,10 +107,14 @@ async def api_upload(
             source_modified_at=source_modified_at,
             project_id=project_id,
             folder_name=folder_name,
+            sensitive=_form_bool(sensitive),  # #603: set in the INSERT itself
         )
     )
 
     if result.duplicate:
+        if not policy.can_view(result.row):
+            # #603: don't name an item this person may not see (its Source, date or slug).
+            raise HTTPException(status_code=409, detail="This file was already uploaded.")
         # _friendly_datetime, not a raw strftime with %-d/%-I -- those are the
         # platform-specific extensions that helper exists to avoid (#211).
         dupe_date = _friendly_datetime(result.row["timestamp"])
@@ -136,6 +146,7 @@ async def api_create_content(
     client: str = Form(""),
     project_id: str = Form(""),
     type_metadata: str | None = Form(None),
+    sensitive: str = Form(""),
 ):
     """Creates a capture_events row for content with no uploaded file — a
     YouTube link today, a stream/URL capture once a future issue wires up
@@ -185,6 +196,7 @@ async def api_create_content(
         client=client or None,
         type_metadata=parsed_type_metadata,
         project_id=project_id,
+        sensitive=_form_bool(sensitive),  # #603
     )
 
     if result.error:
@@ -251,8 +263,9 @@ def api_processing(request: Request, session: str = ""):
     settled, so the drawer can show the caller's own items finish. Derived from
     existing per-row signals — no status is stored just for this."""
     session_slugs = [s for s in session.split(",") if s][:200]
-    by_slug = {r["slug"]: r for r in db.list_processing_candidates()}
-    for r in db.get_processing_rows_by_slugs(session_slugs):
+    # #603: a sensitive item's name never shows in anyone else's drawer (the item policy, per row).
+    by_slug = {r["slug"]: r for r in policy.filter_visible(db.list_processing_candidates())}
+    for r in policy.filter_visible(db.get_processing_rows_by_slugs(session_slugs)):
         by_slug.setdefault(r["slug"], r)
     session_set = set(session_slugs)
     items = []
@@ -280,6 +293,7 @@ def api_processing(request: Request, session: str = ""):
 @router.get("/api/image/{slug}", dependencies=requires(roles.VIEWER))
 def api_get_image(request: Request, slug: str):
     row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.note_access(row, access_log.HOW_API)  # #604 follow-up 7: sensitive items only
     return JSONResponse(_to_public(row))
 
 
@@ -334,6 +348,23 @@ def api_rendered_html(request: Request, slug: str):
     if truncated:
         headers["X-Rendered-Truncated"] = "1"
     return Response(content=html, media_type="text/html; charset=utf-8", headers=headers)
+
+@router.post("/api/image/{slug}/sensitive")
+def api_set_sensitive(slug: str, sensitive: str = Form("true")):
+    """#603: the item page's "This is sensitive" switch. sensitive=true marks (editor), false clears
+    (admin only: 403 forbidden otherwise). One undoable batch; the answer carries batch_id."""
+    result = items.set_sensitive(slug, _form_bool(sensitive))
+    return JSONResponse({"ok": True, "batch_id": result.batch_id, "changed": result.data["changed"],
+                         "sensitive": result.data["sensitive"],
+                         "item": _to_public(result.item) if result.item else None})
+
+
+@router.get("/api/image/{slug}/access-log", dependencies=requires(roles.ADMIN))
+def api_access_log(slug: str):
+    """#604 follow-up 7: who opened this sensitive item, newest first (admin)."""
+    row = policy.viewable_item(slug)
+    return JSONResponse({"slug": row["slug"], "reason": policy.restriction_reason(row),
+                         "entries": [{**e, "who": shapes_actor_label(e["actor"])} for e in access_log.for_item(slug)]})
 
 
 @router.post("/api/image/{slug}/ocr")
@@ -411,7 +442,7 @@ def api_captions_unreviewed(request: Request):
     bulk caption-review page. Accept reuses POST /api/image/{slug} (sets
     content_description) + caption/mark-used; skip is POST /api/captions/{slug}/skip."""
     out = []
-    for r in db.list_unaccepted_captions():
+    for r in policy.filter_visible(db.list_unaccepted_captions()):  # #603: a flagged image can be captioned
         tm = r.get("type_metadata") or {}
         out.append({
             "slug": r["slug"],
@@ -775,6 +806,15 @@ def api_bulk_add_to_project(slugs: list[str] = Form(...), project_id: str = Form
         return JSONResponse({"count": count})
     result = membership.add_files(project_id, slugs, missing_ok=True, **membership.UI_EFFECTS)
     return JSONResponse({"count": count, "batch_id": result.batch_id})
+
+
+@router.post("/api/bulk/sensitive")
+def api_bulk_sensitive(slugs: list[str] = Form(...), sensitive: str = Form("true")):
+    """#603: the file grids' bulk "Mark sensitive" (Unfiled, the uploader gallery). One batch for the
+    whole selection (undo reverses it). Clearing is admin only (403). Every slug must be visible."""
+    result = items.set_sensitive(slugs, _form_bool(sensitive))
+    return JSONResponse({"count": len(result.data["changed"]), "batch_id": result.batch_id,
+                         "sensitive": result.data["sensitive"]})
 
 
 @router.post("/api/bulk/attach-tags")

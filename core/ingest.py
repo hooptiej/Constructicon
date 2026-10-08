@@ -188,6 +188,7 @@ def ingest_file(
     source_modified_at=None,
     project_id=None,
     folder_name="",
+    sensitive=False,
 ) -> IngestResult:
     """Main entry point for file-based uploads.
 
@@ -207,6 +208,9 @@ def ingest_file(
         source_modified_at: Source file's mtime (unix seconds) for duplicate detection
         project_id: Optional project to attach to
         folder_name: Optional folder name (for folder-drop uploads)
+        sensitive: #603: the upload dialog's "sensitive" checkbox. The flag is set in the INSERT
+            itself, so the item is never visible unlocked. A duplicate of an existing item marks
+            that item sensitive instead (core/items.set_sensitive, logged).
 
     Returns:
         IngestResult with row (newly created or duplicate) or error details
@@ -221,6 +225,10 @@ def ingest_file(
     # Duplicate check
     dupe = db.find_duplicate(filename, size, source_modified_at)
     if dupe is not None:
+        if sensitive and not dupe.get("sensitive"):
+            from . import items  # lazy: items imports this module
+            items.set_sensitive(dupe["slug"], True)
+            dupe = db.get_by_slug(dupe["slug"])
         return IngestResult(row=dupe, duplicate=True)
 
     # Media type detection (extension-only check first, no path yet)
@@ -287,6 +295,7 @@ def ingest_file(
             source_modified_at=source_modified_at,
             media_type=media_type,
             type_metadata=decision.type_metadata,
+            sensitive=sensitive,
         )
         attach_to_project(slug, project_id or None)
         auto_match(slug, [Path(filename).stem, folder_name])
@@ -314,6 +323,7 @@ def ingest_file(
             source_modified_at=source_modified_at,
             media_type=provisional,
             ocr_status="pending" if provisional_spec.ocr_capable else None,
+            sensitive=sensitive,
         )
 
         # #448: replaces storage.save_stream's old extension-based save-time
@@ -344,6 +354,7 @@ def ingest_file(
         "source_modified_at": source_modified_at,
         "media_type": media_type,
         "ocr_status": "pending" if spec.ocr_capable else None,
+        "sensitive": sensitive,
     }
 
     for key, value in decision.row_overrides.items():
@@ -399,6 +410,7 @@ def ingest_content(
     client=None,
     type_metadata=None,
     project_id=None,
+    sensitive=False,
 ) -> IngestResult:
     """Main entry point for content-only items (no file upload).
 
@@ -475,6 +487,7 @@ def ingest_content(
         "tags": tags or [],
         "client": client or None,
         "type_metadata": type_metadata,
+        "sensitive": sensitive,
     }
 
     for key, value in decision.row_overrides.items():

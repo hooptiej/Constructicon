@@ -14,7 +14,7 @@ from pathlib import Path
 # timeline is pure (no DB access — see its module docstring), so this
 # direction of import can't cycle; it's here for list_project_items' sort.
 # #557: policy owns the restricted-items browse filter (imports nothing from db at module load).
-from . import actor as actor_ctx, card_rules, policy, timeline
+from . import actor as actor_ctx, card_rules, errors, policy, timeline
 
 # #453: overridable so the DB can live in its own bind-mounted DIRECTORY.
 # WAL mode keeps -wal/-shm next to the DB file; with only the file
@@ -701,6 +701,136 @@ def _trash_expires_nullable(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_trash_expires ON trash(purged_at, expires_at)")
 
 
+# --- Search index (#543) ------------------------------------------------------------------
+# ONE searchable text per item in an FTS5 table. `item_search_src` is the view that defines that
+# text; `item_search` indexes it (rowid = capture_events.id). Columns, in bm25 weight order (a
+# title match outranks a match inside OCR text):
+#   display_name, content_description, filename   every name an item has ever worn (a rename must
+#                                                  not make the old filename unfindable; title_of()
+#                                                  in core/item_title.py picks only ONE of them)
+#   tags          the free-text `tags` JSON column + the names of its tag-tree tags (post_tags)
+#   cards         the titles of the cards (projects) the item belongs to (project_items)
+#   description   the uploader's note
+#   extracted_text  OCR / extracted text
+# The table is CONTENTLESS with contentless_delete=1 (SQLite >= 3.43): it keeps the search index
+# but no second copy of the OCR text, and a row can be deleted by rowid, so the sync triggers never
+# need the old text (an external-content table's 'delete' command does, and breaks when a write is
+# silently ignored, as INSERT OR IGNORE into post_tags/project_items is). Every trigger is AFTER a
+# change and re-indexes exactly the items that change touches: delete their entry, re-insert from
+# the view. The triggers fire on the tables, so the item service, undo, MCP, scripts and the delete
+# paths are all covered without each knowing. The schema is created at every boot (both
+# processes, idempotent); the one-time backfill is the `search_index_543` data migration.
+SEARCH_COLUMNS = ("display_name", "content_description", "filename", "tags", "cards", "description",
+                  "extracted_text")
+SEARCH_WEIGHTS = (12.0, 12.0, 10.0, 8.0, 8.0, 4.0, 1.0)  # bm25 column weights, SEARCH_COLUMNS order
+_SEARCH_COLS_SQL = ", ".join(SEARCH_COLUMNS)
+
+_SEARCH_VIEW = """
+CREATE VIEW IF NOT EXISTS item_search_src AS
+SELECT ce.id AS id,
+       COALESCE(ce.display_name, '') AS display_name,
+       COALESCE(ce.content_description, '') AS content_description,
+       COALESCE(ce.filename, '') AS filename,
+       COALESCE(ce.tags, '') || ' ' || COALESCE((SELECT group_concat(name, ' ') FROM (
+           SELECT bt.name AS name FROM post_tags pt JOIN blog_tags bt ON bt.id = pt.tag_id
+           WHERE pt.post_slug = ce.slug)), '') AS tags,
+       COALESCE((SELECT group_concat(title, ' ') FROM (
+           SELECT p.title AS title FROM project_items pi JOIN projects p ON p.id = pi.project_id
+           WHERE pi.post_slug = ce.slug)), '') AS cards,
+       COALESCE(ce.description, '') AS description,
+       COALESCE(ce.extracted_text, '') AS extracted_text
+FROM capture_events ce
+"""
+
+
+def _search_sync_triggers():
+    """name -> DDL for every trigger that keeps item_search current."""
+    def reindex(where):
+        return (f"DELETE FROM item_search WHERE rowid IN (SELECT id FROM item_search_src WHERE {where}); "
+                f"INSERT INTO item_search(rowid, {_SEARCH_COLS_SQL}) "
+                f"SELECT id, {_SEARCH_COLS_SQL} FROM item_search_src WHERE {where};")
+
+    def of_slug(ref):
+        return f"id IN (SELECT id FROM capture_events WHERE slug = {ref})"
+
+    def of_tag(ref):
+        return (f"id IN (SELECT ce.id FROM capture_events ce JOIN post_tags pt ON pt.post_slug = ce.slug "
+                f"WHERE pt.tag_id = {ref})")
+
+    def of_card(ref):
+        return (f"id IN (SELECT ce.id FROM capture_events ce JOIN project_items pi ON pi.post_slug = ce.slug "
+                f"WHERE pi.project_id = {ref})")
+
+    cols = "display_name, content_description, filename, tags, description, extracted_text"
+    trig = {}
+
+    def add(name, when, table, body):
+        trig[name] = f"CREATE TRIGGER IF NOT EXISTS {name} {when} ON {table} BEGIN {body} END"
+
+    # an item is created, edited (only the columns the index reads) or deleted
+    add("item_search_ce_ai", "AFTER INSERT", "capture_events", reindex("id = NEW.id"))
+    add("item_search_ce_au", f"AFTER UPDATE OF {cols}", "capture_events", reindex("id = NEW.id"))
+    add("item_search_ce_ad", "AFTER DELETE", "capture_events", "DELETE FROM item_search WHERE rowid = OLD.id;")
+    # a tag is attached/detached, an item is added to/removed from a card
+    for table, short in (("post_tags", "pt"), ("project_items", "pi")):
+        add(f"item_search_{short}_ai", "AFTER INSERT", table, reindex(of_slug("NEW.post_slug")))
+        add(f"item_search_{short}_ad", "AFTER DELETE", table, reindex(of_slug("OLD.post_slug")))
+    # a tag is renamed or deleted, a card is retitled or deleted: every item wearing it is re-indexed
+    add("item_search_bt_au", "AFTER UPDATE OF name", "blog_tags", reindex(of_tag("NEW.id")))
+    add("item_search_bt_ad", "AFTER DELETE", "blog_tags", reindex(of_tag("OLD.id")))
+    add("item_search_pr_au", "AFTER UPDATE OF title", "projects", reindex(of_card("NEW.id")))
+    add("item_search_pr_ad", "AFTER DELETE", "projects", reindex(of_card("OLD.id")))
+    return trig
+
+
+def _ensure_search_schema(conn):
+    """Creates the FTS5 table, its source view and its sync triggers if absent. Idempotent and
+    cheap, so both processes run it at every boot (the MCP server must be able to write items
+    even when the web app hasn't run the backfill yet). Does NOT fill the index: that is the
+    `search_index_543` migration (rebuild_search_index)."""
+    try:
+        conn.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS item_search USING fts5({_SEARCH_COLS_SQL}, "
+            "content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2')")
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(
+            f"cannot create the search index table item_search: {e}. This needs SQLite >= 3.43 built with "
+            f"FTS5; this Python has SQLite {sqlite3.sqlite_version} (#543).") from e
+    conn.execute(_SEARCH_VIEW)
+    for ddl in _search_sync_triggers().values():
+        conn.execute(ddl)
+
+
+def rebuild_search_index():
+    """Re-reads every item into the search index: empties it and refills it from item_search_src.
+    Safe to run any time, any number of times (the result is the same). Returns
+    (items_indexed, seconds)."""
+    conn = get_conn()
+    t0 = time.monotonic()
+    try:
+        conn.execute("DELETE FROM item_search")
+        conn.execute(f"INSERT INTO item_search(rowid, {_SEARCH_COLS_SQL}) "
+                     f"SELECT id, {_SEARCH_COLS_SQL} FROM item_search_src")
+        n = conn.execute("SELECT COUNT(*) FROM item_search_docsize").fetchone()[0]
+        conn.commit()
+        return n, time.monotonic() - t0
+    finally:
+        conn.close()
+
+
+def check_search_index():
+    """{items, indexed, missing, stale} comparing the index to the items (docsize holds one row per
+    indexed rowid). Both lists empty means in step; the fix for drift is rebuild_search_index().
+    A read."""
+    conn = get_conn()
+    try:
+        have = {r[0] for r in conn.execute("SELECT id FROM item_search_docsize")}
+        want = {r[0] for r in conn.execute("SELECT id FROM capture_events")}
+        return {"items": len(want), "indexed": len(have), "missing": sorted(want - have), "stale": sorted(have - want)}
+    finally:
+        conn.close()
+
+
 def init_db(migrate=True):
     """Boot-time schema setup.
 
@@ -913,6 +1043,8 @@ def init_db(migrate=True):
         conn.execute(provenance_options.DDL)
         conn.commit()
         _rebuild_project_relations_typed(conn)
+        _ensure_search_schema(conn)  # #543: after every column it reads exists
+        conn.commit()
     finally:
         conn.close()
     if migrate:
@@ -1263,6 +1395,14 @@ def _mig_ownership_backfill_604():
 # owner's own cards; they moved to scripts/archive/ (already recorded in schema_migrations on the
 # owner's installs, so dropping them from this list changes nothing there; fresh installs never
 # run them). v2c_1/2/5 are generic (legacy status, hobby vocabulary, reference-only cards).
+def _mig_search_index_543():
+    # #543: fills the FTS5 search index for every item already in the DB (new/changed items are
+    # kept current by the triggers from here on). Idempotent: 'rebuild' discards and re-creates the
+    # index, so a second run changes nothing. Reports the item count and the time it took.
+    rows, secs = rebuild_search_index()
+    print(f"schema_migrations: search_index_543 indexed {rows} item(s) in {secs:.2f}s", flush=True)
+
+
 MIGRATIONS = [
     ("drop_legacy_uploads", _mig_drop_legacy_uploads),
     ("curator_snooze_519", _mig_curator_snooze_519),
@@ -1279,6 +1419,7 @@ MIGRATIONS = [
 
     ("ownership_backfill_604", _mig_ownership_backfill_604),
     ("audit_scrub_secret_routes_559", _mig_audit_scrub_secret_routes_559),
+    ("search_index_543", _mig_search_index_543),
 ]
 
 
@@ -1999,15 +2140,20 @@ def list_uploaders(query=None, client=None):
         # the same set so "N items" matches what's actually listed.
         # #603: and the same browse clause search() applies, so a hidden item's description can't be
         # probed through these counts (a ?query= that only matches a sensitive item counts 0).
-        clauses, params = ["redacted = 0" + policy.sql_browse_clause()], []
+        # #543: the text filter is the SAME one search() uses (item_search), so a gallery's per-uploader
+        # "total" and its listed items agree when a query is given.
+        clauses, params = ["ce.redacted = 0" + policy.sql_browse_clause("ce.")], []
         if query:
-            clauses.append("(description LIKE ? OR filename LIKE ?)")
-            params += [f"%{query}%", f"%{query}%"]
+            match = _search_match(query)
+            clauses.append("ce.id IN (SELECT rowid FROM item_search WHERE item_search MATCH ?)" if match else "0")
+            if match:
+                params.append(match)
         if client:
-            clauses.append("client = ?")
+            clauses.append("ce.client = ?")
             params.append(client)
         where = f"WHERE {' AND '.join(clauses)}"
-        rows = conn.execute(f"SELECT tech, timestamp FROM capture_events {where}", params).fetchall()
+        rows = conn.execute(f"SELECT ce.tech AS tech, ce.timestamp AS timestamp FROM capture_events ce {where}",
+                            params).fetchall()
         groups = {}
         for r in rows:
             key = source_group(r["tech"])
@@ -2085,9 +2231,32 @@ def access_log_summary(slugs):
         conn.close()
 
 
+_SEARCH_WORD_RE = re.compile(r"[^\W_]+")
+_SEARCH_MAX_WORDS = 16
+
+
+def _search_match(query):
+    """The FTS5 MATCH string for what a person typed, or None when it holds no searchable word.
+    Every run of letters/digits becomes a quoted prefix term ("tun"* finds "Tuning"), all of them
+    required (AND). Quoting each word means quotes, `*`, `-`, `:`, parentheses and the words AND /
+    OR / NOT / NEAR are searched as plain text, never read as FTS5 syntax. Unicode letters work
+    (the tokenizer folds accents, so "cafe" finds "café")."""
+    words = _SEARCH_WORD_RE.findall(query or "")[:_SEARCH_MAX_WORDS]
+    return " ".join(f'"{w}"*' for w in words) or None
+
+
 def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False,
            include_superseded=True):
-    """Keyword/filter search over capture_events, most recent first.
+    """Keyword/filter search over capture_events. With a `query`, best match first (#543: relevance,
+    a hit in a name or tag outranks one inside OCR text; ties newest first). Without one, most recent
+    first.
+
+    #543: `query` is looked up in the item_search index (see "Search index" above): every name the
+    item has (display_name, content_description, filename), its tags (free-text and tag-tree), its
+    card titles, the uploader's note and the extracted text. Words are prefix-matched and ANDed; the
+    match is on whole words/word starts, not on any substring. A query with no letters or digits in
+    it ("***") finds nothing. `tags` (any-of, matched against the free-text tag list) and `limit` are
+    applied in SQL.
 
     #282: redacted rows are excluded by default, same as every other
     list/browse query here (list_recent_posts, list_unfiled_items, ...) --
@@ -2112,51 +2281,58 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, inclu
     brand asset is a real stored image that still needs thumbnail/date
     backfills, unlike a fileless redacted row).
     """
+    match = None
+    if query:
+        match = _search_match(query)
+        if match is None:
+            return []
     conn = get_conn()
     try:
         clauses, params = [], []
         if not include_redacted:
             # #443: restricted types ride with redaction: the enumerate-
             # everything callers (include_redacted=True) still see them.
-            clauses.append("redacted = 0" + policy.sql_browse_clause())
+            # #603: the same browse clause hides flagged-sensitive items from anyone but their owner/an admin.
+            clauses.append("ce.redacted = 0" + policy.sql_browse_clause("ce."))
         if not include_brand:
-            clauses.append("is_brand_asset = 0")
+            clauses.append("ce.is_brand_asset = 0")
         if not include_superseded:
             # #477: browse views pass False so only the current revision of a chain lists;
             # search itself keeps finding old revisions (callers mark them superseded).
-            clauses.append(_not_superseded().replace(" AND ", "", 1))
-        if query:
-            clauses.append("(description LIKE ? OR filename LIKE ? OR extracted_text LIKE ?)")
-            params += [f"%{query}%", f"%{query}%", f"%{query}%"]
+            clauses.append(_not_superseded("ce.").replace(" AND ", "", 1))
         if client:
-            clauses.append("client = ?")
+            clauses.append("ce.client = ?")
             params.append(client)
         if uploaded_by:
             # Matches either the exact Source string or rows whose Source starts
             # with `uploaded_by` as its group prefix (see source_group()) — lets
             # callers filter by either a full Source string or the short grouping
             # key the gallery views link with (e.g. "Hooptie J (me)").
-            clauses.append("(tech = ? OR tech LIKE ? OR tech LIKE ?)")
+            clauses.append("(ce.tech = ? OR ce.tech LIKE ? OR ce.tech LIKE ?)")
             params += [uploaded_by, f"{uploaded_by} —%", f"{uploaded_by} -%"]
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        # #166: the tag filter runs in Python (tags is a JSON column, not
-        # queryable in SQL), so when it's present the row LIMIT must apply AFTER
-        # filtering, not before -- fetching only the `limit` most recent rows and
-        # THEN filtering by tag silently drops any older tagged match once
-        # `limit` newer, untagged rows exist. Only pay for the unbounded fetch
-        # when a tag filter is actually requested.
-        query_sql = f"SELECT * FROM capture_events {where} ORDER BY timestamp DESC"
-        query_params = list(params)
-        if not tags:
-            query_sql += " LIMIT ?"
-            query_params.append(limit)
-        rows = conn.execute(query_sql, query_params).fetchall()
-        results = [_row_to_dict(r) for r in rows]
         if tags:
-            wanted = set(tags)
-            results = [r for r in results if wanted & set(r["tags"])]
-            results = results[:limit]
-        return results
+            # #543: was a Python filter after an unbounded fetch (#166). json_each reads the free-text
+            # tag list in SQL, so the LIMIT below applies after the filter, in the database.
+            wanted = list(dict.fromkeys(tags))
+            clauses.append("CASE WHEN json_valid(ce.tags) THEN EXISTS (SELECT 1 FROM json_each(ce.tags) "
+                           f"WHERE json_each.value IN ({', '.join('?' * len(wanted))})) ELSE 0 END")
+            params += wanted
+        if match:
+            clauses.insert(0, "item_search MATCH ?")
+            params.insert(0, match)
+            weights = ", ".join(str(w) for w in SEARCH_WEIGHTS)
+            sql = (f"SELECT ce.* FROM item_search JOIN capture_events ce ON ce.id = item_search.rowid "
+                   f"WHERE {' AND '.join(clauses)} ORDER BY bm25(item_search, {weights}), ce.timestamp DESC LIMIT ?")
+        else:
+            where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            sql = f"SELECT ce.* FROM capture_events ce {where} ORDER BY ce.timestamp DESC LIMIT ?"
+        params.append(int(limit))
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError as e:
+            raise errors.AppError("search_failed", f"search for {query!r} failed in SQLite: {e}", status=500,
+                                  details={"query": query, "match": match}) from e
+        return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 
@@ -3816,11 +3992,14 @@ def mark_change_rows_undone(row_ids, undone_by):
 
 
 def list_tables():
-    """Every user table in the DB (sqlite_* internals excluded)."""
+    """Every user table in the DB (sqlite_* internals excluded). The search index (#543: item_search and
+    its FTS5 shadow tables) is derived data, emptied by the triggers when its items go, so it is not
+    listed -- reset.CLEARED_TABLES / KEPT_TABLES classify real data only."""
     conn = get_conn()
     try:
         return sorted(r["name"] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"))
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
+            "AND name NOT LIKE 'item_search%'"))
     finally:
         conn.close()
 

@@ -1051,15 +1051,50 @@ Builds` has children like `Walker studies`, `More builds`, etc.
 `db.list_posts_for_tag(tag_id)` walks the full descendant subtree
 (`_descendant_tag_ids`) to answer "everything under this topic."
 
-**A plain keyword search over title/description/OCR text
-(`db.search()`, `GET /api/search`) is a completely different, much
-weaker query, and will miss real on-topic items.** Several real items
-tagged under a topic's child tags have no keyword match on that topic
-anywhere in their text at all. If you (human or agent) are trying to
-answer "show me everything about X," walking the tag tree from X's tag
-(via `list_posts_for_tag`/`list_tag_tree`) finds items that
-`db.search()`/`/api/search` will silently miss. Don't assume a keyword
-search over descriptions is a substitute for a tag-tree walk.
+**A keyword search (`db.search()`, `GET /api/search`) matches the words an item itself
+carries (see "Search" below), not the tag tree above it.** An item tagged only under a child
+tag of a topic (`Walker studies` under `Kerbal Space Program Builds`) has no text that
+names the topic, so a keyword search for the topic misses it. If you (human or agent) are
+trying to answer "show me everything about X," walking the tag tree from X's tag (via
+`list_posts_for_tag`/`list_tag_tree`) finds items that `db.search()`/`/api/search` will
+miss. Don't assume a keyword search is a substitute for a tag-tree walk.
+
+### Search (#543)
+
+`db.search()` (behind `GET /api/search`, the object page's related/attach pickers, the blog
+builder, `/api/gallery` and the MCP `constructicon_search`) reads one SQLite FTS5 index,
+`item_search` (rowid = `capture_events.id`). The text it holds per item is defined once, by the
+view `item_search_src` in `core/db.py`: `display_name`, `content_description` and `filename` (every
+name the item has had, so a rename never makes the old filename unfindable; `core/item_title.py`
+picks only one of them to SHOW), the free-text `tags` column plus tag-tree tag names (`post_tags`),
+the titles of the cards it is on (`project_items`), the uploader's note (`description`) and
+`extracted_text`. Not indexed: `agent_notes`, `type_metadata`, `provenance`, `client`, the slug.
+
+- **Matching:** each run of letters/digits you type is a word-START match, all required ("tun
+  gig" finds "Tuning the Gigabyte"); accents fold; case is ignored. Quotes, `*`, `-`, `:`, brackets
+  and AND/OR/NOT/NEAR are plain punctuation/words, never FTS5 syntax (`db._search_match`). It is
+  NOT a substring match: "ning" does not find "Tuning". A query with no letters or digits finds
+  nothing. Up to 16 words.
+- **Ranking:** with a query, best match first by bm25 with column weights (name > filename > tags
+  and card titles > note > OCR text), ties newest first. With no query it is newest first, as before.
+- **Visibility is unchanged:** the same SQL clauses as ever (redacted, restricted types, flagged
+  items via `policy.sql_browse_clause("ce.")`, brand assets, `include_superseded`), then
+  `policy.filter_visible` in the callers. The index holds flagged items' text; they are filtered
+  by the query, so a viewer never finds one by a word, a tag or a card title.
+- **Tag filter and limit are SQL** (`json_each` over the free-text list, any-of; `LIMIT ?`).
+- **Kept current by triggers**, not by each write path: item insert/update/delete, `post_tags`,
+  `project_items`, a tag renamed or deleted (`blog_tags`), a card retitled or deleted (`projects`)
+  all re-index exactly the items they touch. The table is contentless with `contentless_delete=1`
+  (SQLite >= 3.43; the image has 3.46) so there is no second copy of the OCR text and the triggers
+  never need old values. A NEW table or column that should be searchable goes into
+  `item_search_src` + `_search_sync_triggers()`, and needs a rebuild migration.
+- **Schema vs data:** `_ensure_search_schema()` (table, view, triggers; idempotent) runs at every
+  boot in both processes; the one-time backfill is the `search_index_543` migration (web process),
+  which logs the item count and the time. `db.rebuild_search_index()` is the repair for any drift
+  (`db.check_search_index()` reports missing/stale rows). `db.list_tables()` hides the `item_search*`
+  tables (derived data, not part of `reset.CLEARED_TABLES`/`KEPT_TABLES`); "database exactly as
+  before" snapshot tests skip them too (their bytes differ after an undo, their content does not).
+- Check with `scripts/test_search_543.py` (throwaway DB).
 
 ## MCP server: `constructicon-mcp` (issue #68, resolved)
 
@@ -1077,7 +1112,7 @@ configuration gap for that session, not evidence the server itself is gone.
 
 - #167 tracks auditing this tool surface for real gaps found in later
   work (e.g. whether `constructicon_search`'s `tags` filter shares
-  `db.search()`'s row-limit-before-filter bug, whether there's a tool for
+  `db.search()`'s row-limit-before-filter bug (fixed in #543: the filter is SQL), whether there's a tool for
   setting a project's cover/write-up) — check it before assuming a
   capability needs building from scratch.
 - **Captioning through MCP (#588, #585, #587 item 5).** On an install with no Ollama

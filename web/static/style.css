@@ -1386,6 +1386,13 @@ body.delete-mode-on .card-select-row { display: flex; }
 .project-video-timeline {
   position: relative;
 }
+.project-video-timeline-note {
+  /* #631: why dragging is off on this timeline (it fits inside one day) */
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
 .project-video-timeline-blocks {
   position: relative;
   height: 32px;

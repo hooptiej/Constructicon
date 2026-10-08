@@ -23,7 +23,8 @@
     msg.style.flex = '1';
     const undo = el('button', { type: 'button', className: 'btn' }, 'Undo');
     const close = el('button', { type: 'button', className: 'btn', title: 'Dismiss' }, '×');
-    bar.append(msg, undo, close);
+    // No change to undo (batchId null): a plain message bar with just the close button (#631).
+    if (batchId) bar.append(msg, undo, close); else bar.append(msg, close);
     document.body.appendChild(bar);
 
     let finished = false;

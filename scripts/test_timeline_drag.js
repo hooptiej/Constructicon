@@ -65,6 +65,15 @@ eq('stackGroups unsorted input', M.stackGroups([items[3], items[0], items[4]], 0
 eq('stackGroups on a flat axis stacks everything', M.stackGroups([{ id: 'x', date: 7 }, { id: 'y', date: 7 }], 7, 7, 800, 10), [['x', 'y']]);
 eq('stackGroups empty', M.stackGroups([], 0, 10, 100, 10), []);
 
+// can a plain drag move anything? (#631) -- only when the axis touches two Mountain days
+eq('dragCanMove: a one-minute axis cannot move', M.dragCanMove(ep(2026, 10, 6, 17, 39), ep(2026, 10, 6, 17, 40)), false);
+eq('dragCanMove: a whole same-day axis cannot move', M.dragCanMove(ep(2026, 10, 6, 0, 0), ep(2026, 10, 6, 23, 59)), false);
+eq('dragCanMove: a 2-minute axis across midnight can move', M.dragCanMove(ep(2026, 10, 6, 23, 59), ep(2026, 10, 7, 0, 1)), true);
+eq('dragCanMove: a multi-month axis can move', M.dragCanMove(ep(2025, 1, 1), ep(2025, 12, 1)), true);
+eq('dragCanMove: a single instant cannot move', M.dragCanMove(ep(2026, 10, 6, 12), ep(2026, 10, 6, 12)), false);
+const moved = M.snap(ep(2026, 10, 6, 17, 40), ep(2026, 10, 6, 17, 39), false);
+eq('why: every raw point on a one-minute axis snaps back to the start (plain drag)', moved, ep(2026, 10, 6, 17, 39));
+
 // readout
 const ro = M.formatReadout(ep(2025, 3, 4, 18, 39), 'en-US');
 eq('readout names weekday, date and time', /Tue/.test(ro) && /Mar 4, 2025/.test(ro) && /6:39\sPM/.test(ro), true);

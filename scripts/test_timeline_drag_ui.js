@@ -171,6 +171,104 @@ async function main() {
   const vc = bodyEl.qa('timeline-chooser')[0];
   ok('viewer gets the chooser as links, no Move/Reset', !!vc && vc.qa('timeline-chooser-reset').length === 0 && vc.qa('timeline-chooser-pick')[0].tagName === 'a');
 
+  // 8. #631: a timeline that spans about a minute. Dragging can't move anything, so say so up front,
+  // don't dangle the drag affordances, and explain a drag that ends where it started.
+  const msgs = [];
+  const T0 = ep(2026, 10, 6, 17, 39);
+  const shortSaved = [];
+  const shortEvents = [
+    { id: 's1', label: 'Shot one', date: T0, dateLabel: '', openUrl: '/object/s1' },
+    { id: 's2', label: 'Shot two', date: T0 + 0.5, dateLabel: '', openUrl: '/object/s2' },
+    { id: 's3', label: 'Shot three', date: T0 + 60, dateLabel: '', openUrl: '/object/s3' },
+  ];
+  const cShort = new El('div');
+  const tlS = new PVT(cShort, { events: shortEvents, canEdit: true,
+    onSave: async (e, d) => { shortSaved.push([e.id, d]); return { effective_date: d, set_by_hand: true, batch_id: 'S' }; },
+    onNoMove: (m, info) => msgs.push({ m, info }) });
+  tlS._eventRow.rect = { left: 0, top: 100, width: 1000, height: 20, right: 1000, bottom: 120 };
+  const note = cShort.qa('project-video-timeline-note');
+  ok('short timeline: a note is shown', note.length === 1, note.length);
+  ok('note says the timeline is shorter than one day and dragging cannot move items',
+    /shorter than one day/.test(note[0].textContent) && /can't move items/.test(note[0].textContent), note[0] && note[0].textContent);
+  ok('note names the DATES group and the Timeline date field in the item\'s Details',
+    /Details/.test(note[0].textContent) && /DATES/.test(note[0].textContent) && /Timeline date/.test(note[0].textContent));
+  ok('short timeline: no marker offers the grab cursor class', cShort.qa('project-video-timeline-event--editable').length === 0);
+  ok('short timeline: the stack hint does not say "to drag"', shortEvents.every((e) => !/to drag/.test(e._el.title || '')) && /click to choose one/.test(shortEvents[0]._el.title));
+  bodyEl.qa("timeline-chooser").forEach((c) => c.remove()); // the viewer chooser left open by section 7
+  const s1 = shortEvents[0]._el;
+  s1.fire('pointerdown', { button: 0, clientX: 0, pointerId: 3 }); // stack: opens the chooser, as before
+  ok('short timeline: clicking a stack still opens the chooser', bodyEl.qa('timeline-chooser').length === 1);
+  ok('chooser does not promise a drag', !/drag/.test(bodyEl.qa('timeline-chooser')[0].textContent) && /arrow keys/.test(bodyEl.qa('timeline-chooser')[0].textContent));
+  s1.fire('click', {});
+  bodyEl.qa('timeline-chooser')[0].qa('timeline-chooser-pick')[0].fire('click', {}); // pick Shot one
+  ok('short timeline: picking still works', tlS._picked === 's1');
+  ok('picked readout does not say "drag it"', !/drag it/.test(tlS._readout.textContent) && /arrow keys/.test(tlS._readout.textContent), tlS._readout.textContent);
+  const pS = shortEvents[0]._el;
+  pS.fire('pointerdown', { button: 0, clientX: 0, pointerId: 4 });
+  pS.fire('pointermove', { clientX: 900 });
+  pS.fire('pointerup', {});
+  await new Promise((r) => setTimeout(r, 5));
+  ok('short timeline: a drag saves nothing', shortSaved.length === 0, shortSaved);
+  ok('short timeline: a drag reports why it did not move', msgs.length === 1 && /Shot one/.test(msgs[0].m) && /shorter than one day/.test(msgs[0].m)
+    && /Timeline date/.test(msgs[0].m) && msgs[0].info.mode === 'pointer', msgs);
+  ok('the reason is Mountain-time free of surprises: no raw epoch numbers', !/\d{9,}/.test(msgs[0].m));
+
+  // 9. a normal multi-month timeline: still drags, still re-dates, no note
+  const nSaved = [];
+  const cLong = new El('div');
+  const longEvents = [
+    { id: 'l1', label: 'Long one', date: ep(2025, 1, 1), dateLabel: '', openUrl: '/object/l1' },
+    { id: 'l2', label: 'Long two', date: ep(2025, 12, 1), dateLabel: '', openUrl: '/object/l2' },
+  ];
+  const longMsgs = [];
+  const tlL = new PVT(cLong, { events: longEvents, canEdit: true,
+    onSave: async (e, d) => { nSaved.push([e.id, d]); return { effective_date: d, set_by_hand: true, batch_id: 'L' }; },
+    onNoMove: (m) => longMsgs.push(m) });
+  tlL._eventRow.rect = { left: 0, top: 100, width: 1000, height: 20, right: 1000, bottom: 120 };
+  ok('long timeline: no note', cLong.qa('project-video-timeline-note').length === 0);
+  ok('long timeline: markers keep the drag affordance', cLong.qa('project-video-timeline-event--editable').length === 2);
+  const l1 = longEvents[0]._el;
+  l1.fire('pointerdown', { button: 0, clientX: 0, pointerId: 5 });
+  l1.fire('pointermove', { clientX: 500 });
+  l1.fire('pointerup', {});
+  await new Promise((r) => setTimeout(r, 5));
+  ok('long timeline: a real drag still re-dates', nSaved.length === 1 && nSaved[0][0] === 'l1' && nSaved[0][1] > ep(2025, 5, 1), nSaved);
+  ok('long timeline: a real drag gives no "did not move" message', longMsgs.length === 0, longMsgs);
+
+  // 10. a zero-distance drag on a long timeline: out 100px and back to the start
+  const l2 = longEvents[1]._el;
+  l2.fire('pointerdown', { button: 0, clientX: 1000, pointerId: 6 });
+  l2.fire('pointermove', { clientX: 900 });
+  l2.fire('pointermove', { clientX: 1000 });
+  l2.fire('pointerup', {});
+  await new Promise((r) => setTimeout(r, 5));
+  ok('long timeline: a drag that returns to the start saves nothing', nSaved.length === 1, nSaved);
+  ok('long timeline: and says why, naming the day-step and the Details route',
+    longMsgs.length === 1 && /Long two/.test(longMsgs[0]) && /same day/.test(longMsgs[0]) && /whole days/.test(longMsgs[0]) && /Timeline date/.test(longMsgs[0]), longMsgs);
+  ok('long timeline message is not the short-timeline one', !/shorter than one day/.test(longMsgs[0]));
+  // a Shift drag that lands back on its 15-minute step names that step, not the day
+  const l2b = longEvents[1]._el; // the no-op re-rendered the markers
+  l2b.fire('pointerdown', { button: 0, clientX: 1000, pointerId: 7 });
+  l2b.fire('pointermove', { clientX: 900, shiftKey: true });
+  l2b.fire('pointermove', { clientX: 1000, shiftKey: true });
+  l2b.fire('pointerup', {});
+  await new Promise((r) => setTimeout(r, 5));
+  // (the fine snap of an arbitrary epoch is a 15-minute multiple, so it only counts as a no-op when
+  // the item already sits on one; this one is at :39 so it moves, which is the existing behaviour)
+  ok('long timeline: a Shift drag keeps working as before', nSaved.length === 2 && nSaved[1][0] === 'l2', nSaved);
+
+  // 11. no onNoMove hook: the reason still shows, in the drag readout
+  const tlN = new PVT(new El('div'), { events: shortEvents.map((e) => ({ ...e })), canEdit: true, onSave: async () => ({}) });
+  tlN._eventRow.rect = { left: 0, top: 100, width: 1000, height: 20, right: 1000, bottom: 120 };
+  tlN._setPending(tlN.events[0], tlN.events[0].date, 'pointer');
+  await tlN._commit();
+  ok('without a page hook the readout carries the reason', /shorter than one day/.test(tlN._readout.textContent), tlN._readout.textContent);
+
+  // 12. a viewer never sees the note
+  const cV = new El('div');
+  new PVT(cV, { events: shortEvents.map((e) => ({ ...e })), canEdit: false });
+  ok('viewer: no note on a short timeline', cV.qa('project-video-timeline-note').length === 0);
+
   console.log(failed ? `\n${failed} FAILED` : '\nall passed');
   process.exit(failed ? 1 : 0);
 }

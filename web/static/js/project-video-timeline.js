@@ -17,20 +17,27 @@
 // events cover mouse and touch; a focused marker also moves with the arrow keys. The date maths is
 // in timeline-drag-math.js (pure, unit-tested); saving is the caller's opts.onSave(event, epochOrNull),
 // which returns the server's answer; opts.onSaved({event, result, before, reset}) then shows the Undo bar.
+// #631: when the whole axis fits inside one Mountain day a plain drag cannot change any date, so an
+// editor sees a note saying so (with the way to set an exact date), the marker does not offer the grab
+// cursor, and a drag that still ends on its starting date says why through opts.onNoMove(message).
 // Markers that sit within STACK_PX of each other form a stack: pressing one opens a small chooser.
 
 const STACK_PX = 12;       // markers closer than this on the axis form a stack
 const DRAG_START_PX = 4;   // a press that moves less than this is a click
+// #631. Worded for the item's Details panel as it is today: the DATES group, Edit, the "Timeline date" field.
+const DETAILS_ROUTE = 'open the item, then in its Details choose Edit on the DATES group and set the Timeline date';
+const NO_DRAG_NOTE = `Timeline is shorter than one day: dragging can't move items here. To set an exact date, ${DETAILS_ROUTE}.`;
 const SCALE_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 class ProjectVideoTimeline {
-  constructor(container, { blocks = [], events = [], canEdit = false, onSave = null, onSaved = null } = {}) {
+  constructor(container, { blocks = [], events = [], canEdit = false, onSave = null, onSaved = null, onNoMove = null } = {}) {
     this.container = container;
     this.blocks = blocks;
     this.events = events;
     this.canEdit = !!(canEdit && onSave);
     this.onSave = onSave;
     this.onSaved = onSaved;
+    this.onNoMove = onNoMove; // (message, info): a drag that ended on the date it started on says why (#631)
     this._popover = null;
     this._readout = null;
     this._chooser = null;
@@ -207,6 +214,8 @@ class ProjectVideoTimeline {
 
     const range = this._range();
     this._r = range;
+    // #631: false when no plain drag can change a date on this axis (see TimelineDragMath.dragCanMove).
+    this._dragCanMove = window.TimelineDragMath.dragCanMove(range.min, range.max);
 
     const blockRow = document.createElement('div');
     blockRow.className = 'project-video-timeline-blocks';
@@ -305,7 +314,7 @@ class ProjectVideoTimeline {
         // first member), a pointer cursor instead of the grab hand, and a hint on hover.
         el.classList.add('project-video-timeline-event--stack');
         if (this._picked !== event.id) {
-          el.title = `${group.length} items here: click to choose one` + (this.canEdit ? ' to drag' : '');
+          el.title = `${group.length} items here: click to choose one` + (this.canEdit && this._dragCanMove ? ' to drag' : '');
         }
         if (group[0] === event.id) {
           const badge = document.createElement('span');
@@ -322,7 +331,8 @@ class ProjectVideoTimeline {
       el.addEventListener('mouseleave', () => this._hidePopover());
       el.addEventListener('click', (ev) => this._onClick(ev, event));
       if (this.canEdit) {
-        el.classList.add('project-video-timeline-event--editable');
+        // The grab cursor and touch capture only where a drag can do something (#631).
+        if (this._dragCanMove) el.classList.add('project-video-timeline-event--editable');
         el.addEventListener('pointerdown', (ev) => this._onPointerDown(ev, event));
         el.addEventListener('keydown', (ev) => this._onKeyDown(ev, event));
         el.addEventListener('blur', () => {
@@ -334,6 +344,13 @@ class ProjectVideoTimeline {
       eventRow.appendChild(wrap);
     });
     this.container.appendChild(eventRow);
+    if (this.canEdit && !this._dragCanMove) {
+      const note = document.createElement('p');
+      note.className = 'project-video-timeline-note';
+      note.setAttribute('role', 'note');
+      note.textContent = NO_DRAG_NOTE;
+      this.container.appendChild(note);
+    }
   }
 
   // ---- #593: clicking, stacks, dragging, keys ------------------------------------------------
@@ -413,6 +430,7 @@ class ProjectVideoTimeline {
     const M = window.TimelineDragMath;
     const rect = this._eventRow.getBoundingClientRect();
     const raw = M.pxToEpoch(clientX - rect.left, rect.width, this._r.min, this._r.max);
+    this._lastFine = !!fine;
     this._setPending(event, M.snap(raw, event.date, fine), 'pointer');
   }
 
@@ -492,7 +510,12 @@ class ProjectVideoTimeline {
     const p = this._pending;
     if (!p) return;
     const { event, date } = p;
-    if (Math.abs(date - event.date) < 1) { this._cancel(); return; } // dropped where it was
+    if (Math.abs(date - event.date) < 1) { // dropped where it was: say why, never a silent no-op (#631)
+      const message = this._noMoveMessage(event, p.mode);
+      this._cancel();
+      this._explainNoMove(event, message, p.mode);
+      return;
+    }
     this._busy = true;
     this._showReadout(event, date, 'saving…');
     const before = event.date;
@@ -512,6 +535,29 @@ class ProjectVideoTimeline {
       this._showReadout(event, event.date, `not saved: ${(e && e.message) || e}`);
       setTimeout(() => { this._hideReadout(); this._render(); this._focus(event.id); }, 2500);
     }
+  }
+
+  _noMoveMessage(event, mode) {
+    const M = window.TimelineDragMath;
+    const name = `"${event.label || event.id}"`;
+    if (mode === 'keyboard') {
+      return `${name} stays on ${M.formatReadout(event.date)}: that step would go past the earliest or latest date the timeline allows (1970 to 2100).`;
+    }
+    if (!this._dragCanMove && !this._lastFine) {
+      return `${name} didn't move: this timeline is shorter than one day, and a drag moves in whole days. To set an exact date, ${DETAILS_ROUTE}.`;
+    }
+    const fine = this._lastFine;
+    return `${name} didn't move: the drag ended on the same ${fine ? '15-minute step' : 'day'} it started on (${M.formatReadout(event.date)}), and a drag moves in ${fine ? '15-minute steps' : 'whole days'}. Drag further${fine ? '' : ', or hold Shift for 15-minute steps'}. To set an exact date, ${DETAILS_ROUTE}.`;
+  }
+
+  _explainNoMove(event, message, mode) {
+    if (this.onNoMove) this.onNoMove(message, { event, mode });
+    else this._flashReadout(event, message); // no page hook: fall back to the readout bubble
+  }
+
+  _flashReadout(event, message) {
+    if (event._el) this._showReadout(event, event.date, message);
+    setTimeout(() => this._hideReadout(), 6000);
   }
 
   // Back to the computed date (the server clears the override).
@@ -564,7 +610,7 @@ class ProjectVideoTimeline {
     const head = document.createElement('div');
     head.className = 'timeline-chooser-head';
     head.textContent = this.canEdit
-      ? `${stack.length} items sit here. Pick one to move it.`
+      ? `${stack.length} items sit here. Pick one to move it${this._dragCanMove ? '' : ' with the arrow keys'}.`
       : `${stack.length} items sit here.`;
     box.appendChild(head);
     stack.forEach((event) => {
@@ -600,7 +646,7 @@ class ProjectVideoTimeline {
           this._render();
           this._focus(event.id);
           const picked = this.events.find((e) => e.id === event.id);
-          if (picked && picked._el) this._showReadout(picked, picked.date, 'drag it, or use the arrow keys');
+          if (picked && picked._el) this._showReadout(picked, picked.date, (this._dragCanMove ? 'drag it, or use the arrow keys' : 'use the arrow keys to move it'));
           setTimeout(() => { if (!this._pending) this._hideReadout(); }, 3000);
         });
         const open = document.createElement('a');

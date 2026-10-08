@@ -216,6 +216,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "thumb_url": f"/f/{r['slug']}/thumb" if _has_thumbnail(r) and not r.get("redacted") else None,
             "title": r.get("content_description") or r.get("description") or r.get("filename") or r["slug"],
             "effective_date": timeline.resolve_item_date(r),
+            "set_by_hand": r.get("display_date_override") is not None,  # #593: shown on the marker
         }
         for r in raw_items
         if r["slug"] != project.get("writeup_slug")
@@ -308,6 +309,8 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "effective_end_display": _friendly_datetime(effective_end),
             "timeline_items": timeline_items,
             "timeline_children": timeline_children,
+            # #593: dragging a marker re-dates an item, an editor's door (the route enforces it too).
+            "timeline_can_edit": roles.at_least(roles.role_of(actor_ctx.current_actor()), roles.EDITOR),
             "PROJECT_STATUSES": PROJECT_STATUSES,
             # V2 cards: the kind / stage / stop-reason controls on the detail page.
             "card_kinds": [{"key": k, "label": card_rules.KIND_LABELS[k]} for k in card_rules.KINDS],

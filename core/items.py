@@ -222,6 +222,29 @@ def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **field
     return _result(OP_UPDATE, muts, batch_id, dry_run, item, slug=slug)
 
 
+DISPLAY_DATE_MIN = 0.0          # 1970-01-01
+DISPLAY_DATE_MAX = 4102444800.0  # 2100-01-01
+
+
+def set_display_date(slug, epoch, *, dry_run=False, actor=None, batch_id=None):
+    """(#593) Sets (epoch = unix seconds) or clears (epoch None) the item's display-date override:
+    the "date set by hand" the project timeline reads (core/timeline.py resolve_item_date). The
+    drag on the project timeline calls this. It is `update(display_date_override=...)`, so ONE
+    change-log row and one undo; a no-op (same value) logs nothing. The date must be a finite
+    number between 1970 and 2100, else 400 `bad_date`. `res.data` carries `changed` and the
+    resolved `effective_date` / `set_by_hand`."""
+    if epoch is not None:
+        value = _epoch("display_date", epoch)
+        if value is None or value != value or not (DISPLAY_DATE_MIN <= value <= DISPLAY_DATE_MAX):
+            raise InvalidInput("display_date must be a date between 1970 and 2100", code="bad_date")
+        epoch = value
+    res = update(slug, dry_run=dry_run, actor=actor, batch_id=batch_id, display_date_override=epoch)
+    res.data["changed"] = bool(res.changes)
+    res.data["effective_date"] = timeline.resolve_item_date(res.item)
+    res.data["set_by_hand"] = res.item.get("display_date_override") is not None
+    return res
+
+
 CAPTION_MAX_CHARS = 2000
 
 

@@ -212,8 +212,8 @@
       {# ---- DATES ---- #}
       {% set dates_view %}
       <dl class="dp-rows">
-        <div class="dp-row"><dt>Starts</dt><dd>{{ effective_start_display }} <span class="dp-muted">({{ 'set by hand' if project.start_date_override else 'from files' }})</span></dd></div>
-        <div class="dp-row"><dt>Ends</dt><dd>{{ effective_end_display }} <span class="dp-muted">({{ 'set by hand' if project.end_date_override else 'from files' }})</span></dd></div>
+        <div class="dp-row"><dt>Starts</dt><dd id="dates-start-view">{{ effective_start_display }} <span class="dp-muted">({{ 'set by hand' if project.start_date_override else 'from files' }})</span></dd></div>
+        <div class="dp-row"><dt>Ends</dt><dd id="dates-end-view">{{ effective_end_display }} <span class="dp-muted">({{ 'set by hand' if project.end_date_override else 'from files' }})</span></dd></div>
       </dl>
       {% endset %}
       {% set dates_edit %}
@@ -223,7 +223,7 @@
           <input class="input" type="datetime-local" id="start-date-input" value="{{ start_date_input or '' }}" style="width:auto">
           <button type="button" class="dp-btn" id="start-date-reset">Reset</button>
         </div>
-        <p class="dp-note">{% if project.start_date_override %}Manually set.{% else %}Computed: {{ effective_start_display }}{% endif %}</p>
+        <p class="dp-note" id="dates-start-note">{% if project.start_date_override %}Manually set.{% else %}Computed: {{ effective_start_display }}{% endif %}</p>
       </div>
       <div class="dp-field">
         <label for="end-date-input">Timeline end</label>
@@ -231,7 +231,7 @@
           <input class="input" type="datetime-local" id="end-date-input" value="{{ end_date_input or '' }}" style="width:auto">
           <button type="button" class="dp-btn" id="end-date-reset">Reset</button>
         </div>
-        <p class="dp-note">{% if project.end_date_override %}Manually set.{% else %}Computed: {{ effective_end_display }}{% endif %}</p>
+        <p class="dp-note" id="dates-end-note">{% if project.end_date_override %}Manually set.{% else %}Computed: {{ effective_end_display }}{% endif %}</p>
       </div>
       {% endset %}
 
@@ -432,12 +432,55 @@
   <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 
   {% if timeline_children or timeline_items %}
+  <script src="/static/js/timeline-drag-math.js?v={{ static_version('js/timeline-drag-math.js') }}"></script>
   <script src="/static/js/project-video-timeline.js?v={{ static_version('js/project-video-timeline.js') }}"></script>
   <script>
   (function () {
     const timelineChildren = {{ timeline_children | tojson }};
     const timelineItems = {{ timeline_items | tojson }};
+    // #593: an editor can drag a marker to re-date its item (POST /api/image/{slug}/date, one undoable
+    // change); a viewer gets the static timeline. The server enforces the role too.
+    const canEdit = {{ timeline_can_edit | tojson }};
+    const projectSlug = {{ project.slug | tojson }};
+    async function saveDate(event, epoch) {
+      const form = new FormData();
+      if (epoch === null) form.append('reset', 'true'); else form.append('display_date', String(epoch));
+      form.append('project', projectSlug);
+      const res = await fetch(`/api/image/${encodeURIComponent(event.id)}/date`, { method: 'POST', body: form });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((body.error && body.error.message) || body.detail || 'Save failed');
+      return body;
+    }
+    // The card's computed Timeline start / end follow the new date (a hand-set override still wins).
+    function refreshDates(span) {
+      if (!span) return;
+      [['start', 'Starts', 'Timeline start'], ['end', 'Ends', 'Timeline end']].forEach(([k]) => {
+        const dd = document.getElementById(`dates-${k}-view`);
+        const note = document.getElementById(`dates-${k}-note`);
+        const byHand = span[`${k}_by_hand`];
+        if (dd) {
+          dd.textContent = `${span[`${k}_display`]} `;
+          const tag = document.createElement('span');
+          tag.className = 'dp-muted';
+          tag.textContent = `(${byHand ? 'set by hand' : 'from files'})`;
+          dd.appendChild(tag);
+        }
+        if (note) note.textContent = byHand ? 'Manually set.' : `Computed: ${span[`${k}_display`]}`;
+      });
+    }
+    function afterSave({ event, result, reset }) {
+      refreshDates(result.span);
+      if (!result.batch_id) return;
+      const when = new Date(result.effective_date * 1000).toLocaleDateString();
+      const msg = reset
+        ? `"${event.label}" is back on its computed date (${when}).`
+        : `"${event.label}" re-dated to ${when}. The date is now set by hand.`;
+      window.showUndoBar(msg, result.batch_id, (how) => { if (how === 'undone') window.location.reload(); });
+    }
     new ProjectVideoTimeline(document.getElementById('project-video-timeline'), {
+      canEdit,
+      onSave: saveDate,
+      onSaved: afterSave,
       blocks: timelineChildren.map((c) => ({
         id: c.id,
         label: c.title,
@@ -451,6 +494,7 @@
         label: it.title,
         date: it.effective_date,
         thumbUrl: it.thumb_url,
+        setByHand: it.set_by_hand,
         dateLabel: new Date(it.effective_date * 1000).toLocaleDateString(),
         openUrl: `/object/${it.slug}?from=project:{{ project.slug }}`,
       })),

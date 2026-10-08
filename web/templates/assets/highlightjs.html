@@ -1,14 +1,60 @@
-{# #449: shared preview asset for code highlighting via highlight.js #}
+{# #449: shared preview asset for code highlighting via highlight.js. #607: capped blocks are left plain when
+   large (data-nohl), and HTML files get a Rendered / Code toggle (choice remembered in localStorage). #}
 <link rel="stylesheet" href="/static/vendor/highlight/atom-one-dark.min.css?v={{ static_version('vendor/highlight/atom-one-dark.min.css') }}">
 <style>
   .code-preview { width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color, #2A2A2A); }
   .code-preview pre { margin: 0; max-height: 70vh; overflow: auto; }
   .code-preview code.hljs { display: block; padding: 1rem 1.15rem; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; line-height: 1.55; tab-size: 2; -moz-tab-size: 2; }
+  .code-preview-note { margin: 8px 4px 0; }
+  .html-preview { width: 100%; }
+  .html-preview .view-toggle { display: inline-flex; margin: 0 0 8px; border: 1px solid var(--border-color, #2A2A2A); border-radius: 8px; overflow: hidden; }
+  .html-preview .vt-btn { background: transparent; color: var(--text-2, #A8A48F); border: 0; padding: 5px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+  .html-preview .vt-btn + .vt-btn { border-left: 1px solid var(--border-color, #2A2A2A); }
+  .html-preview .vt-btn[aria-pressed="true"] { background: var(--chip, #2A2A2A); color: var(--text, #E8E4D4); font-weight: 600; }
+  .html-preview .vt-btn:focus-visible { outline: 2px solid var(--card-pip-on, #E8C65C); outline-offset: -2px; }
+  .html-preview .hp-pane[hidden] { display: none; }
+  /* A big page scrolls inside this fixed-height frame, never the object page. White: a saved page
+     assumes the browser's own paper, not our dark theme. */
+  .html-preview .hp-frame { display: block; width: 100%; height: 70vh; border: 1px solid var(--border-color, #2A2A2A); border-radius: 8px; background: #fff; }
+  .html-preview .hp-load { margin: 8px 0; }
 </style>
 <script src="/static/vendor/highlight/highlight.min.js?v={{ static_version('vendor/highlight/highlight.min.js') }}"></script>
 <script>
   (function () {
     const block = document.getElementById('code-preview-block');
-    if (block && window.hljs) hljs.highlightElement(block);
+    // Past ~60 KB the block stays plain text: highlighting is the cost that froze big files (#607).
+    if (block && window.hljs && !block.dataset.nohl) hljs.highlightElement(block);
+
+    const root = document.getElementById('html-preview');
+    if (!root) return;
+    const KEY = 'constructicon.htmlPreviewView';
+    const frame = document.getElementById('html-frame');
+    const big = root.dataset.big === '1';
+    let framed = false;  // has the frame been given its src yet
+    function loadFrame() {
+      if (framed || !frame) return;
+      framed = true;
+      frame.src = frame.dataset.src;
+      const btn = root.querySelector('.hp-load');
+      if (btn) btn.remove();
+    }
+    function show(view, remember) {
+      root.querySelectorAll('.vt-btn').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === view ? 'true' : 'false'));
+      root.querySelectorAll('.hp-pane').forEach(p => { p.hidden = p.dataset.pane !== view; });
+      if (remember) { try { localStorage.setItem(KEY, view); } catch (e) { /* storage blocked: the choice just isn't remembered */ } }
+      if (view === 'rendered' && !big) loadFrame();
+    }
+    if (big && frame) {
+      // A large file doesn't load into a frame on its own: one click, so opening the page stays quick.
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'dp-btn hp-load';
+      btn.textContent = 'Load rendered view' + (root.dataset.size ? ' (' + root.dataset.size + ')' : '');
+      btn.addEventListener('click', loadFrame);
+      frame.parentNode.insertBefore(btn, frame);
+    }
+    root.querySelectorAll('.vt-btn').forEach(b => b.addEventListener('click', () => show(b.dataset.view, true)));
+    let saved = null;
+    try { saved = localStorage.getItem(KEY); } catch (e) { /* storage blocked: default view */ }
+    show(saved === 'code' ? 'code' : 'rendered', false);
   })();
 </script>

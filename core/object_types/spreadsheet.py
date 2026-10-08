@@ -233,19 +233,24 @@ def get_properties(row):
         return {}
 
 
+def _td(tag, value):
+    """#606: one table cell; the full value is its title (the shared table CSS cuts the text to one line)."""
+    return f'<{tag} title="{escape(value)}">{escape(value)}</{tag}>'
+
+
 def _table(grid, total_rows):
     if not grid:
         return '<p class="muted">Empty sheet</p>'
     head, body = grid[0], grid[1:PREVIEW_ROWS + 1]
     width = max(len(r) for r in grid)
     html = '<div class="data-preview"><table><thead><tr>'
-    html += "".join(f"<th>{escape(c)}</th>" for c in head + [""] * (width - len(head)))
+    html += "".join(_td("th", c) for c in head + [""] * (width - len(head)))
     html += "</tr></thead><tbody>"
     for r in body:
-        html += "<tr>" + "".join(f"<td>{escape(c)}</td>" for c in r + [""] * (width - len(r))) + "</tr>"
+        html += "<tr>" + "".join(_td("td", c) for c in r + [""] * (width - len(r))) + "</tr>"
     html += "</tbody></table></div>"
     if total_rows - 1 > PREVIEW_ROWS:
-        html += f'<p class="muted">Showing the first {PREVIEW_ROWS} of {total_rows - 1:,} rows</p>'
+        html += f'<p class="muted data-preview-note">Showing the first {PREVIEW_ROWS} of {total_rows - 1:,} rows</p>'
     return html
 
 
@@ -284,6 +289,7 @@ register(ObjectTypeSpec(
     embedded_metadata_fn=get_embedded_metadata,
     preview_fn=preview,
     preview_assets=("datatable",),
+    preview_layout="table",  # #606: the sheets get the page width
     badge_icon="\U0001F4CA",  # bar chart
     badge_text="XLS",
 ))

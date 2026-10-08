@@ -1,4 +1,5 @@
-{# #449: shared preview asset for data table styling #}
+{# #449: shared preview asset for data table styling. #606: tight single-line rows, an ellipsis per column
+   (full value on hover, click a cell to expand it), sticky header + first column. #}
 <style>
   .data-preview {
     width: 100%;
@@ -6,26 +7,65 @@
     overflow: auto;
     border-radius: 8px;
     border: 1px solid var(--border-color, #2A2A2A);
+    background: var(--surface, #17191E);
   }
   .data-preview table {
-    border-collapse: collapse;
-    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    width: max-content;
+    min-width: 100%;
+  }
+  .data-preview th,
+  .data-preview td {
+    /* One line per row: the cell never wraps, long values are cut with an ellipsis (the full value is
+       the cell's title, and a click opens it). */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 32ch;
+    padding: 4px 8px;
+    line-height: 1.35;
+    height: auto;
+    vertical-align: top;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color, #2A2A2A);
   }
   .data-preview th {
     position: sticky;
     top: 0;
+    z-index: 2;
     background: var(--surface-2, #1c1c1c);
-    border-bottom: 1px solid var(--border-color, #2A2A2A);
-    padding: 4px 8px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 12px;
-    text-align: left;
     font-weight: 600;
   }
-  .data-preview td {
-    padding: 4px 8px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 13px;
-    border-bottom: 1px solid var(--border-color, #2A2A2A);
+  .data-preview td { font-size: 13px; cursor: zoom-in; }
+  /* The first column stays put while the table scrolls sideways, so a row stays identifiable. */
+  .data-preview th:first-child,
+  .data-preview td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--surface-2, #1c1c1c);
+    border-right: 1px solid var(--border-color, #2A2A2A);
   }
+  .data-preview th:first-child { z-index: 3; }
+  .data-preview td:first-child { z-index: 1; }
+  .data-preview td.dt-open {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    max-width: 70ch;
+    cursor: zoom-out;
+  }
+  .data-preview-note { margin: 8px 4px 0; }
 </style>
+<script>
+  (function () {
+    // #606: click a cell to read it whole (click again to fold it back).
+    document.addEventListener('click', function (ev) {
+      const cell = ev.target.closest && ev.target.closest('.data-preview td');
+      if (!cell) return;
+      if (window.getSelection && String(window.getSelection())) return;  // the reader is selecting text, not clicking
+      cell.classList.toggle('dt-open');
+    });
+  })();
+</script>

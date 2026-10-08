@@ -160,8 +160,8 @@ def main():
         p = props(slugs["devices.xlsx"])
         check("Excel: sheets with sizes, hidden flagged", "Devices (31 × 3)" in p.get("Sheets", "") and "Calc (1 × 1, hidden)" in p.get("Sheets", ""))
         page = c.get(f"/object/{slugs['devices.xlsx']}")
-        check("Excel: first sheet as an open table", "<summary>Devices</summary>" in page and "<th>Address</th>" in page)
-        check("Excel: dates as dates", "<td>2025-01-02</td>" in page)
+        check("Excel: first sheet as an open table", "<summary>Devices</summary>" in page and "<th title=\"Address\">Address</th>" in page)
+        check("Excel: dates as dates", "<td title=\"2025-01-02\">2025-01-02</td>" in page)
         found = {r["slug"] for r in json.loads(c.get("/api/search?" + urllib.parse.urlencode({"query": TAG})))}
         for name in slugs:
             check(f"search finds {name} by its text", slugs[name] in found)

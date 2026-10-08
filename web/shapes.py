@@ -319,6 +319,9 @@ def _to_object_detail(row):
         "source_display": row["tech"],
         "redacted": bool(row["redacted"]),
         "extracted_text": row["extracted_text"],
+        # #607: the page itself never embeds the text (a 1 MB file text froze the tab); it gets the
+        # length and fetches the text on demand from GET /api/image/{slug}/text.
+        "extracted_text_chars": len(row["extracted_text"] or ""),
         "ocr_status": row["ocr_status"],
         # #135: file size and original modification date for the Properties panel
         "file_size": row.get("file_size"),
@@ -360,6 +363,7 @@ def _to_object_detail(row):
         file_path=storage.path_for(row["stored_filename"]) if row.get("stored_filename") else None,
     ))
     item["preview_assets"] = list(spec.preview_assets)
+    item["preview_layout"] = spec.preview_layout  # #606: "table" = the preview gets the page width
     return item
 
 

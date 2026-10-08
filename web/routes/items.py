@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from core import besteffort, captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
@@ -15,6 +15,7 @@ from core import tags as tags_svc, timeline
 from web.common import DESKTOP_APP_CLIENT_HEADER, DESKTOP_APP_CLIENT_VALUE
 from web.shapes import _friendly_datetime, _to_project_option, _to_public
 from core import policy, roles
+from core.object_types import code as code_type
 from web.roles import RoleRouter, requires
 
 log = logging.getLogger("constructicon.web")
@@ -280,6 +281,59 @@ def api_processing(request: Request, session: str = ""):
 def api_get_image(request: Request, slug: str):
     row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
     return JSONResponse(_to_public(row))
+
+
+# #607: the OCR / text panel no longer rides inside the object page (a 1 MB file text was embedded three
+# times and froze the tab). The page fetches it here, on demand, capped.
+TEXT_DEFAULT_LIMIT = 100_000
+TEXT_MAX_LIMIT = 1_000_000
+
+
+@router.get("/api/image/{slug}/text", dependencies=requires(roles.VIEWER))
+def api_get_item_text(request: Request, slug: str, limit: int = TEXT_DEFAULT_LIMIT):
+    """The item's extracted text (OCR / the text layer / a text file's content), first `limit`
+    characters (default 100,000, at most 1,000,000), with the full length so the page can say
+    "showing N of M"."""
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    limit = max(1, min(int(limit), TEXT_MAX_LIMIT))
+    text = row.get("extracted_text") or ""
+    return JSONResponse({"slug": slug, "text": text[:limit], "chars": len(text),
+                         "limit": limit, "truncated": len(text) > limit,
+                         "ocr_status": row.get("ocr_status")})  # the page polls this for OCR progress
+
+
+# A saved page must not be able to phone home, run script, post a form or read the app's cookies.
+# `sandbox` (no tokens) = no scripts, forms, popups, same-origin or top navigation even if this URL is
+# opened directly; default-src 'none' = no network at all (images/fonts/media only as data: URIs, styles
+# only inline). The page itself is framed by an <iframe sandbox=""> as well (core/object_types/code.py).
+RENDERED_HTML_CSP = ("sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; "
+                     "media-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'")
+
+
+@router.get("/api/image/{slug}/rendered", dependencies=requires(roles.VIEWER))
+def api_rendered_html(request: Request, slug: str):
+    """An uploaded .html file as a web page, for the object page's sandboxed Rendered view (#607).
+    Same item policy as the file itself; decoded from its own encoding (a UTF-16 `gpresult /h`
+    report included) and served as UTF-8 under the strict CSP above."""
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.require_file(row)  # a redacted file is admin-only, as at /f/<slug>
+    if row["redacted"]:
+        raise HTTPException(status_code=410, detail="file was redacted (sensitive content)")
+    if not row.get("stored_filename") or not code_type.is_html(row.get("filename")):
+        raise HTTPException(status_code=404, detail="this item is not an HTML file")
+    path = storage.path_for(row["stored_filename"])
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="file missing on disk")
+    html, truncated = code_type.render_source(path)
+    headers = {
+        "Content-Security-Policy": RENDERED_HTML_CSP,
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "Cache-Control": "private, max-age=60",
+    }
+    if truncated:
+        headers["X-Rendered-Truncated"] = "1"
+    return Response(content=html, media_type="text/html; charset=utf-8", headers=headers)
 
 
 @router.post("/api/image/{slug}/ocr")

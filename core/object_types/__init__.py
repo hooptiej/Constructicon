@@ -256,6 +256,10 @@ class ObjectTypeSpec:
     preview_fn: object = None
     # Issue #448: tuple of preview asset definitions (deferred to PR 3).
     preview_assets: tuple = ()
+    # #606: how wide the object page makes the preview. "default" keeps the image-sized column
+    # (max 700 px, the side panel beside it); "table" gives a wide table the whole page width
+    # (the side panel moves below it). The data and spreadsheet types say "table".
+    preview_layout: str = "default"
     # Issue #448: content-based detection for file uploads.
     # (path: Path, filename: str) -> bool — True if this file's bytes match the type.
     # If None, extension-only matching; if present, called after extension match.
@@ -310,6 +314,11 @@ def register(spec):
         raise ObjectTypeContractError(
             f"Object type '{spec.key}' must declare preview_fn and properties_fn "
             "(see docs/design/object-type-contract-v2.md)"
+        )
+
+    if spec.preview_layout not in ("default", "table"):
+        raise ObjectTypeContractError(
+            f"Object type '{spec.key}': preview_layout must be 'default' or 'table', not {spec.preview_layout!r}"
         )
 
     # Check url_fallback conflicts: only one type can have url_fallback=True globally

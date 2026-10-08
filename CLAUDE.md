@@ -685,6 +685,38 @@ To add a new object type (issue #448 contract v2):
 
 7. **Reference**: see docs/design/object-type-contract-v2.md for the full specification.
 
+**Previews of big, HTML, wide and non-UTF-8 files (#606, #607).**
+- **A preview never carries the whole file.** `code` reads only the head of the stored file
+  (`_textstats.read_head_lines`: at most 2,000 lines, 200 K characters and 140 K of escaped markup, so the
+  object page stays near 300 KB whatever the file size), says "Showing the first N of M lines" (the count reads
+  at most 64 MB: "at least" past that) with Download (and Open raw, except for `.html`: a raw HTML file served from
+  `/f/<slug>` runs as a page in the app's own origin), and leaves the block unhighlighted above 60 K characters
+  (`data-nohl`). **`extracted_text` is never embedded in the page**: the template gets only
+  `item.extracted_text_chars`; the OCR/text panel fetches `GET /api/image/{slug}/text?limit=` on first open
+  (viewer, item policy, default 100,000 characters, hard cap 1,000,000, also returns `ocr_status` for the OCR
+  poll). The OCR lamp's tooltip is a short label, and the link scan reads only the first 100,000 characters.
+- **HTML files** (`code` with `.html`) get a Rendered / Code toggle (choice in localStorage
+  `constructicon.htmlPreviewView`). Rendered is `<iframe sandbox="">` (no tokens at all: no scripts, forms,
+  popups, same-origin or top navigation) loading `GET /api/image/{slug}/rendered` (viewer, item policy,
+  redacted = admin only), served as UTF-8 with `Content-Security-Policy: sandbox; default-src 'none'; img-src data:;
+  style-src 'unsafe-inline'; font-src data:; media-src data:; form-action 'none'; base-uri 'none';
+  frame-ancestors 'self'`, `nosniff`, `Referrer-Policy: no-referrer`. So a saved page can't phone home, run script or
+  read the cookies; images and fonts show only when embedded as `data:`. The frame is a fixed 70vh box (big pages
+  scroll inside it); a file over 8 MB waits for a "Load rendered view" click. Limits: a link inside the frame can
+  still navigate the frame itself, and a `<meta refresh>` likewise (no `navigate-to` in CSP).
+- **Tables** (`data`, `spreadsheet`): `ObjectTypeSpec.preview_layout="table"` gives the preview the page width
+  (`.dp-hero-left.dp-wide.dp-table`; the side panel wraps below) and turns the flex-row frame into a block, which
+  was the cause of the squeezed, 250 px rows (see #606). Rows are one line (`nowrap`, ellipsis, 32ch max
+  per column, 4px padding, line-height 1.35), every cell carries its full value as its `title` (click to
+  expand), header and first column are sticky. Image, PDF and video pages keep `dp-wide` (700 px).
+- **Encodings** (`core/object_types/_textstats.py`): `detect_encoding` reads a BOM (UTF-8-sig, UTF-16 LE/BE,
+  UTF-32 LE/BE) or, with none, the NUL pattern of UTF-16; `open_text` / `read_text` decode accordingly (bad bytes
+  replaced) and every text reader uses them (code, data/CSV, text, markdown, text stats; the HTML rendered view
+  normalises to UTF-8). SQLite's `length()` stops at the first NUL, so a UTF-16 file read as UTF-8 looked "3
+  characters long" in SQL while holding a full NUL-ridden string. The one-time `reextract_utf16_text_607`
+  migration re-extracts rows whose file reads as UTF-16/32 and whose text is NUL-ridden or short.
+- Check with `scripts/test_previews_606_607.py` (throwaway DB; the xlsx part needs openpyxl, in the app image).
+
 ## Data model (verify against `core/db.py`'s `SCHEMA` before trusting this — it evolves)
 
 - **`capture_events`** — the core item table. Despite the name (a holdover

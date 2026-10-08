@@ -63,7 +63,7 @@
   {% endif %}
 
   <div class="dp-hero">
-    <div class="dp-hero-left dp-wide">
+    <div class="dp-hero-left dp-wide{% if item.preview_layout == 'table' and item.preview_html %} dp-table{% endif %}">
       <div class="detail-preview">
         {% if item.redacted %}
           <div class="redacted-placeholder">
@@ -357,6 +357,8 @@
             OCR text
           </summary>
           <pre class="ocr-text mono" id="ocr-text-content"></pre>
+          <p class="muted" id="ocr-text-note" style="display:none;margin:6px 0 0"></p>
+          <button type="button" class="dp-btn" id="ocr-more-btn" style="display:none;margin-top:6px"></button>
         </details>
       </div>
       {% endif %}
@@ -441,7 +443,9 @@
 const IS_OCR_CAPABLE = {{ item.ocr_capable | tojson }};
 const IS_FILE = {{ item.is_file | tojson }};
 let ocrStatus = {{ item.ocr_status | tojson }};
-let ocrText = {{ item.extracted_text | tojson }};
+// #607: the page never embeds the extracted text (a 1 MB file text was inlined, shown as a tooltip and
+// copied into the DOM, and froze the tab). Only its length is here; the text is fetched on demand.
+let ocrChars = {{ item.extracted_text_chars | tojson }};
 
 // #266: display-only rotation (0/90/180/270) -- never touches the stored
 // file, just how #preview-img renders. Persisted via type_metadata (merge
@@ -639,7 +643,92 @@ function extractUrlsFromText(text) {
       if (seen.has(url)) return false;
       seen.add(url);
       return true;
-    });
+    })
+    .slice(0, OCR_MAX_LINKS);
+}
+
+// #607 limits: how much text one request fetches (the server caps a request at 1,000,000), how much of it
+// the link scan reads, how many links are listed, and the size under which the text is fetched on page
+// load (so "Links found" still shows without a click) instead of when the disclosure opens.
+const OCR_TEXT_LIMIT = 100000;
+const OCR_LINK_SCAN_CHARS = 100000;
+const OCR_MAX_LINKS = 200;
+const OCR_EAGER_CHARS = 20000;
+const OCR_HARD_LIMIT = 1000000;
+const ocrTextNote = document.getElementById('ocr-text-note');
+const ocrMoreBtn = document.getElementById('ocr-more-btn');
+let ocrLoadedLimit = 0;   // how many characters the panel last asked for; 0 = nothing fetched yet
+let ocrLoading = false;
+
+function ocrSizeLabel(n) {
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return Math.round(n / 1024) + ' KB';
+  return n + ' characters';
+}
+
+function showOcrLinks(text) {
+  let container = document.getElementById('ocr-links-container');
+  const urls = extractUrlsFromText(text.slice(0, OCR_LINK_SCAN_CHARS));  // Issue #90 (scan capped, #607)
+  if (!urls.length) {
+    if (container) container.style.display = 'none';
+    return;
+  }
+  if (!container) {
+    container = document.createElement('details');
+    container.id = 'ocr-links-container';
+    container.className = 'ocr-disclosure';
+    container.style.marginTop = '8px';
+    const summary = document.createElement('summary');
+    summary.innerHTML = '<svg class="disclosure-caret" width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Links found';
+    container.appendChild(summary);
+    const list = document.createElement('div');
+    list.style.marginTop = '8px';
+    list.id = 'ocr-links-list';
+    container.appendChild(list);
+    ocrDisclosure.parentNode.insertBefore(container, ocrDisclosure.nextSibling);
+  }
+  const linksList = document.getElementById('ocr-links-list');
+  linksList.innerHTML = '';
+  urls.forEach(url => {
+    const link = document.createElement('a');
+    link.href = url;
+    link.textContent = url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.style.display = 'block';
+    link.style.wordBreak = 'break-all';
+    link.style.marginBottom = '4px';
+    linksList.appendChild(link);
+  });
+  container.style.display = 'block';
+}
+
+async function loadOcrText(limit) {
+  if (ocrLoading) return;
+  ocrLoading = true;
+  if (!ocrLoadedLimit) ocrTextContent.textContent = 'Loading…';
+  try {
+    const res = await fetch('/api/image/{{ item.slug }}/text?limit=' + limit);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const body = await res.json();
+    ocrLoadedLimit = limit;
+    ocrChars = body.chars;
+    ocrTextContent.textContent = body.text;
+    if (body.truncated) {
+      ocrTextNote.textContent = 'Showing the first ' + body.text.length.toLocaleString() + ' of ' + body.chars.toLocaleString() + ' characters.';
+      ocrTextNote.style.display = 'block';
+      ocrMoreBtn.style.display = limit < OCR_HARD_LIMIT ? 'inline-block' : 'none';
+      ocrMoreBtn.textContent = 'Show more (up to ' + Math.min(OCR_HARD_LIMIT, body.chars).toLocaleString() + ' characters)';
+    } else {
+      ocrTextNote.style.display = 'none';
+      ocrMoreBtn.style.display = 'none';
+    }
+    showOcrLinks(body.text);
+  } catch (err) {
+    ocrTextContent.textContent = 'Could not load the text: ' + err.message;
+  } finally {
+    ocrLoading = false;
+  }
 }
 
 function renderOcrPanel() {
@@ -647,72 +736,35 @@ function renderOcrPanel() {
   ocrPanel.style.display = 'flex';
   const meta = OCR_LAMP_META[ocrStatus || 'none'];
   ocrLamp.style.background = meta.color;
-  ocrLamp.title = (ocrStatus === 'done' && ocrText) ? ocrText : meta.label;
+  // A short label, never the text itself (a megabyte tooltip is a freeze, #607).
+  ocrLamp.title = (ocrStatus === 'done' && ocrChars) ? meta.label + ' - ' + ocrSizeLabel(ocrChars) + ' of text' : meta.label;
   ocrLabel.textContent = meta.label;
   ocrRetryBtn.disabled = ocrStatus === 'pending';
-  ocrRetryBtn.textContent = ocrStatus === 'pending' ? 'Running…' : (ocrText ? 'Try again' : 'Run OCR');
-  if (ocrText) {
-    ocrTextContent.textContent = ocrText;
+  ocrRetryBtn.textContent = ocrStatus === 'pending' ? 'Running…' : (ocrChars ? 'Try again' : 'Run OCR');
+  if (ocrChars) {
     ocrDisclosure.style.display = 'block';
-
-    // Issue #90: Extract and display URLs from OCR text
-    const urls = extractUrlsFromText(ocrText);
-    const linksContainer = document.getElementById('ocr-links-container');
-    if (urls.length > 0) {
-      if (!linksContainer) {
-        const newLinksContainer = document.createElement('details');
-        newLinksContainer.id = 'ocr-links-container';
-        newLinksContainer.className = 'ocr-disclosure';
-        newLinksContainer.style.display = 'block';
-        newLinksContainer.style.marginTop = '8px';
-        const summary = document.createElement('summary');
-        summary.innerHTML = '<svg class="disclosure-caret" width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="#A8A48F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Links found';
-        newLinksContainer.appendChild(summary);
-        const linksList = document.createElement('div');
-        linksList.style.marginTop = '8px';
-        linksList.id = 'ocr-links-list';
-        urls.forEach(url => {
-          const link = document.createElement('a');
-          link.href = url;
-          link.textContent = url;
-          link.target = '_blank';
-          link.rel = 'noopener';
-          link.style.display = 'block';
-          link.style.wordBreak = 'break-all';
-          link.style.marginBottom = '4px';
-          linksList.appendChild(link);
-        });
-        newLinksContainer.appendChild(linksList);
-        ocrDisclosure.parentNode.insertBefore(newLinksContainer, ocrDisclosure.nextSibling);
-      } else {
-        const linksList = document.getElementById('ocr-links-list');
-        linksList.innerHTML = '';
-        urls.forEach(url => {
-          const link = document.createElement('a');
-          link.href = url;
-          link.textContent = url;
-          link.target = '_blank';
-          link.rel = 'noopener';
-          link.style.display = 'block';
-          link.style.wordBreak = 'break-all';
-          link.style.marginBottom = '4px';
-          linksList.appendChild(link);
-        });
-        linksContainer.style.display = 'block';
-      }
-    } else {
-      const linksContainer = document.getElementById('ocr-links-container');
-      if (linksContainer) {
-        linksContainer.style.display = 'none';
-      }
-    }
+    summaryLabel();
+    if (!ocrLoadedLimit && (ocrChars <= OCR_EAGER_CHARS || ocrDisclosure.open)) loadOcrText(OCR_TEXT_LIMIT);
   } else {
     ocrDisclosure.style.display = 'none';
     const linksContainer = document.getElementById('ocr-links-container');
-    if (linksContainer) {
-      linksContainer.style.display = 'none';
-    }
+    if (linksContainer) linksContainer.style.display = 'none';
   }
+}
+
+function summaryLabel() {
+  const sum = ocrDisclosure.querySelector('summary');
+  if (!sum) return;
+  let tag = sum.querySelector('.ocr-size');
+  if (!tag) { tag = document.createElement('span'); tag.className = 'ocr-size muted'; tag.style.marginLeft = '6px'; sum.appendChild(tag); }
+  tag.textContent = '(' + ocrSizeLabel(ocrChars) + ')';
+}
+
+if (ocrPanel) {  // only OCR-capable types render the panel
+  ocrDisclosure.addEventListener('toggle', () => {
+    if (ocrDisclosure.open && ocrChars && !ocrLoadedLimit) loadOcrText(OCR_TEXT_LIMIT);
+  });
+  ocrMoreBtn.addEventListener('click', () => loadOcrText(OCR_HARD_LIMIT));
 }
 renderOcrPanel();
 
@@ -720,12 +772,13 @@ async function pollOcr() {
   for (let i = 0; i < 25; i++) {
     await new Promise(r => setTimeout(r, 1200));
     try {
-      const res = await fetch('/api/image/{{ item.slug }}');
+      const res = await fetch('/api/image/{{ item.slug }}/text?limit=1');  // status + length only, not the text
       if (res.ok) {
-        const item = await res.json();
-        if (item.ocr_status !== 'pending') {
-          ocrStatus = item.ocr_status;
-          ocrText = item.extracted_text;
+        const info = await res.json();
+        if (info.ocr_status !== 'pending') {
+          ocrStatus = info.ocr_status;
+          ocrChars = info.chars;
+          ocrLoadedLimit = 0;  // refetch the new text
           renderOcrPanel();
           return;
         }

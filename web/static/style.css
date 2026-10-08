@@ -1783,6 +1783,30 @@ body.delete-mode-on .card-select-row { display: flex; }
 .project-video-timeline-event-wrap--picked {
   z-index: 5;
 }
+/* A pile of markers: dragging does nothing until one is picked, so it looks clickable, not grabbable,
+   and carries a count badge (owner, 2026-10-08). A picked member goes back to the grab hand. */
+.project-video-timeline-event--stack,
+.project-video-timeline-event--editable.project-video-timeline-event--stack {
+  cursor: pointer;
+}
+.project-video-timeline-event-wrap--picked .project-video-timeline-event--editable {
+  cursor: grab;
+}
+.project-video-timeline-stack-count {
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--hazard-yellow);
+  color: #1e1b16;
+  font: 600 10px/16px var(--font-mono, monospace);
+  text-align: center;
+  pointer-events: none;
+  z-index: 6;
+}
 .project-video-timeline-event-wrap--picked .project-video-timeline-event {
   background: var(--hazard-yellow);
   transform: rotate(45deg) scale(1.3);

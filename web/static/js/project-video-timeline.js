@@ -295,7 +295,24 @@ class ProjectVideoTimeline {
       el.dataset.slug = event.id;
       if (event.setByHand) el.classList.add('project-video-timeline-event--hand');
       if (this._picked === event.id) wrap.classList.add('project-video-timeline-event-wrap--picked');
-      const inStack = (this._groups.get(event.id) || []).length > 1;
+      const group = this._groups.get(event.id) || [];
+      const inStack = group.length > 1;
+      if (inStack) {
+        // A pile must LOOK like a pile (owner, 2026-10-08): dragging a stacked marker does nothing
+        // until one is picked, so say so up front -- a count badge on the pile (drawn once, on its
+        // first member), a pointer cursor instead of the grab hand, and a hint on hover.
+        el.classList.add('project-video-timeline-event--stack');
+        if (this._picked !== event.id) {
+          el.title = `${group.length} items here: click to choose one` + (this.canEdit ? ' to drag' : '');
+        }
+        if (group[0] === event.id) {
+          const badge = document.createElement('span');
+          badge.className = 'project-video-timeline-stack-count';
+          badge.textContent = String(group.length);
+          badge.setAttribute('aria-hidden', 'true');
+          wrap.appendChild(badge);
+        }
+      }
       el.setAttribute('aria-label', `${event.label || event.id}, ${event.dateLabel || ''}${event.setByHand ? ', date set by hand' : ''}` +
         (inStack ? ', stacked with other items' : '') +
         (this.canEdit ? '. Arrow keys move it a day, Shift plus arrow a month, Enter saves, Escape cancels.' : ''));

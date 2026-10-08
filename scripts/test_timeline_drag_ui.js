@@ -72,6 +72,10 @@ async function main() {
   row.rect = { left: 0, top: 100, width: 1000, height: 20, right: 1000, bottom: 120 };
   ok('rendered four markers', container.qa('project-video-timeline-event').length === 4);
   ok('hand-set marker is ringed', container.qa('project-video-timeline-event--hand').length === 1);
+  // a pile looks like a pile: one count badge per stack, and its members are marked as stacked
+  const badges = container.qa('project-video-timeline-stack-count');
+  ok('a stack shows ONE count badge with its size', badges.length === 1 && badges[0].textContent === '2', badges.map((b) => b.textContent));
+  ok('stack members carry the stack class', container.qa('project-video-timeline-event--stack').length === 2);
   ok('b and c form a stack, a does not', tl._stackOf(events[1]).length === 2 && tl._stackOf(events[0]).length === 1);
 
   // 1. drag a (single) to ~ 40% of the axis

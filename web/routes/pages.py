@@ -103,10 +103,10 @@ def _home_context(request, hobby, ref, rev):
     show_all_revs = rev == "all"  # #477: Files panel lists current revisions only unless ?rev=all
     # #107/#256/#624: every uploaded item, independent per media_type, so every type that has
     # uploads gets a tab and "all files" really means all of them. The page embeds only the first
-    # batch of each type plus the counts and the cursors for more; the rest is served a page at a
+    # batch of the default view plus the counts and the cursor for more; the rest is served a page at a
     # time by GET /api/home/files (web/files_feed.py, which also keeps the visibility rules).
     by_type, older_revs, unfiled = files_feed.load(show_all_revs)
-    files_by_type, files_meta = files_feed.initial(by_type, unfiled, show_all_revs)
+    files_seed, files_meta = files_feed.initial(by_type, unfiled, show_all_revs)
     # Timeline feature: the gallery rail shows every project (including
     # children, with an is_child flag) in date order -- deliberately built
     # from all_projects, not the top-level-only `projects` local above that
@@ -141,7 +141,7 @@ def _home_context(request, hobby, ref, rev):
         "reference_objects": reference_objects,  # #370 follow-up: loose reference objects
         "owner_name": _owner_label,
         "owner_initials": _owner_initials,
-        "files_by_type": files_by_type,
+        "files_seed": files_seed,
         "files_meta": files_meta,
         "rev_note": _rev_note(request, older_revs, show_all_revs),
         "timeline_projects": timeline_projects,

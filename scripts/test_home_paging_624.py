@@ -12,7 +12,7 @@ A seeded archive (~1,800 files across eight types, 60 cards, half the files file
 time, mixed-case and accented names, plus a restricted certificate, flagged / redacted / brand / superseded
 items) is served three ways and compared:
 
-  1. the page embeds only the first batch of each type, with correct per-type counts and cursors, and
+  1. the page embeds only the first batch of the default view, with correct counts and a cursor, and
      is a fraction of the old size;
   2. paging GET /api/home/files through every view (type tab x filed mode x sort) returns every visible
      item exactly once, in the order the old client-side sort produced (an independent oracle here for
@@ -128,8 +128,8 @@ def seed(n_cards=60):
 
 
 def embedded(html):
-    """(files_by_type, FILES meta) as the page embeds them."""
-    by_type = re.search(r"const filesByType = (.*);\n", html)
+    """(seed items, FILES meta) as the page embeds them."""
+    by_type = re.search(r"const filesSeed = (.*);\n", html)
     meta = re.search(r"const FILES = (.*);\n", html)
     return (json.loads(by_type.group(1)) if by_type else None), (json.loads(meta.group(1)) if meta else None)
 
@@ -247,7 +247,7 @@ def main():
                 return slugs, pages, r
 
     # --- 1. the page ------------------------------------------------------------------------------
-    print("--- 1. the page embeds one batch per type ---")
+    print("--- 1. the page embeds one batch of the default view ---")
     real, counting, box = count_connects()
     db.sqlite3.connect = counting
     try:
@@ -257,29 +257,22 @@ def main():
     html = r.text
     check("GET / 200", r.status_code == 200, r.status_code)
     by_type_emb, meta = embedded(html)
-    check("the page embeds filesByType and FILES", by_type_emb is not None and meta is not None)
     rows_all, by_type, unfiled = oracle("admin", "all", "all", "newest")
-    full_json = len(json.dumps([{"slug": x["slug"]} for x in rows_all]))
-    check("every embedded type has at most one batch (120)", all(len(v) <= 120 for v in by_type_emb.values()),
-          {k: len(v) for k, v in by_type_emb.items()})
+    check("the page embeds filesSeed and FILES", by_type_emb is not None and meta is not None)
+    check("the embed is one batch (120) of the default view", len(by_type_emb) == 120, len(by_type_emb))
     check("every type with files has a tab (counts keys == visible types)", set(meta["counts"]) == set(by_type),
           (sorted(meta["counts"]), sorted(by_type)))
-    check("embedded batch is the first 120 of each type, newest first",
-          all([i["slug"] for i in by_type_emb[mt]] == [x["slug"] for x in rows[:120]] for mt, rows in by_type.items()))
-    check("the page embeds far fewer cards than the archive has",
-          sum(len(v) for v in by_type_emb.values()) < len(rows_all) / 2,
-          (sum(len(v) for v in by_type_emb.values()), len(rows_all)))
+    check("the seed is the first 120 of All / Newest, in order",
+          [i["slug"] for i in by_type_emb] == [x["slug"] for x in rows_all[:120]])
     check("per-type counts match (all / unfiled / filed)", all(
         meta["counts"][mt] == {"all": len(rows), "unfiled": sum(1 for x in rows if x["slug"] in unfiled),
                                "filed": sum(1 for x in rows if x["slug"] not in unfiled)} for mt, rows in by_type.items()))
     check("unfiled_total is every unfiled slug", meta["unfiled_total"] == len(unfiled), (meta["unfiled_total"], len(unfiled)))
-    emb_slugs = {i["slug"] for v in by_type_emb.values() for i in v}
+    emb_slugs = {i["slug"] for i in by_type_emb}
     check("unfiled_slugs lists only embedded items that are unfiled", set(meta["unfiled_slugs"]) == emb_slugs & unfiled)
     check("the batch size and seed view are sent", meta["batch"] == 120 and meta["seed"] == {"filed": "all", "sort": "newest"})
-    check("cursors: one per tab; a tab with 120 or fewer has none",
-          set(meta["cursors"]) == set(by_type) | {"all"}
-          and all((meta["cursors"][mt] is None) == (len(by_type[mt]) <= 120) for mt in by_type))
-    print(f"      page size {len(r.content)} bytes; embedded {sum(len(v) for v in by_type_emb.values())} of {len(rows_all)} items; "
+    check("one cursor continues the seed view", isinstance(meta["cursor"], str) and "cursors" not in meta)
+    print(f"      page size {len(r.content)} bytes; embedded {len(by_type_emb)} of {len(rows_all)} items; "
           f"{box['n']} connections opened")
     check("GET / opens few connections (read_session, #624)", box["n"] < 60, box["n"])
     check("the restricted, redacted and brand items are not in the page", all(
@@ -330,19 +323,18 @@ def main():
 
     # --- 3. the embedded batch + the endpoint = the whole list ---------------------------------------------
     print("--- 3. embedded batch continues into the endpoint ---")
-    for tab in ["all"] + sorted(by_type):
-        if tab == "all":  # what the client builds: all embedded types merged alphabetically, newest first, top batch
-            merged = sorted([i for mt in sorted(by_type_emb) for i in by_type_emb[mt]], key=lambda i: -i["uploaded_at"])[:120]
-        else:
-            merged = by_type_emb[tab]
-        slugs = [i["slug"] for i in merged]
-        cursor = meta["cursors"][tab]
-        while cursor:
-            body = api(admin, type=tab, filed="all", sort="newest", cursor=cursor).json()
-            slugs += [i["slug"] for i in body["items"]]
-            cursor = body["next_cursor"]
+    slugs = [i["slug"] for i in by_type_emb]
+    cursor = meta["cursor"]
+    while cursor:
+        body = api(admin, type="all", filed="all", sort="newest", cursor=cursor).json()
+        slugs += [i["slug"] for i in body["items"]]
+        cursor = body["next_cursor"]
+    check("All: embedded batch + endpoint == the old full list", slugs == [r["slug"] for r in rows_all], (len(slugs), len(rows_all)))
+    for tab in sorted(by_type):  # a type tab's first click: its first page, no cursor
+        body = api(admin, type=tab).json()
         want, _, _ = oracle("admin", tab, "all", "newest")
-        check(f"{tab}: embedded batch + endpoint == the old full list", slugs == [r["slug"] for r in want], (len(slugs), len(want)))
+        check(f"{tab}: first page from the endpoint == the first 120 of the old list",
+              [i["slug"] for i in body["items"]] == [r["slug"] for r in want[:120]] and body["total"] == len(want))
 
     # --- 4. who may see what ------------------------------------------------------------------------------------
     print("--- 4. nothing restricted leaks ---")

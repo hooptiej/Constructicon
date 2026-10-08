@@ -4,12 +4,11 @@ The panel used to embed every item in the page and sort, filter and tab over the
 browser (~1.2 MB of inline JSON on a 1,800-item archive, growing with it). Now the server keeps the
 full list and the browser asks for what it has scrolled to:
 
-  * `initial()`: what home embeds. The first BATCH items per media type in the default view (All
-    files, Newest), per-type counts for the tabs and the All/Unfiled/Filed toggle, and a cursor
-    per tab for "more".
+  * `initial()`: what home embeds. The first BATCH items of the default view (All files, Newest),
+    per-type counts for the tabs and the All/Unfiled/Filed toggle, and the cursor for "more".
   * `page()`: one page of any view, behind GET /api/home/files. A view is (type tab, filed
-    mode, sort). The same call serves the first page of a view the page didn't embed (another
-    sort, Unfiled only, ...) and every later page.
+    mode, sort). The same call serves the first page of every view the page didn't embed (each type
+    tab, another sort, Unfiled only, ...) and every later page.
 
 Both read the SAME visible list, built the way the page always built it: db.list_recent_items_by_type
 (brand assets and redacted rows excluded, the browse clause), policy.filter_visible (restricted and
@@ -154,31 +153,22 @@ def _next_cursor(rows, end, view_key):
 # --- what the page embeds ----------------------------------------------------------------
 
 def initial(by_type, unfiled, show_all_revs):
-    """-> (files_by_type, meta) for home.html. files_by_type has the first BATCH card items of each
-    type (default view); meta carries the counts, the cursors that continue each tab, and the
-    seed view the embedded items belong to."""
-    seed = {}
-    cursors = {}
-    for mt in by_type:
-        rows = view_rows(by_type, mt, DEFAULT_FILED, DEFAULT_SORT, unfiled)
-        seed[mt] = rows[:BATCH]
-        cursors[mt] = _next_cursor(rows, BATCH, _view_key(mt, DEFAULT_FILED, DEFAULT_SORT, show_all_revs))
-    all_rows = view_rows(by_type, "all", DEFAULT_FILED, DEFAULT_SORT, unfiled)
-    cursors["all"] = _next_cursor(all_rows, BATCH, _view_key("all", DEFAULT_FILED, DEFAULT_SORT, show_all_revs))
-    flat = [r for rows in seed.values() for r in rows]
-    items = iter(_card_items(flat))  # one pass: one card-title and one hobby-code lookup, not one per type
-    files_by_type = {mt: [next(items) for _ in rows] for mt, rows in seed.items()}
-    shown = {r["slug"] for r in flat}
+    """-> (seed items, meta) for home.html. The seed is the first BATCH card items of the default
+    view (All files, Newest): exactly what the panel draws first. Every other view, type tabs
+    included, is fetched from page() on its first use. meta carries the per-type counts (tabs and
+    the All/Unfiled/Filed numbers), the cursor that continues the seed view, and the seed view."""
+    rows = view_rows(by_type, "all", DEFAULT_FILED, DEFAULT_SORT, unfiled)
+    seed_rows = rows[:BATCH]
     meta = {
         "batch": BATCH,
         "seed": {"filed": DEFAULT_FILED, "sort": DEFAULT_SORT},
         "rev": "all" if show_all_revs else "",
         "counts": counts(by_type, unfiled),
-        "cursors": cursors,
+        "cursor": _next_cursor(rows, BATCH, _view_key("all", DEFAULT_FILED, DEFAULT_SORT, show_all_revs)),
         "unfiled_total": len(unfiled),
-        "unfiled_slugs": sorted(shown & unfiled),  # only the embedded items' lamps, not every unfiled slug
+        "unfiled_slugs": [r["slug"] for r in seed_rows if r["slug"] in unfiled],  # the seed's lamps only
     }
-    return files_by_type, meta
+    return _card_items(seed_rows), meta
 
 
 # --- one page of any view ------------------------------------------------------------------

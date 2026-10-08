@@ -189,11 +189,11 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
     const counts = {}; types.forEach((t) => { const r = archive.filter((x) => x.media_type === t); counts[t] = { all: r.length, unfiled: r.filter((x) => unfiled.has(x.slug)).length, filed: r.filter((x) => !unfiled.has(x.slug)).length }; });
     const B = 120;
     const cursorFor = (tab, filed, sort, rows, end) => (end < rows.length ? 'cur|' + [tab, filed, sort].join('|') + '|' + end : null);
-    const seedBy = {}; types.forEach((t) => { seedBy[t] = view(t, 'all', 'newest').slice(0, B); });
+    const seed = view('all', 'all', 'newest').slice(0, B);
     const meta = { batch: B, seed: { filed: 'all', sort: 'newest' }, rev: '', counts, unfiled_total: unfiled.size,
-      cursors: Object.assign({ all: cursorFor('all', 'all', 'newest', view('all', 'all', 'newest'), B) }, ...types.map((t) => ({ [t]: cursorFor(t, 'all', 'newest', view(t, 'all', 'newest'), B) }))),
-      unfiled_slugs: [...new Set(Object.values(seedBy).flat().map((x) => x.slug))].filter((s) => unfiled.has(s)) };
-    src = src.replace('{{ files_meta | tojson }}', JSON.stringify(meta)).replace('{{ files_by_type | tojson }}', JSON.stringify(seedBy));
+      cursor: cursorFor('all', 'all', 'newest', view('all', 'all', 'newest'), B),
+      unfiled_slugs: seed.map((x) => x.slug).filter((s) => unfiled.has(s)) };
+    src = src.replace('{{ files_meta | tojson }}', JSON.stringify(meta)).replace('{{ files_seed | tojson }}', JSON.stringify(seed));
     check('home.html script: no Jinja left in the Files panel script', !/\{\{|\{%/.test(src), src.match(/\{\{.*?\}\}|\{%.*?%\}/g));
 
     const requests = []; let failNext = null;
@@ -239,12 +239,16 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
     lastIO().cb([{ isIntersecting: true }]); await settle(); lastIO().cb([{ isIntersecting: true }]); await settle();
     check('scroll to the end: every file once, in server order, then no row', keysOf(view('all', 'all', 'newest')) === c.grid.cards.join() && c.grid.row === null && requests.length === 3, [c.grid.cards.length, requests.length]);
 
-    c = mkClient(); requests.length = 0;
+    requests.length = 0; c = mkClient();
     c.tabsEl.clicks.image(); await settle();
-    check('type tab (default view): instant from the embedded batch, no request', requests.length === 0 && keysOf(view('image', 'all', 'newest').slice(0, B)) === c.grid.cards.join());
+    check('type tab, first click: one request for that type, first page, no cursor', requests.length === 1 && /type=image/.test(requests[0]) && /filed=all/.test(requests[0]) && /sort=newest/.test(requests[0]) && !/cursor=/.test(requests[0]), requests);
+    check('type tab: shows that type\'s first 120', keysOf(view('image', 'all', 'newest').slice(0, B)) === c.grid.cards.join());
     check('type tab: counts follow the tab', c.filedBtns.map((b) => b.cnt.textContent).join() === '(300),(100),(200)', c.filedBtns.map((b) => b.cnt.textContent));
+    c.tabsEl.clicks.all(); await settle();
+    c.tabsEl.clicks.image(); await settle();
+    check('a type tab already opened is cached: no second request', requests.length === 1, requests);
     c.tabsEl.clicks.audio(); await settle();
-    check('a small type fits in its batch: all 10, no row, no request', c.grid.cards.length === 10 && c.grid.row === null && requests.length === 0);
+    check('a small type fits in its first page: all 10, no row', c.grid.cards.length === 10 && c.grid.row === null && requests.length === 2);
 
     c = mkClient(); requests.length = 0;
     c.sortEl.value = 'az'; c.sortEl.listeners.change(); await settle();

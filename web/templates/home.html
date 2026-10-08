@@ -173,7 +173,7 @@
          own script further down for why — CSS alone made whichever column
          had more content inflate the other, which backfired once Files
          could hold hundreds of uncapped cards). -->
-    {% if files_by_type %}
+    {% if files_meta.counts %}
     <div class="home-widgets-right-column">
 
     <!-- #41/#107/#256: merged Unfiled+Files widget — every upload, organized
@@ -225,9 +225,9 @@
       function cardHtml(item) {
         return ItemCards.html(item, { unfiledSlugs: UNFILED_SLUGS });
       }
-      // #624: the page embeds only the first batch of each type (the default view); everything else
-      // comes from GET /api/home/files a page at a time. Per-type dict, keyed by media_type.
-      const filesByType = {{ files_by_type | tojson }};
+      // #624: the page embeds only the first batch of the default view (All, Newest); everything else,
+      // each type tab included, comes from GET /api/home/files a page at a time.
+      const filesSeed = {{ files_seed | tojson }};
       const filesGrid = document.getElementById('files-grid');
       const filesSort = document.getElementById('files-sort');
       const filesTabs = document.getElementById('files-tabs');
@@ -265,8 +265,8 @@
       }
 
       // #624: one feed per view (tab + filed mode + sort), kept so going back to a view is instant.
-      // The default view (the page's embedded items) starts full of them; any other view starts empty
-      // and fetches its first page, then more pages as the scroll sentinel is reached.
+      // The default view (the page's embedded items) starts full of them; any other view (each type tab
+      // on its first click, another sort, Unfiled) starts empty and fetches its first page, then more pages as the scroll sentinel is reached.
       const feeds = new Map();
       function viewCount(tab, filed) {
         let n = 0;
@@ -282,16 +282,10 @@
       function feedFor(tab, filed, sort) {
         const key = [tab, filed, sort].join('|');
         if (feeds.has(key)) return feeds.get(key);
-        const seeded = filed === FILES.seed.filed && sort === FILES.seed.sort;
-        let seed = [];
-        if (seeded) {
-          // The server's own order for "All": types merged alphabetically, then newest first (stable).
-          const embedded = tab === 'all' ? mediaTypes.flatMap(type => filesByType[type] || []) : (filesByType[tab] || []);
-          seed = embedded.slice().sort((x, y) => y.uploaded_at - x.uploaded_at).slice(0, FILES.batch);
-        }
+        const seeded = tab === 'all' && filed === FILES.seed.filed && sort === FILES.seed.sort;
         const feed = ItemCards.feed({
-          items: seed,
-          cursor: seeded ? (FILES.cursors[tab] || null) : (viewCount(tab, filed) ? '' : null),
+          items: seeded ? filesSeed.slice() : [],
+          cursor: seeded ? (FILES.cursor || null) : (viewCount(tab, filed) ? '' : null),
           total: viewCount(tab, filed),
           fetchPage: (cursor) => ItemCards.getJson(filesUrl(tab, filed, sort, cursor)),
           onPage: (page) => page.unfiled_slugs.forEach(slug => UNFILED_SLUGS.add(slug)),

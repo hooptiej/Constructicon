@@ -86,6 +86,7 @@ RETIRED_PUBLIC = {
 PUBLIC_WRITERS = {
     "init_db": "schema DDL + run-once migrations (web process at boot)",
     "run_pending_migrations": "migrations",
+    "rebuild_search_index": "#543: refills the derived FTS5 search index (the search_index_543 migration; also the repair for drift)",
     "ensure_special_clients": "vestigial imagerepo client list, seeded by sync_clients.py (no longer at boot, #562)",
     "sync_hudu_clients": "vestigial imagerepo client sync (sync_clients.py)",
     "add_test_client": "vestigial imagerepo client fixture",

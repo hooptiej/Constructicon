@@ -88,7 +88,9 @@ def snapshot():
     try:
         out = {}
         for (t,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
-                              "AND name NOT IN ('audit_log') ORDER BY name"):
+                              "AND name NOT IN ('audit_log') "
+                              "AND name NOT LIKE 'item_search%' ORDER BY name"):  # #543: the FTS index's shadow tables are derived and their bytes differ after an undo
+
             cols = [r["name"] for r in c.execute(f"PRAGMA table_info({t})") if (r["type"] or "").upper() != "BLOB"]
             out[t] = sorted(json.dumps(dict(r), sort_keys=True, default=str)
                             for r in c.execute(f"SELECT {', '.join(cols)} FROM {t}"))

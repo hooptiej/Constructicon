@@ -293,6 +293,11 @@ class ObjectTypeSpec:
     # static site (the public "museum") and project zips skip them. Access
     # control proper is #467 (authentication).
     restricted: bool = False
+    # #602: what a file of this type IS, for the refusal when its extension is supported but its
+    # contents fail every sniffer ("This .msi file isn't a valid Windows Installer package").
+    # A str for the whole type, or a dict {extension: noun} for a type spanning several formats.
+    # Unset: "<label> file" is used.
+    content_noun: object = ""
 
 
 OBJECT_TYPES = {}
@@ -492,6 +497,23 @@ def detect_media_type(filename, path=None):
         return sniffers[0].key
 
     return None
+
+
+def mismatch_reason(filename):
+    """#602: the refusal for a file whose extension IS supported but whose contents matched none of
+    the sniffers that claim it (a .msi that isn't an installer package): names the real reason
+    instead of "Unsupported file type", which reads as if the extension weren't accepted at all.
+    Falls back to the unsupported wording for an extension nothing claims."""
+    ext = file_extension(filename)
+    sniffers = sorted((s for s in OBJECT_TYPES.values() if ext in s.extensions and s.sniff_fn is not None),
+                      key=lambda s: (-s.sniff_priority, s.key))
+    if not ext or not sniffers:
+        return f"Unsupported file type: {ext or Path(filename).suffix}"
+    spec = sniffers[0]
+    noun = spec.content_noun.get(ext) if isinstance(spec.content_noun, dict) else spec.content_noun
+    noun = noun or f"{spec.label.lower()} file"
+    return (f"This {ext} file isn't a valid {noun}: its contents don't match what a {ext} file should "
+            f"contain (is it corrupt, or renamed from another format?).")
 
 
 def accepted_extensions():

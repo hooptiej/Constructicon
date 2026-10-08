@@ -13,6 +13,9 @@ services:
       - ./core:/app/core
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
+      # #601: the uploader source behind /downloads/constructicon-uploader-source.zip. Read-only;
+      # without it (and without the copy baked into the image) that download answers 503.
+      - ./desktop_app:/app/desktop_app:ro
       - ./assets:/app/assets:ro
       - ./storage:/app/storage
       - ./db:/app/data
@@ -60,6 +63,7 @@ services:
       - ./core:/app/core
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
+      - ./desktop_app:/app/desktop_app:ro  # #601
       - ./assets:/app/assets:ro
       - ./storage-test:/app/storage
       - ./db-test:/app/data

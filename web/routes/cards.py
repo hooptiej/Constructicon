@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from core import besteffort, card_rules, cards, changes, db, hobbies, membership, timeline
 from core.errors import NotFound
+from web.common import from_request_thread
 from web.shapes import _to_card_face, _to_project_option
 from core import policy, roles
 from web.roles import RoleRouter, requires
@@ -126,7 +127,7 @@ def api_create_project_from_related(slug: str = Form(...), title: str = Form(...
 
 
 @router.post("/api/projects/{project_id}")
-async def api_update_project(
+def api_update_project(
     request: Request,
     project_id: str,
     title: str = Form(None),
@@ -168,7 +169,7 @@ async def api_update_project(
     #   - key absent            -> leave parent_id unchanged (sentinel ...)
     #   - key present, empty     -> clear parent (None)
     #   - key present, a value   -> validate + set
-    _form = await request.form()
+    _form = from_request_thread(request.form)
     parent_id_value = ...  # "..." means don't update parent_id
     if "parent_id" in _form:
         raw_parent = (str(_form.get("parent_id")) or "").strip()

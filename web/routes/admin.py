@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from core import backup, captions, db, install_config, items, object_types, paths, reset, storage
 from core import provenance_options
+from web.common import from_request_thread
 from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public, actor_label
 from core import access_log, roles
 from web.roles import RoleRouter, requires
@@ -111,7 +112,7 @@ def api_get_install_config():
 
 
 @router.post("/api/install-config")
-async def api_set_install_config(request: Request):
+def api_set_install_config(request: Request):
     """Saves install settings. JSON body {key: value, ...} with keys from GET's `fields`;
     "" (or null) clears one; `publish_targets` is {name: {repo: "owner/repo", branch}}.
     Validated (400 bad_install_config / bad_install_key / bad_publish_target), one undoable
@@ -121,7 +122,7 @@ async def api_set_install_config(request: Request):
     if ctype != "application/json":
         raise HTTPException(status_code=415, detail="Content-Type must be application/json")
     try:
-        body = await request.json()
+        body = from_request_thread(request.json)
     except ValueError:
         raise HTTPException(status_code=400, detail="Body must be JSON")
     return JSONResponse(install_config.update(body).to_dict())

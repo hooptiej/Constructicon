@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from core import access_log, besteffort, captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
 from core import tags as tags_svc, timeline
 from web import content_security
+from web.common import from_request_thread
 from web.shapes import _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
 from core import policy, roles
 from core.object_types import code as code_type
@@ -69,7 +70,7 @@ async def api_upload(
     sensitive: str = Form(""),
 ):
     # The Source string is decided server-side, never by a client-supplied field.
-    user = db.source_manual_upload()  # #562
+    user = await run_in_threadpool(db.source_manual_upload)  # #562 (reads the owner label from the DB)
 
     # #433: get file size early for duplicate check; use file.size if available,
     # otherwise measure via seek/tell
@@ -106,7 +107,7 @@ async def api_upload(
     )
 
     if result.duplicate:
-        if not policy.can_view(result.row):
+        if not await run_in_threadpool(policy.can_view, result.row):
             # #603: don't name an item this person may not see (its Source, date or slug).
             raise HTTPException(status_code=409, detail="This file was already uploaded.")
         # _friendly_datetime, not a raw strftime with %-d/%-I -- those are the
@@ -128,7 +129,7 @@ async def api_upload(
 
 
 @router.post("/api/content")
-async def api_create_content(
+def api_create_content(
     request: Request,
     background_tasks: BackgroundTasks,
     media_type: str | None = Form(None),
@@ -455,7 +456,7 @@ def api_caption_skip(slug: str):
 
 
 @router.post("/api/image/{slug}")
-async def api_update_image(
+def api_update_image(
     request: Request,
     slug: str,
     description: str | None = Form(None),
@@ -488,7 +489,7 @@ async def api_update_image(
     # cases to the same None value, so read the raw form directly instead.
     # A present-but-empty display_name/icon clears the override back to the
     # default fallback; an absent one leaves it alone.
-    form_data = await request.form()
+    form_data = from_request_thread(request.form)
     fields = {}
     if description is not None:
         fields["description"] = description
@@ -654,7 +655,7 @@ def api_refresh_thumbnail(request: Request, slug: str):
 
 
 @router.post("/api/image/{slug}/action/{key}")
-async def api_run_type_action(request: Request, slug: str, key: str):
+def api_run_type_action(request: Request, slug: str, key: str):
     """#448: Generic per-type action route. The type file owns the handler;
     actions are declared in ObjectTypeSpec.actions. #446: actions must
     applies_to(row) to be runnable."""
@@ -672,7 +673,7 @@ async def api_run_type_action(request: Request, slug: str, key: str):
         raise HTTPException(status_code=404, detail=f"{spec.label} has no action '{key}' for this item")
 
     try:
-        result = await run_in_threadpool(action.handler, row)
+        result = action.handler(row)
     except Exception as e:
         print(f"Action '{key}' failed: {e!r}", flush=True)
         raise HTTPException(status_code=500, detail=f"Action '{key}' failed: {e}")

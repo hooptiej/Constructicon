@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from urllib.parse import unquote, quote
 
+import anyio.from_thread
 from fastapi.templating import Jinja2Templates
 
 from core import besteffort, db, install_config, markdown_render, object_types, storage, users
@@ -126,3 +127,13 @@ def _build_breadcrumbs(from_param, current_item_name):
     breadcrumbs.append({"label": current_item_name, "href": None})
 
     return breadcrumbs
+
+
+def from_request_thread(async_fn, *args):
+    """#550: read the request body from inside a plain `def` route (FastAPI runs those in a worker
+    thread, so the blocking work stays off the event loop). `request.form()` / `request.json()` /
+    `request.body()` are coroutines; this hops back to the event loop to run one and returns its
+    result: `form = from_request_thread(request.form)`. The route's context (the actor) is the
+    worker thread's own copy, so nothing about who is acting changes. Only call it from a sync
+    route or a function a sync route called: from async code it raises, use `await` there."""
+    return anyio.from_thread.run(async_fn, *args)

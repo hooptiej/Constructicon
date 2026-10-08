@@ -144,10 +144,11 @@ async def _ocr_watchdog():
     while True:
         await asyncio.sleep(OCR_WATCHDOG_INTERVAL_SECONDS)
         try:
-            stale = db.list_stale_pending_ocr(OCR_STALE_THRESHOLD_SECONDS)
+            # #550: the DB reads/writes run in a worker thread (to_thread copies this task's `system` actor).
+            stale = await asyncio.to_thread(db.list_stale_pending_ocr, OCR_STALE_THRESHOLD_SECONDS)
             for row in stale:
                 print(f"OCR watchdog: re-firing {row['slug']} — pending for over {OCR_STALE_THRESHOLD_SECONDS}s")
-                _refire_ocr(row["slug"])
+                await asyncio.to_thread(_refire_ocr, row["slug"])
         except Exception as e:
             print(f"OCR watchdog error: {e!r}")
 

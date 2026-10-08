@@ -15,19 +15,19 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from core import install_config, roles, users
 from core.errors import AppError, NotFound
 from web import auth as web_auth
-from web.common import templates
+from web.common import from_request_thread, templates
 from web.roles import RoleRouter, requires
 
 router = RoleRouter(default_role=roles.PUBLIC)  # login / setup / logout must work with no login
 
 
-async def _json_body(request: Request):
+def _json_body(request: Request):
     """The JSON object body, or 415 / 400 (the #558 JSON gate)."""
     ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if ctype != "application/json":
         raise HTTPException(status_code=415, detail="Content-Type must be application/json")
     try:
-        body = await request.json()
+        body = from_request_thread(request.json)
     except ValueError:
         raise HTTPException(status_code=400, detail="Body must be JSON") from None
     if not isinstance(body, dict):
@@ -98,10 +98,10 @@ def api_me():
 
 
 @router.post("/api/auth/login")
-async def api_login(request: Request):
+def api_login(request: Request):
     """JSON {username, password}. Sets the session cookie; 401 invalid_login, 429
     too_many_attempts (details.retry_after). Never logs the body."""
-    body = await _json_body(request)
+    body = _json_body(request)
     user = users.authenticate(body.get("username"), body.get("password"), _client_ip(request))
     old = web_auth.cookie_token(request.headers.get("cookie"))
     if old:
@@ -110,10 +110,10 @@ async def api_login(request: Request):
 
 
 @router.post("/api/auth/setup")
-async def api_setup(request: Request):
+def api_setup(request: Request):
     """First-run: JSON {username, password, display_name?} creates the first admin and signs
     them in. 404 once any user exists."""
-    body = await _json_body(request)
+    body = _json_body(request)
     result = users.create_first_admin(body.get("username"), body.get("password"), body.get("display_name"))
     user = users.get(result.data["user"]["id"])
     return _signed_in_response(request, user, {"batch_id": result.batch_id})
@@ -132,13 +132,13 @@ def api_logout(request: Request):
 # --- my password ----------------------------------------------------------------------------
 
 @router.post("/api/account/password", dependencies=requires(roles.VIEWER))
-async def api_change_my_password(request: Request):
+def api_change_my_password(request: Request):
     """JSON {current_password, new_password} for the signed-in user. Keeps this session, ends
     the user's others. 401 not_signed_in / wrong_password."""
     me = users.current_user()
     if not me:
         raise AppError("not_signed_in", "Sign in first.", status=401)
-    body = await _json_body(request)
+    body = _json_body(request)
     token = web_auth.cookie_token(request.headers.get("cookie"))
     result = users.set_password(me["id"], body.get("new_password"), current_password=body.get("current_password") or "",
                                 keep_token=token)
@@ -155,24 +155,24 @@ def api_list_users():
 
 
 @router.post("/api/users", dependencies=requires(roles.ADMIN))
-async def api_create_user(request: Request):
+def api_create_user(request: Request):
     """JSON {username, password, role, display_name?}. 409 username_taken."""
-    body = await _json_body(request)
+    body = _json_body(request)
     return users.create_user(body.get("username"), body.get("password"), body.get("role"),
                              body.get("display_name")).to_dict()
 
 
 @router.post("/api/users/{user_id}/role", dependencies=requires(roles.ADMIN))
-async def api_set_user_role(user_id: int, request: Request):
+def api_set_user_role(user_id: int, request: Request):
     """JSON {role}. 409 last_admin when it would leave no enabled admin."""
-    body = await _json_body(request)
+    body = _json_body(request)
     return users.set_role(user_id, body.get("role")).to_dict()
 
 
 @router.post("/api/users/{user_id}/password", dependencies=requires(roles.ADMIN))
-async def api_reset_user_password(user_id: int, request: Request):
+def api_reset_user_password(user_id: int, request: Request):
     """JSON {password}: an admin's reset. Ends that user's sessions."""
-    body = await _json_body(request)
+    body = _json_body(request)
     keep = None
     me = users.current_user()
     if me and me["id"] == user_id:

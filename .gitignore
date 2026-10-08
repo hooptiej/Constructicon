@@ -19,10 +19,6 @@ imagerepo.db-journal
 # Site exports — generated builds, not source code
 exports/
 
-# Uploaded desktop-app build — a binary artifact someone uploads from
-# account settings, not something built from this source
-desktop_app_build/
-
 # Logs
 *.log
 

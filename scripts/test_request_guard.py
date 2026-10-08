@@ -49,7 +49,7 @@ def audit_rows(path):
 
 
 def post(headers=None, **kw):
-    return client.post("/api/settings", data={"key": "thingiverse_app_token", "value": DUMMY},
+    return client.post("/api/settings", data={"key": "youtube_data_api_key", "value": DUMMY},
                        headers=headers or {}, **kw)
 
 
@@ -63,7 +63,7 @@ check("no Origin, no Referer passes", post().status_code == 200)
 check("foreign Referer, no Origin -> 403", post({"Referer": "http://evil.example/x"}).status_code == 403)
 check("matching Referer, no Origin passes", post({"Referer": f"http://{HOST}/admin"}).status_code == 200)
 check("default-port Host/Origin forms are equivalent",
-      client.post("/api/settings", data={"key": "thingiverse_app_token", "value": DUMMY},
+      client.post("/api/settings", data={"key": "youtube_data_api_key", "value": DUMMY},
                   headers={"Origin": "http://testhost.local", "Host": "testhost.local:80"}).status_code == 200)
 check("same host different port -> 403", post({"Origin": "http://testhost.local:9999"}).status_code == 403)
 check("GET with evil Origin unaffected", client.get("/api/settings", headers={"Origin": "http://evil.example"}).status_code == 200)
@@ -109,7 +109,7 @@ check("settings audit rows exist", len(rows) >= 3)
 check("no dummy secret anywhere in settings audit rows", all(DUMMY not in b for b in rows))
 parsed = [json.loads(b) for b in rows]
 check("settings rows log name only, value redacted",
-      all(p.get("key") == "thingiverse_app_token" and p.get("value") == "[REDACTED]" for p in parsed), str(parsed[:1]))
+      all(p.get("key") == "youtube_data_api_key" and p.get("value") == "[REDACTED]" for p in parsed), str(parsed[:1]))
 
 client.post("/api/projects", data={"title": "Guard Test"}, headers=ok_origin)
 # provenance option add: `key` is a plain slug, must not be over-redacted

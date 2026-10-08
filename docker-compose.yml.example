@@ -13,9 +13,6 @@ services:
       - ./core:/app/core
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
-      # #601: the uploader source behind /downloads/constructicon-uploader-source.zip. Read-only;
-      # without it (and without the copy baked into the image) that download answers 503.
-      - ./desktop_app:/app/desktop_app:ro
       - ./assets:/app/assets:ro
       - ./storage:/app/storage
       - ./db:/app/data
@@ -25,7 +22,7 @@ services:
     environment:
       - IMAGEREPO_BASE_URL=http://10.0.1.78:8000
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
-      # Non-browser clients (scripts, the desktop uploader) send it as Authorization: Bearer.
+      # Non-browser clients (scripts) send it as Authorization: Bearer.
       - CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token
     command: uvicorn web.app:app --host 0.0.0.0 --port 8000
 
@@ -63,7 +60,6 @@ services:
       - ./core:/app/core
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
-      - ./desktop_app:/app/desktop_app:ro  # #601
       - ./assets:/app/assets:ro
       - ./storage-test:/app/storage
       - ./db-test:/app/data

@@ -1,16 +1,13 @@
 """Admin routes (#547): settings, backup, delete-all, audit log, redacted/restricted lists,
-storage stats, provenance options, caption tuning + breaker, desktop-app build upload."""
+storage stats, provenance options, caption tuning + breaker."""
 
-import io
-import zipfile
 from pathlib import Path
 
-from fastapi import Request, Form, UploadFile, File, HTTPException
+from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse
 
 from core import backup, captions, db, install_config, items, object_types, paths, reset, storage
 from core import provenance_options
-from web.common import DESKTOP_APP_BUILD_DIR, DESKTOP_APP_BUILD_PATH
 from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public, actor_label
 from core import access_log, roles
 from web.roles import RoleRouter, requires
@@ -71,14 +68,8 @@ def api_backup():
 # core.db.get_setting/has_setting/set_setting) are generic key/value, so a
 # future second key (or any other app-level setting) only needs an entry
 # here plus a labeled row in admin.html, not a schema change.
-# thingiverse_app_token (#62): read-only Thingiverse API access token for
-# pulling the owner's own public models — no user-auth flow needed on
-# Thingiverse's side, so this is exactly the same "paste one static secret"
-# shape as youtube_data_api_key. No storage/endpoint changes required; this
-# confirms #55/#59's genericness holds for a second key.
 KNOWN_SETTINGS = {
     "youtube_data_api_key": "YouTube Data API Key",
-    "thingiverse_app_token": "Thingiverse App Token",
     "pages_publish_token": "GitHub Pages Publish Token",
     # #562: "pages_publish_targets" moved to the install config (Admin > Install).
 }
@@ -365,32 +356,6 @@ def api_captions_reset_breaker():
     admin page when the breaker has opened."""
     captions.reset_breaker()
     return JSONResponse({"ok": True, "breaker": captions.breaker_status()})
-
-
-@router.get("/api/account/desktop-app-build", dependencies=requires(roles.VIEWER))
-def api_get_desktop_app_build(request: Request):
-    if not DESKTOP_APP_BUILD_PATH.exists():
-        return JSONResponse({"exists": False})
-    stat = DESKTOP_APP_BUILD_PATH.stat()
-    return JSONResponse({"exists": True, "size": stat.st_size, "uploaded_at": stat.st_mtime})
-
-
-@router.post("/api/account/desktop-app-build")
-async def api_upload_desktop_app_build(request: Request, file: UploadFile = File(...)):
-    """A tech who's built the app locally (py2app has to run on an actual
-    Mac — this server can't build one itself) uploads the resulting zip
-    here so everyone else can just download a working binary instead of
-    building their own. No versioning: whoever uploads last is what
-    everyone gets next."""
-    if not file.filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Expected a .zip file (zip the built .app, don't upload it unzipped)")
-    content = await file.read()
-    if not zipfile.is_zipfile(io.BytesIO(content)):
-        raise HTTPException(status_code=400, detail="That file isn't a valid zip archive")
-    DESKTOP_APP_BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    DESKTOP_APP_BUILD_PATH.write_bytes(content)
-    stat = DESKTOP_APP_BUILD_PATH.stat()
-    return JSONResponse({"exists": True, "size": stat.st_size, "uploaded_at": stat.st_mtime})
 
 
 def _provenance_list_response(scope):

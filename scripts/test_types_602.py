@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""#602 (.vpptoken, .jfif/.jpe, content-mismatch refusal), #600 (firmware `log`), #601 (uploader
-source zip). Throwaway DB + storage (scripts/_testenv.py), the real FastAPI app through TestClient,
+"""#602 (.vpptoken, .jfif/.jpe, content-mismatch refusal), #600 (firmware `log`). Throwaway DB + storage (scripts/_testenv.py), the real FastAPI app through TestClient,
 no server.
 
     python scripts/test_types_602.py
@@ -17,10 +16,6 @@ no server.
 4. A text file renamed .msi is refused 400 with the real reason (not "Unsupported file type");
    a truly unknown extension keeps the old wording; the shared error shape holds.
 5. #600: firmware.extract_text_for_row's failure path logs instead of raising NameError.
-6. #601: the uploader-source zip holds constructicon_uploader/api.py; a tree without it answers 503
-   instead of an empty zip; compose/Dockerfile carry the mount/copy; the download page names
-   "Set Install Token...".
-
 No executables or installer-shaped binaries are created: the .msi case is a text file.
 Exits 1 if any check fails.
 """
@@ -34,8 +29,6 @@ import os
 import secrets
 import sqlite3
 import sys
-import tempfile
-import zipfile
 from pathlib import Path
 
 os.environ.setdefault("CAPTION_DISABLED", "1")
@@ -60,7 +53,6 @@ from core import actor, db, ingest, object_types, paths, policy, users  # noqa: 
 _testenv.assert_isolated()
 from core.object_types import firmware, vpptoken  # noqa: E402
 from web import app as webapp  # noqa: E402
-from web.routes import files as files_routes  # noqa: E402
 
 ingest.run_in_thread = lambda fn, *a: None  # no OCR/caption threads: this test is about types
 
@@ -310,32 +302,6 @@ finally:
 check("the failure path returns '' (degrades, does not raise)", out == "", out)
 check("...and logged a warning naming the site", any("extract_text_for_row" in r.getMessage() for r in records),
       [r.getMessage() for r in records])
-
-# ---- 6. #601 uploader source zip ------------------------------------------------------------------
-print("--- 6. #601: the uploader-source zip is not empty ---")
-r = admin.get("/downloads/constructicon-uploader-source.zip")
-check("zip download 200", r.status_code == 200 and r.headers["content-type"] == "application/zip", r.status_code)
-names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
-check("zip holds constructicon_uploader/api.py",
-      "constructicon-uploader-source/constructicon_uploader/api.py" in names, names[:8])
-check("zip holds run.py and the README too", {"constructicon-uploader-source/run.py", "constructicon-uploader-source/README.md"} <= set(names))
-check("no __pycache__ inside it", not any("__pycache__" in n for n in names))
-real_dir = files_routes.DESKTOP_APP_DIR
-for label, d in (("an empty directory", Path(tempfile.mkdtemp(prefix="types602-empty-"))),
-                 ("a missing directory", Path(tempfile.gettempdir()) / "types602-nope")):
-    files_routes.DESKTOP_APP_DIR = d
-    try:
-        r = admin.get("/downloads/constructicon-uploader-source.zip")
-    finally:
-        files_routes.DESKTOP_APP_DIR = real_dir
-    check(f"{label}: 503 uploader_source_missing, not an empty zip",
-          r.status_code == 503 and r.json().get("error", {}).get("code") == "uploader_source_missing", f"{r.status_code} {r.text[:120]}")
-compose = (ROOT / "docker-compose.yml.example").read_text()
-check("compose mounts ./desktop_app read-only into the web service", "./desktop_app:/app/desktop_app:ro" in compose)
-check("Dockerfile bakes a fallback copy", "COPY desktop_app /app/desktop_app" in (ROOT / "Dockerfile").read_text())
-page = admin.get("/account")
-check("the download page (/account) tells you to Set Install Token...",
-      page.status_code == 200 and "Set Install Token" in page.text, page.status_code)
 
 print()
 print("FAILED: " + ", ".join(FAILS) if FAILS else "all checks passed")

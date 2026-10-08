@@ -12,12 +12,11 @@ The whole matrix, in-process, with real sessions and a per-run install token:
   4. viewer / editor / admin: pages, editor routes, admin routes, restricted and redacted items on
      every door (/f, /object, item API, item writes, the decision queue);
   5. the install token: admin with no CSRF, actor `token`; wrong token 401 invalid_token (even on
-     a public door); other schemes and the old desktop-app header grant nothing; no token
+     a public door); other schemes grant nothing; no token
      configured = every Bearer refused;
   6. role_of for every actor; the MCP (role admin, refuses to start with no token); the web
      refusing to start on a broken token config;
-  7. the desktop uploader's API module against the app (no token / wrong / right);
-  8. no token, password or session in the audit log.
+  7. no token, password or session in the audit log.
 Exits 1 if any check fails.
 """
 
@@ -27,7 +26,6 @@ import secrets
 import sqlite3
 import subprocess
 import sys
-import types
 
 import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports, refuses otherwise)
 TMP = _testenv.isolate("auth2-")
@@ -316,9 +314,6 @@ check("scheme is case-insensitive", c.get("/api/settings").status_code == 200)
 c = new_client(Authorization="Basic dXNlcjpwYXNz")
 r = c.get("/api/settings")
 check("Basic auth grants nothing (anonymous 401 unauthorized)", r.status_code == 401 and err_code(r) == "unauthorized")
-c = new_client(**{"X-Constructicon-Client": "desktop-app"})
-r = c.post("/api/upload", files={"file": ("x.txt", b"x", "text/plain")}, headers=SAME)
-check("old X-Constructicon-Client header grants nothing (401)", r.status_code == 401)
 c = new_client(**{"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1"})
 check("a loopback-looking request is still anonymous (no IP trust)", c.get("/api/projects").status_code == 401)
 check("TestClient's own client address is loopback-ish and still refused", anon.get("/api/projects").status_code == 401)
@@ -369,65 +364,8 @@ finally:
     os.environ["CONSTRUCTICON_INSTALL_TOKEN"] = saved
     install_token.reset_cache()
 
-# ---- 7. the desktop uploader's API module ---------------------------------------------------------
-class _Resp:
-    """Just enough of a requests.Response for the uploader's api module."""
-
-    def __init__(self, r):
-        self.status_code, self._r = r.status_code, r
-        self.ok = 200 <= r.status_code < 400
-
-    def json(self):
-        return self._r.json()
-
-
-def uploader_checks():
-    try:
-        import requests  # noqa: F401
-    except ImportError:  # the module only needs the name; its post() is replaced below
-        stub = types.ModuleType("requests")
-        stub.RequestException = type("RequestException", (Exception,), {})
-        sys.modules["requests"] = stub
-    sys.path.insert(0, os.path.join(ROOT, "desktop_app"))
-    from constructicon_uploader import api as up_api
-    raw = new_client()
-
-    def fake_post(url, data=None, files=None, headers=None, timeout=None, allow_redirects=True):
-        assert url.startswith(BASE)
-        return _Resp(raw.post(url[len(BASE):], data=data, files=files, headers={**(headers or {}), **SAME}))
-
-    up_api.requests.post = fake_post
-    upfile = os.path.join(TMP, "auth2-uploader.txt")
-    with open(upfile, "w") as f:
-        f.write("from the desktop uploader\n")
-    try:
-        up_api.upload_file(BASE, upfile)
-        check("uploader without a token -> AuthError", False, "no error")
-    except up_api.AuthError as e:
-        check("uploader without a token -> AuthError 'set the install token'", "Set Install Token" in str(e), str(e))
-    try:
-        up_api.upload_file(BASE, upfile, token="wrong-" + "x" * 40)
-        check("uploader with a wrong token -> AuthError", False, "no error")
-    except up_api.AuthError as e:
-        check("uploader with a wrong token -> AuthError (refused)", "refused" in str(e), str(e))
-    res = up_api.upload_file(BASE, upfile, token=TOKEN)
-    up_row = db.get_by_slug(res["slug"])
-    check("uploader with the token uploads, labelled automated",
-          up_row and up_row["tech"] == db.source_automated_upload(), up_row and up_row["tech"])
-    check("uploader headers: Bearer + client identity", up_api.request_headers("abc") ==
-          {"X-Constructicon-Client": "desktop-app", "Authorization": "Bearer abc"})
-
-
-print("--- 7. desktop uploader ---")
-if os.path.isdir(os.path.join(ROOT, "desktop_app", "constructicon_uploader")):
-    uploader_checks()
-else:
-    # The app image doesn't carry desktop_app/ (only core/web/mcp_server/scripts are mounted), so a
-    # run inside the container skips this part; a run from a checkout covers it.
-    print("SKIP desktop uploader checks: desktop_app/ is not in this checkout")
-
-# ---- 8. no secrets in the audit log ---------------------------------------------------------------
-print("--- 8. audit log ---")
+# ---- 7. no secrets in the audit log ---------------------------------------------------------------
+print("--- 7. audit log ---")
 dump = "\n".join(str(r) for r in conn.execute("SELECT * FROM audit_log"))
 check("audit log holds no install token", TOKEN not in dump)
 check("audit log holds no Authorization header", "Bearer" not in dump and "authorization" not in dump.lower())

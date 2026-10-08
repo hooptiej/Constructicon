@@ -3,7 +3,7 @@
 Who presents it:
   * the MCP transport (mcp_server/auth.py): `Authorization: Bearer <token>` on every request,
     role admin, actor `mcp`;
-  * non-browser web clients (scripts, verification, the desktop uploader): the same header on
+  * non-browser web clients (scripts, verification): the same header on
     web requests, role admin, actor `token` (web/auth.py's AccessMiddleware). No CSRF needed:
     a browser can't attach this header cross-site without a CORS preflight the app never grants.
 

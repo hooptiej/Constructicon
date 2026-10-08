@@ -183,7 +183,7 @@ check("today: project zip excludes the flagged item", not has(FLAG, manifest))
 
 # the request log records the route's role
 same = {"Origin": f"http://{HOST}"}
-client.post("/api/settings", data={"key": "thingiverse_app_token", "value": "dummy-not-real"}, headers=same)
+client.post("/api/settings", data={"key": "youtube_data_api_key", "value": "dummy-not-real"}, headers=same)
 client.post(f"/api/image/{PLAIN}", data={"display_name": "Role policy notes"}, headers=same)
 c = sqlite3.connect(db.DB_PATH)
 logged = dict(c.execute("SELECT path, required_role FROM audit_log WHERE op IS NULL AND path IN (?, ?) ORDER BY id",

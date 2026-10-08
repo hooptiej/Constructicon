@@ -32,7 +32,7 @@ from . import besteffort
 
 ACTOR_UI = "owner-ui"        # legacy: an anonymous web request before #467 step 2 (old log rows; in-process tests)
 ACTOR_ANONYMOUS = "anonymous"  # #467 step 2: a web request with no live session and no install token
-ACTOR_TOKEN = "token"        # #467 step 2: a web request carrying the install token (scripts, the uploader)
+ACTOR_TOKEN = "token"        # #467 step 2: a web request carrying the install token (scripts)
 ACTOR_MCP = "mcp"
 ACTOR_SYSTEM = "system"      # boot, migrations' surrounding work, OCR/caption workers
 ACTOR_SCRIPT = "script"      # a CLI script under scripts/ calling core directly

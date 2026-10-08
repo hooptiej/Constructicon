@@ -13,7 +13,6 @@ from starlette.concurrency import run_in_threadpool
 from core import access_log, besteffort, captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
 from core import tags as tags_svc, timeline
 from web import content_security
-from web.common import DESKTOP_APP_CLIENT_HEADER, DESKTOP_APP_CLIENT_VALUE
 from web.shapes import _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
 from core import policy, roles
 from core.object_types import code as code_type
@@ -69,14 +68,8 @@ async def api_upload(
     folder_name: str = Form(""),
     sensitive: str = Form(""),
 ):
-    # Which Source string a browser upload gets is decided server-side, not
-    # by a client-supplied field — the desktop uploader app (see
-    # desktop_app/constructicon_uploader/api.py) identifies itself with this
-    # header on every request; the web upload drawer sends nothing extra, so
-    # its absence is what marks a deliberate one-off drag-drop through the
-    # browser UI.
-    is_desktop_app = request.headers.get(DESKTOP_APP_CLIENT_HEADER) == DESKTOP_APP_CLIENT_VALUE
-    user = db.source_automated_upload() if is_desktop_app else db.source_manual_upload()  # #562
+    # The Source string is decided server-side, never by a client-supplied field.
+    user = db.source_manual_upload()  # #562
 
     # #433: get file size early for duplicate check; use file.size if available,
     # otherwise measure via seek/tell
@@ -173,8 +166,7 @@ async def api_create_content(
     link" field (#184): the client no longer decides youtube-vs-url itself,
     it just posts the URL and lets the server figure out what it is.
     """
-    is_desktop_app = request.headers.get(DESKTOP_APP_CLIENT_HEADER) == DESKTOP_APP_CLIENT_VALUE
-    user = db.source_automated_upload() if is_desktop_app else db.source_manual_upload()  # #562
+    user = db.source_manual_upload()  # #562
     tag_list = _parse_tags_form(tags)
     try:
         parsed_type_metadata = json.loads(type_metadata) if type_metadata else None

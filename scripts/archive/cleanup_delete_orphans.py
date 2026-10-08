@@ -1,3 +1,4 @@
+# Retired: ran on prod around 2026-10-03 (#497); do not re-run. Kept for reference.
 """Issue #497: find (and optionally remove) the ghosts older project deletes left behind.
 
 Before #497, deleting a project left behind its auto-created write-up document, typed
@@ -26,9 +27,9 @@ What counts as an orphan
 
 Usage
 -----
-    python scripts/cleanup_delete_orphans.py               # dry run (read-only)
-    python scripts/cleanup_delete_orphans.py --execute     # apply (take a backup first)
-    python scripts/cleanup_delete_orphans.py --db /path/to/imagerepo.db
+    python scripts/archive/cleanup_delete_orphans.py               # dry run (read-only)
+    python scripts/archive/cleanup_delete_orphans.py --execute     # apply (take a backup first)
+    python scripts/archive/cleanup_delete_orphans.py --db /path/to/imagerepo.db
 
 The DB path is --db, else $CONSTRUCTICON_DB_PATH, else core.db.DB_PATH.
 """

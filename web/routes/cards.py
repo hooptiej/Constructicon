@@ -48,7 +48,7 @@ def api_projects(request: Request):
 def api_create_project(request: Request, title: str = Form(...), parent_id: str = Form(None),
                        kind: str = Form(None), stage: str = Form(None), stop_reason: str = Form(None)):
     """Creates a project from the upload drawer's "+ New project..." flow
-    (#1) — distinct from scripts/seed_example_projects.py's one-off seeding,
+    (#1) — distinct from scripts/archive/seed_example_projects.py's one-off seeding,
     this is the first real UI-driven way to make a project.
 
     Also creates (or reuses) a root-level blog_tags row with the same name

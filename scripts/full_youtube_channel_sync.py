@@ -2,7 +2,7 @@
 real YouTube Data API v3, now that a real key exists (#55's app_settings
 store).
 
-This supersedes #22's RSS-based top-up (scripts/import_new_youtube_from_channel_rss.py),
+This supersedes #22's RSS-based top-up (scripts/archive/import_new_youtube_from_channel_rss.py),
 which was explicitly a stopgap: YouTube's public Atom feed only ever exposes
 the ~15 most recent uploads, so it could never do a real full-history
 harvest — see that script's own docstring. With a real API key now
@@ -161,7 +161,7 @@ API_BASE = "https://www.googleapis.com/youtube/v3"
 PLAYLIST_ITEMS_PAGE_SIZE = 50  # YouTube Data API's own max per playlistItems.list call
 VIDEOS_BATCH_SIZE = 50  # YouTube Data API's own max ids per videos.list call
 
-# #51's confirmed groupings (see scripts/apply_project_groupings.py) —
+# #51's confirmed groupings (see scripts/archive/apply_project_groupings.py) —
 # re-checked after this script runs a real import/correction pass, since
 # matching is by video id (stable across a title/description correction)
 # but "should still hold" deserves verification, not assumption.

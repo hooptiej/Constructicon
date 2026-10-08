@@ -1,3 +1,4 @@
+# Retired: ran on prod around 2026-08-31 on the first dev archive (#7); do not re-run. Kept for reference.
 """One-off script: seed a handful of real, SPECIFIC `projects` rows so the
 home page's Projects column (right two-thirds, see web/app.py's home_page
 route) has something real to show, and so there's something to click into
@@ -24,7 +25,7 @@ figuring out "what belongs together as one project" —
     Builds and Tech) with no per-build breakdown — it doesn't group by
     specific build at all except where a build is named directly in the
     page copy (e.g. "Tension Biped", "the Only Flying Skorpion").
-  - hooptiej.github.io (what scripts/backfill_from_hooptiej_site.py reads)
+  - hooptiej.github.io (what scripts/archive/backfill_from_hooptiej_site.py reads)
     is itself a later migration/reinterpretation of that content — its
     <h3> sub-topic headings and extra backfilled YouTube videos are an
     editorial layer added during that migration, not original site
@@ -34,10 +35,10 @@ figuring out "what belongs together as one project" —
 Each project below is tagged in its comment with how it was sourced.
 
 Run with the venv's python from the Constructicon repo root, AFTER
-scripts/backfill_from_hooptiej_site.py has populated capture_events (this
+scripts/archive/backfill_from_hooptiej_site.py has populated capture_events (this
 script only references slugs that script creates — a missing slug is
 skipped with a warning rather than failing the whole run):
-    python scripts/seed_example_projects.py
+    python scripts/archive/seed_example_projects.py
 """
 import sys
 from pathlib import Path
@@ -173,7 +174,7 @@ def main():
         if missing:
             print(f"note: {project_def['title']!r} — {len(missing)} slug(s) not found in the DB yet, skipping them: {missing}")
         if not present:
-            print(f"skip {project_def['title']!r}: none of its slugs exist yet — run scripts/backfill_from_hooptiej_site.py first")
+            print(f"skip {project_def['title']!r}: none of its slugs exist yet — run scripts/archive/backfill_from_hooptiej_site.py first")
             continue
         project = db._create_project(
             project_def["title"],

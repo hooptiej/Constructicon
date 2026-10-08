@@ -220,7 +220,7 @@ import check_no_silent_except as checker  # noqa: E402
 
 check("check_no_silent_except: the tree is clean", checker.main() == 0)
 
-probe = Path(ROOT) / "core" / "_silent_probe_551.py"
+probe = Path(TMP) / "_silent_probe_551.py"  # a temp dir, not core/: the checkout may be mounted read-only (#552)
 cases = {
     "pass": "def f():\n    try:\n        x()\n    except Exception:\n        pass\n",
     "return": "def f():\n    try:\n        x()\n    except Exception:\n        return None\n",

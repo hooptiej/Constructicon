@@ -1,3 +1,4 @@
+# Retired: ran on prod around 2026-09-06 (#165); do not re-run. Kept for reference.
 """Issue #165: backfill real tag-tree entries for items tagged before the fix.
 
 Background
@@ -32,7 +33,7 @@ INSERT OR IGNORE, detach_tag only removes tags no longer in the list).
 Usage
 -----
 Run against a running instance:
-    python scripts/sync_free_text_tags_to_tag_tree.py --base-url http://localhost:8000
+    python scripts/archive/sync_free_text_tags_to_tag_tree.py --base-url http://localhost:8000
 """
 
 import argparse

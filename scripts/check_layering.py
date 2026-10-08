@@ -51,10 +51,10 @@ RAW_ALLOWED = {
     "core/ocr.py": "pipeline: OCR client-domain tags",
     "core/card_migration.py": "migrations: the one-time V2 card migration (actor 'migration', refused by undo)",
     # scripts/ one-offs that write directly against the DB inside the container (kept runnable).
-    "scripts/apply_project_groupings.py": "one-off 2026-09 grouping import, already applied; kept runnable",
-    "scripts/seed_example_projects.py": "one-off seed of example cards on an empty dev DB",
-    "scripts/backfill_from_hooptiej_site.py": "one-off backfill from the old static site (tag tree + tags)",
-    "scripts/link_lil_dragon_brand.py": "one-off brand-asset relation links, already applied",
+    "scripts/archive/apply_project_groupings.py": "one-off 2026-09 grouping import, already applied; kept runnable",
+    "scripts/archive/seed_example_projects.py": "one-off seed of example cards on an empty dev DB",
+    "scripts/archive/backfill_from_hooptiej_site.py": "one-off backfill from the old static site (tag tree + tags)",
+    "scripts/archive/link_lil_dragon_brand.py": "one-off brand-asset relation links, already applied",
     "scripts/check_layering.py": "this checker (names the private writers in strings only)",
 }
 # Throwaway-DB test fixtures: they set up raw state on a temp DB before exercising the services.

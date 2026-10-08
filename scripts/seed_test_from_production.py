@@ -376,11 +376,18 @@ def describe_plan(project_plans, unfiled_kept, plan_items, skipped, projects, me
             print(f"  - {slug} ({mt}): {why}")
 
 
+def count_items(target):
+    """Every non-redacted item on the target, brand assets included (#552). /api/gallery's per-uploader
+    totals leave brand assets out of browsing and undercount; the storage stats (admin, which the
+    install token is) count the rows themselves, by media type."""
+    stats = target.get_json("/api/admin/storage-stats")
+    return sum(t.get("count", 0) for t in stats.get("by_type", []))
+
+
 def describe_target(target):
     try:
         projects = target.get_json("/api/projects")
-        groups = target.get_json("/api/gallery")
-        items = sum(g.get("total", 0) for g in groups)
+        items = count_items(target)
         pending = target.get_json("/api/pending-decisions").get("count", "?")
         print(f"=== TARGET {target.base_url} currently: {len(projects)} projects, {items} items, "
               f"{pending} open pending decisions ===")
@@ -551,8 +558,7 @@ def verify(target, project_plans, id_map, slug_map, expected_items):
     print("=== VERIFY (over HTTP) ===")
     projects = target.get_json("/api/projects")
     print(f"Target projects: {len(projects)} (expected {len(project_plans)})")
-    groups = target.get_json("/api/gallery")
-    print(f"Target items: {sum(g.get('total', 0) for g in groups)} "
+    print(f"Target items: {count_items(target)} "
           f"(expected {expected_items} seeded + write-ups)")
     bad = []
     for pp in project_plans:

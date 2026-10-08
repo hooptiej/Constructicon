@@ -1,3 +1,4 @@
+# Retired: ran on prod around 2026-10-03 (#425); do not re-run. Kept for reference.
 """Link the original 'lil dragon' ink drawing to the brand assets it became (#425).
 
 The drawing (capture_events.slug, found by filename 'lil-dragon-original-drawing') is the
@@ -11,9 +12,9 @@ source of the hooptieJ logo's dragon. This proposes item-to-item "related" links
 DRY-RUN BY DEFAULT: prints the plan and touches nothing (the database is opened read-only).
 Nothing is written without --execute. Run it where the database is, e.g. in the app container:
 
-    python3 scripts/link_lil_dragon_brand.py                  # plan only
-    python3 scripts/link_lil_dragon_brand.py --include-logos  # plan with the wider logo family
-    python3 scripts/link_lil_dragon_brand.py --execute        # actually link
+    python3 scripts/archive/link_lil_dragon_brand.py                  # plan only
+    python3 scripts/archive/link_lil_dragon_brand.py --include-logos  # plan with the wider logo family
+    python3 scripts/archive/link_lil_dragon_brand.py --execute        # actually link
 
 Side effect to know about: db._add_relation (#16) also shares tags and project membership both
 ways, so linking pulls the assets' tags (e.g. "New Hoop Icon") and projects onto the drawing and

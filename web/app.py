@@ -27,7 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
-from web import auth as web_auth, request_guard
+from web import auth as web_auth, content_security, request_guard
 from web.common import _STATIC_DIR
 from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
 from web.routes import meta, pages, admin, items, curator, files, cards, hobbies, blog_export, auth as auth_routes
@@ -98,7 +98,13 @@ class _CurrentExportFiles(StaticFiles):
 
     async def get_response(self, path, scope):
         self.all_directories = self.get_directories(paths.current_export_dir(), None)
-        return await super().get_response(path, scope)
+        response = await super().get_response(path, scope)
+        # #610: the generated pages are ours and must render, but media/ holds the owner's uploaded
+        # files copied verbatim (an .html or .svg among them): those get the same treatment as /f/.
+        if path.replace("\\", "/").lstrip("/").startswith("media/") and getattr(response, "path", None):
+            for key, value in content_security.file_headers(response.path, Path(response.path).name).items():
+                response.headers[key] = value
+        return response
 
 
 paths.current_export_dir().mkdir(parents=True, exist_ok=True)

@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from core import access_log, besteffort, captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
 from core import tags as tags_svc, timeline
+from web import content_security
 from web.common import DESKTOP_APP_CLIENT_HEADER, DESKTOP_APP_CLIENT_VALUE
 from web.shapes import _friendly_datetime, _to_project_option, _to_public, actor_label as shapes_actor_label
 from core import policy, roles
@@ -316,12 +317,10 @@ def api_get_item_text(request: Request, slug: str, limit: int = TEXT_DEFAULT_LIM
                          "ocr_status": row.get("ocr_status")})  # the page polls this for OCR progress
 
 
-# A saved page must not be able to phone home, run script, post a form or read the app's cookies.
-# `sandbox` (no tokens) = no scripts, forms, popups, same-origin or top navigation even if this URL is
-# opened directly; default-src 'none' = no network at all (images/fonts/media only as data: URIs, styles
-# only inline). The page itself is framed by an <iframe sandbox=""> as well (core/object_types/code.py).
-RENDERED_HTML_CSP = ("sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; "
-                     "media-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'")
+# The CSP is shared with /f/ (#610): web/content_security.py. A saved page must not be able to phone
+# home, run script, post a form or read the app's cookies; the page is also framed by an
+# <iframe sandbox=""> (core/object_types/code.py).
+RENDERED_HTML_CSP = content_security.RENDERED_HTML_CSP
 
 
 @router.get("/api/image/{slug}/rendered", dependencies=requires(roles.VIEWER))

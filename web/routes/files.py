@@ -4,7 +4,7 @@ and wallpaper listings."""
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 
-from core import db, object_types, storage, thumbnails
+from core import db, item_title, object_types, storage, thumbnails
 from web import content_security
 from core import access_log, policy, roles
 from web.roles import RoleRouter, requires
@@ -23,7 +23,7 @@ def api_list_brand_assets(request: Request):
     return JSONResponse([
         {
             "slug": asset["slug"],
-            "title": asset.get("content_description") or asset.get("display_name") or asset["slug"],
+            "title": item_title.title_of(asset),
             "brand_role": asset.get("brand_role"),
             "thumb_url": f"/f/{asset['slug']}/thumb",
             "file_url": f"/f/{asset['slug']}",
@@ -40,7 +40,7 @@ def api_list_wallpapers(request: Request):
     return JSONResponse([
         {
             "slug": w["slug"],
-            "title": w.get("content_description") or w.get("display_name") or w.get("filename") or w["slug"],
+            "title": item_title.title_of(w),
             "thumb_url": f"/f/{w['slug']}/thumb",
             "file_url": f"/f/{w['slug']}",
             "is_file": bool(w.get("stored_filename")),

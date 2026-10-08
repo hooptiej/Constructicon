@@ -7,6 +7,8 @@ the object page, "export" = the static site).
 
 from markupsafe import Markup, escape
 
+from .. import item_title
+
 
 def _rotation_style(item):
     """#266 display rotation as a style attribute, or "". type_metadata is
@@ -21,7 +23,7 @@ def _rotation_style(item):
 
 def _alt(item):
     """Best human label; `or`, not .get(k, default), because keys can hold None."""
-    return item.get("display_name") or item.get("filename") or item.get("slug") or ""
+    return item_title.title_of(item)
 
 
 def image_viewer(ctx):

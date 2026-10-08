@@ -2,7 +2,7 @@
 into the dicts pages and the JSON API return, plus the small pure helpers they use.
 Moved verbatim from web/app.py."""
 
-from core import captions, card_payload, cards, datefmt, db, object_types, policy, revisions, storage, timeline, users
+from core import captions, card_payload, cards, datefmt, db, item_title, object_types, policy, revisions, storage, timeline, users
 
 
 def _has_thumbnail(row, spec=None):
@@ -78,11 +78,10 @@ def _to_public(row):
         # string "null".
         # row["display_name"] (#11) is a per-object override — set via
         # /api/image/<slug> or the constructicon_rename MCP tool, or seeded
-        # from an audio file's own tag title at upload time (#255, see
-        # core/embedded_metadata.py for why the title lands here and not
-        # only in content_description) — that takes priority over the old
-        # filename/content_description/slug fallback chain when present.
-        "display_name": row.get("display_name") or row["filename"] or row.get("content_description") or row["slug"],
+        # from an audio file's own tag title at upload time (#255). The key
+        # "display_name" in this payload is the item's one canonical title
+        # (core/item_title.py, #542); every page and script reads it from here.
+        "display_name": item_title.title_of(row),
         # File-kind badge (issue #12) — driven entirely by the type's
         # ObjectTypeSpec (core/object_types.py) so gallery cards never need
         # an if/else on media_type; a new type registered there picks up a
@@ -307,9 +306,9 @@ def _to_object_detail(row):
         # has ever written type_metadata for, same "always a dict, never
         # missing" contract as row["tags"].
         "type_metadata": row.get("type_metadata") or {},
-        # See _to_public's matching comment — row["display_name"]/row["icon"]
-        # (#11) are per-object overrides that win over the generic fallbacks.
-        "display_name": row.get("display_name") or filename or row.get("content_description") or row["slug"],
+        # See _to_public's matching comment: "display_name" is the canonical title (#542);
+        # row["icon"] (#11) is a per-object override that wins over the generic badge.
+        "display_name": item_title.title_of(row),
         "icon": row.get("icon") or spec.badge_icon,
         "description": row["description"],
         "tags": row["tags"],
@@ -471,7 +470,7 @@ def _to_content_public(row, project_slug=None):
         link = f"{link}?from=project:{project_slug}"
     return {
         "slug": row["slug"],
-        "title": row.get("content_description") or row.get("description") or row.get("filename") or row["slug"],
+        "title": item_title.title_of(row),
         "media_type": media_type,
         "type_icon": spec.badge_icon,
         "type_badge": spec.badge_text,

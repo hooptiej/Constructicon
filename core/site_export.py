@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from core import card_rules, db, install_config, markdown_render, paths, policy, storage, object_types
+from core import card_rules, db, install_config, item_title, markdown_render, paths, policy, storage, object_types
 from core import version as version_info
 
 
@@ -201,6 +201,7 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     )
     # Register the export_preview filter
     env.filters["export_preview"] = export_preview
+    env.filters["item_title"] = item_title.title_of  # #542: the one canonical item title
     # #471: write-up and blog bodies render as safe Markdown (raw HTML off).
     # The templates used `| safe` before, which published bodies as raw HTML.
     env.filters["markdown"] = markdown_render.render

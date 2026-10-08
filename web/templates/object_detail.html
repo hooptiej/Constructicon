@@ -1338,7 +1338,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     }
     relatedGrid.innerHTML = relatedItems.map(r => `
       <div class="related-item">
-        <a href="/object/${r.slug}" class="related-thumb${r.redacted ? ' redacted-thumb' : ''}" title="${escapeHtml(r.filename || r.display_name)}${r.redacted ? ' (redacted)' : ''}">
+        <a href="/object/${r.slug}" class="related-thumb${r.redacted ? ' redacted-thumb' : ''}" title="${escapeHtml(r.display_name)}${r.redacted ? ' (redacted)' : ''}">
           ${r.thumb_url ? `<img src="${r.thumb_url}" loading="lazy">` : ''}
         </a>
         <button type="button" class="related-remove" data-slug="${r.slug}" title="Remove relation">
@@ -1378,7 +1378,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
       return;
     }
     relatedPickerGrid.innerHTML = candidates.map(i =>
-      `<button type="button" class="existing-avatar-thumb${i.redacted ? ' redacted-thumb' : ''}" data-slug="${i.slug}" title="${escapeHtml(i.filename || i.display_name)}${i.redacted ? ' (redacted)' : ''}">${i.thumb_url ? `<img src="${i.thumb_url}" loading="lazy">` : ''}</button>`
+      `<button type="button" class="existing-avatar-thumb${i.redacted ? ' redacted-thumb' : ''}" data-slug="${i.slug}" title="${escapeHtml(i.display_name)}${i.redacted ? ' (redacted)' : ''}">${i.thumb_url ? `<img src="${i.thumb_url}" loading="lazy">` : ''}</button>`
     ).join('');
   }
 
@@ -1444,7 +1444,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     similarPanel.style.display = '';
     similarGrid.innerHTML = items.map(i => `
       <div class="related-item">
-        <a href="/object/${i.slug}" class="related-thumb${i.redacted ? ' redacted-thumb' : ''}" title="${escapeHtml(i.filename || i.display_name)} — ${REASON_LABEL[i.similarity_reason] || 'Similar'}${i.redacted ? ' (redacted)' : ''}">
+        <a href="/object/${i.slug}" class="related-thumb${i.redacted ? ' redacted-thumb' : ''}" title="${escapeHtml(i.display_name)} — ${REASON_LABEL[i.similarity_reason] || 'Similar'}${i.redacted ? ' (redacted)' : ''}">
           ${i.thumb_url ? `<img src="${i.thumb_url}" loading="lazy">` : ''}
         </a>
         <button type="button" class="related-remove similar-add" data-slug="${i.slug}" title="Add as related">
@@ -1496,7 +1496,7 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     revGrid.innerHTML = found.slice(0, 40).map(i =>
       '<button type="button" class="rev-pick" data-slug="' + escapeHtml(i.slug) + '">' +
       (i.thumb_url ? '<img src="' + escapeHtml(i.thumb_url) + '" loading="lazy" alt="">' : '<span class="rev-pick-noimg"></span>') +
-      '<span>' + escapeHtml(i.display_name || i.filename || i.slug) +
+      '<span>' + escapeHtml(i.display_name) +
       (i.superseded_by ? ' <em class="dp-muted">(superseded)</em>' : '') + '</span></button>').join('');
   }
   function openRevPicker(mode) {

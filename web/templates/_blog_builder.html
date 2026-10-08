@@ -226,7 +226,7 @@
       coverInput.value = entry.cover_slug || '';
       dateInput.value = tsToDateInput(entry.content_date);
       state.projects = (entry.projects || []).map((p) => ({ id: p.id, title: p.title || p.name || 'Project', note: p.note || '' }));
-      state.objects = (entry.items || []).map((o) => ({ slug: o.slug, label: o.display_name || o.content_description || o.title || o.slug, note: o.note || '' }));
+      state.objects = (entry.items || []).map((o) => ({ slug: o.slug, label: o.title, note: o.note || '' }));
       renderProjects();
       renderObjects();
       deleteBtn.style.display = 'block';
@@ -327,7 +327,7 @@
       const items = await res.json(); // ARRAY
       objectPickerList.innerHTML = '';
       (items || []).forEach((item) => {
-        const label = item.display_name || item.content_description || item.title || item.slug;
+        const label = item.display_name;
         const el = document.createElement('div');
         el.className = 'blog-picker-item';
         if (state.pickerMode === 'cover') {

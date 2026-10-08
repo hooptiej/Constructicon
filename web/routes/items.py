@@ -10,7 +10,7 @@ from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTa
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from core import access_log, besteffort, captions, db, ingest, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
+from core import access_log, besteffort, captions, db, ingest, item_title, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
 from core import tags as tags_svc, timeline
 from web import content_security
 from web.common import from_request_thread
@@ -273,7 +273,7 @@ def api_processing(request: Request, session: str = ""):
             in_flight_count += 1
         items.append({
             "slug": slug,
-            "name": row.get("display_name") or row.get("content_description") or row.get("filename") or slug,
+            "name": item_title.title_of(row),
             "stages": st["stages"],
             "overall": st["overall"],
             "is_session": is_session,
@@ -438,7 +438,7 @@ def api_captions_unreviewed(request: Request):
         tm = r.get("type_metadata") or {}
         out.append({
             "slug": r["slug"],
-            "name": r.get("display_name") or r.get("filename") or r["slug"],
+            "name": item_title.title_of(r),
             "caption": (tm.get("auto_caption") or "").strip(),
             "thumb_url": f"/f/{r['slug']}/thumb",
             "detail_url": f"/object/{r['slug']}",

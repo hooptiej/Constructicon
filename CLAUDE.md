@@ -131,9 +131,8 @@ will freeze content out of here and publish it to GitHub Pages (the owner's
   tags (via the already-present `ffprobe` — deliberately no `mutagen`
   dependency, see `core/object_types/audio.py`'s docstring for the
   real-file check behind that), seeded into `content_description` +
-  `display_name` (the title — both, because the display-name fallback
-  chain puts `filename` ahead of `content_description`, so a title stored
-  only there would never show on a tile) and `type_metadata`
+  `display_name` (the title, so it is the owner-visible name from the
+  start; see `core/item_title.py`) and `type_metadata`
   (artist/album/track/year/genre); and, since #265, **`content_date`** —
   an image's EXIF `DateTimeOriginal` (Pillow, `core/object_types/image.py`)
   and a video's container `creation_time` (ffprobe,
@@ -890,9 +889,15 @@ To add a new object type (issue #448 contract v2):
     title). Similarly `timestamp` (capture/upload time) vs. `content_date`
     (the content's own real-world date). These pairs are easy to confuse —
     check which one a given piece of code actually means.
-  - `display_name`, `icon` — optional per-object override of the
-    filename/content_description/slug and the media type's default badge
-    icon.
+  - `display_name`, `icon` — optional per-object override of the item's title
+    and the media type's default badge icon. **An item's title (#542) is
+    `core/item_title.py` `title_of(row)` and nothing else:** `display_name` →
+    `content_description` → `filename` → `slug`. `description` (the uploader's note)
+    is never a title. Python calls `title_of`; Jinja uses the `item_title` filter (the
+    static export registers it); JS reads the `display_name` (item payloads) or `title`
+    (project grid, timeline, blog entry items) the server already resolved and never
+    rebuilds the chain. `scripts/test_item_title_542.py` fails on a new hand-rolled
+    chain.
   - `uploaded_by_user_id` (#604 step 1, NULL = admin-owned) and `sensitive` / `sensitive_by` /
     `sensitive_at` (#603): see "Ownership and sensitive items".
   - `type_metadata` — freeform JSON bag for per-type properties that don't

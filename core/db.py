@@ -1852,7 +1852,7 @@ def _set_brand_asset(slug, is_brand, brand_role=None):
 def list_brand_assets():
     """Returns all brand assets (where is_brand_asset=1), non-redacted,
     ordered by brand_role then recency (timestamp desc). Each row includes
-    slug, title (from content_description or display_name), brand_role,
+    slug, brand_role (the title is core/item_title.py's, #542),
     and availability for thumb/file URLs."""
     conn = get_conn()
     try:

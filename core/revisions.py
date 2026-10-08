@@ -27,7 +27,7 @@ import logging
 import re
 import time
 
-from . import besteffort, changes, datefmt, db
+from . import besteffort, changes, datefmt, db, item_title
 from .card_rules import CardError
 from .errors import InvalidInput
 
@@ -128,7 +128,7 @@ def decorate(items, mapping=None):
 
 
 def _display(row):
-    return row.get("display_name") or row.get("filename") or row.get("content_description") or row["slug"]
+    return item_title.title_of(row)
 
 
 def chain_detail(slug):
@@ -260,7 +260,7 @@ def _day(ts, other=None):
 
 
 def _name(row):
-    return row.get("display_name") or row.get("filename") or row["slug"]
+    return item_title.title_of(row)
 
 
 def newer_of(this_row, cand_row):
@@ -323,7 +323,7 @@ def candidates_for(slug):
     conn = db.get_conn()
     try:
         rows = conn.execute(
-            "SELECT slug, filename, display_name, media_type, timestamp, source_modified_at, stored_filename "
+            "SELECT slug, filename, display_name, content_description, media_type, timestamp, source_modified_at, stored_filename "
             "FROM capture_events "
             "WHERE filename IS NOT NULL AND slug != ? AND redacted = 0 AND is_brand_asset = 0 AND media_type IS ? "
             "ORDER BY timestamp DESC", (slug, row.get("media_type"))).fetchall()
@@ -353,7 +353,7 @@ def queue_replace_question(slug):
     _fwd, back = _maps()
     options, identical, directions = [], [], {}
     for c in cands:
-        name = c["display_name"] or c["filename"]
+        name = item_title.title_of(c)
         newer, why = newer_of(row, c)
         directions[c["slug"]] = (newer, why)
         options.append({"key": c["slug"], "label": f"Yes, it replaces {name}"})
@@ -368,7 +368,7 @@ def queue_replace_question(slug):
     if identical:
         c = identical[0]
         suggested = SAME_PREFIX + c["slug"]
-        reason = (f"Same size and identical contents as {c['display_name'] or c['filename']}: "
+        reason = (f"Same size and identical contents as {item_title.title_of(c)}: "
                   "it is the same file, so keeping one is enough.")
         confidence = "high"
     elif len(cands) == 1:

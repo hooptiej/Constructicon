@@ -29,11 +29,10 @@ capture timestamp is to a photo what publishedAt is to that video:
   - the title -> content_description (the content's own title, as opposed
     to `description`, the uploader's note about it — see the
     capture_events comments in core/db.py) AND display_name. Both, because
-    web/app.py's display-name fallback chain is display_name -> filename
-    -> content_description -> slug: for a file upload the filename always
-    wins over content_description, so a title stored only there would
-    never reach a gallery tile or the detail page header — which is the
-    whole point of pulling it. display_name is documented (#11) as "a
+    core/item_title.py's chain is display_name -> content_description ->
+    filename -> slug; display_name is still set too, so the title is the
+    owner-visible name from the start and a later rename or caption edit
+    can't change what the upload carried in. display_name is documented (#11) as "a
     per-object override of the filename"; a tag title is precisely that,
     and #241's inline rename still clears it back to the filename as
     before.

@@ -43,7 +43,7 @@ import os
 import time
 from datetime import datetime
 
-from . import captions, cards, changes, db, embedded_metadata, ingest, membership, object_types, physical_piece, provenance_options
+from . import captions, cards, changes, db, embedded_metadata, ingest, item_title, membership, object_types, physical_piece, provenance_options
 from . import paths, storage, thumbnails, timeline
 from . import tags as tags_svc
 from .cards import Result
@@ -80,10 +80,6 @@ def get_item(slug):
     if row is None:
         raise NotFound(f"No item {slug!r}.")
     return row
-
-
-def title_of(row):
-    return row.get("display_name") or row.get("content_description") or row.get("filename") or row["slug"]
 
 
 def _slim(table, img):
@@ -457,7 +453,7 @@ def _trash_insert(log, batch_id, row, reason, embedding=None):
         "stored_filename": sf, "has_original": int(has_orig), "has_thumb": int(has_thumb),
         "dir": f"{TRASH_DIR_NAME}/{batch_id}",
         "size_bytes": (orig.stat().st_size if has_orig else 0) + (thumb.stat().st_size if has_thumb else 0),
-        "title": title_of(row), "reason": reason, "created_at": now, "expires_at": None if hold else now + TRASH_TTL_SECONDS,
+        "title": item_title.title_of(row), "reason": reason, "created_at": now, "expires_at": None if hold else now + TRASH_TTL_SECONDS,
         "purged_at": None, "embedding": embedding,
     })
     return entry

@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from pathlib import Path
 
-from core import card_rules, cards, curation_queue, curator, db, install_config, markdown_render, object_types, revisions, timeline
+from core import card_rules, cards, curation_queue, curator, db, install_config, item_title, markdown_render, object_types, revisions, timeline
 from core import hobbies, physical_piece, provenance_options
 from core.db import PROJECT_STATUSES, BRAND_ROLES
 from web.common import _build_breadcrumbs, _rev_note, templates
@@ -68,7 +68,7 @@ def home_page(request: Request, hobby: str = "", ref: str = "", rev: str = ""):
             media_type = row.get("media_type") or "image"
             spec = object_types.get_object_type(media_type)
             has_thumb = _should_advertise_thumb(row, spec)
-            title = row.get("display_name") or row.get("content_description") or row["filename"] or row["slug"]
+            title = item_title.title_of(row)
             # Asset card (8.1, #596): display name, the file's effective date, thumbnail, type
             # line = media type label; loose, so no "Stacked" box; no provenance on the face.
             reference_objects.append({
@@ -214,7 +214,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
         {
             "slug": r["slug"],
             "thumb_url": f"/f/{r['slug']}/thumb" if _has_thumbnail(r) and not r.get("redacted") else None,
-            "title": r.get("content_description") or r.get("description") or r.get("filename") or r["slug"],
+            "title": item_title.title_of(r),
             "effective_date": timeline.resolve_item_date(r),
             "set_by_hand": r.get("display_date_override") is not None,  # #593: shown on the marker
         }

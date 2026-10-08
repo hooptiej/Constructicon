@@ -31,7 +31,7 @@ import threading
 import time
 from urllib.parse import quote
 
-from . import actor as actor_ctx, cards, curator_needs, db, decisions, policy, roles
+from . import actor as actor_ctx, cards, curator_needs, db, decisions, item_title, policy, roles
 from .errors import InvalidInput
 
 TYPE_QUESTION = "question"
@@ -129,7 +129,7 @@ def _file_question(entry):
 def _file_question_item(entry):
     """One v1 file-level decision (project_match / retype) as a queue item."""
     row = entry["row"]
-    title = row.get("display_name") or row.get("content_description") or row.get("filename") or row["slug"]
+    title = item_title.title_of(row)
     link = f"/object/{quote(row['slug'], safe='')}"
     if entry["kind"] == "project_match":
         options = [{"key": str(c["id"]), "label": c["title"], "reason": None, "suggested": False}

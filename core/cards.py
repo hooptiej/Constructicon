@@ -20,7 +20,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import actor as actor_ctx, card_rules, changes, datefmt, db, markdown_render, timeline
+from . import actor as actor_ctx, card_rules, changes, datefmt, db, item_title, markdown_render, timeline
 from .card_rules import CardError
 from .errors import AppError, InvalidInput
 
@@ -2096,7 +2096,7 @@ def _day_label(ts):
 
 def _asset_card(r, ts, spec, card_row, thumb_fn):
     """One file's face (file_face) for a pile or a fan on `card_row`'s page."""
-    title = r.get("content_description") or r.get("description") or r.get("filename") or r["slug"]
+    title = item_title.title_of(r)
     text = next((t for t in (r.get("content_description"), r.get("description")) if t and t != title), "")
     name = r.get("filename") or ""
     ext = name.rpartition(".")[2] if "." in name else ""

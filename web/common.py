@@ -9,7 +9,7 @@ from urllib.parse import unquote, quote
 
 from fastapi.templating import Jinja2Templates
 
-from core import besteffort, db, install_config, markdown_render, object_types, storage, users
+from core import besteffort, db, install_config, item_title, markdown_render, object_types, storage, users
 from core import version as version_info
 from web import auth as web_auth
 
@@ -43,6 +43,7 @@ def static_version(relative_path):
 templates.env.globals["static_version"] = static_version
 # #471: safe Markdown -> HTML for authored bodies (write-ups); raw HTML off.
 templates.env.filters["markdown"] = markdown_render.render
+templates.env.filters["item_title"] = item_title.title_of  # #542: the one canonical item title
 
 # #310: environment awareness for the browser tab title. constructicon-test
 # sets CONSTRUCTICON_ENV=dev in its compose so its tab reads "DEV-..." and is

@@ -38,7 +38,7 @@ from mcp.server.mcpserver import Image as McpImage, MCPServer
 from mcp.types import CallToolResult, TextContent
 
 from core import access_log, actor as actor_ctx, policy, roles, users
-from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
+from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
 from core import blog, changes, hobbies, membership, reset
@@ -194,10 +194,9 @@ def _to_public(row):
         "slug": row["slug"],
         "url": f"{BASE_URL}/f/{row['slug']}",
         "filename": row["filename"],
-        # display_name/icon (#11) — per-object overrides, falling back to
-        # the same filename/content_description/slug and spec.badge_icon
-        # chain the web app uses (see web/app.py's _to_public/_to_object_detail).
-        "display_name": row.get("display_name") or row["filename"] or row.get("content_description") or row["slug"],
+        # display_name/icon (#11) — per-object overrides. display_name here is the item's one
+        # canonical title (core/item_title.py, #542): rename, then caption, then filename, then slug.
+        "display_name": item_title.title_of(row),
         "icon": row.get("icon") or spec.badge_icon,
         "media_type": row.get("media_type") or "image",
         "description": row["description"],
@@ -568,7 +567,7 @@ def constructicon_list_needs_caption(limit: int = 50, include_failed: bool = Tru
         cards_in, hobbies_in = _caption_context(row)
         out.append({
             "slug": row["slug"],
-            "name": items.title_of(row),
+            "name": item_title.title_of(row),
             "type": row.get("media_type") or "image",
             "filename": row.get("filename"),
             "caption_status": (row.get("type_metadata") or {}).get("auto_caption_status"),
@@ -607,7 +606,7 @@ def constructicon_view(slug: str, size: str = "preview") -> list[McpImage | str]
     policy.note_access(row, access_log.HOW_MCP_VIEW)  # #604 follow-up 7: sensitive items only
     data, mime, (width, height) = rendered
     tm = row.get("type_metadata") or {}
-    lines = [f"{items.title_of(row)} [{slug}]",
+    lines = [f"{item_title.title_of(row)} [{slug}]",
              f"type: {row.get('media_type') or 'image'}; shown as {mime} {width}x{height}, {len(data) // 1024} KB ({size})"]
     if row.get("content_description"):
         lines.append(f"description: {row['content_description']}")
@@ -2281,8 +2280,7 @@ def constructicon_list_pending_decisions() -> list[dict]:
             })
             continue
         row = item["row"]
-        # Use the same title logic as the web endpoint
-        title = row.get("display_name") or row.get("filename") or row.get("content_description") or row["slug"]
+        title = item_title.title_of(row)
 
         entry = {
             "id": item["id"],

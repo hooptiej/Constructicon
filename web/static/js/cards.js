@@ -70,7 +70,7 @@
   function face(item, opts) {
     var size = opts.size === 'small' ? 'small' : 'mini';
     var href = opts.href || ('/object/' + item.slug);
-    var title = item.display_name || item.slug;
+    var title = item.display_name;
     var typeLine = item.type_label || item.media_type || 'File';
     var stacked = item.stacked || '';
     var code = (item.codes || [])[0] || '';

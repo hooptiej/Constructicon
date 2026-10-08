@@ -43,6 +43,7 @@ const doc = { createElement: (t) => new El(t), body: bodyEl, activeElement: body
 const winListeners = {};
 const win = { addEventListener: (t, f) => { (winListeners[t] = winListeners[t] || []).push(f); }, removeEventListener() {}, innerWidth: 1200, innerHeight: 800, location: { href: '' } };
 const ctx = vm.createContext({ window: win, document: doc, console, setTimeout, clearTimeout, Math, Date, Map, Set, Promise });
+win.MountainTime = require(path.join(ROOT, 'web/static/js/mountain-time.js'));
 win.TimelineDragMath = require(path.join(ROOT, 'web/static/js/timeline-drag-math.js'));
 ctx.window = win;
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'web/static/js/project-video-timeline.js'), 'utf8') + '\nglobalThis.PVT = ProjectVideoTimeline;', ctx);

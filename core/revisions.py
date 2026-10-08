@@ -27,7 +27,7 @@ import logging
 import re
 import time
 
-from . import besteffort, changes, db
+from . import besteffort, changes, datefmt, db
 from .card_rules import CardError
 from .errors import InvalidInput
 
@@ -256,11 +256,7 @@ def option_target(key):
 
 
 def _day(ts, other=None):
-    d = time.gmtime(ts)
-    s = f"{time.strftime('%b', d)} {d.tm_mday}"
-    if other is None or time.gmtime(other).tm_year != d.tm_year:
-        s += f" {d.tm_year}"
-    return s
+    return datefmt.short_day(ts, other)
 
 
 def _name(row):

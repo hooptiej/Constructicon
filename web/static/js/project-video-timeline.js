@@ -75,22 +75,24 @@ class ProjectVideoTimeline {
     // gets one tick per day, matching what a ruler at that zoom level
     // should show.
     const spanDays = (range.max - range.min) / 86400;
-    const minDate = new Date(range.min * 1000);
+    // Calendar boundaries are Mountain Time (mountain-time.js, #544), the zone every date is shown in.
+    const MT = window.MountainTime;
+    const minDate = MT.parts(range.min);
     const ticks = [];
 
     if (spanDays > 730) {
-      let year = minDate.getFullYear();
+      let year = minDate.year;
       while (true) {
-        const t = new Date(year, 0, 1).getTime() / 1000;
+        const t = MT.toEpoch(year, 1, 1);
         if (t > range.max) break;
         if (t >= range.min) ticks.push({ date: t, label: String(year) });
         year++;
       }
     } else if (spanDays > 60) {
-      let year = minDate.getFullYear();
-      let month = minDate.getMonth();
+      let year = minDate.year;
+      let month = minDate.month - 1;
       while (true) {
-        const t = new Date(year, month, 1).getTime() / 1000;
+        const t = MT.toEpoch(year, month + 1, 1);
         if (t > range.max) break;
         if (t >= range.min) ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[month]} ${year}` });
         month++;
@@ -99,14 +101,14 @@ class ProjectVideoTimeline {
     } else if (spanDays > 14) {
       const dayMs = 7 * 86400;
       for (let t = range.min; t <= range.max; t += dayMs) {
-        const d = new Date(t * 1000);
-        ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[d.getMonth()]} ${d.getDate()}` });
+        const d = MT.parts(t);
+        ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[d.month - 1]} ${d.day}` });
       }
     } else {
       const dayMs = 86400;
       for (let t = range.min; t <= range.max; t += dayMs) {
-        const d = new Date(t * 1000);
-        ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[d.getMonth()]} ${d.getDate()}` });
+        const d = MT.parts(t);
+        ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[d.month - 1]} ${d.day}` });
       }
     }
     return ticks;
@@ -283,7 +285,7 @@ class ProjectVideoTimeline {
           // into it (see the --end rule in style.css).
           time.classList.add('project-video-timeline-event-time--end');
         }
-        time.textContent = new Date(event.date * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        time.textContent = window.MountainTime.formatTime(event.date);
         wrap.appendChild(time);
         event._time = time;
       }
@@ -445,7 +447,7 @@ class ProjectVideoTimeline {
     this._pending = { event, date, mode };
     const pct = Math.min(100, Math.max(0, M.epochToPercent(date, this._r.min, this._r.max)));
     event._wrap.style.left = `${pct}%`;
-    if (event._time) event._time.textContent = new Date(date * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (event._time) event._time.textContent = window.MountainTime.formatTime(date);
     this._showReadout(event, date);
   }
 
@@ -536,7 +538,7 @@ class ProjectVideoTimeline {
   _apply(event, result) {
     event.date = result.effective_date;
     event.setByHand = !!result.set_by_hand;
-    event.dateLabel = new Date(event.date * 1000).toLocaleDateString();
+    event.dateLabel = window.MountainTime.formatDate(event.date);
   }
 
   _focus(id) {

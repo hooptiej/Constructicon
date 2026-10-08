@@ -470,6 +470,7 @@
 }
 </style>
 
+<script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
 <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 <script>
 (function () {
@@ -591,7 +592,7 @@
       document.getElementById('admin-trash-count').textContent = `(${t.count})`;
       const held = t.held || { count: 0, bytes: 0 };
       let text = t.count
-        ? `${t.count} deleted item${t.count === 1 ? '' : 's'}, ${fmtBytes(t.bytes)}. Oldest deleted ${new Date(t.oldest * 1000).toLocaleString()}; next purge ${new Date(t.next_expiry * 1000).toLocaleString()}.`
+        ? `${t.count} deleted item${t.count === 1 ? '' : 's'}, ${fmtBytes(t.bytes)}. Oldest deleted ${MountainTime.formatDateTime(t.oldest)}; next purge ${MountainTime.formatDateTime(t.next_expiry)}.`
         : 'No deleted items waiting.';
       if (held.count) text += ` ${held.count} redacted file${held.count === 1 ? '' : 's'} held (${fmtBytes(held.bytes)}), kept until you recover or delete ${held.count === 1 ? 'it' : 'them'}; "Empty trash now" skips ${held.count === 1 ? 'it' : 'them'}.`;
       summary.textContent = text;
@@ -794,7 +795,7 @@
       });
       return b;
     }
-    function when(ts) { return ts ? new Date(ts * 1000).toLocaleString() : 'never'; }
+    function when(ts) { return ts ? MountainTime.formatDateTime(ts) : 'never'; }
 
     function render(data) {
       roleList = data.roles || roleList;

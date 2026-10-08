@@ -2,18 +2,18 @@
 // scripts/test_timeline_drag.js can run it under node. The browser gets it as
 // window.TimelineDragMath; node gets it from require().
 //
-// All dates are unix SECONDS (what the server stores). "Day" arithmetic is on the viewer's local
-// calendar (the timeline's labels are browser-local too), so a step across a daylight-saving
-// change keeps the same wall-clock time instead of drifting an hour.
+// All dates are unix SECONDS (what the server stores). "Day" arithmetic is on the MOUNTAIN TIME calendar
+// (mountain-time.js, #544: the same zone every date is shown in, whatever the browser's zone is), so a
+// step across a daylight-saving change keeps the same wall-clock time instead of drifting an hour.
 //
 // What the owner gets:
 //   * a plain drag lands on a DAY and keeps the item's own time of day (snapDay);
 //   * a drag with Shift held snaps to 15 minutes instead (snapFine);
 //   * the arrow keys step a day, Shift+arrow (or PageUp / PageDown) a month (keyStep).
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.TimelineDragMath = factory();
-})(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./mountain-time.js'));
+  else root.TimelineDragMath = factory(root.MountainTime);
+})(typeof self !== 'undefined' ? self : this, function (MT) {
   const FINE_MINUTES = 15;
   const MAX_EPOCH = 4102444800; // 2100-01-01, the server's upper bound
   const MIN_EPOCH = 0;          // 1970-01-01, the server's lower bound
@@ -35,13 +35,11 @@
     return Math.min(hi, Math.max(lo, epoch));
   }
 
-  // Land on the local calendar day that `epoch` falls on, keeping `orig`'s local time of day.
+  // Land on the Mountain calendar day that `epoch` falls on, keeping `orig`'s Mountain time of day.
   function snapDay(epoch, orig) {
-    const d = new Date(epoch * 1000);
-    const o = new Date(orig * 1000);
-    const out = new Date(d.getFullYear(), d.getMonth(), d.getDate(),
-      o.getHours(), o.getMinutes(), o.getSeconds(), o.getMilliseconds());
-    return out.getTime() / 1000;
+    const d = MT.parts(epoch);
+    const o = MT.parts(orig);
+    return MT.toEpoch(d.year, d.month, d.day, o.hour, o.minute, o.second);
   }
 
   // Round to the nearest FINE_MINUTES.
@@ -54,22 +52,19 @@
     return fine ? snapFine(epoch) : snapDay(epoch, orig);
   }
 
-  // Add whole local months, clamping the day of month (Jan 31 + 1 month = Feb 28/29, not Mar 3).
+  // Add whole Mountain months, clamping the day of month (Jan 31 + 1 month = Feb 28/29, not Mar 3).
   function addMonths(epoch, n) {
-    const d = new Date(epoch * 1000);
-    const day = d.getDate();
-    const out = new Date(d.getTime());
-    out.setDate(1);
-    out.setMonth(out.getMonth() + n);
-    const last = new Date(out.getFullYear(), out.getMonth() + 1, 0).getDate();
-    out.setDate(Math.min(day, last));
-    return out.getTime() / 1000;
+    const p = MT.parts(epoch);
+    const index = p.year * 12 + (p.month - 1) + n;
+    const year = Math.floor(index / 12);
+    const month = index - year * 12 + 1;
+    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    return MT.toEpoch(year, month, Math.min(p.day, last), p.hour, p.minute, p.second);
   }
 
   function addDays(epoch, n) {
-    const d = new Date(epoch * 1000);
-    d.setDate(d.getDate() + n);
-    return d.getTime() / 1000;
+    const p = MT.parts(epoch);
+    return MT.toEpoch(p.year, p.month, p.day + n, p.hour, p.minute, p.second);
   }
 
   // The date a key press moves a marker to, or null when the key isn't a move.
@@ -105,9 +100,7 @@
 
   // "Tue, Mar 4, 2025, 6:39 PM" (day drag) -- the live readout. `locale` is for the tests.
   function formatReadout(epoch, locale) {
-    return new Date(epoch * 1000).toLocaleString(locale || undefined, {
-      weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-    });
+    return MT.formatLong(epoch, locale);
   }
 
   return { FINE_MINUTES, MAX_EPOCH, MIN_EPOCH, pxToEpoch, epochToPercent, clamp, snapDay, snapFine, snap,

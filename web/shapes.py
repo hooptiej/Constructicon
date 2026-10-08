@@ -2,7 +2,7 @@
 into the dicts pages and the JSON API return, plus the small pure helpers they use.
 Moved verbatim from web/app.py."""
 
-from core import captions, card_payload, cards, db, object_types, policy, revisions, storage, timeline, users
+from core import captions, card_payload, cards, datefmt, db, object_types, policy, revisions, storage, timeline, users
 
 
 def _has_thumbnail(row, spec=None):
@@ -199,27 +199,13 @@ def _split_revisions(rows, show_all):
 
 
 def _friendly_date(epoch):
-    """'%-d'-style formatting (no leading zero) without relying on the
-    platform-specific %-d/%-e strftime extension, which isn't available on
-    Windows — this runs cross-platform.
-
-    Renders in timeline.LOCAL_TIMEZONE (Mountain Time), not the process's
-    own system timezone (UTC inside this app's container) — a bare
-    datetime.fromtimestamp(epoch) here previously showed an 18:31 MDT photo
-    as the next calendar day."""
-    if not epoch:
-        return None
-    dt = timeline.epoch_to_local(epoch)
-    return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
+    """`Sep 30, 2026` in Mountain Time (core/datefmt.py is the one implementation, #544)."""
+    return datefmt.day(epoch)
 
 
 def _friendly_datetime(epoch):
-    if not epoch:
-        return None
-    dt = timeline.epoch_to_local(epoch)
-    hour12 = dt.hour % 12 or 12
-    ampm = "AM" if dt.hour < 12 else "PM"
-    return f"{_friendly_date(epoch)} at {hour12}:{dt.minute:02d} {ampm}"
+    """`Sep 30, 2026 at 6:31 PM` in Mountain Time (core/datefmt.py, #544)."""
+    return datefmt.datetime_label(epoch)
 
 
 def _datetime_local_value(epoch):

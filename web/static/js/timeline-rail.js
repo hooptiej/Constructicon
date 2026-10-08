@@ -14,6 +14,7 @@
 // opened a popup, no hover) and rendered nothing before a year that
 // happened to have no entries, both fixed here.
 
+// Dates are read in Mountain Time via mountain-time.js (#544), whatever the browser's zone.
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // Must match .timeline-entry:hover's transform: scale() in style.css (#292).
@@ -103,7 +104,7 @@ class TimelineRail {
     }
     popover.querySelector('.timeline-popover-title').textContent = entry.label || '';
     popover.querySelector('.timeline-popover-date').textContent =
-      entry.dateLabel || new Date(entry.date * 1000).toLocaleDateString();
+      entry.dateLabel || MountainTime.formatDate(entry.date);
 
     popover.classList.add('visible');
     // Measure after making it visible (offsetHeight is 0 while display:none).
@@ -136,7 +137,7 @@ class TimelineRail {
     const sorted = this._sorted();
     if (sorted.length === 0) return;
 
-    const years = sorted.map((entry) => new Date(entry.date * 1000).getFullYear());
+    const years = sorted.map((entry) => MountainTime.parts(entry.date).year);
     const maxYear = Math.max(...years);
     const minYear = Math.min(...years);
 
@@ -149,16 +150,16 @@ class TimelineRail {
       this._rows.push({ el: yearMarker, kind: 'year' });
 
       let lastMonth = null;
-      while (entryIndex < sorted.length && new Date(sorted[entryIndex].date * 1000).getFullYear() === year) {
+      while (entryIndex < sorted.length && MountainTime.parts(sorted[entryIndex].date).year === year) {
         const entry = sorted[entryIndex];
-        const d = new Date(entry.date * 1000);
-        if (d.getMonth() !== lastMonth) {
+        const d = MountainTime.parts(entry.date);
+        if (d.month !== lastMonth) {
           const monthMarker = document.createElement('div');
           monthMarker.className = 'timeline-month-marker';
-          monthMarker.textContent = MONTH_NAMES[d.getMonth()];
+          monthMarker.textContent = MONTH_NAMES[d.month - 1];
           this._track.appendChild(monthMarker);
           this._rows.push({ el: monthMarker, kind: 'month' });
-          lastMonth = d.getMonth();
+          lastMonth = d.month;
         }
 
         const row = document.createElement('div');
@@ -170,7 +171,7 @@ class TimelineRail {
         node.className = 'timeline-entry'
           + (entry.isChild ? ' timeline-entry-child' : '')
           + (isSpan ? ' timeline-entry-span' : '');
-        node.textContent = `${d.getMonth() + 1}/${d.getDate()}`;
+        node.textContent = `${d.month}/${d.day}`;
 
         node.addEventListener('mouseenter', () => this._showPopover(entry, node));
         node.addEventListener('mouseleave', () => this._scheduleHidePopover());

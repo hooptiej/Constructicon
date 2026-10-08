@@ -32,6 +32,11 @@
           {% for a in item.actions %}
           <button type="button" role="menuitem" class="type-action-btn" data-action="{{ a.key }}" data-confirm="{{ a.confirm }}">{{ a.label }}</button>
           {% endfor %}
+          {% if item.is_file and not item.redacted and can_replace_file %}
+          {# #617: new bytes, same item: slug, cards, tags, title and captions stay; the old file goes to the trash (undo). #}
+          <button type="button" role="menuitem" id="replace-file-btn" title="Swap in a new version of this file; the link, cards, tags and title stay">Replace file&hellip;</button>
+          <input type="file" id="replace-file-input" hidden>
+          {% endif %}
           {% if item.is_file and not item.redacted %}
           <button type="button" role="menuitem" class="dp-menu-warn" id="redact-btn">Remove file, keep info (sensitive content)</button>
           {% endif %}
@@ -1099,6 +1104,37 @@ for (const [id, on] of [['sensitive-mark-btn', true], ['sensitive-unmark-btn', f
       const err = document.getElementById('sensitive-error');
       err.textContent = (body.error && body.error.message) || body.detail || 'That did not work';
       btn.disabled = false;
+    }
+  });
+}
+
+// #617: "Replace file…" — the same item gets new bytes (slug, cards, tags, title, captions stay).
+// The old file goes to the trash for 7 days in the same change, so the undo bar brings it back.
+const replaceBtn = document.getElementById('replace-file-btn');
+const replaceInput = document.getElementById('replace-file-input');
+if (replaceBtn && replaceInput) {
+  replaceBtn.addEventListener('click', () => { replaceInput.value = ''; replaceInput.click(); });
+  replaceInput.addEventListener('change', async () => {
+    const f = replaceInput.files && replaceInput.files[0];
+    if (!f) return;
+    if (!confirm('Replace this item\'s file with "' + f.name + '" (' + Math.round(f.size / 1024) + ' KB)? The link, cards, tags and title stay. The old file is kept in the trash for 7 days and you can undo.')) return;
+    const live = document.getElementById('dp-status-live');
+    if (live) live.textContent = 'Replacing file…';
+    const fd = new FormData();
+    fd.append('file', f, f.name);
+    let res;
+    try {
+      res = await fetch('/api/image/{{ item.slug }}/replace-file', { method: 'POST', body: fd });
+    } catch (e) {
+      alert('Replace failed: could not reach the server (' + e + ').');
+      return;
+    }
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      window.showUndoBar('File replaced. The old file is in the trash for ' + (body.trash_days || 7) + ' days.', body.batch_id, () => window.location.reload());
+    } else {
+      const e = body.error || {};
+      alert('Replace failed' + (e.code ? ' (' + e.code + ')' : ' (HTTP ' + res.status + ')') + ': ' + (e.message || body.detail || 'no detail returned'));
     }
   });
 }

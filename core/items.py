@@ -16,6 +16,9 @@ constructicon_undo(batch_id); it calls back into this module for the file side o
   unredact(slug)           visibility only, for old file-less redactions (refused while a hold exists).
   retype(slug, type, run)  the media_type change is imaged; post-processing (OCR / thumbnail /
                            caption / embedded metadata) re-runs through the caller's runner.
+  replace_file(slug, bytes)  (#617) new bytes under the SAME slug; the old file goes to the trash
+                           (reason "replace", TRASH_DAYS) in the same batch as the row change, so one
+                           undo brings it back. Same type only; re-runs the ingest post-processing.
   delete(slugs)            files -> <storage>/.trash/<batch_id>/, rows (and everything that points
                            at them) deleted with row images, one `trash` row per item.
   relate(a, b) / unrelate(a, b)   (phase C) the "related" link; relate also shares tags and
@@ -38,9 +41,11 @@ They are machine bookkeeping, not curation, and imaging them would make every la
 real edit conflict with the pipeline's own updates.
 """
 
+import io
 import json
 import os
 import time
+from pathlib import Path
 from datetime import datetime
 
 from . import captions, cards, changes, db, embedded_metadata, ingest, item_title, membership, object_types, physical_piece, provenance_options
@@ -61,7 +66,9 @@ OP_PURGE = "trash_purge"
 OP_RECOVER = "item_recover_redacted"
 OP_ERASE = "item_redact_erase"
 OP_SENSITIVE = "item_sensitive"  # #603
+OP_REPLACE_FILE = "item_replace_file"  # #617
 REASON_REDACT = "redact"
+REASON_REPLACE = "replace"  # #617: the bytes a replace_file displaced
 
 TRASH_DIR_NAME = paths.TRASH_DIR_NAME
 TRASH_DAYS = 7
@@ -435,14 +442,15 @@ def _rmdir_empty(batch_id):
         pass  # silent-ok: not empty (another item of the batch) or already gone
 
 
-def _trash_insert(log, batch_id, row, reason, embedding=None):
+def _trash_insert(log, batch_id, row, reason, embedding=None, with_thumb=True):
     """Images a trash row for `row`'s files (original and/or thumbnail, whichever exist on disk).
-    Returns the entry to move, or None when the item has no files at all."""
+    Returns the entry to move, or None when the item has no files at all. `with_thumb=False` leaves
+    the thumbnail out (a replaced file's thumbnail is derived data: rebuilt, never held)."""
     slug, sf = row["slug"], row.get("stored_filename")
     orig = paths.storage_dir() / sf if sf else None
     has_orig = bool(orig is not None and orig.is_file())
     thumb = storage.thumb_path_for(slug)
-    has_thumb = thumb.is_file()
+    has_thumb = with_thumb and thumb.is_file()
     if not (has_orig or has_thumb):
         return None
     now = time.time()
@@ -614,6 +622,163 @@ def retype(slug, media_type, run_background=None, *, dry_run=False, actor=None, 
     return _result(OP_RETYPE, muts, batch_id, dry_run, db.get_by_slug(slug), slug=slug)
 
 
+# --- replace the file, keep the item (#617) --------------------------------------------
+
+def _refuse(code, message, status=400, **details):
+    return AppError(code, message, status=status, details=details or None)
+
+
+def _final_filename(row, filename):
+    """The filename the item keeps after a replace. The item's own name stays (so its title and
+    every link to it stay), except that the extension must tell the truth about the new bytes: when
+    the new file's extension differs, the stem is kept and the extension swapped."""
+    current = row.get("filename") or ""
+    if not filename:
+        return current or row.get("stored_filename") or ""
+    new_ext = object_types.file_extension(filename)
+    cur_ext = object_types.file_extension(current) if current else ""
+    if current and new_ext == cur_ext:
+        return current
+    stem = current[: len(current) - len(cur_ext)] if current else Path(filename).stem
+    return f"{stem}{new_ext}"
+
+
+def _same_bytes(path, content):
+    try:
+        return path.is_file() and path.stat().st_size == len(content) and path.read_bytes() == content
+    except OSError as e:
+        print(f"items: could not compare {path} with the replacement bytes: {e!r}", flush=True)
+        return False
+
+
+def _reprocess_file(slug, run_background):
+    """Everything derived from the file's bytes, re-derived through the ingest path: the old text,
+    perceptual hash, embedding and thumbnail are dropped, then embedded metadata (fill-only), the
+    thumbnail (synchronously for a type whose thumbnail is the file), OCR / text extraction and
+    captions run exactly as after an upload. Machine work, not imaged (see the module docstring).
+    The search index follows by trigger (extracted_text / filename)."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        return
+    spec = object_types.get_object_type(row.get("media_type"))
+    db.set_extracted_text(slug, "")
+    db.set_perceptual_hash(slug, None)
+    db.set_embedding(slug, None)
+    db.set_ocr_status(slug, "pending" if spec.ocr_capable else None)
+    storage.thumb_path_for(slug).unlink(missing_ok=True)
+    if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
+        thumbnails.ensure_thumbnail(db.get_by_slug(slug))
+    embedded_metadata.fill_missing(slug)
+    ingest.post_insert(slug, spec, run_background)
+
+
+def replace_file(slug, content, filename=None, run_background=None, *, dry_run=False, actor=None, batch_id=None):
+    """#617: swaps an item's file bytes and keeps everything else: slug (so /f/<slug> and every link
+    stay), cards, tags, title, captions, relations and revision chain.
+
+    The displaced file goes to the trash in the SAME batch as the row change (reason "replace",
+    kept TRASH_DAYS like a delete), so `cards.undo(batch_id)` / constructicon_undo puts the old
+    bytes and the old size/name back. The new bytes live under a fresh stored name, so the two files
+    never collide; after an undo the replacement stays in storage (so a redo works).
+
+    Rules, each its own error code:
+      forbidden             403, below editor (checked first, says nothing about the item)
+      not_found             404, no such item, or one the actor may not see (core/policy.py)
+      replace_redacted      409, a redacted item has no file to replace (recover it first)
+      no_file               400, a content-only item (YouTube, URL ...) has no uploaded file
+      empty_file            400, zero bytes
+      file_too_large        413, over the upload cap (storage.MAX_MB)
+      unsupported_type / content_mismatch   400, the same checks an upload gets
+      replace_type_mismatch 422, the bytes are another TYPE than the item (a .md replaced with a
+                            .pdf): the type drives the item's metadata, icon and processing, so a
+                            type change is an upload + constructicon_mark_superseded, not a replace
+      replace_needs_decision / replace_rejected   422, the type's pre-store hook would not just accept
+      file_unchanged        409, the bytes are identical to the current file
+    `filename` is the new file's name: it decides the type check; the item keeps its own name unless
+    the extension differs (see _final_filename). Post-processing runs through `run_background`
+    (default ingest.run_in_thread). Returns a Result; data: slug, filename, previous_stored_filename,
+    previous_size, new_size, trashed, expires_at, trash_days."""
+    from . import actor as actor_ctx, policy, roles  # lazy: policy is imported by db at call time
+    who = actor_ctx.resolve(actor)
+    if not roles.at_least(roles.role_of(who), roles.EDITOR):
+        raise _forbidden("Replacing a file needs an editor or an admin.")
+    row = db.get_by_slug(slug) if slug else None
+    if row is None or not policy.can_view(row, who):
+        raise NotFound(f"No item {slug!r}.")
+    if row.get("redacted"):
+        raise _refuse("replace_redacted", f"{slug} is redacted: its file was removed on purpose, so it can't be "
+                      "replaced. Recover the held file first (constructicon_recover_redacted).", 409, slug=slug)
+    if not row.get("stored_filename"):
+        raise _refuse("no_file", f"{slug} has no uploaded file to replace (it is a {row.get('media_type')} link or "
+                      "content-only item).", 400, slug=slug, media_type=row.get("media_type"))
+    if not isinstance(content, (bytes, bytearray)) or len(content) == 0:
+        raise _refuse("empty_file", "The replacement file is empty (0 bytes). Nothing was changed.", 400)
+    if len(content) > storage.MAX_BYTES:
+        raise _refuse("file_too_large", f"The replacement is {len(content) / 1048576:.1f} MB, over the "
+                      f"{storage.MAX_MB} MB upload limit. Nothing was changed.", 413,
+                      size_bytes=len(content), max_bytes=storage.MAX_BYTES)
+    content = bytes(content)
+    if _same_bytes(storage.path_for(row["stored_filename"]), content):
+        raise _refuse("file_unchanged", f"These bytes are identical to {slug}'s current file; nothing to replace.",
+                      409, slug=slug)
+
+    name_for_type = filename or row.get("filename") or row["stored_filename"]
+    if object_types.detect_media_type(name_for_type) is None:
+        raise _refuse("unsupported_type", f"Unsupported file type: {object_types.file_extension(name_for_type) or name_for_type!r}.",
+                      400, filename=name_for_type)
+    _unused_slug, new_stored, _n = storage.save_stream(name_for_type, io.BytesIO(content))
+    new_path = storage.path_for(new_stored)
+    batch_id = batch_id or changes.new_batch_id()
+    moved, committed = [], False
+    try:
+        sniffed = object_types.detect_media_type(name_for_type, new_path)
+        if sniffed is None:
+            raise _refuse("content_mismatch", object_types.mismatch_reason(name_for_type), 400, filename=name_for_type)
+        if sniffed != row.get("media_type"):
+            raise _refuse("replace_type_mismatch",
+                          f"That file is a {sniffed!r}, but {slug} is a {row.get('media_type')!r}. Replacing keeps the "
+                          "item's type; to swap in a different kind of file, upload it as a new item and use "
+                          "constructicon_mark_superseded. Nothing was changed.", 422,
+                          slug=slug, current_type=row.get("media_type"), new_type=sniffed, filename=name_for_type)
+        spec = object_types.get_object_type(sniffed)
+        decision = ingest._apply_pre_store(spec, object_types.IngestCandidate(
+            filename=name_for_type, path=new_path, media_type=sniffed, source=who))
+        if decision.action == "reject":
+            raise _refuse("replace_rejected", decision.reason or f"The {spec.label} type refused this file.", 422)
+        if decision.action != "accept":
+            raise _refuse("replace_needs_decision", f"The {spec.label} type would ask the owner a question about this "
+                          "file (as on upload), which a replace can't do. Upload it as a new item instead.", 422,
+                          media_type=sniffed)
+        final_name = _final_filename(row, filename)
+        with db.transaction(dry_run=dry_run):
+            fresh = get_item(slug)  # re-read under the write lock
+            if fresh.get("redacted") or fresh.get("stored_filename") != row["stored_filename"]:
+                raise _refuse("conflict_changed", f"{slug} changed while its file was being replaced (redacted, or "
+                              "replaced by someone else). Nothing was changed; try again.", 409)
+            with db.ImageLog(OP_REPLACE_FILE, actor, batch_id, [slug]) as log:
+                log.update("capture_events", {"slug": slug}, {
+                    "stored_filename": new_stored, "filename": final_name, "file_size": len(content),
+                    "source_modified_at": None})
+                entry = _trash_insert(log, batch_id, fresh, REASON_REPLACE, with_thumb=False)
+                muts = list(log.muts)
+            if entry and not dry_run:
+                for src, dst in _file_pairs(entry):
+                    _move(src, dst, moved)
+        committed = True
+    except BaseException:
+        rollback_moves(moved)
+        raise
+    finally:
+        if dry_run or not committed:
+            new_path.unlink(missing_ok=True)
+    if not dry_run:
+        _reprocess_file(slug, run_background or ingest.run_in_thread)
+    item = db.get_by_slug(slug)
+    return _result(OP_REPLACE_FILE, muts, batch_id, dry_run, item, slug=slug, filename=final_name,
+                   previous_stored_filename=row["stored_filename"], previous_size=row.get("file_size"),
+                   new_size=len(content), trashed=bool(entry), expires_at=_expiry(muts), trash_days=TRASH_DAYS)
+
+
 # --- delete ----------------------------------------------------------------------------
 
 def _delete_one(row, batch_id, actor):
@@ -759,6 +924,26 @@ def after_undo(rows, plan):
         if r.get("op") == OP_RETYPE:
             for slug in r.get("affected_slugs") or []:
                 _reprocess(slug, ingest.run_in_thread)
+    for slug in _swapped_files(rows):  # #617: the bytes changed (a replace undone, or such an undo undone)
+        _reprocess_file(slug, ingest.run_in_thread)
+
+
+def _swapped_files(rows):
+    """Slugs whose stored file changed in these change-log rows (a replace_file, its undo, or the
+    undo of that undo): their derived data (text, thumbnail, hash) belongs to the other file."""
+    out = []
+    for r in rows:
+        for m in r.get("mutations") or []:
+            b, a = m.get("before"), m.get("after")
+            if (m.get("table") == "capture_events" and b and a and "stored_filename" in b and "stored_filename" in a
+                    and b["stored_filename"] != a["stored_filename"] and m["key"]["slug"] not in out):
+                out.append(m["key"]["slug"])
+    return out
+
+
+def needs_after_undo(rows):
+    """True when undoing `rows` needs the post-commit tidy-up even with no trash files to move."""
+    return any(r.get("op") == OP_RETYPE for r in rows) or bool(_swapped_files(rows))
 
 
 # --- purge -----------------------------------------------------------------------------

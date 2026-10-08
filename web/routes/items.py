@@ -16,6 +16,7 @@ from web import content_security, files_feed
 from web.common import from_request_thread
 from web.shapes import _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
 from core import policy, roles
+from core.errors import AppError
 from core.object_types import code as code_type
 from web.roles import RoleRouter, requires
 
@@ -570,6 +571,25 @@ def api_set_item_date(slug: str, display_date: float | None = Form(None), reset:
                        "start_by_hand": card.get("start_date_override") is not None,
                        "end_by_hand": card.get("end_date_override") is not None}
     return JSONResponse(out)
+
+
+@router.post("/api/image/{slug}/replace-file")
+async def api_replace_file(request: Request, slug: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """#617: replace the item's file bytes, keep the item (slug, cards, tags, title, captions). The
+    object page's "Replace file…" action. Editor+ (the router default). The old bytes go to the
+    trash for TRASH_DAYS in the same change; `batch_id` undoes it via POST /api/changes/{batch_id}/undo.
+    Errors carry specific codes (replace_redacted, replace_type_mismatch, file_too_large,
+    empty_file, ...), see core/items.replace_file."""
+    await run_in_threadpool(policy.viewable_item, slug)  # #467: 404 if missing or not viewable
+    if file.size is not None and file.size > storage.MAX_BYTES:
+        raise AppError("file_too_large", f"The replacement is {file.size / 1048576:.1f} MB, over the {storage.MAX_MB} MB "
+                       "upload limit. Nothing was changed.", status=413, details={"max_bytes": storage.MAX_BYTES})
+    content = await file.read(storage.MAX_BYTES + 1)  # bounded: one byte past the cap is enough to refuse
+    result = await run_in_threadpool(lambda: items.replace_file(slug, content, file.filename or None,
+                                                                run_background=background_tasks.add_task))
+    return JSONResponse({**_to_public(result.item), "replaced": True, "batch_id": result.batch_id,
+                         "previous_size": result.data["previous_size"], "new_size": result.data["new_size"],
+                         "trash_days": result.data["trash_days"]})
 
 
 @router.post("/api/image/{slug}/redact")

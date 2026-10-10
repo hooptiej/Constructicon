@@ -933,6 +933,31 @@ Two ideas share the nav rail's "Curator" tab and one queue:
   `scripts/test_ownership_sensitive.py` (the queue as each role sees it), both on a throwaway DB, and, against a
   live instance, `scripts/check_curator_queue.py`.
 
+## Writing a card's write-up (#638)
+
+A process for Claude sessions; the app does not draft write-ups itself yet (that is #639). Two passes, in
+this order, and never straight to final prose:
+1. **Evidence pass** (from the card's own items, via `constructicon_get_project`):
+   - **When:** sort items by their resolved date (`effective_date`) and cluster same-day or close items into
+     likely work sessions. That is the story's skeleton.
+   - **What and where:** read each item's auto-caption (`type_metadata.auto_caption`) and OCR text
+     (`extracted_text`) per cluster. A detail that recurs across independent items is signal; a detail that
+     appears once is probably caption noise, so drop it. **Any count in an auto-caption is untrustworthy**
+     (wheels, parts, anything): moondream fails at counting every time, and repetition doesn't fix it.
+   - **Which parts:** CAD/STL/source filenames are a separate signal that photos can't give (part names, sub-assemblies).
+   - **Seams:** files sharing a tag or card are not necessarily one story. On Clod-a-Pede, a set of truck-face
+     STLs looked like part of the mascot but was an unrelated, abandoned idea. Flag anything that could be a
+     separate or abandoned direction; don't stitch it in.
+   - Write this up as a **draft** with confidence noted and the open questions listed.
+2. **Oral-history pass** (with the owner): bring the draft and ask how it worked and why, one question at a
+   time. The owner's answers go into the write-up as fact; any Claude analysis goes in a separate, clearly
+   labelled section. Confirm an interpretation before stating it. The data has the "when" and the "what";
+   only the owner has the "why" (intent, what was tried and dropped, what a part is for).
+
+Only then save it (`constructicon_set_project_writeup`). If the owner isn't available, a write-up built from the
+evidence pass alone must say so at the top ("Reconstructed by Claude from the project's own files ...").
+Voice: narrative, in chronological order, with real dates and tools named, not a dry spec sheet.
+
 ## Adding an object type
 
 To add a new object type (issue #448 contract v2):

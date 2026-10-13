@@ -155,15 +155,24 @@ the date and commit forward when you re-verify.
   `ocr_capable`: video is captioned but not OCR'd; STL is explicitly
   excluded — wireframe renders produce garbage). Strictly one image at a
   time under `CAPTION_LOCK`. #454: **No routine restarts; restart only on
-  failure or if Ollama RAM exceeds ceiling, guarded by cooldown + circuit
-  breaker.** Keep-alive model unload is now the primary memory release; restarts
-  (via Docker Engine API) are a safety valve for failures or runaway memory.
+  failure, guarded by cooldown + circuit breaker.** Keep-alive model unload is
+  the primary memory release; a restart is a safety valve for failures.
+  **#643: the app container never holds the Docker socket.** The restart is a
+  POST to the `ollama-restarter` sidecar (`ops/ollama-restarter/restarter.py`,
+  stdlib only), the only container that mounts `/var/run/docker.sock`. It restarts
+  only the container in ITS `RESTARTER_CONTAINER` (never from the request), needs
+  the shared secret (`X-Restart-Token`, from `secrets/ollama_restart_token`), allows
+  one attempt per `RESTARTER_MIN_INTERVAL_SECONDS` (default 300) and makes no other
+  Docker call (so #454's RAM-ceiling check, which read container stats, is gone).
+  It sits on an `internal: true` compose network shared only with the web service,
+  no published port. Web side: `CAPTION_RESTART_URL` + `CAPTION_RESTART_TOKEN_FILE`;
+  unset, unreachable, 429 or 401 = "no valve this time", logged, breaker untouched.
   **Deploy prerequisites for the app container** — join Ollama's compose
   network (`ollama_default`, external — the ipvlan `questlog-lan` network can't
-  reach the host's published `:11434`) so `http://ollama:11434` resolves,
-  and bind-mount `/var/run/docker.sock` for safety-valve restarts + RAM reading.
-  Without the socket it relies on Ollama's own `keep_alive: 0` model unload;
-  set `CAPTION_DISABLED=1` to skip captioning entirely. Tune with the admin
+  reach the host's published `:11434`) so `http://ollama:11434` resolves, and
+  the `restart-valve` network for the sidecar (see `docker-compose.yml.example`).
+  Set `CAPTION_DISABLED=1` to skip captioning entirely. Check with
+  `scripts/test_restart_sidecar_643.py`. Tune with the admin
   page's (`/admin`) "Caption tuning" panel (`POST /api/captions/test`) before
   changing the defaults in that module.
 - **`core/embedded_metadata.py`** (#255, #265) — metadata the uploaded
@@ -1454,7 +1463,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `check_routes_roles`, `check_policy_doors`;
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,
-    `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`;
+    `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
+    `test_restart_sidecar_643`;
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
     `test_email_type`, `test_traditional_media`, `test_office` (live);
   - pages, search, dates, UI: `test_search_543`, `test_item_title_542`, `test_mountain_time_544` (`.py` and
@@ -1604,7 +1614,9 @@ so its deploys skip the snapshot (by design, don't snapshot 2.75 TB for a test).
 
 **The SQLite DB lives in its own directory, never a bare file mount (#453, 2026-09-30).** Both services mount `Media/<instance>/db/` at `/app/data/` with `CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db`. WAL mode keeps `-wal`/`-shm` beside the DB, and the old single-file mount gave web and mcp private copies, which corrupted constructicon-test's DB. Read DB state with a plain `sqlite3.connect(db.DB_PATH)` inside the app container, not a `?mode=ro` URI (that can miss the WAL and show stale rows). Every `/api/backup` result now includes `integrity`.
 
-**Captions: guarded, not per-image-restarted (#454, 2026-09-30).** The old per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Captions are back ON everywhere with the #454 safety valve (restart only on failure / RAM ceiling, 10-min cooldown, circuit breaker; status in `GET /api/captions/defaults` → `breaker`, reset via `POST /api/captions/reset-breaker`). All four services join `ollama_default`. Only the **web** services mount `/var/run/docker.sock`; the MCP services deliberately don't (#458), so only web can do safety-valve restarts. After a reboot, check `ollama` is actually running: it can fail to start before the NVIDIA driver loads (see #454).
+**Captions: guarded, not per-image-restarted (#454, 2026-09-30).** The old per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Captions are back ON everywhere with the #454 safety valve (restart only on failure, 10-min cooldown, circuit breaker; status in `GET /api/captions/defaults` → `breaker` and `restart_valve`, reset via `POST /api/captions/reset-breaker`). All four services join `ollama_default`. **No app container mounts `/var/run/docker.sock` (#643):** web asks the `ollama-restarter` sidecar (see `core/captions.py` above), which is the only holder of the socket; MCP has neither (#458), so only web can trigger safety-valve restarts. After a reboot, check `ollama` is actually running: it can fail to start before the NVIDIA driver loads (see #454).
+
+**The app runs as a non-root user (#643):** UID/GID 1000 (`app` in the image, Dockerfile `APP_UID`/`APP_GID`), which is `hoop` on the NAS. Every read-write bind mount (storage, db, backups, exports, import) must be owned by 1000:1000 on the host; files a root container wrote before #643 need a one-time `sudo chown -R 1000:1000 <dir>`. A `Permission denied` on upload, thumbnail, backup or export after a deploy means a directory missed that chown. `docker exec <web> id` should print `uid=1000(app)`.
 
 Two containers run side by side on that box:
 
@@ -1770,7 +1782,9 @@ the module was actually imported with real dependencies.
    (written by the container's own process) — plain `rm -rf` from the
    `hoop` user will hit `Permission denied` on those. Clean them from
    *inside* the container instead: `sudo docker exec constructicon-test
-   find /app/core -name __pycache__ -exec rm -rf {} +`.
+   find /app/core -name __pycache__ -exec rm -rf {} +`. (Since #643 the app runs
+   as UID 1000, so new ones are hoop-owned; leftovers from before still need this,
+   via `sudo docker exec -u 0 ...` since the container's user can't remove them.)
 6. **Prefer real files over synthetic ones for upload/render-path tests.**
    Before hand-building a test file (a minimal STL triangle, a hand-crafted
    PSD header, etc.), check whether `constructicon-web` (production) already

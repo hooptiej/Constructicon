@@ -4,11 +4,20 @@ services:
   # #453: mount the DB's DIRECTORY, never the bare imagerepo.db file. SQLite runs in
   # WAL mode, which keeps -wal/-shm next to the DB; with a file-only mount each
   # container gets private copies and web + mcp corrupt the shared database.
+  #
+  # #643: the app image runs as a non-root user, UID/GID 1000 (Dockerfile ARG APP_UID /
+  # APP_GID). Every host directory bind-mounted read-write below (storage, db, backups,
+  # exports, import) must be owned by that UID, e.g. `sudo chown -R 1000:1000 ./storage ./db`.
+  # The web container NEVER mounts /var/run/docker.sock: Ollama's caption safety-valve
+  # restart goes through the ollama-restarter sidecar below.
   constructicon-web:
     build: .
     container_name: constructicon-web
     ports:
       - "8000:8000"
+    networks:
+      - default
+      - restart-valve      # #643: reach ollama-restarter, and nothing else on that network
     volumes:
       - ./core:/app/core
       - ./web:/app/web
@@ -19,12 +28,48 @@ services:
       # #467 step 2: the install token, ONE file shared with the MCP service below. Create it with
       #   python3 scripts/mcp_token.py generate ./secrets/constructicon_token   (mode 600)
       - ./secrets/constructicon_token:/run/secrets/constructicon_token:ro
+      # #643: the restart sidecar's shared secret (same file as ollama-restarter's).
+      - ./secrets/ollama_restart_token:/run/secrets/ollama_restart_token:ro
     environment:
       - IMAGEREPO_BASE_URL=http://10.0.1.78:8000
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
       # Non-browser clients (scripts) send it as Authorization: Bearer.
       - CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token
+      # #643: captions' safety valve. Leave both unset (and drop the sidecar) for an
+      # install without Ollama: captions then just have no restart valve.
+      - CAPTION_RESTART_URL=http://ollama-restarter:8080/restart
+      - CAPTION_RESTART_TOKEN_FILE=/run/secrets/ollama_restart_token
     command: uvicorn web.app:app --host 0.0.0.0 --port 8000
+
+  # #643: the ONLY container with the Docker socket. It does one thing: restart the
+  # container named in RESTARTER_CONTAINER (never taken from the request), at most once
+  # per RESTARTER_MIN_INTERVAL_SECONDS, for a caller that presents the shared secret.
+  # No published port; its only network is `internal`, shared with the web service.
+  # Create the secret once:
+  #   python3 scripts/mcp_token.py generate ./secrets/ollama_restart_token   (mode 600)
+  # It runs as UID 1000 (so it can read that file) plus the group that owns the socket:
+  # set group_add to `stat -c %g /var/run/docker.sock` on your host (999 on the NAS).
+  ollama-restarter:
+    build: ./ops/ollama-restarter
+    container_name: constructicon-ollama-restarter
+    user: "1000:1000"
+    group_add:
+      - "999"
+    networks:
+      - restart-valve
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./secrets/ollama_restart_token:/run/secrets/ollama_restart_token:ro
+    environment:
+      - RESTARTER_CONTAINER=ollama
+      - RESTARTER_TOKEN_FILE=/run/secrets/ollama_restart_token
+      - RESTARTER_MIN_INTERVAL_SECONDS=300
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
 
   constructicon-mcp:
     build: .
@@ -67,3 +112,9 @@ services:
       - IMAGEREPO_BASE_URL=http://10.0.1.78:8001
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
     command: uvicorn web.app:app --host 0.0.0.0 --port 8000
+
+networks:
+  # #643: the restart sidecar's network. `internal: true` = no route out, no published
+  # port; only services listed on it (constructicon-web, ollama-restarter) can reach it.
+  restart-valve:
+    internal: true

@@ -281,7 +281,7 @@
          an objective tool beats a guess-deploy-eyeball cycle. Each run goes
          through the exact pipeline cycle (POST /api/captions/test →
          core/captions.py caption_once: lock, one call, guarded restart on
-         failure or RAM ceiling, #454), so the timings shown are what
+         failure, #454; via the restart sidecar, #643), so the timings shown are what
          production will see. Nothing here writes to the object. Full-row
          panel: controls on the left, the preview image and model output on
          the right, so a long caption has real width to wrap into instead of
@@ -1003,7 +1003,7 @@
       capTemp.value = d.temperature; capTempVal.textContent = Number(d.temperature).toFixed(2);
       capTokens.value = d.num_predict; capTokensVal.textContent = d.num_predict;
       capPrompt.value = d.prompt;
-      capOllamaStatus.textContent = d.ollama_up ? `${d.model} up` + (d.docker_socket ? '' : ' (no restart)') : 'Ollama unreachable';
+      capOllamaStatus.textContent = d.ollama_up ? `${d.model} up` + (d.restart_valve ? '' : ' (no restart)') : 'Ollama unreachable';
       capOllamaStatus.className = 'apikey-status' + (d.ollama_up ? ' apikey-status-set' : '');
       if (d.disabled) { capOllamaStatus.textContent = 'Captions are off'; capOllamaStatus.className = 'apikey-status'; }
       capSkippedMsg.textContent = d.disabled

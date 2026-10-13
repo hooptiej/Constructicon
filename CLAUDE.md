@@ -1741,6 +1741,14 @@ the module was actually imported with real dependencies.
    bug. Confirmed reliable deploying all of #103/#95/#88+#90/#92+#93's
    changes to `constructicon-web` (production) in one shot, verified by
    grepping the remote files afterward for content unique to each PR.
+   **From a Windows checkout, ship the branch's committed files, not the
+   working copy, and turn off CRLF conversion (#654):** the working files
+   are CRLF (`core.autocrlf=true`), and so is a plain `git archive`. Use
+   `git -c core.autocrlf=false archive HEAD core web | ssh -i
+   ~/.ssh/id_ed25519_truenas hoop@10.0.1.78 'cd "<target-dir>" && tar xf -'`.
+   Then check `git diff --stat` on the box: it should show only your real
+   change. A whole-file rewrite means the endings came across as CRLF
+   (seen 2026-10-12 on #642: 1838 lines changed for an 8-line fix).
 3. `sudo docker restart constructicon-test`, then `sudo docker logs
    constructicon-test --tail 20` — look for `Application startup complete`
    with no traceback.

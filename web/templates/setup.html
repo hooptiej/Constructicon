@@ -6,7 +6,9 @@
 {% include "_blog_builder.html" %}
 {% include "_export_builder.html" %}
 {#- #467 step 1: first-run setup. Served only while the install has no user (404 afterwards).
-    Creates the first admin, signs them in, and fills the install's owner name when unset. -#}
+    Creates the first admin, signs them in, and fills the install's owner name when unset.
+    #648: claiming the install needs its install token (the secret file made on the server during
+    rollout), so reaching this page first is not enough. -#}
 <div class="app-main">
   <section class="admin-panel auth-card">
     <div>
@@ -15,7 +17,14 @@
         other people (viewers, editors, admins) in Admin &rarr; Users.{% if not owner_name_set %} Your name also becomes
         the install's owner name (change it any time in Admin &rarr; Install).{% endif %}</p>
     </div>
+    {% if proof_available %}
     <form id="setup-form" class="auth-form" method="post" novalidate>
+      <label>Install token
+        <input class="input" type="password" name="{{ proof_field }}" id="setup-install-token" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+      </label>
+      <p class="page-subtitle" id="setup-token-help">This proves you're the person who set up this install. It's the
+        contents of <code>secrets/constructicon_token</code> in the install's folder on the server (for example
+        <code>cat secrets/constructicon_token</code> there). It's checked once and never stored.</p>
       <label>Your name
         <input class="input" name="display_name" id="setup-display-name" autocomplete="name" maxlength="80">
       </label>
@@ -31,11 +40,18 @@
       <p class="error-text" id="setup-error" role="alert" hidden></p>
       <button type="submit" class="btn-primary" id="setup-submit">Create the admin account</button>
     </form>
+    {% else %}
+    <p class="error-text" id="setup-unavailable" role="status">This install has no install token configured, so the admin
+      account can't be created here. On the server, run
+      <code>docker exec &lt;web container&gt; python3 scripts/reset_password.py --create-admin &lt;username&gt; --generate</code>
+      (it prints the new password once), then sign in.</p>
+    {% endif %}
   </section>
 </div>
 <script>
 (function () {
   const form = document.getElementById('setup-form');
+  if (!form) return;
   const err = document.getElementById('setup-error');
   const btn = document.getElementById('setup-submit');
   function fail(msg) { err.textContent = msg; err.hidden = false; }
@@ -49,6 +65,7 @@
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
+          {{ proof_field }}: form.elements['{{ proof_field }}'].value,
           username: form.username.value,
           display_name: form.display_name.value,
           password: form.password.value,

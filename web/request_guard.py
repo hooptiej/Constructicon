@@ -113,7 +113,7 @@ AUDIT_ROUTE_RULES = {
     # #467 step 1: everything that carries a password (sign-in, first-run setup, my password,
     # creating a user) logs no body values at all.
     "/api/auth/login": "none",
-    "/api/auth/setup": "none",
+    "/api/auth/setup": "none",  # #648: also carries the install token (users.SETUP_PROOF_FIELD)
     "/api/account/password": "none",
     "/api/users": "none",
 }

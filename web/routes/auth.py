@@ -75,7 +75,9 @@ def setup_page(request: Request):
     """First-run setup: only while the install has no user at all, else 404."""
     if not users.setup_needed():
         raise NotFound("Setup is already done.")
-    return templates.TemplateResponse(request, "setup.html", {"owner_name_set": bool(install_config.owner_name())})
+    return templates.TemplateResponse(request, "setup.html", {"owner_name_set": bool(install_config.owner_name()),
+                                                              "proof_available": users.setup_proof_available(),
+                                                              "proof_field": users.SETUP_PROOF_FIELD})
 
 
 @router.get("/logout", response_class=HTMLResponse)
@@ -111,9 +113,11 @@ def api_login(request: Request):
 
 @router.post("/api/auth/setup")
 def api_setup(request: Request):
-    """First-run: JSON {username, password, display_name?} creates the first admin and signs
-    them in. 404 once any user exists."""
+    """First-run: JSON {install_token, username, password, display_name?} creates the first admin
+    and signs them in. 404 once any user exists. #648: the install token proves the claim comes
+    from the operator (403 without it or when wrong, 429 after repeats); the body is never logged."""
     body = _json_body(request)
+    users.require_setup_proof(body.get(users.SETUP_PROOF_FIELD), _client_ip(request))
     result = users.create_first_admin(body.get("username"), body.get("password"), body.get("display_name"))
     user = users.get(result.data["user"]["id"])
     return _signed_in_response(request, user, {"batch_id": result.batch_id})

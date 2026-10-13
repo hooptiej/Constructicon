@@ -125,7 +125,7 @@ print("--- 2. users ---")
 admin = new_client()
 admin_name, admin_pw = "boss_" + secrets.token_hex(2), pw()
 SECRETS.append(admin_pw)
-r = admin.post("/api/auth/setup", json={"username": admin_name, "password": admin_pw}, headers=SAME)
+r = admin.post("/api/auth/setup", json={"username": admin_name, "password": admin_pw, "install_token": TOKEN}, headers=SAME)
 check("setup creates the admin and signs in", r.status_code == 200 and r.json()["user"]["role"] == "admin", r.text[:200])
 check("after setup: /setup 404", anon.get("/setup").status_code == 404)
 check("after setup: POST /api/auth/setup 404",

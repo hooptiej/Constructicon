@@ -149,7 +149,9 @@ cur = paths.current_export_dir()
 (cur / "media" / "u2.svg").write_bytes(SVG)
 (cur / "media" / "u3.png").write_bytes(png.getvalue())
 r = client.get("/preview/index.html")
-check("preview: the generated page still renders (no CSP, no attachment)", r.status_code == 200 and "content-security-policy" not in hdr(r)
+# #645: the generated pages carry the light preview policy (security_headers.PREVIEW_CSP), never the sandbox.
+check("preview: the generated page still renders (not sandboxed, no attachment)", r.status_code == 200
+      and "sandbox" not in hdr(r).get("content-security-policy", "")
       and not hdr(r).get("content-disposition", "").startswith("attachment") and "zq610idx" in r.text)
 r = client.get("/preview/media/u1.html")
 check("preview: a user .html is sandboxed + attachment + nosniff", r.status_code == 200 and hdr(r).get("content-security-policy") == CSP
@@ -158,8 +160,8 @@ r = client.get("/preview/media/u2.svg")
 check("preview: a user .svg is sandboxed + nosniff", r.status_code == 200 and hdr(r).get("content-security-policy") == CSP
       and hdr(r).get("x-content-type-options") == "nosniff", hdr(r))
 r = client.get("/preview/media/u3.png")
-check("preview: a user .png is nosniff only", r.status_code == 200 and hdr(r).get("x-content-type-options") == "nosniff"
-      and "content-security-policy" not in hdr(r))
+check("preview: a user .png is nosniff, not sandboxed", r.status_code == 200 and hdr(r).get("x-content-type-options") == "nosniff"
+      and "sandbox" not in hdr(r).get("content-security-policy", ""))
 check("preview: anonymous turned away (unchanged)", anon.get("/preview/media/u1.html", follow_redirects=False).status_code in (302, 401))
 
 print()

@@ -189,7 +189,7 @@ async function loadBrandAssets() {
                     <div class="brand-asset-links">
                       <div class="brand-asset-link-item">
                         <span class="brand-asset-link-text">${escapeHtml(asset.file_url)}</span>
-                        <button type="button" class="brand-asset-copy-btn" title="Copy file URL" onclick="copyToClipboard('${escapeAttr(asset.file_url)}'); event.preventDefault();">Copy</button>
+                        <button type="button" class="brand-asset-copy-btn" title="Copy file URL" data-url="${escapeAttr(asset.file_url)}">Copy</button>
                       </div>
                     </div>
                   </div>
@@ -199,6 +199,15 @@ async function loadBrandAssets() {
           </div>
         </div>
       `).join('');
+
+    // #645: no inline onclick (the CSP blocks inline handlers); data-url + a listener, as the
+    // brand drawer does. The button sits inside the card's link, so stop the navigation.
+    container.querySelectorAll('.brand-asset-copy-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        copyToClipboard(btn.dataset.url, btn);
+      });
+    });
   } catch (err) {
     console.error('Failed to load brand assets:', err);
   }
@@ -222,10 +231,9 @@ function escapeHtml(str) {
   return encodeHtml(str);
 }
 
-function copyToClipboard(text) {
+function copyToClipboard(text, btn) {
   navigator.clipboard.writeText(text).then(() => {
     // Show brief confirmation
-    const btn = event.target;
     const orig = btn.textContent;
     btn.textContent = '✓ Copied';
     setTimeout(() => {

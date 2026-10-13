@@ -35,6 +35,15 @@ services:
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
       # Non-browser clients (scripts) send it as Authorization: Bearer.
       - CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token
+      # #645: browser security headers (web/security_headers.py) are always on; these only tune them.
+      #   HSTS, sent ONLY on requests that really arrived over HTTPS. Off by default (plain-HTTP
+      #   installs must never send it). Set it once the install is served over HTTPS (behind a
+      #   proxy that also needs #646's proxy settings), e.g. one year:
+      # - CONSTRUCTICON_HSTS_SECONDS=31536000
+      #   Replace the app pages' Content-Security-Policy (default: security_headers.APP_CSP), or "off".
+      # - CONSTRUCTICON_CSP=
+      #   Diagnose a page the CSP breaks: send it as Content-Security-Policy-Report-Only instead.
+      # - CONSTRUCTICON_CSP_REPORT_ONLY=1
       # #643: captions' safety valve. Leave both unset (and drop the sidecar) for an
       # install without Ollama: captions then just have no restart valve.
       - CAPTION_RESTART_URL=http://ollama-restarter:8080/restart

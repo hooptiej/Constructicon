@@ -19,9 +19,12 @@ import threading
 import imagehash
 import numpy as np
 from PIL import Image, ImageStat
-from sentence_transformers import SentenceTransformer
 
 from . import db
+
+# sentence_transformers (and torch under it) is imported in _get_model, not here: #644 runs the
+# perceptual hash in a parser child process (core/parse_limits.py), which imports this module and
+# must not pay seconds of torch import, or its memory, for a hash.
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 PHASH_MATCH_THRESHOLD = 8         # Hamming distance out of 64 bits — lower is more similar
@@ -42,6 +45,7 @@ def _get_model():
     if _model is None:
         with _model_lock:
             if _model is None:
+                from sentence_transformers import SentenceTransformer
                 _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return _model
 

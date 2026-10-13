@@ -4,7 +4,7 @@ and wallpaper listings."""
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 
-from core import db, item_title, object_types, storage, thumbnails
+from core import db, item_title, object_types, parse_limits, storage, thumbnails
 from web import content_security
 from core import access_log, policy, roles
 from web.roles import RoleRouter, requires
@@ -77,6 +77,11 @@ def get_file(slug: str):
     return content_security.serve_file(path, filename=row["filename"])
 
 
+# #644: a request waits at most this long for a free parser slot (core/parse_limits.py) before it
+# answers 404; background work (upload, OCR) waits as long as it takes.
+_THUMB_WAIT_SECONDS = 10
+
+
 @router.get("/f/{slug}/thumb", dependencies=requires(roles.PUBLIC))
 def get_thumbnail(slug: str):
     row = db.get_by_slug(slug)
@@ -92,7 +97,7 @@ def get_thumbnail(slug: str):
         # e.g. the background OCR pass hasn't run or its fetch failed
         # transiently. Try once, synchronously, so a first page load isn't
         # stuck with a permanently broken thumbnail just because of timing.
-        thumbnails.ensure_thumbnail(row)
+        thumbnails.ensure_thumbnail(row, wait=_THUMB_WAIT_SECONDS)
     spec = object_types.get_object_type(row.get("media_type"))
     if spec.thumbnail_source != object_types.ThumbnailSource.UPLOADED_FILE and not storage.thumb_path_for(slug).exists():
         # #478: a CAPTURE/FETCH type's thumbnail is generated, never the file
@@ -100,9 +105,14 @@ def get_thumbnail(slug: str):
         # if there's still nothing, 404 rather than falling back to the
         # original, which served a .docx/.zip/.stl to an <img> tag.
         if row.get("stored_filename"):
-            thumbnails.ensure_thumbnail(row)
+            thumbnails.ensure_thumbnail(row, wait=_THUMB_WAIT_SECONDS)
         if not storage.thumb_path_for(slug).exists():
             raise HTTPException(status_code=404, detail="no thumbnail for this item")
+    if not storage.thumb_path_for(slug).exists() and parse_limits.has_failure(thumbnails.limit_key(row),
+                                                                              thumbnails.THUMBNAIL_STEP):
+        # #644: its thumbnail hit a parser limit (e.g. an image over the pixel cap). Don't fall back
+        # to the original below: that would hand the oversized file to every browser that shows a tile.
+        raise HTTPException(status_code=404, detail="no thumbnail for this item (a parser limit stopped it)")
     path = storage.thumb_path_or_original(slug, row["stored_filename"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="file missing on disk")

@@ -2,7 +2,8 @@
 into the dicts pages and the JSON API return, plus the small pure helpers they use.
 Moved verbatim from web/app.py."""
 
-from core import captions, card_payload, cards, datefmt, db, item_title, object_types, policy, revisions, storage, timeline, users
+from core import (captions, card_payload, cards, datefmt, db, item_title, object_types, parse_limits, policy, revisions,
+                  storage, thumbnails, timeline, users)
 
 
 def _has_thumbnail(row, spec=None):
@@ -24,6 +25,10 @@ def _has_thumbnail(row, spec=None):
     claiming a /f/<slug>/thumb URL that will only ever 404 (#197)."""
     spec = spec or object_types.get_object_type(row.get("media_type"))
     if spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE and spec.capture_fn is None:
+        return False
+    if parse_limits.has_failure(thumbnails.limit_key(row), thumbnails.THUMBNAIL_STEP):
+        # #644: its thumbnail hit a parser limit (remembered for an hour): show the type's icon,
+        # not an <img> that 404s.
         return False
     if spec.has_thumbnail_fn is not None:
         # #478: the type knows per row (e.g. a .docx saved without a preview)
@@ -241,7 +246,9 @@ def _call_properties_fn(spec, row):
     if not spec.properties_fn:
         return {}
     try:
-        return spec.properties_fn(row) or {}
+        # #644: in a parser child, page-view budget; a limit hit is remembered for the page.
+        return parse_limits.call(spec.properties_fn, row, kind=parse_limits.VIEW, what="properties",
+                                 key=thumbnails.limit_key(row)) or {}
     except Exception as e:
         print(f"properties_fn failed for {row.get('slug')}: {e!r}")
         return {}
@@ -373,6 +380,9 @@ def _to_object_detail(row):
     ))
     item["preview_assets"] = list(spec.preview_assets)
     item["preview_layout"] = spec.preview_layout  # #606: "table" = the preview gets the page width
+    # #644: the parser limits this file hit (this process remembers them for an hour), for the
+    # notice under the preview. Read last, so a limit the preview itself just hit is included.
+    item["parse_limits"] = parse_limits.failures_for(thumbnails.limit_key(row))
     return item
 
 

@@ -59,7 +59,7 @@ from pathlib import Path
 import pytesseract
 from PIL import Image, ImageOps, ImageStat
 
-from . import db, object_types, similarity, storage, thumbnails
+from . import db, object_types, parse_limits, similarity, storage, thumbnails
 
 MIN_NICKNAME_LEN = 3
 OCR_TIMEOUT_SECONDS = 20  # a real screenshot should OCR in a few seconds; past 20s it's not worth the wait
@@ -125,7 +125,8 @@ def _compute_similarity_signals(slug, image_path, text):
     extracted_text/ocr_status, it just leaves that row without a similarity
     signal."""
     try:
-        db.set_perceptual_hash(slug, similarity.compute_perceptual_hash(image_path))
+        db.set_perceptual_hash(slug, parse_limits.call(similarity.compute_perceptual_hash, image_path,
+                                                       kind=parse_limits.BACKGROUND, what="similarity hash"))
     except Exception as e:
         print(f"Perceptual hash failed for {slug}: {e!r}")
     try:
@@ -166,7 +167,7 @@ def _preprocess_for_ocr(img):
     return img
 
 
-def _load_for_ocr(image_path):
+def _load_for_ocr(image_path, key=None):
     """Open an image for pytesseract, guaranteed to hand it a format it
     actually recognizes. pytesseract checks the PIL Image's own `.format`
     attribute (set once, at the original open, and preserved through
@@ -185,12 +186,20 @@ def _load_for_ocr(image_path):
 
     #288: the EXIF Orientation tag is applied first (storage.exif_upright)
     so tesseract sees the photo the way a person does -- it reads rotated
-    text about as well as anyone reads a page turned on its side."""
+    text about as well as anyone reads a page turned on its side.
+
+    #644: the decode and preprocessing run in a parser child (core/parse_limits.py); only the
+    finished PNG (long side at most MAX_OCR_DIMENSION) comes back."""
+    png = parse_limits.call(_ocr_png, str(image_path), kind=parse_limits.BACKGROUND, what="OCR image", key=key)
+    return Image.open(io.BytesIO(png))
+
+
+def _ocr_png(image_path):
+    """_load_for_ocr's work, in the parser child: the preprocessed image as PNG bytes."""
     img = _preprocess_for_ocr(storage.exif_upright(Image.open(image_path)).convert("RGB"))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    buf.seek(0)
-    return Image.open(buf)
+    return buf.getvalue()
 
 
 def run_ocr(slug):
@@ -255,7 +264,9 @@ def _run_ocr_pipeline(slug, row, spec):
     text = None
     if spec.text_extract_fn is not None:
         try:
-            text = spec.text_extract_fn(row) or None
+            # #644: in a parser child, background budget; a limit hit is remembered for the page.
+            text = parse_limits.call(spec.text_extract_fn, row, kind=parse_limits.BACKGROUND,
+                                     what="text extraction", key=thumbnails.limit_key(row)) or None
         except Exception as e:
             print(f"text-layer extraction failed for {slug}: {e!r}")
 
@@ -270,7 +281,8 @@ def _run_ocr_pipeline(slug, row, spec):
             return
         with OCR_SEMAPHORE:
             try:
-                text = pytesseract.image_to_string(_load_for_ocr(image_path), timeout=OCR_TIMEOUT_SECONDS)
+                text = pytesseract.image_to_string(_load_for_ocr(image_path, thumbnails.limit_key(row)),
+                                                   timeout=OCR_TIMEOUT_SECONDS)
             except Exception as e:
                 # Best-effort — OCR quality issues, a corrupt image, or a
                 # timeout shouldn't ever surface as an upload failure, but

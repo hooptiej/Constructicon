@@ -10,7 +10,7 @@ from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTa
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from core import access_log, besteffort, captions, db, ingest, item_title, items, membership, object_types, ocr, revisions, similarity, storage, thumbnails
+from core import access_log, besteffort, captions, db, ingest, item_title, items, membership, object_types, ocr, parse_limits, revisions, similarity, storage, thumbnails
 from core import tags as tags_svc, timeline
 from web import content_security, files_feed
 from web.common import from_request_thread
@@ -370,9 +370,23 @@ def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks
     spec = object_types.get_object_type(row.get("media_type"))
     if not spec.ocr_capable:
         raise HTTPException(status_code=400, detail=f"OCR isn't available for {spec.label} content")
+    parse_limits.forget(thumbnails.limit_key(row))  # #644: an explicit retry really runs again
     db.set_ocr_status(slug, "pending")
     background_tasks.add_task(ocr.run_ocr, slug)
     return JSONResponse(_to_public(db.get_by_slug(slug)))
+
+
+@router.post("/api/image/{slug}/parse-limits/clear")
+def api_clear_parse_limits(request: Request, slug: str):
+    """#644: forget the parser-limit hits this file's steps (thumbnail, preview, properties, text,
+    ...) are remembered for, so the next view or run really tries again instead of waiting out
+    CONSTRUCTICON_PARSE_RETRY_SECONDS. The object page's "Try again now" button. Each retry still
+    runs inside the limits."""
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    key = thumbnails.limit_key(row)
+    cleared = len(parse_limits.failures_for(key))
+    parse_limits.forget(key)
+    return JSONResponse({"ok": True, "cleared": cleared})
 
 
 @router.post("/api/image/{slug}/caption")
@@ -664,13 +678,19 @@ def api_refresh_thumbnail(request: Request, slug: str):
             # #548: a failure is an error status in the shared shape, not an HTTP 200 {ok:false}.
             raise HTTPException(status_code=500, detail=f"Failed to delete cached thumbnail: {e!r}")
 
-    # Regenerate the thumbnail
+    # Regenerate the thumbnail (#644: an explicit retry, so a remembered limit hit is cleared first)
+    parse_limits.forget(thumbnails.limit_key(row))
     success = thumbnails.ensure_thumbnail(row)
     if success:
         return JSONResponse({
             "ok": True,
             "thumb_url": f"/f/{slug}/thumb"
         })
+    hit = next((f for f in parse_limits.failures_for(thumbnails.limit_key(row))
+                if f["what"] == thumbnails.THUMBNAIL_STEP), None)
+    if hit:
+        raise AppError("parse_limit", f"No thumbnail: rendering this file {hit['message']}.", status=422,
+                       details={"kind": hit["kind"]})
     raise HTTPException(status_code=500, detail="Failed to generate thumbnail (see logs for details)")
 
 

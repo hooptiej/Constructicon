@@ -42,7 +42,7 @@ from core import access_log, actor as actor_ctx, policy, roles, users
 from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
-from core import blog, changes, hobbies, membership, reset
+from core import blog, changes, hobbies, membership, parse_limits, reset
 from core import tags as tags_svc
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
@@ -1549,6 +1549,7 @@ def constructicon_retry_ocr(slug: str) -> dict | None:
     spec = object_types.get_object_type(row.get("media_type"))
     if not spec.ocr_capable:
         raise ValueError(f"OCR isn't available for {spec.label} content")
+    parse_limits.forget(thumbnails.limit_key(row))  # #644: an explicit retry really runs again
     db.set_ocr_status(slug, "pending")
     actor_ctx.spawn(ocr.run_ocr, slug)
     return _to_public(db.get_by_slug(slug))

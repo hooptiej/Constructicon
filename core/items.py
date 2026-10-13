@@ -49,7 +49,7 @@ from pathlib import Path
 from datetime import datetime
 
 from . import captions, cards, changes, db, embedded_metadata, ingest, item_title, membership, object_types, physical_piece, provenance_options
-from . import paths, storage, thumbnails, timeline
+from . import parse_limits, paths, storage, thumbnails, timeline
 from . import tags as tags_svc
 from .cards import Result
 from .errors import AppError, Conflict, InvalidInput, NotFound
@@ -601,6 +601,7 @@ def _reprocess(slug, run_background):
     if spec.ocr_capable:
         db.set_ocr_status(slug, "pending")
     storage.thumb_path_for(slug).unlink(missing_ok=True)
+    parse_limits.forget(thumbnails.limit_key(row))  # #644: a new type re-reads the file from scratch
     embedded_metadata.fill_missing(slug)
     ingest.post_insert(slug, spec, run_background)
 
@@ -666,6 +667,7 @@ def _reprocess_file(slug, run_background):
     db.set_embedding(slug, None)
     db.set_ocr_status(slug, "pending" if spec.ocr_capable else None)
     storage.thumb_path_for(slug).unlink(missing_ok=True)
+    parse_limits.forget(thumbnails.limit_key(row))  # #644: new bytes, so old limit hits don't apply
     if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
         thumbnails.ensure_thumbnail(db.get_by_slug(slug))
     embedded_metadata.fill_missing(slug)

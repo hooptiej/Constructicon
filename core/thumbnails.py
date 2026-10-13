@@ -19,7 +19,7 @@ import logging
 import httpx
 from PIL import Image
 
-from . import besteffort, object_types, storage
+from . import besteffort, object_types, parse_limits, storage
 
 log = logging.getLogger("constructicon.thumbnails")
 
@@ -48,24 +48,52 @@ FETCH_HEADERS = {
 }
 
 
-def ensure_thumbnail(row):
+THUMBNAIL_STEP = "thumbnail"  # the parse_limits step name (the object page shows it)
+
+
+def limit_key(row):
+    """What core/parse_limits.py remembers a limit hit under: the stored file, else the slug."""
+    return row.get("stored_filename") or row.get("slug")
+
+
+def ensure_thumbnail(row, wait=None):
     """Generates and saves a thumbnail for `row` if its type has one and it
     isn't already on disk. Returns True if a thumbnail exists on disk after
     this call (freshly made or already there), False if this type has no
-    thumbnail concept or generating one failed."""
+    thumbnail concept or generating one failed.
+
+    #644: the work (decoding, rendering, fetching) runs in a parser child process
+    (core/parse_limits.py, background budget), which writes the thumbnail file itself. A limit
+    hit is remembered, so until it expires (or Retry / Refresh clears it) this returns False at
+    once instead of rendering a hostile file again. `wait`: seconds to wait for a free parser
+    slot (a request passes one; background work waits as long as it takes)."""
     slug = row["slug"]
     if storage.thumb_path_for(slug).exists():
         return True
     spec = object_types.get_object_type(row.get("media_type"))
+    if spec.thumbnail_source == object_types.ThumbnailSource.NONE:
+        return False
+    if spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE and spec.capture_fn is None:
+        return False
     try:
-        if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
-            return _from_uploaded_file(row)
-        if spec.thumbnail_source == object_types.ThumbnailSource.FETCH_URL:
-            return _from_fetch(row, spec)
-        if spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
-            return _from_capture(row, spec)
+        return bool(parse_limits.call(_generate, row, kind=parse_limits.BACKGROUND, what=THUMBNAIL_STEP,
+                                      key=limit_key(row), wait=wait))
+    except parse_limits.LimitExceeded:  # silent-ok: parse_limits logged the hit and remembers it for the page
+        return False
     except Exception as e:
         print(f"thumbnail generation failed for {slug}: {e!r}")
+    return False
+
+
+def _generate(row):
+    """ensure_thumbnail's work, in the parser child: dispatch on the type's thumbnail source."""
+    spec = object_types.get_object_type(row.get("media_type"))
+    if spec.thumbnail_source == object_types.ThumbnailSource.UPLOADED_FILE:
+        return _from_uploaded_file(row)
+    if spec.thumbnail_source == object_types.ThumbnailSource.FETCH_URL:
+        return _from_fetch(row, spec)
+    if spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE:
+        return _from_capture(row, spec)
     return False
 
 
@@ -159,12 +187,25 @@ def _encode_view(img, edge, has_alpha, prefer_png=False):
         flat = flat.resize((max(1, int(flat.width * 0.75)), max(1, int(flat.height * 0.75))))
 
 
+VIEW_STEP = "view picture"
+
+
 def render_view(row, size="preview"):
     """(image bytes, mime type, (width, height)) of a picture of this item sized for an agent to
     look at (long edge <= VIEW_MAX_EDGE, encoded <= VIEW_MAX_BYTES), or None when the item has no
     visual (a certificate, an archive, a type with no renderer). `size` is "thumb" or "preview".
     Reuses the types' own renderers via ensure_thumbnail. Never raises: an unreadable file is
-    "no visual"."""
+    "no visual". #644: decoded in a parser child (background budget)."""
+    try:
+        return parse_limits.call(_render_view, row, size, kind=parse_limits.BACKGROUND, what=VIEW_STEP,
+                                 key=limit_key(row))
+    except Exception as e:  # a limit hit or an unreadable file: "no visual"
+        besteffort.warn(log, "thumbnails: couldn't render a view picture", e, slug=row["slug"])
+        return None
+
+
+def _render_view(row, size):
+    """render_view's work, in the parser child."""
     edge = VIEW_SIZES[size]
     path = _view_source(row, size)
     if path is None:

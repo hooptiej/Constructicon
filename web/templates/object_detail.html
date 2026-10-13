@@ -106,6 +106,19 @@
         {% endif %}
       </div>
 
+      {# #644: a parser safety limit stopped one of this file's steps (core/parse_limits.py). The file is
+         stored unchanged; the step is retried after the remembered hit expires, or now with the button. #}
+      {% if item.parse_limits %}
+      <div class="rev-banner parse-limit-note" id="parse-limit-note" role="status">
+        <p style="margin:0"><strong>Stopped by a safety limit.</strong> This file is stored unchanged, but part of reading it was cut short:</p>
+        <ul style="margin:6px 0 6px 18px;padding:0">
+          {% for f in item.parse_limits %}<li>{{ f.what | capitalize }}: {{ f.message }}.</li>{% endfor %}
+        </ul>
+        <p class="muted" style="margin:0">It will be tried again in about {{ item.parse_limits | map(attribute='retry_in_minutes') | min }} min.
+          <button type="button" class="dp-btn" id="parse-limit-retry">Try again now</button></p>
+      </div>
+      {% endif %}
+
       {# #266: display-only rotation (0/90/180/270), stored in type_metadata.rotation -- never touches the stored file.
          #385: Refresh thumbnail only when a thumbnail exists. Open full size opens the stored file. #}
       {% if item.is_image_file or item.thumb_url or (item.url and not item.redacted) %}
@@ -498,6 +511,26 @@ if (rotateBtn) {
     } else if (previewImg) {
       // Revert the optimistic UI update on failure.
       previewImg.style.transform = currentRotation ? `rotate(${currentRotation}deg)` : '';
+    }
+  });
+}
+
+// #644: "Try again now" on the parser-limit notice: forget the remembered hits, then reload so the
+// steps (properties, preview, thumbnail) run again, inside the same limits.
+const parseLimitRetry = document.getElementById('parse-limit-retry');
+if (parseLimitRetry) {
+  parseLimitRetry.addEventListener('click', async () => {
+    parseLimitRetry.disabled = true;
+    parseLimitRetry.textContent = 'Trying again…';
+    try {
+      const res = await fetch('/api/image/{{ item.slug }}/parse-limits/clear', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((body.error && body.error.message) || body.detail || 'Could not clear the limit');
+      window.location.reload();
+    } catch (err) {
+      parseLimitRetry.disabled = false;
+      parseLimitRetry.textContent = 'Try again now';
+      alert(err.message);
     }
   });
 }

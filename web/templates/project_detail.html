@@ -295,7 +295,7 @@
       {% if featured_entries %}
       <dl class="dp-rows">
         <div class="dp-row"><dt>Featured in</dt><dd>
-          {% for e in featured_entries %}<a href="#" onclick="window.openBlogEntry({{ e.slug | tojson }}); return false;">{{ e.title }}</a>{% if e.status != 'ready' %} <span class="dp-muted">(draft)</span>{% endif %}{% if not loop.last %} &middot; {% endif %}{% endfor %}
+          {% for e in featured_entries %}<a href="#" class="js-open-blog-entry" data-entry-slug="{{ e.slug }}">{{ e.title }}</a>{% if e.status != 'ready' %} <span class="dp-muted">(draft)</span>{% endif %}{% if not loop.last %} &middot; {% endif %}{% endfor %}
         </dd></div>
       </dl>
       {% else %}
@@ -544,6 +544,14 @@
 </div>
 
 <script>
+// #414 "Featured in" links open the Blog builder. #645: a delegated listener, not an inline
+// onclick (the CSP's script-src-attr 'none' blocks inline handlers).
+document.addEventListener('click', (e) => {
+  const link = e.target.closest && e.target.closest('a.js-open-blog-entry');
+  if (!link) return;
+  e.preventDefault();
+  if (window.openBlogEntry) window.openBlogEntry(link.dataset.entrySlug);
+});
 let currentCoverSlug = {{ project.cover_slug | tojson }};
 let currentCoverProjectId = {{ project.cover_project_id | tojson }};
 let currentWriteupSlug = {{ project.writeup_slug | tojson }};

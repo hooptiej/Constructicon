@@ -116,7 +116,7 @@
     }
     if (opts.selectable === 'row') {
       parts.push('<label class="card-select-row"><span class="card-select-label">Select</span>' +
-        '<input type="checkbox" class="card-select" data-slug="' + esc(item.slug) + '" title="Select for bulk actions" onchange="toggleCardSelect(this)"' +
+        '<input type="checkbox" class="card-select" data-slug="' + esc(item.slug) + '" title="Select for bulk actions"' +
         (opts.selected && opts.selected.has(item.slug) ? ' checked' : '') + '></label>');
     }
     return '<div class="cx-item-tools">' + parts.join('') + '</div>';
@@ -276,6 +276,17 @@
       }
     };
     return f;
+  }
+
+  // #645: the select checkbox has no inline onchange (the CSP's script-src-attr 'none' blocks
+  // inline handlers); one delegated listener calls the page's toggleCardSelect(cb) instead.
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('change', function (e) {
+      var cb = e.target;
+      if (cb && cb.matches && cb.matches('input.card-select') && typeof window.toggleCardSelect === 'function') {
+        window.toggleCardSelect(cb);
+      }
+    });
   }
 
   window.ItemCards = { html: html, face: face, esc: esc, pager: pager, getJson: getJson, feed: feed };

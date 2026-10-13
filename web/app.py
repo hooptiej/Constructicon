@@ -30,6 +30,7 @@ from core import items as item_service  # aliased: web.routes.items (imported be
 from web import auth as web_auth, content_security, request_guard
 from web.common import _STATIC_DIR
 from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
+from web.security_headers import SecurityHeadersMiddleware
 from web.routes import meta, pages, admin, items, curator, files, cards, hobbies, blog_export, auth as auth_routes
 
 app = FastAPI()
@@ -123,6 +124,9 @@ app.add_middleware(web_auth.SessionMiddleware)
 app.add_middleware(ActorMiddleware)
 # #558: outermost, so a forged cross-origin request is refused before anything runs.
 app.add_middleware(request_guard.OriginGuardMiddleware)
+# #645: browser security headers (CSP, frame-ancestors / X-Frame-Options, Referrer-Policy, nosniff,
+# HSTS over HTTPS only). Added last, so it wraps even the origin guard: its refusals carry them too.
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 OCR_WATCHDOG_INTERVAL_SECONDS = 60

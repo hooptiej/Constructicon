@@ -443,6 +443,27 @@ old rows.
 which creates the first admin, signs them in and fills `install_config.owner_name` if unset (that
 fill is logged as actor `anonymous`: nobody is signed in yet). `/setup` is 404 once any user exists.
 `/admin` (reachable with the install token before then) shows "Create the admin account".
+- **Claiming it needs the install token (#648).** Reaching `/setup` first is not enough (a scanner
+  that finds a new public hostname could otherwise win the race and own the install).
+  `POST /api/auth/setup` takes `install_token` (`users.SETUP_PROOF_FIELD`) beside `username`,
+  `password` and `display_name`; the page asks for it and says where it is (`secrets/constructicon_token`
+  in the install's folder on the server, made at rollout step 2). `users.require_setup_proof`
+  decides, in this order: 404 `not_found` once any user exists (whatever the token, so it is no
+  oracle afterwards); a request already running as the token (`Authorization: Bearer`) passes; no
+  token configured -> 403 `setup_unavailable` (the page shows the reset-script command instead of the
+  form: fail closed); 429 `too_many_attempts` while the address backs off (the sign-in limiter's
+  rules, its own `setup-ip` key, so 5 free tries); missing -> 403 `setup_proof_required`; wrong -> 403
+  `setup_proof_wrong` (constant-time compare). The token is never stored or logged (the route's
+  `AUDIT_ROUTE_RULES` entry logs no body values). It grants nothing new: whoever holds it is already
+  admin over the API and the MCP.
+- **One winner (#648).** `users.create_first_admin` checks "no users" and inserts inside one
+  `db.transaction()` (`BEGIN IMMEDIATE`, SQLite's write lock taken before the read), so concurrent
+  setups, even from the web and MCP processes, can't both win: the loser gets the 404.
+- **Escape hatches, unchanged and needing no setup proof:** the install token over the API (`POST
+  /api/users` with role admin, Admin > Users, or setup with the Bearer header) and
+  `scripts/reset_password.py --create-admin` on the server (shell access is the proof).
+- Check with `scripts/test_setup_race_648.py` (throwaway DBs: refusals, the backoff, five HTTP setups
+  and six OS processes at once, the hatches, a no-token install, nothing secret in the audit log).
 
 **Reset script (on the box).** `sudo docker exec -it <web container> python3 scripts/reset_password.py
 <username>` (prompts twice), `... <username> --generate` (prints a generated password once, no -it
@@ -458,7 +479,8 @@ Owner decisions 2026-10-07. **Login scope is everything**, roles are enforced, r
 admin-only, and the one install token is how every non-browser client gets in (as admin).
 
 **What's open without login (role public):** `/healthz`, `/login`, `/logout` (the page), `/setup`
-(only while there are no users, 404 after), `/api/auth/login|logout|setup|me`, `/static`, `/brand`,
+(only while there are no users, 404 after; claiming it needs the install token, #648),
+`/api/auth/login|logout|setup|me`, `/static`, `/brand`,
 and the `/f/<slug>` hotlinks + thumbnails **except restricted and redacted items** (an admin session
 or the token gets them, an admin sees the redacted item's 410; anyone else 404, as if missing).
 **Everything else needs at least viewer**, including `/preview` (the export preview) and the
@@ -600,8 +622,12 @@ defaults to every HTTP response. A header the response already set always wins.
    compose up -d` (recreates both; a plain restart doesn't pick up compose changes).
 4. Check: `sudo docker exec <web> python3 scripts/mcp_token.py check --web-url http://localhost:<port>`
    (expects 401 without, 200 with the token) and the MCP log line "bearer token auth ENABLED".
-5. First admin: open the site, it redirects to `/setup` (or `docker exec <web> python3
-   scripts/reset_password.py --create-admin <name> --generate`).
+5. First admin: open the site, it redirects to `/setup`, which asks for the install token (#648):
+   paste the contents of `secrets/constructicon_token` (read it on the box, e.g. `cat
+   secrets/constructicon_token`; don't send it through chat or email), then your name, username and
+   password. Or skip the browser: `docker exec <web> python3 scripts/reset_password.py --create-admin
+   <name> --generate`. Until step 3 the web app has no token, so `/setup` refuses everyone (it shows
+   that command instead): a fresh install can't be claimed by whoever finds it first.
 6. Clients: every MCP client's config gets the `headers` block; scripts
    run elsewhere get `CONSTRUCTICON_TOKEN_FILE`.
 **What breaks if a client isn't updated:** an MCP client without the header gets 401 on every call
@@ -1530,7 +1556,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
     `test_replace_file_617`, `test_card_faces`, `test_install_config`, `check_layering`;
-  - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_role_policy`,
+  - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_role_policy`,
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `check_routes_roles`, `check_policy_doors`;
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,

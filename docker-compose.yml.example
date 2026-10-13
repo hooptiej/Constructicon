@@ -27,6 +27,8 @@ services:
       - ./db:/app/data
       # #467 step 2: the install token, ONE file shared with the MCP service below. Create it with
       #   python3 scripts/mcp_token.py generate ./secrets/constructicon_token   (mode 600)
+      # #648: it is also what claims a fresh install: /setup asks for it before it creates the
+      #   first admin, so create it BEFORE the first `up` (and before the site is reachable).
       - ./secrets/constructicon_token:/run/secrets/constructicon_token:ro
       # #643: the restart sidecar's shared secret (same file as ollama-restarter's).
       - ./secrets/ollama_restart_token:/run/secrets/ollama_restart_token:ro

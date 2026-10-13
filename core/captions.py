@@ -25,11 +25,21 @@ this box right after (70 images, ~140 calls, no restarts): with
 keep_alive:0 (now the primary unload, not insurance) GPU memory returns to
 1-4 MiB after every call, container RAM stays 1.1-1.65 GB with no upward
 trend, and there were no GPU errors. New rule (#454):
-no routine restarts; restart only on model-call failure or if Ollama RAM
-exceeds the ceiling (measured peak ~1650 MB, threshold ~3000 MB), guarded
-by a cooldown (600s) and circuit breaker that opens after 3 consecutive
-failures. A process restart resets the breaker. Socket access (for safety-valve
-restarts + RAM reading) is now needed only as this guard, not per-image.
+no routine restarts; restart only on model-call failure, guarded by a
+cooldown (600s) and circuit breaker that opens after 3 consecutive
+failures. A process restart resets the breaker.
+
+#643: this container no longer holds the Docker socket (it parses every
+upload, so a parser bug plus the socket was root on the NAS). The restart is
+a request to the single-purpose restart sidecar (ops/ollama-restarter/), which
+holds the socket, restarts only the container named in ITS config, needs a
+shared secret and rate-limits itself. Configure with CAPTION_RESTART_URL
+(e.g. http://ollama-restarter:8080/restart) and CAPTION_RESTART_TOKEN_FILE.
+Unset, unreachable or rate-limited = no safety valve this time: logged, the
+caption pipeline carries on (keep_alive:0 is the primary unload anyway).
+The #454 RAM-ceiling check read container stats over the socket; the sidecar
+deliberately makes no other Docker call, so that check is gone (RAM was
+measured flat at 1.1-1.65 GB with keep_alive:0).
 
 Network: the app container reaches Ollama at CAPTION_OLLAMA_URL (default
 http://ollama:11434 — Docker DNS on Ollama's own compose network, which the
@@ -42,11 +52,9 @@ see the PR for #239 for the runs that picked them.
 """
 
 import base64
-import http.client
 import json
 import logging
 import os
-import socket
 import threading
 import time
 import urllib.error
@@ -59,15 +67,16 @@ log = logging.getLogger("constructicon.captions")
 
 OLLAMA_URL = os.environ.get("CAPTION_OLLAMA_URL", "http://ollama:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("CAPTION_OLLAMA_MODEL", "moondream")
-OLLAMA_CONTAINER = os.environ.get("CAPTION_OLLAMA_CONTAINER", "ollama")
-DOCKER_SOCKET = os.environ.get("CAPTION_DOCKER_SOCKET", "/var/run/docker.sock")
+# #643: the restart sidecar. Which container it restarts is the SIDECAR's config, not ours.
+RESTART_URL = os.environ.get("CAPTION_RESTART_URL", "").strip()
+RESTART_TOKEN_HEADER = "X-Restart-Token"
 # Set CAPTION_DISABLED=1 to skip scheduling captions entirely (e.g. a deploy
 # with no Ollama reachable) rather than logging a failure per upload.
 DISABLED = os.environ.get("CAPTION_DISABLED", "") not in ("", "0", "false", "no")
 
-# #454: Guarded restart parameters. RAM ceiling is ~2x the measured peak
-# (1650 MB + headroom). Cooldown prevents thrashing restarts. Circuit breaker
-# opens after max consecutive failures.
+# #454: Guarded restart parameters. Cooldown prevents thrashing restarts (the
+# sidecar has its own rate limit on top, #643). Circuit breaker opens after max
+# consecutive failures.
 def _parse_env_int(var, default):
     """Safely parse an env var to int, fall back to default on garbage."""
     try:
@@ -77,7 +86,6 @@ def _parse_env_int(var, default):
                         value=os.environ.get(var), default=default)
         return default
 
-CAPTION_OLLAMA_MAX_MEM_MB = _parse_env_int("CAPTION_OLLAMA_MAX_MEM_MB", 3072)  # #454
 CAPTION_RESTART_COOLDOWN_SECONDS = _parse_env_int("CAPTION_RESTART_COOLDOWN_SECONDS", 600)  # #454
 CAPTION_MAX_CONSECUTIVE_FAILURES = _parse_env_int("CAPTION_MAX_CONSECUTIVE_FAILURES", 3)  # #454
 
@@ -217,77 +225,68 @@ def generate_caption(image_path, prompt=None, temperature=None, num_predict=None
     return text, elapsed
 
 
-# --- Docker Engine API over the unix socket ---
+# --- #643: the restart sidecar (ops/ollama-restarter/) ---
 
-class _UnixHTTPConnection(http.client.HTTPConnection):
-    def __init__(self, socket_path, timeout):
-        super().__init__("localhost", timeout=timeout)
-        self._socket_path = socket_path
-
-    def connect(self):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
-        sock.connect(self._socket_path)
-        self.sock = sock
+class RestartUnavailable(RuntimeError):
+    """The safety valve can't be used right now (not configured, sidecar unreachable,
+    rate-limited, or our secret refused). Soft: logged, no breaker trip."""
 
 
-def docker_socket_available():
-    return os.path.exists(DOCKER_SOCKET)
-
-
-def _ollama_mem_mb():
-    """Read Ollama container's memory usage (MB) via Docker Engine API.
-    Returns int (MB) or None if socket unavailable or any error. Never raises.
-    Memory = usage minus inactive_file cache (or .cache if inactive_file missing).
-    #454: used by the RAM ceiling safety valve."""
-    if not docker_socket_available():
-        return None
-    try:
-        conn = _UnixHTTPConnection(DOCKER_SOCKET, timeout=5)
+def _restart_token():
+    """The sidecar's shared secret from CAPTION_RESTART_TOKEN_FILE (preferred) or
+    CAPTION_RESTART_TOKEN, or '' when neither is set. Never logged."""
+    path = os.environ.get("CAPTION_RESTART_TOKEN_FILE", "").strip()
+    if path:
         try:
-            conn.request("GET", f"/containers/{OLLAMA_CONTAINER}/stats?stream=false&one-shot=true")
-            resp = conn.getresponse()
-            if resp.status != 200:
-                return None
-            data = json.loads(resp.read().decode("utf-8"))
-            memory_stats = data.get("memory_stats") or {}
-            usage = memory_stats.get("usage", 0)
-            stats = memory_stats.get("stats") or {}
-            # Subtract inactive file cache (more reliable) or falls back to cache.
-            inactive = stats.get("inactive_file") or stats.get("cache", 0)
-            net_usage = max(0, usage - inactive)
-            return int(net_usage / (1024 * 1024))
-        finally:
-            conn.close()
-    except Exception as e:
-        besteffort.warn(log, "captions: reading Ollama memory usage from the Docker socket", e)
-        return None
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError as e:
+            besteffort.warn(log, "captions: reading CAPTION_RESTART_TOKEN_FILE", e, path=path)
+            return ""
+    return os.environ.get("CAPTION_RESTART_TOKEN", "").strip()
+
+
+def restart_available():
+    """True when the restart sidecar is configured (URL + secret). No network call:
+    the admin status reads it on every poll."""
+    return bool(RESTART_URL) and bool(_restart_token())
+
+
+def _request_sidecar_restart():
+    """One authenticated POST to the sidecar. Returns the sidecar's JSON answer on success.
+    Raises RestartUnavailable (soft) or RuntimeError (the sidecar tried and Docker failed)."""
+    token = _restart_token()
+    if not (RESTART_URL and token):
+        raise RestartUnavailable("no restart sidecar configured (CAPTION_RESTART_URL / CAPTION_RESTART_TOKEN_FILE)")
+    req = urllib.request.Request(RESTART_URL, data=b"", method="POST",
+                                 headers={RESTART_TOKEN_HEADER: token})
+    try:
+        with urllib.request.urlopen(req, timeout=RESTART_TIMEOUT_SECONDS) as resp:
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:
+        body = e.read()[:300]
+        if e.code == 429:
+            raise RestartUnavailable(f"restart sidecar rate-limited the request (Retry-After {e.headers.get('Retry-After')}s)")
+        if e.code in (401, 403):
+            raise RestartUnavailable(f"restart sidecar refused our secret ({e.code}): check CAPTION_RESTART_TOKEN_FILE matches the sidecar's")
+        raise RuntimeError(f"restart sidecar answered {e.code}: {body!r}")
+    except (urllib.error.URLError, OSError) as e:
+        raise RestartUnavailable(f"restart sidecar unreachable at {RESTART_URL}: {e!r}")
 
 
 def restart_ollama_container():
-    """POST /containers/{name}/restart via the Engine API, then block until
-    Ollama answers /api/tags again. Returns the number of seconds the whole
-    bounce took. Raises RuntimeError if the socket isn't there or the API
-    refuses, so the caller can log/degrade."""
-    if not docker_socket_available():
-        raise RuntimeError(f"docker socket {DOCKER_SOCKET} not mounted — cannot restart {OLLAMA_CONTAINER}")
+    """Ask the restart sidecar to bounce Ollama, then block until Ollama answers
+    /api/tags again. Returns the number of seconds the whole bounce took.
+    Raises RestartUnavailable when the valve can't be used this time, RuntimeError
+    when the restart was attempted and failed, so the caller can log/degrade."""
     started = time.monotonic()
-    conn = _UnixHTTPConnection(DOCKER_SOCKET, timeout=RESTART_TIMEOUT_SECONDS)
-    try:
-        # t=5: SIGTERM, then SIGKILL after 5s — Ollama exits promptly anyway.
-        conn.request("POST", f"/containers/{OLLAMA_CONTAINER}/restart?t=5")
-        resp = conn.getresponse()
-        body = resp.read()
-        if resp.status not in (204, 200):
-            raise RuntimeError(f"docker restart of {OLLAMA_CONTAINER} returned {resp.status}: {body[:200]!r}")
-    finally:
-        conn.close()
+    _request_sidecar_restart()
     deadline = time.monotonic() + READY_POLL_SECONDS
     while time.monotonic() < deadline:
         if is_ollama_up(timeout=2):
             return time.monotonic() - started
         time.sleep(1)
-    raise RuntimeError(f"{OLLAMA_CONTAINER} restarted but Ollama not answering after {READY_POLL_SECONDS}s")
+    raise RuntimeError(f"Ollama restarted but not answering after {READY_POLL_SECONDS}s")
 
 
 def _maybe_restart(reason):
@@ -302,10 +301,15 @@ def _maybe_restart(reason):
             print(f"caption: restart wanted ({reason}) but last restart was {elapsed:.1f}s ago; cooling down", flush=True)
             return False, 0.0
     try:
-        print(f"caption: restarting {OLLAMA_CONTAINER}: {reason}", flush=True)
+        print(f"caption: restarting Ollama via the restart sidecar: {reason}", flush=True)
         secs = restart_ollama_container()
         _last_restart_at = time.monotonic()
         return True, secs
+    except RestartUnavailable as e:
+        # #643: no safety valve this time. Not a breaker trip: the consecutive-failure count
+        # still opens the breaker if Ollama keeps failing.
+        print(f"caption: restart skipped, no safety valve available: {e}", flush=True)
+        return False, 0.0
     except Exception as e:
         _breaker_reason = f"Ollama did not come back after restart ({e!r})"
         print(f"caption: circuit breaker OPEN: {_breaker_reason}", flush=True)
@@ -327,7 +331,6 @@ def breaker_status():
         "reason": _breaker_reason,
         "consecutive_failures": _consecutive_failures,
         "seconds_since_restart": secs_since,
-        "max_mem_mb": CAPTION_OLLAMA_MAX_MEM_MB,
         "cooldown_seconds": CAPTION_RESTART_COOLDOWN_SECONDS,
     }
 
@@ -344,7 +347,7 @@ def reset_breaker():
 
 def caption_once(image_path, prompt=None, temperature=None, num_predict=None, label=None):
     """#454: The full per-image cycle under CAPTION_LOCK: one model call,
-    optional guarded restart (on failure, or if RAM > ceiling), then release.
+    optional guarded restart (on failure, via the #643 sidecar), then release.
     Returns dict {caption, elapsed_seconds, restarted, restart_seconds,
     restart_reason, error}. `error` is set (and caption None) on failure.
     If circuit breaker is open, returns immediately with error message."""
@@ -366,11 +369,6 @@ def caption_once(image_path, prompt=None, temperature=None, num_predict=None, la
         try:
             caption, elapsed = generate_caption(image_path, prompt=prompt, temperature=temperature, num_predict=num_predict)
             _consecutive_failures = 0  # reset on success
-            # Check RAM ceiling as safety valve.
-            mem = _ollama_mem_mb()
-            if mem is not None and mem > CAPTION_OLLAMA_MAX_MEM_MB:
-                restart_reason = f"Ollama RAM {mem} MB > {CAPTION_OLLAMA_MAX_MEM_MB} MB"
-                restarted, restart_seconds = _maybe_restart(restart_reason)
         except Exception as e:
             error = repr(e)
             _consecutive_failures += 1

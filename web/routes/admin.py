@@ -291,7 +291,7 @@ def api_caption_defaults():
         "temperature": captions.DEFAULT_TEMPERATURE,
         "num_predict": captions.DEFAULT_NUM_PREDICT,
         "ollama_up": False if captions.DISABLED else captions.is_ollama_up(),
-        "docker_socket": captions.docker_socket_available(),
+        "restart_valve": captions.restart_available(),  # #643: the restart sidecar is configured
         "breaker": captions.breaker_status(),
         "disabled": captions.DISABLED,  # #585: CAPTION_DISABLED=1 on this install
         "needs_caption": captions.count_needs_caption(),
@@ -309,7 +309,7 @@ def api_caption_test(
     against an existing object's real preview image with the given
     settings, WITHOUT writing anything to the row. Goes through the exact
     same caption_once() cycle as the pipeline (lock + guarded restart on
-    failure or RAM ceiling, #454), so a tuning run can never overlap a real
+    failure, #454; via the restart sidecar, #643), so a tuning run can never overlap a real
     one and measures the same thing production will."""
     row = db.get_by_slug(slug.strip())
     if row is None:

@@ -273,10 +273,37 @@ def sandbox_available():
     return "forkserver" in multiprocessing.get_all_start_methods()
 
 
+_CHILD_NAME_PREFIX = "constructicon-parse:"
+
+
+def _install_no_main_fixup():
+    """A forkserver child normally re-imports the parent's __main__ before it runs (the "spawn"
+    idiom): for the MCP that is all of mcp_server/server.py per child, and a script without a
+    main guard would run itself again. Our children need nothing from __main__ (every hook is a
+    module-level function in core), so for processes named with our prefix the main-module
+    entries are dropped from the data the child prepares itself from. Other users of
+    multiprocessing are untouched."""
+    from multiprocessing import spawn
+    if getattr(spawn.get_preparation_data, "_constructicon_no_main", False):
+        return
+    original = spawn.get_preparation_data
+
+    def get_preparation_data(name):
+        data = original(name)
+        if str(name).startswith(_CHILD_NAME_PREFIX):
+            data.pop("init_main_from_name", None)
+            data.pop("init_main_from_path", None)
+        return data
+
+    get_preparation_data._constructicon_no_main = True
+    spawn.get_preparation_data = get_preparation_data
+
+
 def _context():
     global _ctx
     with _ctx_lock:
         if _ctx is None:
+            _install_no_main_fixup()
             ctx = multiprocessing.get_context("forkserver")
             ctx.set_forkserver_preload(PRELOAD)
             _ctx = ctx
@@ -336,7 +363,7 @@ def _run_child(fn, args, b, what):
     ctx = _context()
     parent_conn, child_conn = ctx.Pipe(duplex=False)
     proc = ctx.Process(target=_child_main, args=(child_conn, fn, args, b.seconds, b.memory_mb, _env_snapshot()),
-                       daemon=True, name=f"parse:{what}")
+                       daemon=True, name=f"{_CHILD_NAME_PREFIX}{what}")
     started = False
     try:
         try:

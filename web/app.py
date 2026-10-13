@@ -27,7 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
-from web import auth as web_auth, content_security, request_guard
+from web import auth as web_auth, body_limit, content_security, request_guard
 from web.common import _STATIC_DIR
 from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
 from web.routes import meta, pages, admin, items, curator, files, cards, hobbies, blog_export, auth as auth_routes
@@ -55,6 +55,13 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
     message = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, default=str)
     return JSONResponse(errors.http_body(errors.code_for_status(exc.status_code), message, detail=exc.detail),
                         status_code=exc.status_code, headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(body_limit.BodyTooLarge)
+async def _body_too_large_handler(request: Request, exc: body_limit.BodyTooLarge):
+    """#649: a body over its route's limit, found while a route (or its form parsing) read it:
+    413 payload_too_large with details {max_bytes, limit_kind}."""
+    return exc.response()
 
 
 @app.exception_handler(RequestValidationError)
@@ -121,6 +128,10 @@ app.add_middleware(web_auth.AccessMiddleware, routes=lambda: app.routes)
 app.add_middleware(web_auth.SessionMiddleware)
 # #560: sets the request's actor (owner-ui) around the audit logger and the route.
 app.add_middleware(ActorMiddleware)
+# #649: per-route body caps. Wraps `receive` only (reads nothing itself), so every reader inside it
+# (the audit logger, form parsing, routes) is capped: a declared Content-Length over the limit is
+# refused before a byte is read, and a chunked or lying body is cut off once it passes the limit.
+app.add_middleware(body_limit.BodyLimitMiddleware)
 # #558: outermost, so a forged cross-origin request is refused before anything runs.
 app.add_middleware(request_guard.OriginGuardMiddleware)
 

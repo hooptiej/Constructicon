@@ -137,7 +137,9 @@
   const publishError = document.getElementById('export-publish-error');
   const publishErrorDetail = document.getElementById('export-publish-error-detail');
 
-  function esc(t) { const d = document.createElement('div'); d.textContent = (t == null ? '' : t); return d.innerHTML; }
+  // Escapes quotes too, so it stays safe if a value ever lands in an
+  // attribute (the textContent->innerHTML trick leaves " unescaped, #642).
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
   async function openBuilder() {
     builder.classList.add('open');

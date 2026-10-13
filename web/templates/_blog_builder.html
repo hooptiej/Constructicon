@@ -141,7 +141,10 @@
   const dateInput = document.getElementById('blog-entry-content-date');
   const deleteBtn = document.getElementById('blog-entry-delete-btn');
 
-  function esc(t) { const d = document.createElement('div'); d.textContent = (t == null ? '' : t); return d.innerHTML; }
+  // Escapes quotes too: the result lands inside attribute values (the note
+  // input's value="..."), where a textContent->innerHTML round trip would
+  // leave " unescaped and let stored text break out of the attribute (#642).
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
   // API stores content_date as a unix timestamp (float seconds); <input type=date>
   // works in YYYY-MM-DD. Convert both ways so the field round-trips correctly.

@@ -173,7 +173,7 @@ function createIngestController({ onOpen }) {
           if (state.status === 'uploading' && progressStates[i]) {
             label = progressLabel(progressStates[i], Date.now());
           }
-          let metaHtml = `<span class="staged-status-dot" style="background:${meta.dot}"></span>${label}`;
+          let metaHtml = `<span class="staged-status-dot" style="background:${meta.dot}"></span>${escapeHtml(label)}`;
           if (state.status === 'ocr-failed' && state.slug) {
             metaHtml += ` <button type="button" class="staged-retry-ocr-btn" data-index="${i}">Retry</button>`;
           }

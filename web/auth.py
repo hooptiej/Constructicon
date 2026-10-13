@@ -40,7 +40,8 @@ access -> audit -> csrf -> routes.
     static/js/csrf.js, which wraps fetch and XMLHttpRequest); there are no plain HTML POST forms.
 
 The cookie: HttpOnly, SameSite=Lax, Path=/, Max-Age 30 days (sliding), Secure only when the request
-itself is HTTPS (HTTPS is deferred: plain HTTP on the LAN for now).
+is HTTPS: directly, or through a proxy listed in CONSTRUCTICON_TRUSTED_PROXIES (#646,
+web/proxy_trust.py). The home install is plain HTTP on the LAN, so its cookie has no Secure flag.
 """
 
 import contextvars
@@ -52,7 +53,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, RedirectResponse
 
 from core import actor as actor_ctx, besteffort, errors, install_token, roles, users
-from web import roles as web_roles
+from web import proxy_trust, roles as web_roles
 
 log = logging.getLogger("constructicon.auth")
 
@@ -92,8 +93,9 @@ def cookie_token(cookie_header):
 
 
 def is_https(scope_or_request):
-    scope = getattr(scope_or_request, "scope", scope_or_request)
-    return scope.get("scheme") == "https"
+    """#646: HTTPS directly or via a trusted proxy (web/proxy_trust.py decides; this stays as the
+    name the cookie helpers and tests already use)."""
+    return proxy_trust.is_https(scope_or_request)
 
 
 def cookie_header_value(token, *, secure, max_age=users.SESSION_SECONDS):
@@ -210,9 +212,8 @@ class AccessMiddleware:
             await self._gate(scope, receive, send)
             return
         if not install_token.matches(presented):
-            client = scope.get("client") or (None, None)
             besteffort.warn(log, "install token refused", "wrong bearer token",
-                            path=scope.get("path"), client=client[0])
+                            path=scope.get("path"), client=proxy_trust.client_ip(scope))
             response = _error_response(401, "invalid_token", "The install token is wrong.",
                                        headers={"WWW-Authenticate": 'Bearer error="invalid_token"'})
             await response(scope, receive, send)

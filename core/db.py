@@ -1001,8 +1001,11 @@ def init_db(migrate=True):
         # the old request-log row (these columns NULL there).
         existing_audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_log)")}
         # #557: required_role = the role label of the route a request-log row is about (web/roles.py).
+        # #646: client_ip = the request's client address (the real client behind a trusted proxy,
+        # web/proxy_trust.py); NULL on change-log rows and on request-log rows from before #646.
         for column, ddl_type in (("op", "TEXT"), ("actor", "TEXT"), ("batch_id", "TEXT"),
-                                 ("mutations", "TEXT"), ("undone_by", "INTEGER"), ("required_role", "TEXT")):
+                                 ("mutations", "TEXT"), ("undone_by", "INTEGER"), ("required_role", "TEXT"),
+                                 ("client_ip", "TEXT")):
             if column not in existing_audit_columns:
                 conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {ddl_type}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_batch ON audit_log(batch_id)")
@@ -3589,18 +3592,19 @@ def list_recent_items_by_type(limit_per_type=10, include_brand=False, include_su
 # Captures mutating API requests for debugging/recovery after failures.
 
 def insert_audit_log(method, path, form_body, status_code, error_detail=None, affected_slugs=None, actor=None,
-                     required_role=None):
+                     required_role=None, client_ip=None):
     """Insert a row into the audit_log table. form_body should be a dict (will be
     JSON-serialized). affected_slugs can be a list of slugs or None. Automatically
     records the current timestamp. #560: `actor` (default: the current actor context)
     fills the request-log row's actor column. #557: `required_role` is the route's role
-    label (None when no route matched, e.g. a 404 or a request the guard refused)."""
+    label (None when no route matched, e.g. a 404 or a request the guard refused).
+    #646: `client_ip` is the client's address (web/proxy_trust.client_ip)."""
     conn = get_conn()
     try:
         now = time.time()
         conn.execute(
             "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, actor, "
-            "required_role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "required_role, client_ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 method,
                 path,
@@ -3611,6 +3615,7 @@ def insert_audit_log(method, path, form_body, status_code, error_detail=None, af
                 now,
                 actor_ctx.resolve(actor),
                 required_role,
+                client_ip,
             ),
         )
         conn.commit()

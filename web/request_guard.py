@@ -7,9 +7,11 @@ request": no CORS preflight). The guard rejects a mutating request whose browser
 Origin (or Referer) is not this app's own host.
 
 Policy for the headers, deliberately:
-  * Origin present  -> its host:port must equal the request's own Host header (or be in
-    CONSTRUCTICON_ALLOWED_ORIGINS). Same-origin is install-agnostic: constructicon.local,
-    the bare LAN IP, the test box and a work install all just work, with no config.
+  * Origin present  -> its scheme and host:port must equal the request's own scheme and Host
+    header (or be in CONSTRUCTICON_ALLOWED_ORIGINS, host only). Same-origin is install-agnostic:
+    constructicon.local, the bare LAN IP, the test box and a work install all just work, with no
+    config. The scheme is the request's real one (#646, web/proxy_trust.py): https behind a
+    proxy listed in CONSTRUCTICON_TRUSTED_PROXIES, else what the connection itself was.
   * Origin absent   -> fall back to Referer with the same rule.
   * Both absent     -> ALLOWED. Non-browser clients (curl, scripts,
     urllib verification scripts) send neither header. Every modern browser sends Origin
@@ -23,6 +25,8 @@ import re
 from urllib.parse import urlsplit
 
 from starlette.responses import JSONResponse
+
+from web import proxy_trust
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -52,27 +56,53 @@ def _host_of(origin_or_url):
     return _strip_default_port(netloc.lower()) or None
 
 
-def origin_violation(method, headers):
-    """None if the request passes, else a short reason string (for the 403 message)."""
+def _scheme_of(origin_or_url):
+    try:
+        return urlsplit(origin_or_url).scheme.lower()
+    except ValueError:  # silent-ok: unparseable = no scheme, and _host_of refuses it anyway
+        return ""
+
+
+_PROXY_HINT = (" (this page is HTTPS but the app saw plain HTTP: behind a TLS proxy, list the proxy in "
+               "CONSTRUCTICON_TRUSTED_PROXIES)")
+
+
+def origin_violation(method, headers, scheme=None):
+    """None if the request passes, else a short reason string (for the 403 message).
+
+    `scheme` is the request's own scheme (#646: `proxy_trust.is_https`, so a trusted TLS proxy makes
+    it https). When given, same-origin means the same scheme AND host[:port], as browsers define it:
+    an http:// page can't post to the https:// app. None = host only (the pre-#646 rule)."""
     if method.upper() not in MUTATING_METHODS:
         return None
     own_host = _strip_default_port((headers.get("host") or "").strip().lower())
     extra = _allowed_extra_origins()
     extra_hosts = {_host_of(e) or e for e in extra}
 
+    def same_host(value):
+        host = _host_of(value)
+        return host is not None and host == own_host
+
     def ok(value):
         host = _host_of(value)
         if host is None:
             return False
-        return host == own_host or host in extra_hosts or value.strip().lower() in extra
+        if host in extra_hosts or value.strip().lower() in extra:
+            return True
+        return host == own_host and (scheme is None or _scheme_of(value) == scheme)
+
+    def hint(value):
+        return _PROXY_HINT if (scheme == "http" and same_host(value) and _scheme_of(value) == "https") else ""
 
     origin = headers.get("origin")
     if origin is not None:
         # "null" has no host, so ok() is False -> rejected.
-        return None if ok(origin.strip()) else f"cross-origin request refused (Origin: {origin[:80]})"
+        if ok(origin.strip()):
+            return None
+        return f"cross-origin request refused (Origin: {origin[:80]})" + hint(origin.strip())
     referer = headers.get("referer")
     if referer is not None:
-        return None if ok(referer.strip()) else "cross-origin request refused (Referer)"
+        return None if ok(referer.strip()) else "cross-origin request refused (Referer)" + hint(referer.strip())
     return None  # no browser-sent provenance headers: non-browser client, see module docstring
 
 
@@ -85,7 +115,8 @@ class OriginGuardMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http" and scope["method"] in MUTATING_METHODS:
             headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
-            reason = origin_violation(scope["method"], headers)
+            reason = origin_violation(scope["method"], headers,
+                                      scheme="https" if proxy_trust.is_https(scope) else "http")
             if reason:
                 response = JSONResponse(
                     {"ok": False, "error": {"code": "cross_origin", "message": reason},

@@ -35,8 +35,8 @@ the date and commit forward when you re-verify.
   entry point is still `web.app:app`.
   - `web/app.py` is only the assembly point: `app = FastAPI()`, the error
     handlers (one shape, see "Actor and errors" below), the static mounts
-    (`/static`, `/brand`, `/preview`), middleware (request guard outermost,
-    then the body caps (#649), the actor context, session, access gate, audit logging and CSRF;
+    (`/static`, `/brand`, `/preview`), middleware (the security headers outermost (#645), then the
+    request guard, the body caps (#649), the actor context, session, access gate, audit logging and CSRF;
     see "How the actor is set"), the startup hook (`init_db`
     migrations, the stale-decision sweep, OCR self-heal + watchdog, caption queue
     worker, the trash purge and decision-sweep loops; runs as the `system` actor) and the
@@ -63,7 +63,8 @@ the date and commit forward when you re-verify.
     `shapes`, never from `web.app` or from each other.
   - The rest of `web/`: `auth.py` (session, access-gate and CSRF middleware), `roles.py` (`RoleRouter`,
     `requires`, `NON_ROUTE_ROLES`), `request_guard.py` (same-origin guard and the audit-log redaction
-    rules), `body_limit.py` (per-route request-body caps, #649), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged home
+    rules), `body_limit.py` (per-route request-body caps, #649), `security_headers.py` (CSP, framing and the other
+    browser security headers on every app response, #645), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged home
     Files feed, #624), `guides/` (in-app markdown guides), `export_templates/` (the static site's
     Jinja templates), `templates/` and `static/` (css, js; `static/js/mountain-time.js` is the JS twin
     of `core/datefmt.py`).

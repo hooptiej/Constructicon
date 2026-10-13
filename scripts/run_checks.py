@@ -32,6 +32,9 @@ What is skipped, and why (each skip prints its reason; none counts as a pass):
     inside the instance's own container (`docker exec constructicon-test python3
     scripts/check_curator_queue.py`) and is always skipped here, with that command printed.
   * Anything needing `node` when node is not on PATH, with the docker command to run it instead.
+  * check_dependency_audit.py (#650) needs network for the advisory database, so with --network none
+    it skips itself and prints how to run it (the app image, with network). Run it before a PR that
+    changes requirements.txt or the Dockerfile, and now and then on main.
   * scripts/golden_master.py is a before/after snapshot tool, not a check: not collected.
 
 Environment: CONSTRUCTICON_DB_PATH, CONSTRUCTICON_STORAGE_DIR and CONSTRUCTICON_EXPORTS_DIR are
@@ -372,6 +375,11 @@ SAMPLES = [
     ("All provenance option checks passed.\n", PASS, []),
     ("PASS a\nnot all checks passed\n", UNKNOWN, []),
     ("node not found: skipping the JS/macro comparison\n", SKIP, []),
+    # check_dependency_audit (#650): offline, clean, advisories.
+    ("SKIPPED: no network (pypi.org unreachable), so the advisory database can't be read.\n", SKIP, []),
+    ("OK: no known advisories in 103 packages (the installed environment, pip-audit==2.10.1)\n", PASS, []),
+    ("FAIL cairosvg==2.9.0: CVE-2026-107378, fixed in 2.9.1\nFAILED: cairosvg (1 known advisories)\n", FAIL,
+     ["cairosvg==2.9.0: CVE-2026-107378, fixed in 2.9.1"]),
     ("", UNKNOWN, []),
 ]
 

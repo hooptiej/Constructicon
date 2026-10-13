@@ -1519,6 +1519,25 @@ shows what would run; `--show-output` prints the whole output of anything that d
   (`check_item_cards.py` needs Python with the app's packages AND node together; neither image has
   both, so in this container route it stays SKIP: run it on a machine that has both.
   `golden_master.py` is a before/after snapshot tool, not a check, and is not collected.)
+  It also skips **`check_dependency_audit.py`** (#650) whenever there is no network, which is always the
+  case in the `--network none` run above: see "Dependency audit" below.
+- **Dependency audit (#650): run it with network before a PR that touches `requirements.txt` or the
+  Dockerfile, and now and then on `main`** (new advisories appear for versions that were clean):
+  ```
+  docker run --rm -v "$PWD":/app:ro -w /app constructicon:pr-NNN python scripts/check_dependency_audit.py
+  ```
+  It audits every package installed in the image (transitive ones, pip and setuptools included; torch's
+  `+cpu` label is dropped) with `pip-audit -r <list> --no-deps --disable-pip`, and prints one
+  `FAIL <pkg>==<version>: <advisory>, fixed in ...` line per advisory, then `FAILED: ...` or `OK: no known
+  advisories in N packages`. pip-audit is **not** in the app image (a scanner and its dependencies would
+  ship to production for a pre-deploy check): the script installs the pinned `PIP_AUDIT` into a temp
+  directory and runs it in a subprocess, so the audited environment and the checkout are untouched.
+  `--requirements FILE` audits a pinned file instead (e.g. a `pip freeze` from a running container).
+  An advisory accepted on purpose goes in its `IGNORE` dict with the reason. `requirements.txt` is
+  nearly a full freeze (it pins transitive packages too: PyJWT comes in via `mcp`, setuptools via
+  torch), but py7zr's helpers (pyppmd, pybcj, inflate64, brotli, pycryptodomex, multivolumefile,
+  texttable, psutil) and openpyxl's `et_xmlfile` are not pinned: they resolve to the newest allowed
+  version whenever the image is rebuilt, which is another reason to audit the built image, not the file.
 - **Environment:** for each script the runner points `CONSTRUCTICON_DB_PATH`, `CONSTRUCTICON_STORAGE_DIR`
   and `CONSTRUCTICON_EXPORTS_DIR` at fresh temp directories (unless you already set them) and sets
   `PYTHONDONTWRITEBYTECODE`, so it works from a read-only mount. The tests also call
@@ -1544,7 +1563,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
   - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `test_live_bugs_563`,
     `test_round2` and `test_round3a` (the work-install shakedown rounds: several small fixes each),
-    `test_release` (the CalVer logic).
+    `test_release` (the CalVer logic), `check_dependency_audit` (known advisories in the installed
+    packages; needs network, see above).
 - Besides the runner, **the `constructicon-test` container** (below) is where a change is exercised
   against a copy of real data before prod.
 
@@ -1624,7 +1644,11 @@ from inside either checkout —
 image and recreates only the containers whose image or config changed, so with nothing but code
 changed it can leave the old processes running (see the warning below).
 **So: a code-only change is `./scripts/deploy.sh`; a `requirements.txt` / Dockerfile / compose change
-is `./scripts/deploy.sh --build`; either way, verify the running process has the change.**
+is `./scripts/deploy.sh --build`; either way, verify the running process has the change.** For a
+requirements change that means the package versions in BOTH running containers, e.g. `sudo docker exec
+<web or mcp container> python3 -c "import importlib.metadata as m; print(m.version('py7zr'))"`; if a
+container still reports the old version, it is still running the old image: `sudo docker compose up -d`
+(or `docker restart` it) and check again.
 
 This replaces `git pull` (still stuck on the old HTTPS-with-no-creds
 failure mode if anyone reverts the remote) and replaces routinely
@@ -1877,7 +1901,8 @@ the module was actually imported with real dependencies.
    assume the path) and can be `scp`'d down and re-uploaded to
    `constructicon-test` for a more representative test than a synthetic
    minimal file. As of 2026-09-02, production had at least one real upload
-   for every registered type except `svg` — if a type has zero real
+   for every registered type except `svg` (as of 2026-10-12 it has four real SVGs; its
+   `archive` uploads are all `.zip`, no `.7z` or tar) — if a type has zero real
    production uploads when you need one, ask the owner to upload a real
    example rather than only ever testing against synthetic data for that
    type.

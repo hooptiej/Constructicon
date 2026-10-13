@@ -138,16 +138,42 @@ def declared_length(scope):
     return None
 
 
+class _LimitState:
+    """Per request, in scope[SCOPE_KEY]: the limit, and the refusal once the body tripped it."""
+
+    __slots__ = ("limit", "kind", "declared", "tripped")
+
+    def __init__(self, limit, kind, declared):
+        self.limit = limit
+        self.kind = kind
+        self.declared = declared
+        self.tripped = None
+
+    def trip(self, declared=None):
+        if self.tripped is None:
+            self.tripped = BodyTooLarge(self.limit, self.kind, declared)
+        return self.tripped
+
+
 def declared_refusal(scope):
     """The BodyTooLarge for this request when its DECLARED length is over its limit, else None.
     Reads nothing."""
-    info = scope.get(SCOPE_KEY)
-    if info is None:
+    state = scope.get(SCOPE_KEY)
+    if state is None:
         return None
-    limit, kind, declared = info
-    if declared is not None and declared > limit:
-        return BodyTooLarge(limit, kind, declared)
+    if state.declared is not None and state.declared > state.limit:
+        return state.trip(state.declared)
     return None
+
+
+def tripped(scope):
+    """The refusal when this request's body went over its limit while something read it, else None."""
+    state = scope.get(SCOPE_KEY)
+    return state.tripped if state is not None else None
+
+
+async def _disconnected():
+    return {"type": "http.disconnect"}
 
 
 class BodyLimitMiddleware:
@@ -159,21 +185,37 @@ class BodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
         limit, kind = limit_for(scope.get("path", ""))
-        declared = declared_length(scope)
-        scope[SCOPE_KEY] = (limit, kind, declared)
+        state = _LimitState(limit, kind, declared_length(scope))
+        scope[SCOPE_KEY] = state
         seen = 0
 
         async def limited_receive():
             nonlocal seen
-            if declared is not None and declared > limit:
-                raise BodyTooLarge(limit, kind, declared)
+            if state.declared is not None and state.declared > limit:
+                raise state.trip(state.declared)
             if seen > limit:
-                raise BodyTooLarge(limit, kind)
+                raise state.trip()
             message = await receive()
             if message.get("type") == "http.request":
                 seen += len(message.get("body", b""))
                 if seen > limit:
-                    raise BodyTooLarge(limit, kind)
+                    raise state.trip()
             return message
 
-        await self.app(scope, limited_receive, send)
+        # Whoever caught the exception, once the body tripped the limit the answer is our 413: some
+        # readers wrap it (Starlette's multipart parser runs in a task group, so FastAPI sees an
+        # ExceptionGroup and answers 400 "error parsing the body").
+        replaced = False
+
+        async def guarded_send(message):
+            nonlocal replaced
+            if replaced:
+                return
+            if (message["type"] == "http.response.start" and state.tripped is not None
+                    and message.get("status") != 413):
+                replaced = True
+                await state.tripped.response()(scope, _disconnected, send)
+                return
+            await send(message)
+
+        await self.app(scope, limited_receive, guarded_send)

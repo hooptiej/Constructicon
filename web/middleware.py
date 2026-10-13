@@ -234,7 +234,14 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                 return response
             response = await call_next(request)
             status_code = response.status_code
-            if should_audit:
+            trip = body_limit.tripped(request.scope) if should_audit else None
+            if trip is not None:
+                # #649: the body went over its limit while the route read it. Whatever the route's
+                # answer was (form parsing can turn it into a 400), BodyLimitMiddleware sends the 413.
+                status_code = 413
+                form_data = {"_body": trip.audit_marker}
+                error_detail = request_guard.redact_audit_error(request.url.path, trip.audit_reason)[:ERROR_DETAIL_MAX_CHARS]
+            elif should_audit:
                 # #583: a refusal the app made on purpose is a normal response, so say why.
                 reason = await _error_reason(response)
                 if reason:

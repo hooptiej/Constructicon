@@ -19,6 +19,7 @@ without hashing; every route that takes a file is classified as an upload route 
 else is); bad env values fall back to the defaults.
 """
 import asyncio
+import inspect
 import json
 import os
 import sqlite3
@@ -141,9 +142,8 @@ file_routes, upload_routes = set(), set()
 for route in webapp.app.routes:
     if not isinstance(route, APIRoute):
         continue
-    takes_file = any(getattr(p, "type_", None) is UploadFile or "UploadFile" in repr(getattr(p, "field_info", ""))
-                     or "UploadFile" in repr(getattr(p, "type_", ""))
-                     for p in route.dependant.body_params)
+    takes_file = any("UploadFile" in str(param.annotation) or param.annotation is UploadFile
+                     for param in inspect.signature(route.endpoint).parameters.values())
     sample = route.path.replace("{slug}", "abc123")
     for seg in ("{project_id}", "{user_id}", "{id}", "{hobby_id}", "{entry_id}"):
         sample = sample.replace(seg, "1")
@@ -187,9 +187,9 @@ r = ok_client.post("/api/auth/login", content=login_body(AUTH_LIMIT), headers={"
 check("a sign-in body of exactly the limit (64 KB) signs in", r.status_code == 200 and r.json().get("ok") is True,
       (r.status_code, r.text[:200]))
 check("... and the route ran", JSON_BODY_CALLS == ["/api/auth/login"], JSON_BODY_CALLS)
-r = ok_client.post("/api/auth/login", content=json.dumps({"username": "alice", "password": PW}).encode(),
-                   headers={"Content-Type": "application/json"})
-check("a normal sign-in still works", r.status_code == 200, (r.status_code, r.text[:200]))
+r = TestClient(webapp.app).post("/api/auth/login", content=json.dumps({"username": "alice", "password": PW}).encode(),
+                                headers={"Content-Type": "application/json"})
+check("a normal sign-in (fresh browser) still works", r.status_code == 200, (r.status_code, r.text[:200]))
 
 
 # --- 3. a password over MAX_PASSWORD_LENGTH is refused without hashing ---------------------------
@@ -312,6 +312,10 @@ status, body, pulled = multipart_drive(8 * 1024 * 1024)
 check("a chunked 8 MB multipart upload (limit 3 MB) is 413, not 400", status == 413, (status, body[:300]))
 check("... payload_too_large", b"payload_too_large" in body, body[:200])
 check("... cut off at the upload limit", pulled <= UPLOAD_LIMIT + len(CHUNK) + len(head), pulled)
+row = last_audit("/api/upload")
+check("... and the request log says 413 too (not the parser's 400)",
+      row is not None and row["status_code"] == 413 and "payload_too_large" in (row["error_detail"] or ""),
+      row and (row["status_code"], row["error_detail"]))
 
 
 # --- 5. uploads with a Content-Length ------------------------------------------------------------

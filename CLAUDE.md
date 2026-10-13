@@ -35,9 +35,9 @@ the date and commit forward when you re-verify.
   entry point is still `web.app:app`.
   - `web/app.py` is only the assembly point: `app = FastAPI()`, the error
     handlers (one shape, see "Actor and errors" below), the static mounts
-    (`/static`, `/brand`, `/preview`), middleware (the security headers outermost (#645), then the
-    request guard, the body caps (#649), the actor context, session, access gate, audit logging and CSRF;
-    see "How the actor is set"), the startup hook (`init_db`
+    (`/static`, `/brand`, `/preview`), middleware (the trusted-proxy rewrite outermost (#646), then the
+    security headers (#645), the request guard, the body caps (#649), the actor context, session, access
+    gate, audit logging and CSRF; see "How the actor is set"), the startup hook (`init_db`
     migrations, the stale-decision sweep, OCR self-heal + watchdog, caption queue
     worker, the trash purge and decision-sweep loops; runs as the `system` actor) and the
     `include_router` calls.
@@ -63,7 +63,8 @@ the date and commit forward when you re-verify.
     `shapes`, never from `web.app` or from each other.
   - The rest of `web/`: `auth.py` (session, access-gate and CSRF middleware), `roles.py` (`RoleRouter`,
     `requires`, `NON_ROUTE_ROLES`), `request_guard.py` (same-origin guard and the audit-log redaction
-    rules), `body_limit.py` (per-route request-body caps, #649), `security_headers.py` (CSP, framing and the other
+    rules), `body_limit.py` (per-route request-body caps, #649), `proxy_trust.py` (the real scheme and client
+    address behind a trusted reverse proxy, #646), `security_headers.py` (CSP, framing and the other
     browser security headers on every app response, #645), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged home
     Files feed, #624), `guides/` (in-app markdown guides), `export_templates/` (the static site's
     Jinja templates), `templates/` and `static/` (css, js; `static/js/mountain-time.js` is the JS twin
@@ -394,24 +395,29 @@ added accounts and attribution; step 2 enforces them (next section, "Auth enforc
   each attempt must wait 2^(extra failures) s (max 15 min) after the last failure, else 429
   `too_many_attempts` (`details.retry_after`) without checking the password; a success clears that
   username's and that IP's counts (behind a Docker bridge or NAT every client can share one IP, so
-  the IP count must not outlive a good sign-in). A wrong user, wrong
+  the IP count must not outlive a good sign-in). The IP is `proxy_trust.client_ip`: behind a proxy
+  listed in `CONSTRUCTICON_TRUSTED_PROXIES` it is the real client's (#646, "Behind a reverse proxy"),
+  so each client has its own bucket; without that setting a proxy's clients all share the proxy's. A wrong user, wrong
   password and disabled account all answer the same 401 `invalid_login` (an unknown user still
   spends a hash's time). A password over `MAX_PASSWORD_LENGTH` (1,024) is that same failure, decided
   before the user lookup and without hashing it (#649).
 - `delete_everything` keeps `users` and `sessions` (`reset.KEPT_TABLES`).
 
-**How the actor is set (`web/auth.py`).** Middleware order: origin guard -> `BodyLimitMiddleware`
+**How the actor is set (`web/auth.py`).** Middleware order: (`ProxyHeadersMiddleware`, #646, and
+`SecurityHeadersMiddleware`, #645, outside everything) -> origin guard -> `BodyLimitMiddleware`
 (#649, see "Request-body caps") -> `ActorMiddleware` (anonymous) -> `SessionMiddleware` ->
 `AccessMiddleware` (install token + sign-in gate, step 2) -> audit logger -> `CsrfMiddleware` ->
 routes. A request with the
 `constructicon_session` cookie that resolves to a live session runs as actor `user:<username>`
 with `users.current_user()` set (pages' `current_user()` Jinja global; `roles.role_of` reads it).
 No cookie, or a dead one = `anonymous`. The cookie: HttpOnly, SameSite=Lax, Path=/,
-Max-Age 30 days, `Secure` only when the request is HTTPS (deferred). Change-log rows AND
-request-log rows record `user:<name>`.
+Max-Age 30 days, `Secure` only when the request is HTTPS (`proxy_trust.is_https`: directly, or via a
+trusted proxy, #646; never on the plain-HTTP home install). Change-log rows AND
+request-log rows record `user:<name>`; request-log rows also record `client_ip` (#646).
 
-Outside that whole chain sits `SecurityHeadersMiddleware` (#645), the outermost layer, added last in
-`web/app.py`: see "Browser security headers" under "Auth enforcement".
+Outside that whole chain sit `SecurityHeadersMiddleware` (#645; see "Browser security headers" under
+"Auth enforcement") and, outermost of all, `proxy_trust.ProxyHeadersMiddleware` (#646; see "Behind a
+reverse proxy"), which is why every layer sees the real scheme and client address.
 
 **CSRF.** On top of the origin guard (#558): a POST/PUT/PATCH/DELETE **that carries a live session
 cookie** must send that session's token in `X-CSRF-Token`, else 403 `csrf_failed` (in the request
@@ -477,7 +483,8 @@ included routers expanded; an unknown path counts as viewer, so a stranger can't
 - signed in but below a MOUNT's label -> 403 `forbidden`; below a ROUTE's label -> 403 `forbidden`
   from `web.roles.require_role` (the labels from #557; a page answers the same JSON 403).
 - **No trust for loopback or LAN addresses**: no session and no token = anonymous, whatever the IP
-  or `X-Forwarded-For`.
+  or `X-Forwarded-For`. (A trusted proxy's `X-Forwarded-For`, #646, only changes which address the
+  limiter and the request log record; it never grants anything.)
 
 **Request-body caps (#649, `web/body_limit.py`).** Every request body has a per-route ceiling,
 enforced before anything reads it (uvicorn has no limit of its own, and the audit logger buffers
@@ -521,10 +528,11 @@ separate user-content origin.
 defaults to every HTTP response. A header the response already set always wins.
 - **Everywhere:** `Referrer-Policy: strict-origin-when-cross-origin` (a link out sends our origin, never
   the path; not `same-origin`, because YouTube embeds refuse to play with no Referer) and
-  `Strict-Transport-Security: max-age=<n>` **only when the request itself is HTTPS** (`scope["scheme"]`)
+  `Strict-Transport-Security: max-age=<n>` **only when the request is HTTPS** (`proxy_trust.is_https`)
   and `CONSTRUCTICON_HSTS_SECONDS` is a positive number (default off). Never over plain HTTP: the home
-  install is HTTP-only. It does NOT read `X-Forwarded-Proto` (a client could forge it); behind a TLS
-  proxy, #646's uvicorn proxy settings are what make `scope["scheme"]` say https.
+  install is HTTP-only. It does NOT read `X-Forwarded-Proto` itself (a client could forge it); behind a
+  TLS proxy, `CONSTRUCTICON_TRUSTED_PROXIES` (#646, "Behind a reverse proxy") is what makes the request
+  count as HTTPS, and only for requests that came through that proxy.
 - **App pages and API answers** (everything but `/f` and `/preview`): `X-Frame-Options: SAMEORIGIN`,
   `X-Content-Type-Options: nosniff`, `Permissions-Policy` (camera, microphone, geolocation, payment, usb
   off), `Cross-Origin-Opener-Policy: same-origin`, and `Content-Security-Policy` = `APP_CSP`:
@@ -555,6 +563,72 @@ defaults to every HTTP response. A header the response already set always wins.
   MCP server (port 8100, bearer-only, no browser pages), the static export as published (GitHub Pages
   sets its own headers). Check with `scripts/test_security_headers_645.py` (throwaway DB), which also
   fails if an inline handler, `setAttribute('on...')` or `javascript:` link appears in the templates/JS.
+
+**Behind a reverse proxy (#646, `web/proxy_trust.py`).** For an internet-facing install with HTTPS
+terminated by Caddy or nginx. **The home install does not use this**: it stays plain HTTP with no
+proxy and no setting, which is exactly the behaviour from before #646.
+- **The setting:** `CONSTRUCTICON_TRUSTED_PROXIES`, comma-separated IPs and/or CIDRs, the proxy's
+  address **as the app container sees it**. Unset or empty = forwarded headers are ignored everywhere.
+  A bad entry is logged and skipped; there is no wildcard. Read per request (tests set it).
+- **The one place:** `ProxyHeadersMiddleware`, the outermost layer. Only when the TCP peer is in the
+  list: `X-Forwarded-Proto` (right-most value, `http`/`https` only) becomes `scope["scheme"]`, and
+  `X-Forwarded-For` is walked from the right, skipping trusted proxies; the first other address is the
+  client (`scope["client"]`). The left-most entries are what the client typed and are never believed; a
+  non-address entry stops the walk (the proxy stays the client). Not read: `X-Forwarded-Host` (the proxy
+  must pass the original `Host`), `X-Forwarded-Port`, the RFC 7239 `Forwarded` header.
+- **Who uses it** (always through `proxy_trust.client_ip()` / `is_https()`, never the scope or a header
+  directly; `scripts/test_proxy_646.py` fails otherwise): the session cookie's `Secure` flag
+  (`web/auth.py`), HSTS (`web/security_headers.py`), the origin guard's scheme (`web/request_guard.py`:
+  same-origin is now scheme + host, so behind an HTTPS proxy WITHOUT the setting every POST is a 403
+  `cross_origin` whose message names the setting), the sign-in limiter's per-IP key
+  (`web/routes/auth.py`), the request log's `client_ip` column (`web/middleware.py`, new in #646) and
+  the "install token refused" log line. Starlette's own URL building (`request.base_url`, the
+  trailing-slash 307) follows the rewritten scheme; `/login?next=` redirects are relative.
+- **Trust the proxy's exact address, and give the app no other way in.** Remove the web service's
+  published `ports:` so nothing reaches it except through the proxy. Never trust a whole Docker bridge
+  subnet: a client hitting a published port shows up as that bridge's gateway address, which would
+  then be able to forge the headers. A fixed proxy IP on its own network (`ipv4_address`) is the
+  simple way (`docker-compose.yml.example`, the commented `proxy` service and `edge` network).
+- **uvicorn's own `--proxy-headers`** is on by default but trusts only 127.0.0.1 (in-container
+  loopback, so nothing outside the container). The compose example adds `--no-proxy-headers` so this
+  module is the only reader; the owner's existing compose files don't have it and don't need it.
+- **Caddy** (`Caddyfile`; Caddy keeps `Host`, redirects HTTP to HTTPS, and REPLACES any client-sent
+  `X-Forwarded-For` / `X-Forwarded-Proto` with what it saw, so the app gets a one-entry chain):
+  ```
+  constructicon.example.com {
+      request_body {
+          max_size 30MB            # a second body cap in front of #649's
+      }
+      reverse_proxy constructicon-web:8000
+  }
+  ```
+  plus `CONSTRUCTICON_TRUSTED_PROXIES=<caddy's address>` and `CONSTRUCTICON_HSTS_SECONDS=31536000` on
+  the web service. `tls internal` instead of a public hostname gives a self-signed test certificate.
+- **nginx** (it passes nothing by default; set all four, and `X-Forwarded-For` to `$remote_addr` so a
+  client-sent chain is replaced, not appended to):
+  ```
+  server {
+      listen 443 ssl;
+      server_name constructicon.example.com;
+      ssl_certificate     /etc/nginx/certs/fullchain.pem;
+      ssl_certificate_key /etc/nginx/certs/privkey.pem;
+      client_max_body_size 30m;
+      location / {
+          proxy_pass http://constructicon-web:8000;
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For $remote_addr;
+          proxy_set_header X-Forwarded-Proto $scheme;
+      }
+  }
+  server { listen 80; server_name constructicon.example.com; return 301 https://$host$request_uri; }
+  ```
+- **The MCP server** (port 8100) reads no client address and no scheme (bearer token only; only
+  uvicorn's access log shows the peer), so it has no proxy handling. Put it behind its own route only if
+  it must be reachable from outside, which a customer install doesn't need.
+- Not done here (#646's issue text suggests them; owner call): `CONSTRUCTICON_PUBLIC_URL` (a fixed
+  public origin, for passkeys' relying-party ID and to force Secure without inferring), the `__Host-`
+  cookie prefix on HTTPS (renaming the cookie signs everyone out once). Check with
+  `scripts/test_proxy_646.py` (throwaway DB, the whole trust matrix).
 
 **The install token (`core/install_token.py`).** One secret, two containers:
 - **MCP** (`mcp_server/auth.py`): every request needs `Authorization: Bearer <token>` (401 otherwise;
@@ -614,7 +688,8 @@ containers (`sudo docker restart <web> <mcp>`), update every client. **Lost admi
 
 Check with `scripts/test_auth_step2.py` (throwaway DB: the whole matrix per role and for the token,
 mounts, `next`, the decision queue, the MCP refusing to start, no secrets
-in the audit log). Later (not built): HTTPS (Caddy), per-user MCP tokens.
+in the audit log). Later (not built): HTTPS itself (the app is ready for a TLS proxy since #646, see
+"Behind a reverse proxy"), per-user MCP tokens.
 
 ## Ownership and sensitive items (#604 build steps 1-2, #603)
 
@@ -1532,7 +1607,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_replace_file_617`, `test_card_faces`, `test_install_config`, `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_role_policy`,
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
-    `test_f_sandbox_610`, `test_body_cap_649`, `check_routes_roles`, `check_policy_doors`;
+    `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `check_routes_roles`, `check_policy_doors`;
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,
     `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
     `test_restart_sidecar_643`;

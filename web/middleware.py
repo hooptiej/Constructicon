@@ -10,7 +10,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core import actor as actor_ctx, besteffort, db
-from web import body_limit, request_guard
+from web import body_limit, proxy_trust, request_guard
 
 log = logging.getLogger("constructicon.middleware")
 
@@ -291,6 +291,7 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                     affected_slugs=affected_slugs,
                     actor=actor_ctx.current_actor(),  # #560
                     required_role=getattr(state, "required_role", None),  # #557
+                    client_ip=proxy_trust.client_ip(request),  # #646: the real client behind a trusted proxy
                 )
 
         return response

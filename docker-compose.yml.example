@@ -38,8 +38,16 @@ services:
       # #645: browser security headers (web/security_headers.py) are always on; these only tune them.
       #   HSTS, sent ONLY on requests that really arrived over HTTPS. Off by default (plain-HTTP
       #   installs must never send it). Set it once the install is served over HTTPS (behind a
-      #   proxy that also needs #646's proxy settings), e.g. one year:
+      #   proxy, that also needs CONSTRUCTICON_TRUSTED_PROXIES below), e.g. one year:
       # - CONSTRUCTICON_HSTS_SECONDS=31536000
+      # #646: behind a TLS reverse proxy (Caddy, nginx; see the commented `proxy` service at the
+      # bottom and CLAUDE.md "Behind a reverse proxy"), list the proxy's address(es) as the app
+      # sees them: IPs and/or CIDRs, comma-separated. Only requests whose TCP peer is in this list
+      # may set the scheme (X-Forwarded-Proto) and client address (X-Forwarded-For): that gives the
+      # session cookie its Secure flag, HSTS, the https same-origin check and a per-client sign-in
+      # limiter. Unset (the default, and the home install) = forwarded headers are ignored.
+      # Never list a network that untrusted clients can connect from directly.
+      # - CONSTRUCTICON_TRUSTED_PROXIES=172.30.0.10
       #   Replace the app pages' Content-Security-Policy (default: security_headers.APP_CSP), or "off".
       # - CONSTRUCTICON_CSP=
       #   Diagnose a page the CSP breaks: send it as Content-Security-Policy-Report-Only instead.
@@ -56,7 +64,9 @@ services:
       # - CONSTRUCTICON_MAX_AUTH_BODY_KB=64
       #   Every other route (JSON and form bodies).
       # - CONSTRUCTICON_MAX_BODY_KB=1024
-    command: uvicorn web.app:app --host 0.0.0.0 --port 8000
+    # #646: --no-proxy-headers turns off uvicorn's own forwarded-header handling (on by default for
+    # 127.0.0.1), so CONSTRUCTICON_TRUSTED_PROXIES (web/proxy_trust.py) is the only place they're read.
+    command: uvicorn web.app:app --host 0.0.0.0 --port 8000 --no-proxy-headers
 
   # #643: the ONLY container with the Docker socket. It does one thing: restart the
   # container named in RESTARTER_CONTAINER (never taken from the request), at most once
@@ -128,9 +138,43 @@ services:
     environment:
       - IMAGEREPO_BASE_URL=http://10.0.1.78:8001
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
-    command: uvicorn web.app:app --host 0.0.0.0 --port 8000
+    command: uvicorn web.app:app --host 0.0.0.0 --port 8000 --no-proxy-headers
+
+  # #646: an HTTPS front door for an internet-facing install (NOT the home install, which stays
+  # plain HTTP with no proxy). Caddy terminates TLS and forwards to the web service over the
+  # `edge` network, whose fixed subnet gives the proxy a fixed address to trust. To use it:
+  # uncomment this service and the `edge` network, add `edge` to constructicon-web's networks,
+  # REMOVE constructicon-web's `ports:` (so nothing reaches the app except through the proxy), and
+  # set CONSTRUCTICON_TRUSTED_PROXIES=172.30.0.10 (and CONSTRUCTICON_HSTS_SECONDS) on it.
+  # ./Caddyfile:
+  #   constructicon.example.com {
+  #       request_body {
+  #           max_size 30MB          # a second body cap in front of #649's
+  #       }
+  #       reverse_proxy constructicon-web:8000
+  #   }
+  # Caddy keeps the original Host header and sets X-Forwarded-For / X-Forwarded-Proto itself
+  # (replacing any a client sent), which is exactly what the app reads.
+  # proxy:
+  #   image: caddy:2
+  #   container_name: constructicon-proxy
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - ./caddy-data:/data
+  #   networks:
+  #     edge:
+  #       ipv4_address: 172.30.0.10
+  #   restart: unless-stopped
 
 networks:
+  # #646: the proxy's network (see the commented `proxy` service).
+  # edge:
+  #   ipam:
+  #     config:
+  #       - subnet: 172.30.0.0/24
   # #643: the restart sidecar's network. `internal: true` = no route out, no published
   # port; only services listed on it (constructicon-web, ollama-restarter) can reach it.
   restart-valve:

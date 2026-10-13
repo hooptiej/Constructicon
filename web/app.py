@@ -27,7 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
-from web import auth as web_auth, body_limit, content_security, request_guard
+from web import auth as web_auth, body_limit, content_security, proxy_trust, request_guard
 from web.common import _STATIC_DIR
 from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
 from web.security_headers import SecurityHeadersMiddleware
@@ -136,8 +136,14 @@ app.add_middleware(body_limit.BodyLimitMiddleware)
 # #558: outermost, so a forged cross-origin request is refused before anything runs.
 app.add_middleware(request_guard.OriginGuardMiddleware)
 # #645: browser security headers (CSP, frame-ancestors / X-Frame-Options, Referrer-Policy, nosniff,
-# HSTS over HTTPS only). Added last, so it wraps even the origin guard: its refusals carry them too.
+# HSTS over HTTPS only). Wraps even the origin guard, so its refusals carry them too; only #646's
+# proxy-header rewrite sits outside it.
 app.add_middleware(SecurityHeadersMiddleware)
+# #646: trusted reverse proxies. Added after (so outside) everything else: when the TCP peer is in
+# CONSTRUCTICON_TRUSTED_PROXIES it rewrites scope["scheme"] / scope["client"] from X-Forwarded-Proto /
+# X-Forwarded-For, so every layer above (HSTS, origin guard, cookie Secure, limiter, audit) sees the
+# real scheme and client. Unset = forwarded headers ignored everywhere (the home install).
+app.add_middleware(proxy_trust.ProxyHeadersMiddleware)
 
 
 OCR_WATCHDOG_INTERVAL_SECONDS = 60

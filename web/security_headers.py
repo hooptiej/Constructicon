@@ -16,9 +16,9 @@ the sign-in gate carries the headers too), sets these defaults on each HTTP resp
   off (`script-src-attr 'none'`), which is what an innerHTML injection would use.
 - `Permissions-Policy` (camera, microphone, geolocation, payment, usb off) and
   `Cross-Origin-Opener-Policy: same-origin`.
-- `Strict-Transport-Security`: ONLY when the request itself is HTTPS (`scope["scheme"]`) AND
-  `CONSTRUCTICON_HSTS_SECONDS` is a positive number (default 0 = off). Never over plain HTTP: the
-  home install is HTTP-only.
+- `Strict-Transport-Security`: ONLY when the request is HTTPS (`proxy_trust.is_https`: directly, or
+  through a proxy in CONSTRUCTICON_TRUSTED_PROXIES, #646) AND `CONSTRUCTICON_HSTS_SECONDS` is a
+  positive number (default 0 = off). Never over plain HTTP: the home install is HTTP-only.
 
 Who gets what (`_rule_for`):
 - `/f/...` (user files, the public hotlink route): `content_security` (#610) owns these. Its nosniff
@@ -42,6 +42,8 @@ Env (read per request, so tests can set them; a bad value falls back to the defa
 """
 
 import os
+
+from web import proxy_trust
 
 HSTS_ENV = "CONSTRUCTICON_HSTS_SECONDS"
 CSP_ENV = "CONSTRUCTICON_CSP"
@@ -132,11 +134,11 @@ def defaults_for(scope):
             csp = app_csp()
             if csp:
                 headers[csp[0]] = csp[1]
-    # HSTS only over a real HTTPS request. #646 (proxy support) is what will make scope["scheme"]
-    # say "https" behind a TLS-terminating proxy (uvicorn --proxy-headers + --forwarded-allow-ips);
-    # do NOT read X-Forwarded-Proto here, an untrusted client could set it.
+    # HSTS only over HTTPS: a direct HTTPS request, or one a trusted proxy says was HTTPS (#646,
+    # web/proxy_trust.py, the only reader of X-Forwarded-Proto; a forged header from anyone else
+    # leaves the scheme at http, so no HSTS).
     seconds = hsts_seconds()
-    if seconds and scope.get("scheme") == "https":
+    if seconds and proxy_trust.is_https(scope):
         headers["strict-transport-security"] = f"max-age={seconds}"
     return headers
 

@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from core import install_config, roles, users
 from core.errors import AppError, NotFound
-from web import auth as web_auth
+from web import auth as web_auth, proxy_trust
 from web.common import from_request_thread, templates
 from web.roles import RoleRouter, requires
 
@@ -50,7 +50,9 @@ def _safe_next(target):
 
 
 def _client_ip(request: Request):
-    return request.client.host if request.client else None
+    """The sign-in limiter's per-IP key: the real client behind a trusted proxy (#646), else the
+    TCP peer. A forged X-Forwarded-For from anyone else changes nothing."""
+    return proxy_trust.client_ip(request)
 
 
 def _signed_in_response(request, user, payload):

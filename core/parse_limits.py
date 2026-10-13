@@ -60,6 +60,7 @@ import logging
 import multiprocessing
 import os
 import pickle
+import re
 import signal
 import sys
 import threading
@@ -181,8 +182,10 @@ def _message(kind, b, detail=""):
     if kind == "memory":
         return f"needed more than {b.memory_mb:,} MB of memory, so it was stopped"
     if kind == "pixels":
-        return (f"the image is larger than {setting('CONSTRUCTICON_MAX_IMAGE_MEGAPIXELS'):g} megapixels, "
-                f"so it wasn't decoded" + (f" ({detail})" if detail else ""))
+        cap = setting("CONSTRUCTICON_MAX_IMAGE_MEGAPIXELS")
+        size = re.search(r"\((\d+) pixels\)", detail or "")  # Pillow: "Image size (N pixels) exceeds ..."
+        found = f"is {int(size.group(1)) / 1e6:,.0f} megapixels" if size else f"is larger than {cap:g} megapixels"
+        return f"the image {found}, over the {cap:g} megapixel limit, so it wasn't decoded"
     if kind == "crash":
         return "the parser crashed on this file" + (f" ({detail})" if detail else "")
     if kind == "busy":
@@ -500,6 +503,9 @@ def _child_main(conn, fn, args, seconds, memory_mb, env):
     signal.alarm(int(seconds) + 10)
     cpu = int(seconds) + 5
     resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 5))
+    # No core file: a parser crashing on a hostile file must not write hundreds of MB to disk (and
+    # a dump in progress keeps the dying child, and our pipe, open for seconds).
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     ceiling = _vm_size_bytes() + int(memory_mb) * 1024 * 1024
     _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
     if hard != resource.RLIM_INFINITY:

@@ -252,7 +252,12 @@ def create_user(username, password, role, display_name=None, *, actor=None, batc
 
 def create_first_admin(username, password, display_name=None, *, actor=None):
     """First-run setup: the first admin, only while the users table is empty (404 `not_found`
-    afterwards, the same answer /setup gives). Also fills install_config.owner_name when unset."""
+    afterwards, the same answer /setup gives). Also fills install_config.owner_name when unset.
+
+    Atomic (#648): the "no users yet" check and the insert share one BEGIN IMMEDIATE transaction
+    (db.transaction()), which takes SQLite's write lock before reading, so two setups racing (two
+    requests, or the web and MCP processes) can't both see an empty table: exactly one wins and
+    the other gets the 404. The caller proves ownership first (require_setup_proof)."""
     from . import install_config
     username = validate_username(username)
     validate_password(password)
@@ -269,6 +274,60 @@ def create_first_admin(username, password, display_name=None, *, actor=None):
             install_config.update({"owner_name": display_name or username}, actor=actor, batch_id=batch_id)
     install_config.clear_cache()
     return _result(batch_id, {"user": public(db.get_user(user_id=user_id))})
+
+
+# --- first-run proof (#648) -------------------------------------------------------------------
+# Reaching /setup first must not be enough to own a fresh install: claiming it needs the install
+# token, the secret the operator generated on the server during rollout (CLAUDE.md "Rollout for
+# an install", step 2, before anyone opens the site). It proves nothing new: whoever holds it is
+# already admin over the API and the MCP. It is compared in constant time, never stored or logged
+# (request_guard.AUDIT_ROUTE_RULES logs no body values for /api/auth/setup), and stops working for
+# setup the moment the first admin exists (/setup is 404 from then on).
+
+SETUP_PROOF_FIELD = "install_token"
+
+
+def setup_proof_available():
+    """True when this install has an install token, so /setup can be claimed with it. False on an
+    install with none configured: the first admin then comes from scripts/reset_password.py
+    --create-admin on the server."""
+    from . import install_token
+    return install_token.enabled()
+
+
+def require_setup_proof(presented, ip=None, *, now=None):
+    """Refuse a first-run claim that doesn't prove it comes from the operator.
+
+    404 `not_found` once any user exists (the same answer /setup gives, checked first so this is
+    never a token oracle afterwards); 429 `too_many_attempts` while this address backs off (the
+    sign-in limiter's rules, its own key); 403 `setup_unavailable` when the install has no token;
+    403 `setup_proof_required` / `setup_proof_wrong` for a missing or wrong token. A request that
+    already runs as the install token (an `Authorization: Bearer` script) counts as proof."""
+    from . import install_token
+    from .actor import ACTOR_TOKEN, current_actor
+    if not setup_needed():
+        raise NotFound("Setup is already done.", code="not_found")
+    if current_actor() == ACTOR_TOKEN:
+        return
+    if not install_token.enabled():
+        raise AppError("setup_unavailable", "This install has no install token, so the admin account can't be "
+                       "created from the browser. On the server, run: python3 scripts/reset_password.py "
+                       "--create-admin <username> --generate", status=403)
+    now = time.time() if now is None else now
+    keys = [("setup-ip", ip or "?")]
+    wait = limiter.retry_after(keys, now)
+    if wait > 0:
+        raise AppError("too_many_attempts", f"Too many wrong install tokens. Try again in {int(wait) + 1} seconds.",
+                       status=429, details={"retry_after": int(wait) + 1})
+    given = presented.strip() if isinstance(presented, str) else ""
+    if not given:
+        limiter.failed(keys, now)
+        raise AppError("setup_proof_required", "Enter the install token to prove you set up this install.",
+                       status=403)
+    if not install_token.matches(given):
+        limiter.failed(keys, now)
+        raise AppError("setup_proof_wrong", "That isn't this install's install token.", status=403)
+    limiter.succeeded(keys)
 
 
 def set_role(user, role, *, actor=None):

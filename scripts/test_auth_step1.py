@@ -105,9 +105,10 @@ r = client.get("/setup")
 check("anonymous setup page: 'Sign in' chip, no CSRF meta", "Sign in" in r.text and csrf_from(r.text) is None)
 admin_name, admin_pw = "admin_" + secrets.token_hex(3), pw()
 SECRETS.append(admin_pw)
-r = client.post("/api/auth/setup", json={"username": admin_name, "password": "short"}, headers=SAME)
+r = client.post("/api/auth/setup", json={"username": admin_name, "password": "short", "install_token": _testenv.TOKEN}, headers=SAME)
 check("setup with a short password -> 400 bad_password", r.status_code == 400 and r.json()["error"]["code"] == "bad_password")
-r = client.post("/api/auth/setup", json={"username": admin_name, "password": admin_pw, "display_name": "Test Owner"},
+r = client.post("/api/auth/setup", json={"username": admin_name, "password": admin_pw, "display_name": "Test Owner",
+                                         "install_token": _testenv.TOKEN},
                 headers=SAME)
 check("setup creates the admin", r.status_code == 200 and r.json()["user"]["role"] == "admin", r.text[:200])
 cookie = r.headers.get("set-cookie", "")

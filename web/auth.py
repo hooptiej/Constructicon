@@ -2,7 +2,8 @@
 The rules live in core/users.py, core/install_token.py and core/roles.py.
 
 Three pure-ASGI middlewares (no body buffering, so streaming uploads are untouched). Order
-(web/app.py): origin guard -> actor (anonymous) -> session -> access -> audit -> csrf -> routes.
+(web/app.py): origin guard -> body limit (#649, web/body_limit.py) -> actor (anonymous) -> session ->
+access -> audit -> csrf -> routes.
 
   * SessionMiddleware (web/app.py: inside the origin guard and ActorMiddleware, outside the audit
     logger: guard -> actor -> session -> audit -> csrf -> routes). For a

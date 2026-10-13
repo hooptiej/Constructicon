@@ -404,8 +404,14 @@ def authenticate(username, password, ip=None, *, now=None):
     if wait > 0:
         raise AppError("too_many_attempts", f"Too many failed sign-ins. Try again in {int(wait) + 1} seconds.",
                        status=429, details={"retry_after": int(wait) + 1})
-    creds = db.get_user_credentials(name) if name else None
-    if creds is None:
+    # #649: no stored password is longer than MAX_PASSWORD_LENGTH (validate_password), so a longer
+    # one can't match: fail it like any wrong password, without hashing it. Decided before the user
+    # lookup, so it says nothing about whether the account exists.
+    too_long = isinstance(password, str) and len(password) > MAX_PASSWORD_LENGTH
+    creds = db.get_user_credentials(name) if name and not too_long else None
+    if too_long:
+        ok = False
+    elif creds is None:
         _burn_time(password)
         ok = False
     else:

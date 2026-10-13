@@ -1,6 +1,7 @@
 """Request middleware: the actor context (#560) and audit logging (#547; moved verbatim from
 web/app.py). Added to the app in web/app.py, inside the request guard (web/request_guard.py),
-which stays outermost: guard -> ActorMiddleware -> AuditLoggingMiddleware -> routes."""
+which stays outermost: guard -> body limit (#649) -> ActorMiddleware -> session -> access ->
+AuditLoggingMiddleware -> csrf -> routes."""
 
 import json
 import logging
@@ -9,7 +10,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core import actor as actor_ctx, besteffort, db
-from web import request_guard
+from web import body_limit, request_guard
 
 log = logging.getLogger("constructicon.middleware")
 
@@ -177,8 +178,13 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
         should_audit = is_mutating and is_api
 
         form_data = {}
-        skip_reason = _audit_body_skip_reason(request) if should_audit else None
-        if skip_reason:
+        # #649: a body declared over its route's limit (web/body_limit.py) is refused here, before
+        # anything reads it and without running the route; the refusal is still logged below.
+        refused = body_limit.declared_refusal(request.scope) if should_audit else None
+        skip_reason = _audit_body_skip_reason(request) if should_audit and refused is None else None
+        if refused is not None:
+            form_data = {"_body": refused.audit_marker}
+        elif skip_reason:
             form_data = {"_body": skip_reason}
         elif should_audit and request.method in {"POST", "PUT", "PATCH"}:
             # Read the request body so we can log it. Starlette automatically caches
@@ -190,6 +196,11 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
             content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
             try:
                 body_bytes = await request.body()
+            except body_limit.BodyTooLarge as e:
+                # #649: a chunked (or lying) body passed the limit while being read: at most the
+                # limit was held, and the route never runs.
+                refused = e
+                form_data = {"_body": e.audit_marker}
             except Exception as e:
                 besteffort.warn(log, "audit: reading the request body", e,
                                 method=request.method, path=request.url.path)
@@ -216,9 +227,21 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
         # require_role dependency (web/roles.py) writes the route's role label into it.
         state = request.state
         try:
+            if refused is not None:
+                response = refused.response()
+                status_code = response.status_code
+                error_detail = request_guard.redact_audit_error(request.url.path, refused.audit_reason)[:ERROR_DETAIL_MAX_CHARS]
+                return response
             response = await call_next(request)
             status_code = response.status_code
-            if should_audit:
+            trip = body_limit.tripped(request.scope) if should_audit else None
+            if trip is not None:
+                # #649: the body went over its limit while the route read it. Whatever the route's
+                # answer was (form parsing can turn it into a 400), BodyLimitMiddleware sends the 413.
+                status_code = 413
+                form_data = {"_body": trip.audit_marker}
+                error_detail = request_guard.redact_audit_error(request.url.path, trip.audit_reason)[:ERROR_DETAIL_MAX_CHARS]
+            elif should_audit:
                 # #583: a refusal the app made on purpose is a normal response, so say why.
                 reason = await _error_reason(response)
                 if reason:

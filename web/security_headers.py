@@ -12,7 +12,7 @@ the sign-in gate carries the headers too), sets these defaults on each HTTP resp
   the HTML Rendered view iframes `/api/image/<slug>/rendered`.
 - `Content-Security-Policy`: `APP_CSP` below on app pages and API answers. See CLAUDE.md "Browser
   security headers" for what each source is for. Script keeps `'unsafe-inline'` for now (35 inline
-  `<script>` blocks in 29 templates; moving to nonces is a follow-up), but inline event handlers are
+  `<script>` blocks in 29 templates; moving to nonces is #660), but inline event handlers are
   off (`script-src-attr 'none'`), which is what an innerHTML injection would use.
 - `Permissions-Policy` (camera, microphone, geolocation, payment, usb off) and
   `Cross-Origin-Opener-Policy: same-origin`.
@@ -50,7 +50,8 @@ CSP_REPORT_ONLY_ENV = "CONSTRUCTICON_CSP_REPORT_ONLY"
 # The policy for app pages and API answers. Each source is there because the UI uses it (inventory
 # in the #645 PR): Google Fonts (base.html), YouTube embeds (object page, core/object_types/youtube.py),
 # same-origin iframes (admin drawer, HTML Rendered view). No eval anywhere, no workers, no blob:/data:
-# images, no external fetches.
+# images, no external fetches. (The vendored fflate's ASYNC functions start blob: workers, which
+# worker-src 'self' refuses; ingest.js uses only the synchronous Zip / ZipPassThrough.)
 APP_CSP = "; ".join([
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",

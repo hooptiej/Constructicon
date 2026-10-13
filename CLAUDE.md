@@ -406,6 +406,9 @@ No cookie, or a dead one = `anonymous`. The cookie: HttpOnly, SameSite=Lax, Path
 Max-Age 30 days, `Secure` only when the request is HTTPS (deferred). Change-log rows AND
 request-log rows record `user:<name>`.
 
+Outside that whole chain sits `SecurityHeadersMiddleware` (#645), the outermost layer, added last in
+`web/app.py`: see "Browser security headers" under "Auth enforcement".
+
 **CSRF.** On top of the origin guard (#558): a POST/PUT/PATCH/DELETE **that carries a live session
 cookie** must send that session's token in `X-CSRF-Token`, else 403 `csrf_failed` (in the request
 log). Install-token requests (scripts; `Authorization: Bearer`) never need it:
@@ -484,6 +487,46 @@ with the Rendered view: opaque origin, no script, no network); HTML/XHTML is als
 `content_security.serve_file` (or add `file_headers`)**, never a bare `FileResponse` on a user file.
 Thumbnails are generated JPEGs (nosniff only). Check with `scripts/test_f_sandbox_610.py`. Longer term: a
 separate user-content origin.
+
+**Browser security headers (#645, `web/security_headers.py`).** One pure-ASGI middleware, the
+**outermost** layer (it wraps the origin guard, so every refusal carries the headers too), adds
+defaults to every HTTP response. A header the response already set always wins.
+- **Everywhere:** `Referrer-Policy: strict-origin-when-cross-origin` (a link out sends our origin, never
+  the path; not `same-origin`, because YouTube embeds refuse to play with no Referer) and
+  `Strict-Transport-Security: max-age=<n>` **only when the request itself is HTTPS** (`scope["scheme"]`)
+  and `CONSTRUCTICON_HSTS_SECONDS` is a positive number (default off). Never over plain HTTP: the home
+  install is HTTP-only. It does NOT read `X-Forwarded-Proto` (a client could forge it); behind a TLS
+  proxy, #646's uvicorn proxy settings are what make `scope["scheme"]` say https.
+- **App pages and API answers** (everything but `/f` and `/preview`): `X-Frame-Options: SAMEORIGIN`,
+  `X-Content-Type-Options: nosniff`, `Permissions-Policy` (camera, microphone, geolocation, payment, usb
+  off), `Cross-Origin-Opener-Policy: same-origin`, and `Content-Security-Policy` = `APP_CSP`:
+  `default-src 'self'`; script `'self' 'unsafe-inline'` with **`script-src-attr 'none'`** (no inline
+  event handlers); style `'self' 'unsafe-inline' https://fonts.googleapis.com`; font `'self'
+  https://fonts.gstatic.com`; img, media, connect, worker `'self'`; frame `'self'
+  https://www.youtube.com`; `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`,
+  `frame-ancestors 'self'`. Same-origin framing stays allowed: the admin drawer iframes
+  `/admin?embed=1`, the HTML Rendered view iframes `/api/image/<slug>/rendered`.
+- **`/f/...`** keeps #610's headers as they are (sandbox CSP on active content, nosniff); no app CSP and
+  no X-Frame-Options, so a hotlinked file can still be embedded elsewhere. **`/preview`** (the export
+  preview) gets only `PREVIEW_CSP` (`object-src 'none'; base-uri 'self'; form-action 'self';
+  frame-ancestors 'self'`), which blocks nothing the exported site uses; its `media/` keep the sandbox.
+- **Rules this puts on new UI code:** no inline event handlers (`onclick=`, `onchange=`, also not inside
+  an innerHTML string: use `addEventListener` or a delegated listener), no `javascript:` links, no
+  `eval` / `new Function` / string `setTimeout`, no new external origin (a CDN script, a remote image, an
+  embed other than YouTube) without adding it to `APP_CSP` with a reason. Remote images are blocked
+  (`img-src 'self'`): thumbnails are fetched and stored server-side. Inline `<script>` blocks and
+  `style=` still work (`'unsafe-inline'`); moving script to nonces is #660.
+- **Opt-out:** a route that needs a default left off calls `security_headers.opt_out(response,
+  "x-frame-options", ...)`; a route that needs a different value just sets the header itself.
+- **Env:** `CONSTRUCTICON_HSTS_SECONDS` (above); `CONSTRUCTICON_CSP` replaces `APP_CSP` for an install
+  that needs another source (`off` = no CSP on app pages; X-Frame-Options still stops framing);
+  `CONSTRUCTICON_CSP_REPORT_ONLY=1` sends it as `Content-Security-Policy-Report-Only` to diagnose a page
+  it breaks (frame-ancestors is ignored in that mode; X-Frame-Options still holds). A bad value falls
+  back to the default. Read per request (`docker-compose.yml.example` shows them commented out).
+- Not covered: a 500 from an unhandled exception (Starlette's outermost error middleware answers it), the
+  MCP server (port 8100, bearer-only, no browser pages), the static export as published (GitHub Pages
+  sets its own headers). Check with `scripts/test_security_headers_645.py` (throwaway DB), which also
+  fails if an inline handler, `setAttribute('on...')` or `javascript:` link appears in the templates/JS.
 
 **The install token (`core/install_token.py`).** One secret, two containers:
 - **MCP** (`mcp_server/auth.py`): every request needs `Authorization: Bearer <token>` (401 otherwise;

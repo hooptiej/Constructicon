@@ -39,6 +39,14 @@ services:
       # install without Ollama: captions then just have no restart valve.
       - CAPTION_RESTART_URL=http://ollama-restarter:8080/restart
       - CAPTION_RESTART_TOKEN_FILE=/run/secrets/ollama_restart_token
+      # #649: request-body caps (web/body_limit.py), checked before anything reads the body; over
+      # the cap = 413 payload_too_large. The defaults are shown; uncomment to change one.
+      #   Uploads (/api/upload, /api/image/<slug>/replace-file): the upload cap + 1 MB of form framing.
+      # - CONSTRUCTICON_MAX_UPLOAD_MB=25
+      #   Sign-in, setup, my password, Admin > Users (/api/auth/*, /api/account/*, /api/users*).
+      # - CONSTRUCTICON_MAX_AUTH_BODY_KB=64
+      #   Every other route (JSON and form bodies).
+      # - CONSTRUCTICON_MAX_BODY_KB=1024
     command: uvicorn web.app:app --host 0.0.0.0 --port 8000
 
   # #643: the ONLY container with the Docker socket. It does one thing: restart the

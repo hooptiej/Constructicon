@@ -36,7 +36,8 @@ the date and commit forward when you re-verify.
   - `web/app.py` is only the assembly point: `app = FastAPI()`, the error
     handlers (one shape, see "Actor and errors" below), the static mounts
     (`/static`, `/brand`, `/preview`), middleware (request guard outermost,
-    then the actor context, then audit logging), the startup hook (`init_db`
+    then the body caps (#649), the actor context, session, access gate, audit logging and CSRF;
+    see "How the actor is set"), the startup hook (`init_db`
     migrations, the stale-decision sweep, OCR self-heal + watchdog, caption queue
     worker, the trash purge and decision-sweep loops; runs as the `system` actor) and the
     `include_router` calls.
@@ -62,7 +63,7 @@ the date and commit forward when you re-verify.
     `shapes`, never from `web.app` or from each other.
   - The rest of `web/`: `auth.py` (session, access-gate and CSRF middleware), `roles.py` (`RoleRouter`,
     `requires`, `NON_ROUTE_ROLES`), `request_guard.py` (same-origin guard and the audit-log redaction
-    rules), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged home
+    rules), `body_limit.py` (per-route request-body caps, #649), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged home
     Files feed, #624), `guides/` (in-app markdown guides), `export_templates/` (the static site's
     Jinja templates), `templates/` and `static/` (css, js; `static/js/mountain-time.js` is the JS twin
     of `core/datefmt.py`).
@@ -394,12 +395,14 @@ added accounts and attribution; step 2 enforces them (next section, "Auth enforc
   username's and that IP's counts (behind a Docker bridge or NAT every client can share one IP, so
   the IP count must not outlive a good sign-in). A wrong user, wrong
   password and disabled account all answer the same 401 `invalid_login` (an unknown user still
-  spends a hash's time).
+  spends a hash's time). A password over `MAX_PASSWORD_LENGTH` (1,024) is that same failure, decided
+  before the user lookup and without hashing it (#649).
 - `delete_everything` keeps `users` and `sessions` (`reset.KEPT_TABLES`).
 
-**How the actor is set (`web/auth.py`).** Middleware order: origin guard -> `ActorMiddleware`
-(anonymous) -> `SessionMiddleware` -> `AccessMiddleware` (install token + sign-in gate, step 2) ->
-audit logger -> `CsrfMiddleware` -> routes. A request with the
+**How the actor is set (`web/auth.py`).** Middleware order: origin guard -> `BodyLimitMiddleware`
+(#649, see "Request-body caps") -> `ActorMiddleware` (anonymous) -> `SessionMiddleware` ->
+`AccessMiddleware` (install token + sign-in gate, step 2) -> audit logger -> `CsrfMiddleware` ->
+routes. A request with the
 `constructicon_session` cookie that resolves to a live session runs as actor `user:<username>`
 with `users.current_user()` set (pages' `current_user()` Jinja global; `roles.role_of` reads it).
 No cookie, or a dead one = `anonymous`. The cookie: HttpOnly, SameSite=Lax, Path=/,
@@ -471,6 +474,30 @@ included routers expanded; an unknown path counts as viewer, so a stranger can't
   from `web.roles.require_role` (the labels from #557; a page answers the same JSON 403).
 - **No trust for loopback or LAN addresses**: no session and no token = anonymous, whatever the IP
   or `X-Forwarded-For`.
+
+**Request-body caps (#649, `web/body_limit.py`).** Every request body has a per-route ceiling,
+enforced before anything reads it (uvicorn has no limit of its own, and the audit logger buffers
+mutating `/api/*` bodies before the route runs, the public sign-in routes included).
+`BodyLimitMiddleware` (pure ASGI, just inside the origin guard) reads nothing: it wraps `receive`,
+so a declared `Content-Length` over the limit trips before a byte is pulled, and the bytes actually
+received are counted, so a chunked or lying body is cut off once it passes the limit (at most the
+limit is ever held). The answer is 413 `payload_too_large` in the shared shape with `details:
+{max_bytes, limit_kind}` and `Connection: close`. The audit logger refuses a declared-oversize body
+itself (no read, the route never runs) and logs `{"_body": "not read: ..."}` plus the code; when a
+route's own reading trips it, the middleware swaps whatever answer came back (form parsing wraps the
+exception and would say 400) for the 413, and the log says 413 too.
+- **auth** (`/api/auth/*`, `/api/account/*`, `/api/users*`): `CONSTRUCTICON_MAX_AUTH_BODY_KB`, default 64.
+- **upload** (`/api/upload`, `/api/image/<slug>/replace-file`, the only routes that take a file):
+  `CONSTRUCTICON_MAX_UPLOAD_MB` (`storage.MAX_BYTES`) + 1 MB of multipart framing. They still stream;
+  the per-file checks in the routes are unchanged. An anonymous upload is 401 from the access gate
+  before any of its body is read.
+- **everything else**: `CONSTRUCTICON_MAX_BODY_KB`, default 1024 (the largest real JSON/form body on
+  the owner's archive is a ~6 KB `type_metadata`).
+- A bad or non-positive value falls back to the default. **A new route that takes a file must be
+  added to `_UPLOAD_PATH`**: `scripts/test_body_cap_649.py` fails when the routes with an `UploadFile`
+  parameter and the upload-limit routes differ. A reverse proxy in front (later, HTTPS) should set
+  its own body limit too, as a second layer. The MCP server (port 8100) is not covered: every request
+  there needs the install token first.
 
 **User files are never served as active content on the app origin (#610).** Browsers carry the
 session cookie for this origin, so an uploaded `.html` / `.svg` rendered as a page from `/f/<slug>`
@@ -1461,7 +1488,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_replace_file_617`, `test_card_faces`, `test_install_config`, `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_role_policy`,
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
-    `test_f_sandbox_610`, `check_routes_roles`, `check_policy_doors`;
+    `test_f_sandbox_610`, `test_body_cap_649`, `check_routes_roles`, `check_policy_doors`;
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,
     `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
     `test_restart_sidecar_643`;

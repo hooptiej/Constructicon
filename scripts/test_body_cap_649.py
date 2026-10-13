@@ -43,6 +43,7 @@ from starlette.testclient import TestClient  # noqa: E402
 from core import db, storage, users  # noqa: E402
 _testenv.assert_isolated()
 from web import app as webapp, body_limit  # noqa: E402
+from web import roles as web_roles  # noqa: E402
 from web.routes import auth as auth_routes  # noqa: E402
 
 FAILS = []
@@ -139,7 +140,7 @@ os.environ["CONSTRUCTICON_MAX_BODY_KB"] = saved
 
 # Every APIRoute that takes a file must be an upload route, and every upload route must take one.
 file_routes, upload_routes = set(), set()
-for route in webapp.app.routes:
+for route in web_roles.flat_routes(webapp.app.routes):
     if not isinstance(route, APIRoute):
         continue
     takes_file = any("UploadFile" in str(param.annotation) or param.annotation is UploadFile

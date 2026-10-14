@@ -656,6 +656,11 @@ def constructicon_view(slug: str, size: str = "preview") -> list[McpImage | str]
                            code="not_viewable")
     rendered = thumbnails.render_view(row, size)
     if rendered is None:
+        # #644: say so when a parser limit stopped it (an oversized image is not "no picture").
+        hit = next(iter(parse_limits.failures_for(thumbnails.limit_key(row))), None)
+        if hit:
+            raise InvalidInput(f"No picture of this item ({hit['what']}): {hit['message']}. It will be tried "
+                               f"again in about {hit['retry_in_minutes']} min.", code="not_viewable")
         raise InvalidInput(f"{object_types.get_object_type(row.get('media_type')).label} items have no picture to view.",
                            code="not_viewable")
     policy.note_access(row, access_log.HOW_MCP_VIEW)  # #604 follow-up 7: sensitive items only

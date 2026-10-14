@@ -271,7 +271,7 @@
 /* Top needs (#343) — compact nudge display on the dashboard */
 </style>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 async function loadCuratorDashboard() {
   try {
     const response = await fetch('/api/curator/dashboard');

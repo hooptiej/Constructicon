@@ -558,8 +558,9 @@ defaults to every HTTP response. A header the response already set always wins.
 - **App pages and API answers** (everything but `/f` and `/preview`): `X-Frame-Options: SAMEORIGIN`,
   `X-Content-Type-Options: nosniff`, `Permissions-Policy` (camera, microphone, geolocation, payment, usb
   off), `Cross-Origin-Opener-Policy: same-origin`, and `Content-Security-Policy` = `APP_CSP`:
-  `default-src 'self'`; script `'self' 'unsafe-inline'` with **`script-src-attr 'none'`** (no inline
-  event handlers); style `'self' 'unsafe-inline' https://fonts.googleapis.com`; font `'self'
+  `default-src 'self'`; script **`'self' 'nonce-<n>'`** (#660, no `'unsafe-inline'`) with
+  **`script-src-attr 'none'`** (no inline event handlers); style `'self' 'unsafe-inline'
+  https://fonts.googleapis.com` (on purpose, see below); font `'self'
   https://fonts.gstatic.com`; img, media, connect, worker `'self'`; frame `'self'
   https://www.youtube.com`; `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`,
   `frame-ancestors 'self'`. Same-origin framing stays allowed: the admin drawer iframes
@@ -572,19 +573,37 @@ defaults to every HTTP response. A header the response already set always wins.
   an innerHTML string: use `addEventListener` or a delegated listener), no `javascript:` links, no
   `eval` / `new Function` / string `setTimeout`, no new external origin (a CDN script, a remote image, an
   embed other than YouTube) without adding it to `APP_CSP` with a reason. Remote images are blocked
-  (`img-src 'self'`): thumbnails are fetched and stored server-side. Inline `<script>` blocks and
-  `style=` still work (`'unsafe-inline'`); moving script to nonces is #660.
+  (`img-src 'self'`): thumbnails are fetched and stored server-side.
+- **Script nonces (#660).** The middleware makes one nonce per request (`secrets.token_urlsafe(16)`),
+  fills `APP_CSP`'s `{nonce}` with it, and exposes it as `request.state.csp_nonce` and the Jinja global
+  `csp_nonce()` (a ContextVar, `security_headers.current_nonce()`, so an imported macro sees it too).
+  **Every inline `<script>` in `web/templates/` must be `<script nonce="{{ csp_nonce() }}">`**, or the
+  browser refuses to run it; a `<script src="/static/...">` needs nothing (`'self'`). JS must not build
+  an inline script (`createElement('script')` with text, or a `<script>` in an innerHTML string): load a
+  `/static` file instead. A page whose HTML is cached and replayed would carry a stale nonce: page HTML
+  is rendered per request, keep it that way. The static export (`web/export_templates/`, its own Jinja
+  env) has no scripts and no `csp_nonce`; `/preview` keeps `PREVIEW_CSP`, which doesn't restrict script.
+- **Styles keep `'unsafe-inline'`, deliberately (#660 decision).** There are 150+ `style="..."`
+  attributes in the templates and more built inside JS strings (`cards.js`, `ingest.js`, the templates'
+  innerHTML), and attributes can't take a nonce, so dropping it means moving every one into a class for
+  little gain: injected CSS can restyle or hide parts of a page, and at worst leak attribute values
+  through selector-plus-`url()` tricks, which `img-src 'self'` / `font-src` already starve of an
+  outside destination. It can't run code. Script injection is the one that matters, and the nonce closes
+  it. Revisit only if the inline styles get moved into classes for their own sake.
 - **Opt-out:** a route that needs a default left off calls `security_headers.opt_out(response,
   "x-frame-options", ...)`; a route that needs a different value just sets the header itself.
 - **Env:** `CONSTRUCTICON_HSTS_SECONDS` (above); `CONSTRUCTICON_CSP` replaces `APP_CSP` for an install
-  that needs another source (`off` = no CSP on app pages; X-Frame-Options still stops framing);
+  that needs another source (`off` = no CSP on app pages; X-Frame-Options still stops framing; a literal
+  `{nonce}` in it is filled per request, so keep `'nonce-{nonce}'` in its script-src);
   `CONSTRUCTICON_CSP_REPORT_ONLY=1` sends it as `Content-Security-Policy-Report-Only` to diagnose a page
   it breaks (frame-ancestors is ignored in that mode; X-Frame-Options still holds). A bad value falls
   back to the default. Read per request (`docker-compose.yml.example` shows them commented out).
 - Not covered: a 500 from an unhandled exception (Starlette's outermost error middleware answers it), the
   MCP server (port 8100, bearer-only, no browser pages), the static export as published (GitHub Pages
   sets its own headers). Check with `scripts/test_security_headers_645.py` (throwaway DB), which also
-  fails if an inline handler, `setAttribute('on...')` or `javascript:` link appears in the templates/JS.
+  fails if an inline handler, `setAttribute('on...')` or `javascript:` link appears in the templates/JS,
+  if a template's inline `<script>` lacks the nonce, if `script-src` regains `'unsafe-inline'`, or if a
+  rendered page's inline scripts don't carry the header's nonce (#660).
 
 **Behind a reverse proxy (#646, `web/proxy_trust.py`).** For an internet-facing install with HTTPS
 terminated by Caddy or nginx. **The home install does not use this**: it stays plain HTTP with no

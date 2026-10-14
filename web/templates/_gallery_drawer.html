@@ -81,7 +81,7 @@
   </div>
 </div>
 <script src="/static/js/ingest.js?v={{ static_version('js/ingest.js') }}"></script>
-<script>
+<script nonce="{{ csp_nonce() }}">
 // Staging/upload/tag/folder-drop logic lives in web/static/js/ingest.js
 // (#229 -- used to be an ~800-line near-duplicate of _upload_drawer.html's
 // own copy); this is just this page's own hover/pin pop-out state machine

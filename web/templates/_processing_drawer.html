@@ -23,7 +23,7 @@
   <p class="proc-empty" id="proc-empty" style="display:none">All caught up — nothing processing.</p>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   const tab = document.getElementById('proc-tab');
   const badge = document.getElementById('proc-tab-badge');

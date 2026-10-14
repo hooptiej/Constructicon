@@ -51,6 +51,7 @@ services:
       # Never list a network that untrusted clients can connect from directly.
       # - CONSTRUCTICON_TRUSTED_PROXIES=172.30.0.10
       #   Replace the app pages' Content-Security-Policy (default: security_headers.APP_CSP), or "off".
+      #   Keep 'nonce-{nonce}' in its script-src ({nonce} is filled per request), or inline scripts stop.
       # - CONSTRUCTICON_CSP=
       #   Diagnose a page the CSP breaks: send it as Content-Security-Policy-Report-Only instead.
       # - CONSTRUCTICON_CSP_REPORT_ONLY=1

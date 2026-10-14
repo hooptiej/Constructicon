@@ -222,7 +222,7 @@
 
 <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   const DP = window.DetailsPanel;
   const HOBBY_ID = {{ hobby.id | tojson }};

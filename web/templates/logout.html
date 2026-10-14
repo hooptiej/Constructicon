@@ -25,7 +25,7 @@
   </section>
 </div>
 {% if _me %}
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   const btn = document.getElementById('logout-submit');
   const err = document.getElementById('logout-error');

@@ -19,7 +19,7 @@
   <p id="brand-drawer-empty" class="empty-state" style="display:none">No brand assets yet — mark objects as brand assets from their detail page.</p>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   const backdrop = document.getElementById('brand-drawer-backdrop');
   const drawer = document.getElementById('brand-drawer');

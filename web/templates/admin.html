@@ -472,7 +472,7 @@
 
 <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
 <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -94,7 +94,7 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 // Export builder — client state is the single source of truth. State holds:
 // - site: {title, tagline}
 // - selectedProjects: Set of project SLUGS (the config field is project_slugs)

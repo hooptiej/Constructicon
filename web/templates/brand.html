@@ -141,7 +141,7 @@
 }
 </style>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 async function loadBrandAssets() {
   try {
     const res = await fetch('/api/brand-assets');

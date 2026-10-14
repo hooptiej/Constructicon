@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from . import paths
+from . import parse_limits, paths  # parse_limits: importing it sets Pillow's pixel cap (#644)
 
 # #578: the storage directory is resolved when used (core/paths.py), not frozen at import.
 

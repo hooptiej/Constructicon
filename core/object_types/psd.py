@@ -36,7 +36,7 @@ from io import BytesIO
 
 from psd_tools import PSDImage
 
-from .. import storage
+from .. import parse_limits, storage
 
 
 def _stored_path(row):
@@ -53,6 +53,9 @@ def render_composite(path):
     or a PSD whose layer data can't be composited)."""
     try:
         psd = PSDImage.open(path)
+        # #644: psd-tools decodes the composite itself (Pillow's pixel cap never sees it), so the
+        # canvas size from the header is checked first: a 30,000 x 30,000 canvas is GBs of pixels.
+        parse_limits.check_pixels(psd.width, psd.height)
         image = psd.composite()
         if image is None:
             return None

@@ -26,7 +26,7 @@ try:
 except ImportError:  # silent-ok: optional dependency; 7z is simply unsupported without it
     py7zr = None
 
-from .. import storage
+from .. import parse_limits, storage
 from . import _preview, _textstats
 
 # #485: tar family. Listed by reading member headers only: never extracted to
@@ -34,9 +34,30 @@ from . import _preview, _textstats
 # nothing more). The caps bound a hostile archive's cost.
 TAR_EXTENSIONS = (".tar.gz", ".tgz", ".tar")
 STATS_KEY = "archive_stats"
-MAX_TAR_MEMBERS = 5000      # members listed/counted; beyond this = truncated
 MAX_TAR_SECONDS = 20.0      # wall-clock budget (a gzip bomb decompresses slowly)
 MAX_NAME_CHARS = 300
+
+# #644: every format lists (and counts) at most max_members() members: parse_limits'
+# CONSTRUCTICON_ARCHIVE_MAX_MEMBERS, default 5,000 (the largest real archive has 106). The whole
+# listing is also capped at storage.MAX_EXTRACTED_TEXT_CHARS (a zip member's name can be 64 KB).
+# Beyond either = truncated. Nothing is ever extracted. The parse itself runs in a parser child
+# process (core/parse_limits.py), so its time and memory are bounded too.
+
+
+def max_members():
+    return parse_limits.archive_max_members()
+
+
+def _capped_names(names):
+    """(list, truncated): the first max_members() names whose joined listing fits the text cap."""
+    limit, budget = max_members(), storage.MAX_EXTRACTED_TEXT_CHARS
+    out, used = [], 0
+    for name in names:
+        used += len(name) + 1
+        if len(out) >= limit or used > budget:
+            return out, True
+        out.append(name)
+    return out, False
 
 
 def is_tar_name(name):
@@ -64,7 +85,7 @@ def scan_tar(path):
                 if member is None:
                     break
                 tf.members = []  # tarfile caches every member; don't let it grow
-                if stats["entries"] + stats["folders"] >= MAX_TAR_MEMBERS or time.monotonic() > deadline:
+                if stats["entries"] + stats["folders"] >= max_members() or time.monotonic() > deadline:
                     stats["truncated"] = True
                     break
                 label = _clean_name(member.name)
@@ -108,13 +129,13 @@ def extract_file_list(path):
             return "\n".join(names)
         if ext == ".zip":
             with zipfile.ZipFile(path, "r") as zf:
-                names = zf.namelist()
+                names, _truncated = _capped_names(info.filename for info in zf.infolist())
                 return "\n".join(names) if names else ""
         elif ext == ".7z":
             if py7zr is None:
                 return ""
             with py7zr.SevenZipFile(path, "r") as zf:
-                names = zf.getnames()
+                names, _truncated = _capped_names(zf.getnames())
                 return "\n".join(names) if names else ""
         else:
             return ""
@@ -163,7 +184,7 @@ def _tar_properties(path, row):
         props["Uncompressed size"] = _textstats.human_size(stats["uncompressed"]) + (
             " (so far)" if stats.get("truncated") else "")
     if stats.get("truncated"):
-        props["Listing"] = f"capped at {MAX_TAR_MEMBERS:,} members"
+        props["Listing"] = f"capped at {max_members():,} members"
     if stats.get("damaged"):
         props["Integrity"] = "archive damaged or truncated; listing is partial"
     return props
@@ -195,7 +216,9 @@ def get_properties(row):
                 total_compressed = 0
                 encrypted = False
 
-                for info in zf.infolist():
+                infos = zf.infolist()
+                truncated = len(infos) > max_members()
+                for info in infos[:max_members()]:
                     if info.is_dir():
                         folders.add(info.filename)
                     else:
@@ -205,13 +228,17 @@ def get_properties(row):
                     if info.flag_bits & 0x1:
                         encrypted = True
 
-                props["Entries"] = f"{len(entries):,}"
-                props["Folders"] = str(len(folders))
+                plus = "+" if truncated else ""
+                props["Entries"] = f"{len(entries):,}{plus}"
+                props["Folders"] = f"{len(folders)}{plus if folders else ''}"
                 if total_uncompressed > 0:
-                    props["Uncompressed size"] = _textstats.human_size(total_uncompressed)
+                    props["Uncompressed size"] = _textstats.human_size(total_uncompressed) + (
+                        " (so far)" if truncated else "")
                     ratio = 1 - (total_compressed / total_uncompressed) if total_uncompressed else 0
                     props["Compression"] = f"{ratio:.0%}"
                 props["Encrypted"] = "yes" if encrypted else "no"
+                if truncated:
+                    props["Listing"] = f"capped at {max_members():,} members"
 
         elif ext == ".7z":
             if py7zr is None:
@@ -223,18 +250,24 @@ def get_properties(row):
                 folders = set()
                 total_uncompressed = 0
 
-                for name in archive.list():
+                members = archive.list()
+                truncated = len(members) > max_members()
+                for name in members[:max_members()]:
                     if name.is_directory:
                         folders.add(name.filename)
                     else:
                         entries += 1
                     total_uncompressed += name.uncompressed
 
-                props["Entries"] = f"{entries:,}"
-                props["Folders"] = str(len(folders))
+                plus = "+" if truncated else ""
+                props["Entries"] = f"{entries:,}{plus}"
+                props["Folders"] = f"{len(folders)}{plus if folders else ''}"
                 if total_uncompressed > 0:
-                    props["Uncompressed size"] = _textstats.human_size(total_uncompressed)
+                    props["Uncompressed size"] = _textstats.human_size(total_uncompressed) + (
+                        " (so far)" if truncated else "")
                 props["Encrypted"] = "yes" if archive.needs_password() else "no"
+                if truncated:
+                    props["Listing"] = f"capped at {max_members():,} members"
 
     except Exception as e:
         print(f"Archive properties extraction failed for {path}: {e!r}")

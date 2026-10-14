@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import actor as actor_ctx, automatch, captions, db, embedded_metadata, object_types, ocr, storage, thumbnails
+from . import actor as actor_ctx, automatch, captions, db, embedded_metadata, object_types, ocr, parse_limits, storage, thumbnails
 
 
 @dataclass
@@ -44,9 +44,17 @@ def _apply_pre_store(spec, candidate):
 
     Returns:
         PreStore decision.
+
+    #644: the hook runs in a parser child (background budget). A limit hit accepts the file as
+    its detected type (it is stored; only the type's question, if it had one, isn't asked), so
+    a hostile file can't turn into a failed upload or a hung request.
     """
     if spec.pre_store_fn:
-        return spec.pre_store_fn(candidate)
+        try:
+            return parse_limits.call(spec.pre_store_fn, candidate, kind=parse_limits.BACKGROUND,
+                                     what="upload check")
+        except parse_limits.LimitExceeded:  # silent-ok: parse_limits logged it; storing the file as detected is the fallback
+            return object_types.PreStore.accept()
     return object_types.PreStore.accept()
 
 

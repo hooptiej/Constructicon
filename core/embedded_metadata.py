@@ -63,7 +63,7 @@ client that saw a 500 would retry straight into a 409 duplicate).
 
 import time
 
-from . import db, object_types, storage
+from . import db, object_types, parse_limits, storage
 
 # A content_date a hook returns is only accepted inside this window. Real
 # file metadata does carry sentinels — an MP4 whose creation time was never
@@ -106,7 +106,10 @@ def extract(row):
     if not path.exists():
         return {}
     try:
-        return spec.embedded_metadata_fn(path) or {}
+        # #644: in a parser child, background budget; a limit hit leaves the row as it was
+        # (nothing filled), is logged and is shown on the object page.
+        return parse_limits.call(spec.embedded_metadata_fn, path, kind=parse_limits.BACKGROUND,
+                                 what="file metadata", key=row["stored_filename"]) or {}
     except Exception as e:
         print(f"embedded_metadata_fn failed for {row.get('slug')}: {e!r}")
         return {}

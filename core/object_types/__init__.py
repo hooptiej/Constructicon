@@ -28,9 +28,12 @@ codebase should need to change.
 
 import importlib
 import pkgutil
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+
+from .. import parse_limits
 
 
 class ObjectTypeContractError(Exception):
@@ -302,6 +305,17 @@ class ObjectTypeSpec:
 
 OBJECT_TYPES = {}
 
+# #644: the hooks core/parse_limits.py runs in a child process (they read the uploaded file).
+HOOKS_RUN_IN_CHILD = ("capture_fn", "text_extract_fn", "properties_fn", "embedded_metadata_fn",
+                      "preview_fn", "sniff_fn", "pre_store_fn")
+
+
+def _importable_by_name(fn):
+    """True when `fn` is a module-level function (what pickle sends to a child by name)."""
+    module = sys.modules.get(getattr(fn, "__module__", None) or "")
+    qualname = getattr(fn, "__qualname__", "")
+    return module is not None and "<" not in qualname and getattr(module, qualname, None) is fn
+
 
 def register(spec):
     """Register an ObjectTypeSpec in the global OBJECT_TYPES registry.
@@ -320,6 +334,16 @@ def register(spec):
             f"Object type '{spec.key}' must declare preview_fn and properties_fn "
             "(see docs/design/object-type-contract-v2.md)"
         )
+
+    # #644: every hook that reads a file runs in a parser child process (core/parse_limits.py),
+    # which receives it by its module and name, so it must be a module-level function.
+    for hook_name in HOOKS_RUN_IN_CHILD:
+        fn = getattr(spec, hook_name)
+        if fn is not None and not _importable_by_name(fn):
+            raise ObjectTypeContractError(
+                f"Object type '{spec.key}': {hook_name} must be a module-level function (got {fn!r}); "
+                "it runs in a parser child process (#644)"
+            )
 
     if spec.preview_layout not in ("default", "table"):
         raise ObjectTypeContractError(
@@ -417,7 +441,9 @@ def render_preview(spec, ctx):
     if spec.preview_fn is None:
         return None
     try:
-        return spec.preview_fn(ctx)
+        # #644: in a parser child, page-view budget; a limit hit is remembered for the page.
+        key = ctx.file_path.name if ctx.file_path else (ctx.item or {}).get("slug")
+        return parse_limits.call(spec.preview_fn, ctx, kind=parse_limits.VIEW, what="preview", key=key)
     except Exception as e:
         print(f"preview_fn failed for {spec.key}: {e!r}")
         return None
@@ -479,7 +505,10 @@ def detect_media_type(filename, path=None):
     if path is not None:
         for sniffer in sniffers:
             try:
-                if sniffer.sniff_fn(Path(path), filename):
+                # #644: in a parser child, page-view budget (a sniff reads a header or a zip's
+                # directory); a limit hit counts as "not this type".
+                if parse_limits.call(sniffer.sniff_fn, Path(path), filename, kind=parse_limits.VIEW,
+                                     what="type check"):
                     return sniffer.key
             except Exception as e:
                 print(f"sniff_fn failed for {sniffer.key}: {e!r}", flush=True)

@@ -1643,9 +1643,10 @@ shows what would run; `--show-output` prints the whole output of anything that d
   and `CONSTRUCTICON_EXPORTS_DIR` at fresh temp directories (unless you already set them) and sets
   `PYTHONDONTWRITEBYTECODE`, so it works from a read-only mount. The tests also call
   `_testenv.isolate()` themselves (see "paths" above).
-- **Known failure (2026-10-08):** `scripts/test_timeline_dates.py` fails 1 of 9,
-  `test_project_span_excludes_writeup`; it fails the same way on `main` (not caused by any PR). The
-  runner shows it as FAIL; do not hide it, fix it or file it.
+- **A clean `main` is the baseline.** The old known failure (`test_timeline_dates.py`,
+  `test_project_span_excludes_writeup`) was a stale fixture, fixed in #635: since #423 every
+  `db._create_project` adds its own blank write-up, so a test that brings its own write-up passes
+  `with_writeup=False`. A new red line is a real failure: fix it or file it.
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,

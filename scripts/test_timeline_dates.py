@@ -108,7 +108,10 @@ def test_project_span_excludes_writeup():
     make_item("t7a", timestamp=100.0)
     make_item("t7b", timestamp=200.0)
     make_item("t7-writeup", timestamp=99999.0)  # authored long after the real content
-    project = db._create_project("Writeup Project")
+    # with_writeup=False: since #423 _create_project attaches its own blank write-up
+    # (timestamped "now"). Repointing writeup_slug below would orphan it as an ordinary
+    # member and drag the span's end to today (#635) -- the fixture's write-up is the only one.
+    project = db._create_project("Writeup Project", with_writeup=False)
     db._add_item_to_project(project["id"], "t7a")
     db._add_item_to_project(project["id"], "t7b")
     db._add_item_to_project(project["id"], "t7-writeup")

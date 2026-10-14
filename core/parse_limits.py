@@ -499,6 +499,21 @@ def _vm_size_bytes():
     return 0
 
 
+_PR_SET_DUMPABLE = 4  # linux/prctl.h
+
+
+def _set_not_dumpable():
+    """prctl(PR_SET_DUMPABLE, 0): the kernel makes no core dump of this process at all, piped or
+    not. Linux only; elsewhere RLIMIT_CORE is what there is."""
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+            log.warning("parse child: prctl(PR_SET_DUMPABLE) failed: errno %d", ctypes.get_errno())
+    except (OSError, AttributeError) as e:  # still bounded; only a crash may leave a core dump
+        log.warning("parse child: can't turn off core dumps: %r", e)
+
+
 def _child_main(conn, fn, args, seconds, memory_mb, env):
     global _IN_CHILD
     _IN_CHILD = True
@@ -513,8 +528,11 @@ def _child_main(conn, fn, args, seconds, memory_mb, env):
     cpu = int(seconds) + 5
     resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 5))
     # No core file: a parser crashing on a hostile file must not write hundreds of MB to disk (and
-    # a dump in progress keeps the dying child, and our pipe, open for seconds).
+    # a dump in progress keeps the dying child, and our pipe, open for seconds). RLIMIT_CORE alone
+    # isn't enough: when the kernel's core_pattern pipes to a handler (systemd-coredump on the NAS),
+    # the handler is told an unlimited size and writes the dump anyway. Not dumpable stops both.
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    _set_not_dumpable()
     ceiling = _vm_size_bytes() + int(memory_mb) * 1024 * 1024
     _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
     if hard != resource.RLIM_INFINITY:

@@ -1,3 +1,7 @@
+# The full resolved set, every package pinned (#668): the app's own packages and everything they pull
+# in, at the versions in the tested image. A rebuild installs exactly these, never "newest allowed".
+# torch is not here: the Dockerfile installs its CPU-only build first, pinned there.
+# After changing a pin, rebuild and check `pip freeze` in the new image adds nothing unpinned.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.14.2
@@ -90,3 +94,16 @@ tzdata==2026.4
 uvicorn==0.52.4
 webencodings==0.6.1
 xlrd==2.0.2
+
+# Transitive helpers that used to float (#668), pinned to the versions in constructicon:latest
+# (built 2026-10-12). py7zr's: brotli, inflate64, multivolumefile, psutil, pybcj, pycryptodomex,
+# pyppmd, texttable. openpyxl's: et_xmlfile.
+brotli==1.2.0
+et_xmlfile==2.0.0
+inflate64==1.0.4
+multivolumefile==0.2.3
+psutil==7.2.2
+pybcj==1.0.8
+pycryptodomex==3.24.1
+pyppmd==1.3.1
+texttable==1.7.1

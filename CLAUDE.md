@@ -1635,10 +1635,11 @@ shows what would run; `--show-output` prints the whole output of anything that d
   directory and runs it in a subprocess, so the audited environment and the checkout are untouched.
   `--requirements FILE` audits a pinned file instead (e.g. a `pip freeze` from a running container).
   An advisory accepted on purpose goes in its `IGNORE` dict with the reason. `requirements.txt` is
-  nearly a full freeze (it pins transitive packages too: PyJWT comes in via `mcp`, setuptools via
-  torch), but py7zr's helpers (pyppmd, pybcj, inflate64, brotli, pycryptodomex, multivolumefile,
-  texttable, psutil) and openpyxl's `et_xmlfile` are not pinned: they resolve to the newest allowed
-  version whenever the image is rebuilt, which is another reason to audit the built image, not the file.
+  a full freeze (#668): every package in the image is pinned there (transitive ones too: PyJWT via
+  `mcp`, setuptools via torch, py7zr's and openpyxl's helpers in their own marked section), except
+  torch, which the Dockerfile pins and installs first. So a rebuild installs exactly the tested set.
+  When you change a pin, rebuild and diff `pip freeze` against the old image: nothing new may appear
+  unpinned. The audit still reads the built image, not the file, so it covers whatever is really there.
 - **Environment:** for each script the runner points `CONSTRUCTICON_DB_PATH`, `CONSTRUCTICON_STORAGE_DIR`
   and `CONSTRUCTICON_EXPORTS_DIR` at fresh temp directories (unless you already set them) and sets
   `PYTHONDONTWRITEBYTECODE`, so it works from a read-only mount. The tests also call

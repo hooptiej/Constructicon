@@ -526,9 +526,11 @@ class _Tx:
 
 
 @contextmanager
-def transaction(dry_run=False):
+def transaction(dry_run=False, timeout=30):
     """See the block comment above. dry_run=True rolls back on exit instead of committing.
-    Re-entrant: a nested block runs inside a savepoint of the outer one."""
+    Re-entrant: a nested block runs inside a savepoint of the outer one. `timeout` is how many
+    seconds BEGIN IMMEDIATE (and every statement after it) waits for another process's write lock
+    before failing with "database is locked"; ignored by a nested block."""
     outer = getattr(_ambient, "tx", None)
     if outer is not None:
         try:
@@ -539,7 +541,7 @@ def transaction(dry_run=False):
         except _DryRunRollback:  # silent-ok: the dry run's own sentinel; the rollback is the point
             pass
         return
-    real = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False, isolation_level=None)
+    real = sqlite3.connect(DB_PATH, timeout=timeout, check_same_thread=False, isolation_level=None)
     real.row_factory = sqlite3.Row
     real.execute("PRAGMA journal_mode=WAL")
     real.execute("BEGIN IMMEDIATE")
@@ -663,7 +665,10 @@ def get_processing_rows_by_slugs(slugs):
 
 def _trash_expires_nullable(conn):
     """Redact holds (items.redact) have no expiry, so trash.expires_at must allow NULL. A trash
-    table created by the first phase-B schema has it NOT NULL; rebuild it once (idempotent)."""
+    table created by the first phase-B schema has it NOT NULL; rebuild it once (idempotent).
+    #667: only called inside init_db's schema transaction, so the check and the rebuild happen
+    under one write lock (two processes used to both see NOT NULL and both rebuild; the second
+    one could hit "there is already another table or index with this name: trash_old")."""
     info = {r["name"]: r for r in conn.execute("PRAGMA table_info(trash)")}
     if not info or not info["expires_at"]["notnull"]:
         return
@@ -767,7 +772,8 @@ def _ensure_search_schema(conn):
     """Creates the FTS5 table, its source view and its sync triggers if absent. Idempotent and
     cheap, so both processes run it at every boot (the MCP server must be able to write items
     even when the web app hasn't run the backfill yet). Does NOT fill the index: that is the
-    `search_index_543` migration (rebuild_search_index)."""
+    `search_index_543` migration (rebuild_search_index). #667: runs inside init_db's schema
+    transaction, so two processes never create these objects at the same moment."""
     try:
         conn.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS item_search USING fts5({_SEARCH_COLS_SQL}, "
@@ -811,6 +817,38 @@ def check_search_index():
         conn.close()
 
 
+# #667: how long init_db waits for another process's write lock before its schema step (see there).
+SCHEMA_LOCK_TIMEOUT = 600
+
+
+def _exec_script(conn, script):
+    """Runs a multi-statement DDL script one statement at a time. Not conn.executescript(): that
+    COMMITs any open transaction first, which would end init_db's schema transaction (#667) half
+    way through and reopen the race. sqlite3.complete_statement decides where each statement ends
+    (so a ';' inside a comment, a string or a trigger body doesn't split it)."""
+    buf = ""
+    for piece in script.split(";"):
+        buf += piece + ";"
+        if sqlite3.complete_statement(buf):
+            if any(line.strip() not in ("", ";") and not line.strip().startswith("--") for line in buf.splitlines()):
+                conn.execute(buf)
+            buf = ""
+
+
+def _add_column(conn, table, column, ddl_type):
+    """ALTER TABLE <table> ADD COLUMN <column> <ddl_type>, for init_db's "missing? add it" steps."""
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
+    except sqlite3.OperationalError as e:
+        # #667 belt and braces: init_db checks and adds under one write lock, so another process
+        # can't add this column between our check and our ALTER. If one ever does anyway, the
+        # column we wanted is there, so that is success. Only this exact error for this exact
+        # column; anything else (a bad type, a locked DB, a missing table) still raises.
+        if str(e) != f"duplicate column name: {column}":
+            raise
+        print(f"init_db: {table}.{column} was already added by another process (#667); carrying on", flush=True)
+
+
 def init_db(migrate=True):
     """Boot-time schema setup.
 
@@ -818,21 +856,34 @@ def init_db(migrate=True):
     what scripts/tests get) runs schema DDL and then every pending one-time data migration
     (see MIGRATIONS / run_pending_migrations). The MCP server passes `migrate=False`: it only
     runs the idempotent schema DDL below (CREATE IF NOT EXISTS / ADD COLUMN) so its queries
-    never hit a missing column, and logs any migration web hasn't applied yet."""
-    conn = get_conn()
-    try:
-        conn.executescript(SCHEMA)
+    never hit a missing column, and logs any migration web hasn't applied yet.
+
+    #667: both processes boot at the same moment after an upgrade, so the schema step is ONE
+    `transaction()` (BEGIN IMMEDIATE, SQLite's write lock taken before the first read). The
+    second process waits for the first to commit, then reads the finished schema and has nothing
+    left to do: every "is it there? no -> add it" check below happens under the lock. The wait is
+    up to SCHEMA_LOCK_TIMEOUT, not the usual 30 s, because the web app's data migrations (each in
+    its own transaction, after this) can hold the lock for a while on a big archive (e.g. a
+    search-index rebuild); the MCP then just boots a little later instead of crash-looping on
+    "database is locked"."""
+    waited = time.monotonic()
+    with transaction(timeout=SCHEMA_LOCK_TIMEOUT) as tx:
+        waited = time.monotonic() - waited
+        if waited > 1:
+            print(f"init_db: waited {waited:.1f}s for another process's write lock before the schema step", flush=True)
+        conn = tx.conn
+        _exec_script(conn, SCHEMA)
         _trash_expires_nullable(conn)
         existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(capture_events)")}
         for column, ddl_type in (("file_size", "INTEGER"), ("source_modified_at", "REAL"), ("ocr_status", "TEXT"), ("ocr_started_at", "REAL"), ("perceptual_hash", "TEXT")):
             if column not in existing_columns:
-                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "capture_events", column, ddl_type)
         # display_date_override (Timeline feature): manual override for an object's
         # position on the timeline. NULL means "use the computed default" — see
         # core/timeline.py's resolve_item_date.
         for column, ddl_type in (("display_date_override", "REAL"),):
             if column not in existing_columns:
-                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "capture_events", column, ddl_type)
         # media_type is a loose classifier ('image' | 'youtube' | 'document', or anything else a
         # caller wants) — deliberately no CHECK constraint. See core/object_types.py for the
         # registry that gives each value a real spec (thumbnail strategy, OCR eligibility,
@@ -840,20 +891,20 @@ def init_db(migrate=True):
         # object_types.DEFAULT_SPEC rather than erroring. Existing rows predate this column and
         # are all screenshots, so they default to 'image' below.
         if "media_type" not in existing_columns:
-            conn.execute("ALTER TABLE capture_events ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'")
+            _add_column(conn, "capture_events", "media_type", "TEXT NOT NULL DEFAULT 'image'")
         for column, ddl_type in (("external_url", "TEXT"), ("content_description", "TEXT"), ("content_date", "REAL")):
             if column not in existing_columns:
-                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "capture_events", column, ddl_type)
         # type_metadata: a freeform JSON bag for per-object-type properties that
         # don't fit the generic columns above (see core/object_types.py's
         # MetadataField) — e.g. a future PDF's page count, an STL's dimensions.
         # Deliberately one shared column rather than a new ALTER TABLE per type,
         # so registering a new object type never requires a schema migration.
         if "type_metadata" not in existing_columns:
-            conn.execute("ALTER TABLE capture_events ADD COLUMN type_metadata TEXT NOT NULL DEFAULT '{}'")
+            _add_column(conn, "capture_events", "type_metadata", "TEXT NOT NULL DEFAULT '{}'")
         existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
         if "nickname" not in existing_client_columns:
-            conn.execute("ALTER TABLE clients ADD COLUMN nickname TEXT")
+            _add_column(conn, "clients", "nickname", "TEXT")
         # tag_id: links a project to a blog_tags row (cards.create links the root
         # tag of the same name at creation; the link is the id, so the names can
         # drift apart afterwards) so tagging an object with a project
@@ -865,7 +916,7 @@ def init_db(migrate=True):
         # via a tag filter until someone links one up by hand.
         existing_project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
         if "tag_id" not in existing_project_columns:
-            conn.execute("ALTER TABLE projects ADD COLUMN tag_id INTEGER REFERENCES blog_tags(id)")
+            _add_column(conn, "projects", "tag_id", "INTEGER REFERENCES blog_tags(id)")
         # display_name/icon (#11): an optional per-object override so an object
         # can be given a human-friendly label and a custom emoji independent of
         # its filename and its media_type's generic badge_icon (see
@@ -875,36 +926,36 @@ def init_db(migrate=True):
         # unset, so this is purely additive.
         for column, ddl_type in (("display_name", "TEXT"), ("icon", "TEXT")):
             if column not in existing_columns:
-                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "capture_events", column, ddl_type)
         # parent_id (#133): support for nested projects — projects can now have a
         # parent project, enabling a simple hierarchy. Mirrors the same self-referencing
         # pattern as blog_tags.parent_id for consistency.
         if "parent_id" not in existing_project_columns:
-            conn.execute("ALTER TABLE projects ADD COLUMN parent_id INTEGER REFERENCES projects(id)")
+            _add_column(conn, "projects", "parent_id", "INTEGER REFERENCES projects(id)")
         # Create the index after the column is guaranteed to exist
         conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id)")
         # cover_project_id (#356): a project can borrow a child project's cover instead of
         # hoisting grandchild objects. Mutually exclusive with cover_slug — see update_project.
         if "cover_project_id" not in existing_project_columns:
-            conn.execute("ALTER TABLE projects ADD COLUMN cover_project_id INTEGER REFERENCES projects(id)")
+            _add_column(conn, "projects", "cover_project_id", "INTEGER REFERENCES projects(id)")
         # writeup_slug (#156): optional reference to a document-type capture_event that
         # serves as the project's write-up/article. Follows the same pattern as cover_slug —
         # points at a capture_events.slug with no FK constraint.
         if "writeup_slug" not in existing_project_columns:
-            conn.execute("ALTER TABLE projects ADD COLUMN writeup_slug TEXT")
+            _add_column(conn, "projects", "writeup_slug", "TEXT")
         # is_hobby (#360): marks a blog_tags row as a hobby (top-level organizing tier).
         # Hobbies are just tags with is_hobby=1 and an optional hobby_status.
         existing_blog_tags_columns = {row["name"] for row in conn.execute("PRAGMA table_info(blog_tags)")}
         if "is_hobby" not in existing_blog_tags_columns:
-            conn.execute("ALTER TABLE blog_tags ADD COLUMN is_hobby INTEGER NOT NULL DEFAULT 0")
+            _add_column(conn, "blog_tags", "is_hobby", "INTEGER NOT NULL DEFAULT 0")
         if "hobby_status" not in existing_blog_tags_columns:
-            conn.execute("ALTER TABLE blog_tags ADD COLUMN hobby_status TEXT")
+            _add_column(conn, "blog_tags", "hobby_status", "TEXT")
         # group_code (V2 cards 3.9): the 2-4 char hobby code shown on a card (COL, 3DP, RCA).
         if "group_code" not in existing_blog_tags_columns:
-            conn.execute("ALTER TABLE blog_tags ADD COLUMN group_code TEXT")
+            _add_column(conn, "blog_tags", "group_code", "TEXT")
         # project_hobbies (#360): many-to-many join between projects and hobbies (tags).
         # A project can be associated with multiple hobbies via project_hobbies.
-        conn.executescript("""
+        _exec_script(conn, """
         CREATE TABLE IF NOT EXISTS project_hobbies (
             project_id INTEGER NOT NULL REFERENCES projects(id),
             hobby_tag_id INTEGER NOT NULL REFERENCES blog_tags(id),
@@ -918,26 +969,26 @@ def init_db(migrate=True):
         # computed default" — see core/timeline.py's resolve_project_span.
         for column, ddl_type in (("start_date_override", "REAL"), ("end_date_override", "REAL")):
             if column not in existing_project_columns:
-                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "projects", column, ddl_type)
         # agent_notes (#206): reserved space for agent-authored working notes, separate
         # from owner-facing content. Used for Claude working state (e.g., "this is a
         # Fusion 360 screenshot, not user-facing" or "already inventoried, skip on re-run").
         # Never exposed through public HTTP API — agent-only scratch space.
         if "agent_notes" not in existing_columns:
-            conn.execute("ALTER TABLE capture_events ADD COLUMN agent_notes TEXT")
+            _add_column(conn, "capture_events", "agent_notes", "TEXT")
         # provenance + highlight (#341): Curator Stage 1 data model. provenance is a
         # controlled-vocab extensible field describing how the object came to be (found,
         # created, documented, result, reference, design). highlight is a boolean
         # flag for "cool/unique" objects, featured in export.
         for column, ddl_type in (("provenance", "TEXT"), ("highlight", "INTEGER NOT NULL DEFAULT 0")):
             if column not in existing_columns:
-                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "capture_events", column, ddl_type)
         # is_brand_asset + brand_role (#350): Brand kit data model. is_brand_asset flags
         # reusable branding objects (logo, logotype, icon, color, etc.); brand_role is
         # a freeform label describing their purpose.
         for column, ddl_type in (("is_brand_asset", "INTEGER NOT NULL DEFAULT 0"), ("brand_role", "TEXT")):
             if column not in existing_columns:
-                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "capture_events", column, ddl_type)
         # --- V2 cards, piece 1 (docs/design/v2-cards.md 3.1, 3.2, 3.13) ---
         # kind: what sort of card this is (project/thing/action/family/collection/event).
         # No CHECK -- core/card_rules.validate_kind is the gate (same stance as media_type).
@@ -950,7 +1001,7 @@ def init_db(migrate=True):
             ("stop_reason", "TEXT"),
         ):
             if column not in existing_project_columns:
-                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "projects", column, ddl_type)
         # V2 cards piece 5 (3.4, 3.5, 3.12): whereabouts (+ note), card-level provenance
         # (+ credit) and the card highlight flag. All empty/0 after migration; nothing is
         # guessed. Validation lives in core/card_rules (no CHECK constraints).
@@ -962,24 +1013,24 @@ def init_db(migrate=True):
             ("highlight", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if column not in existing_project_columns:
-                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "projects", column, ddl_type)
         # V2 cards piece 6 (3.10): manual home override for the breadcrumb / export link.
         # NULL = automatic (parent, then first family, then first hobby). Not curated.
         for column, ddl_type in (("home_kind", "TEXT"), ("home_ref", "INTEGER")):
             if column not in existing_project_columns:
-                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "projects", column, ddl_type)
         # #596: the card face's text box. synopsis (a few hand-written sentences) and flavor (one
         # italic line) are set through cards.set_text; writeup_lead is a CACHE of the write-up's
         # opening paragraph(s) (plain text, clamped), kept by the cards service whenever the
         # write-up's body or writeup_slug changes, so a card list never reads write-up bodies.
         for column, ddl_type in (("synopsis", "TEXT"), ("flavor", "TEXT"), ("writeup_lead", "TEXT")):
             if column not in existing_project_columns:
-                conn.execute(f"ALTER TABLE projects ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "projects", column, ddl_type)
         # #596: a hobby's own synopsis / flavor live with its other per-hobby settings.
         existing_hobby_settings_columns = {row["name"] for row in conn.execute("PRAGMA table_info(hobby_settings)")}
         for column, ddl_type in (("synopsis", "TEXT"), ("flavor", "TEXT")):
             if column not in existing_hobby_settings_columns:
-                conn.execute(f"ALTER TABLE hobby_settings ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "hobby_settings", column, ddl_type)
         # #604 step 1: ownership. The user who uploaded an item / created a card, hobby or blog entry
         # (users.id), set at write time from the actor context; NULL = no signed-in user did it (the
         # install token, the MCP, a script, the system) = admin-owned. #603 (#604 step 2): the
@@ -987,14 +1038,14 @@ def init_db(migrate=True):
         for column, ddl_type in (("uploaded_by_user_id", "INTEGER"), ("sensitive", "INTEGER NOT NULL DEFAULT 0"),
                                  ("sensitive_by", "TEXT"), ("sensitive_at", "REAL")):
             if column not in existing_columns:
-                conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "capture_events", column, ddl_type)
         if "created_by_user_id" not in existing_project_columns:
-            conn.execute("ALTER TABLE projects ADD COLUMN created_by_user_id INTEGER")
+            _add_column(conn, "projects", "created_by_user_id", "INTEGER")
         if "created_by_user_id" not in existing_hobby_settings_columns:
-            conn.execute("ALTER TABLE hobby_settings ADD COLUMN created_by_user_id INTEGER")
+            _add_column(conn, "hobby_settings", "created_by_user_id", "INTEGER")
         existing_blog_entry_columns = {row["name"] for row in conn.execute("PRAGMA table_info(blog_entries)")}
         if "created_by_user_id" not in existing_blog_entry_columns:
-            conn.execute("ALTER TABLE blog_entries ADD COLUMN created_by_user_id INTEGER")
+            _add_column(conn, "blog_entries", "created_by_user_id", "INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_capture_events_sensitive ON capture_events(sensitive)")
         # Change log: audit_log grows nullable columns so core operations can record
         # row images (before/after) for audit + undo. Direct HTTP callers keep getting
@@ -1007,11 +1058,11 @@ def init_db(migrate=True):
                                  ("mutations", "TEXT"), ("undone_by", "INTEGER"), ("required_role", "TEXT"),
                                  ("client_ip", "TEXT")):
             if column not in existing_audit_columns:
-                conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {ddl_type}")
+                _add_column(conn, "audit_log", column, ddl_type)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_batch ON audit_log(batch_id)")
         # family_members (V2 cards 3.6): many-to-many membership for kind=family and
         # kind=collection cards. Not nesting: membership never moves or copies files.
-        conn.executescript("""
+        _exec_script(conn, """
         CREATE TABLE IF NOT EXISTS family_members (
             family_id  INTEGER NOT NULL REFERENCES projects(id),
             member_id  INTEGER NOT NULL REFERENCES projects(id),
@@ -1025,12 +1076,9 @@ def init_db(migrate=True):
         # are the one-time `provenance_options_seed_529` migration below.
         from . import provenance_options
         conn.execute(provenance_options.DDL)
-        conn.commit()
         _rebuild_project_relations_typed(conn)
         _ensure_search_schema(conn)  # #543: after every column it reads exists
-        conn.commit()
-    finally:
-        conn.close()
+    # leaving the block commits the whole schema step (an exception rolls all of it back)
     if migrate:
         run_pending_migrations()
     else:
@@ -1445,7 +1493,10 @@ def _rebuild_project_relations_typed(conn):
     leaves the old table untouched). Idempotent: skipped once the table has a
     `type` column. Every existing row becomes 'related'; v1 stored related links
     in both directions and still does, so the row count and
-    list_related_projects are unchanged. Logged as an actor='migration' row."""
+    list_related_projects are unchanged. Logged as an actor='migration' row.
+    #667: init_db calls it inside its own schema transaction (a shared transaction() connection),
+    where the commit / BEGIN IMMEDIATE / rollback below are no-ops and the outer write lock already
+    makes the check and the rebuild one step; they still do the job on a plain connection."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(project_relations)")}
     if "type" in cols:
         return False

@@ -139,7 +139,9 @@ check("curation queue question: file_title", q["file_title"] == NAME, q["file_ti
 out = TMP / "site" if isinstance(TMP, Path) else Path(str(TMP)) / "site"
 res = site_export.build_site({"project_slugs": [proj["slug"]], "blog_entry_slugs": [entry["slug"]]}, out_dir=out)
 proj_html = (out / "projects" / f"{proj['slug']}.html").read_text()
-blog_html = next((out / "blog").glob("*.html"), None)
+# #657: the post's own page, not whichever of it and blog/index.html the directory lists first.
+blog_html = out / "blog" / f"{entry['slug']}.html"
+blog_html = blog_html if blog_html.exists() else None
 check("static export, project page: alt text is the rename", f'alt="{NAME}"' in proj_html, res.get("warnings"))
 check("static export, blog page: alt text is the rename", blog_html is not None and f'alt="{NAME}"' in blog_html.read_text())
 

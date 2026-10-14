@@ -155,6 +155,15 @@ def apply_image_limits():
 apply_image_limits()
 
 
+def check_pixels(width, height):
+    """Refuse a declared image size over the pixel cap before anything decodes it, for a format
+    whose decoder isn't Pillow (a PSD composite). Raises Pillow's own DecompressionBombError, so
+    the limit is reported exactly like an oversized image's."""
+    n = int(width) * int(height)
+    if n > max_image_pixels():
+        raise Image.DecompressionBombError(f"Image size ({n} pixels) exceeds limit of {max_image_pixels()} pixels")
+
+
 # --- The exception and what a user is told ---------------------------------------------------
 
 KINDS = ("time", "memory", "pixels", "crash", "busy", "unavailable")

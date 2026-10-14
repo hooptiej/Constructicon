@@ -150,7 +150,12 @@ the date and commit forward when you re-verify.
 - **`core/ocr.py`, `core/similarity.py`** — text extraction
   (tesseract via `pytesseract`) and "related items" (perceptual hash +
   sentence-transformers embedding similarity, `all-MiniLM-L6-v2`, baked
-  into the Docker image at build time — see Dockerfile).
+  into the Docker image at build time — see Dockerfile). **The model loads offline (#658):**
+  `similarity._get_model` defaults `HF_HUB_OFFLINE=1` and loads with `local_files_only`, and the
+  image sets `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1` after the bake, so a load never calls the
+  Hub (it used to: 144 s of retries with no network). An empty cache fails fast with the download
+  command; a checkout outside the image downloads once with `HF_HUB_OFFLINE=0 python -c "from core
+  import similarity; similarity._get_model()"`. Check with `scripts/test_hf_offline_658.py`.
 - **`core/captions.py`** (#239) — auto-caption *suggestions* from a local
   Ollama vision model (`moondream`) on the TrueNAS box's GPU, written to
   `type_metadata.auto_caption` (never into `description` on its own).

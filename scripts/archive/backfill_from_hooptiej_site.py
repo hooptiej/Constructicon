@@ -1,4 +1,4 @@
-# Retired: ran on prod around 2026-09-01 (#21); do not re-run. Kept for reference.
+raise SystemExit("Retired script: ran on prod around 2026-09-01 (#21). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """One-off migration: backfill capture_events + blog_tags/post_tags from the
 real content on hooptiej.github.io (the live hooptiej.com static site).
 

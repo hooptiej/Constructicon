@@ -1,4 +1,4 @@
-# Retired: ran on prod around 2026-09-01 (#51); do not re-run. Kept for reference.
+raise SystemExit("Retired script: ran on prod around 2026-09-01 (#51). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """Issue #51: create the 8 confirmed projects from issue #10 and attach the
 correct re-imported content rows (#21/#22) to each.
 

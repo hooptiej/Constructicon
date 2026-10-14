@@ -218,15 +218,14 @@ the date and commit forward when you re-verify.
     app's own UI would use, rather than writing to the DB directly; see each docstring for the reasoning
     and any exceptions. Since #467 step 2 each calls `_http.install(<base url>)` (`scripts/_http.py`) so
     its requests carry the install token; see "Auth enforcement".
-  - *Spent one-shots:* `scripts/archive/`. Each file starts with a "Retired: ran on prod around ...; do
-    not re-run. Kept for reference." line. Nothing imports them and no doc tells anyone to run them.
-    **Moving them did not make them safe to run:** six (`apply_project_groupings`,
-    `backfill_from_hooptiej_site`, `backfill_project_writeups`, `import_new_youtube_from_channel_rss`,
-    `seed_example_projects`, `sync_free_text_tags_to_tag_tree`) no longer find `core` from `archive/`
-    (they assume they sit in `scripts/`), but `cleanup_delete_orphans.py` (`--execute` deletes rows),
-    `link_lil_dragon_brand.py` (`--execute` writes) and `apply_curation_suggestions.py` still start
-    from there, so the header line is the only guard. A new one-shot goes in `scripts/` while it is
-    live and moves to `archive/` once it has run.
+  - *Spent one-shots:* `scripts/archive/`. Nothing imports them and no doc tells anyone to run them.
+    **Each one refuses to run (#633):** its first line, before any import or argument parsing, is
+    `raise SystemExit("Retired script: ran on prod around <date> (#N). Kept for reference only; it will
+    not run. See CLAUDE.md, Scripts.")`, so nothing else in the file executes (some of them could still
+    write from there: `cleanup_delete_orphans.py --execute` deleted rows). `scripts/check_archive_guard.py`
+    fails when a file under `archive/` lacks that guard (it also runs each guarded file to prove it
+    exits, and checks `run_checks.py` never collects `archive/`). A new one-shot goes in `scripts/`
+    while it is live and moves to `archive/` once it has run, with the guard as its first line.
   - `scripts/data/`: input files for scripts (the V2 curation suggestions JSON).
   - Outside `scripts/`: `sync_clients.py` at the repo root seeds the vestigial `clients` tables (see
     "Data model"); it stays until the owner decides whether those tables go.
@@ -1662,7 +1661,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
     `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
-  - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `test_live_bugs_563`,
+  - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `check_archive_guard`
+    (every retired script in `scripts/archive/` refuses to run, #633), `test_live_bugs_563`,
     `test_round2` and `test_round3a` (the work-install shakedown rounds: several small fixes each),
     `test_release` (the CalVer logic), `check_dependency_audit` (known advisories in the installed
     packages; needs network, see above).

@@ -1,4 +1,4 @@
-# Retired: ran on prod around 2026-10-03 (#425); do not re-run. Kept for reference.
+raise SystemExit("Retired script: ran on prod around 2026-10-03 (#425). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """Link the original 'lil dragon' ink drawing to the brand assets it became (#425).
 
 The drawing (capture_events.slug, found by filename 'lil-dragon-original-drawing') is the

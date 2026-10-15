@@ -50,8 +50,8 @@ RAW_ALLOWED = {
     "core/automatch.py": "pipeline: the upload-time automatch tagging (#240)",
     "core/ocr.py": "pipeline: OCR client-domain tags",
     "core/card_migration.py": "migrations: the one-time V2 card migration (actor 'migration', refused by undo)",
-    # scripts/ one-offs that write directly against the DB inside the container (kept runnable).
-    "scripts/archive/apply_project_groupings.py": "one-off 2026-09 grouping import, already applied; kept runnable",
+    # Retired one-offs that wrote directly against the DB (kept for reference; they refuse to run, #633).
+    "scripts/archive/apply_project_groupings.py": "one-off 2026-09 grouping import, already applied",
     "scripts/archive/seed_example_projects.py": "one-off seed of example cards on an empty dev DB",
     "scripts/archive/backfill_from_hooptiej_site.py": "one-off backfill from the old static site (tag tree + tags)",
     "scripts/archive/link_lil_dragon_brand.py": "one-off brand-asset relation links, already applied",

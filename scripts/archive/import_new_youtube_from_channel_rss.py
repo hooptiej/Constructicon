@@ -1,4 +1,4 @@
-# Retired: ran on prod around 2026-09-01 (#22); do not re-run. Kept for reference.
+raise SystemExit("Retired script: ran on prod around 2026-09-01 (#22). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """Issue #22: import any hooptiej YouTube channel videos that exist on the
 real channel but are NOT already represented in Constructicon, using the
 new object-type content path (POST /api/content) rather than any legacy

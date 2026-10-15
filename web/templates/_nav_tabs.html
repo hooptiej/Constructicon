@@ -101,7 +101,7 @@
   </ul>
 </nav>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   // Wire up drawer-opener tabs to click their trigger buttons if present
   document.querySelectorAll('.nav-tab-drawer').forEach((btn) => {

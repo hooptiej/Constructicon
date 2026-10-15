@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 from core import besteffort, db, install_config, item_title, markdown_render, object_types, storage, users
 from core import version as version_info
 from web import auth as web_auth
+from web import security_headers
 
 log = logging.getLogger("constructicon.web")
 
@@ -69,6 +70,9 @@ templates.env.globals["app_logo_url"] = install_config.app_logo_url
 # request's context, set by web/auth.py's SessionMiddleware.
 templates.env.globals["current_user"] = users.current_user
 templates.env.globals["csrf_token"] = web_auth.csrf_token
+# #660: this request's CSP script nonce. Every inline <script> carries nonce="{{ csp_nonce() }}";
+# the CSP allows only those (scripts/test_security_headers_645.py fails on one without it).
+templates.env.globals["csp_nonce"] = security_headers.current_nonce
 
 # #431: derive the file upload accept list from the object_types registry
 # rather than hardcoding it in templates. This ensures web/templates/_upload_drawer.html

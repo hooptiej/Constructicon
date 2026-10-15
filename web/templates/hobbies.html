@@ -23,7 +23,7 @@
   <p id="hobbies-empty" class="empty-state" style="display:none">No hobbies yet.</p>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 async function loadHobbies() {
   try {
     const res = await fetch('/api/hobbies');

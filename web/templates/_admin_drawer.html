@@ -16,7 +16,7 @@
   <iframe id="admin-drawer-frame" class="admin-drawer-frame" title="Admin" data-src="/admin?embed=1"></iframe>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   const backdrop = document.getElementById('admin-drawer-backdrop');
   const drawer = document.getElementById('admin-drawer');

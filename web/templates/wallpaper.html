@@ -114,7 +114,7 @@
 }
 </style>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 function escapeHtml(str) {
   return String(str || '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'

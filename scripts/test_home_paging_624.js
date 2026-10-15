@@ -171,9 +171,11 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
   // ---- the page's own script, against a fake server -------------------------------------------------------------------
   {
     const html = fs.readFileSync(path.join(ROOT, 'web/templates/home.html'), 'utf8');
-    const start = html.indexOf('<script>\n    (function () {\n      function escapeHtml');
+    // The opening tag carries the CSP nonce (#660): match it as a whole tag.
+    const TAG = '<script nonce="{{ csp_nonce() }}">';
+    const start = html.indexOf(TAG + '\n    (function () {\n      function escapeHtml');
     const end = html.indexOf('    })();\n    </script>', start) + '    })();'.length;
-    let src = html.slice(start + '<script>'.length, end);
+    let src = html.slice(start + TAG.length, end);
     // the server's archive: image 300 (some unfiled), pdf 150, audio 10. Newest = highest uploaded_at.
     const archive = [];
     const mkType = (type, n, base) => { for (let i = 0; i < n; i++) archive.push({ slug: type + i, media_type: type, display_name: type + ' ' + (n - i), uploaded_at: base - i }); };

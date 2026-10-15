@@ -107,7 +107,7 @@
 </div>
 
 <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
-<script>
+<script nonce="{{ csp_nonce() }}">
 // Blog builder — client state is the single source of truth (state.projects /
 // state.objects); the DOM is only ever rendered FROM that state, never scraped
 // back into it. All the /api/blog-entries endpoints are called with the shapes

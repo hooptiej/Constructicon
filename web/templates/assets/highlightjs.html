@@ -19,7 +19,7 @@
   .html-preview .hp-load { margin: 8px 0; }
 </style>
 <script src="/static/vendor/highlight/highlight.min.js?v={{ static_version('vendor/highlight/highlight.min.js') }}"></script>
-<script>
+<script nonce="{{ csp_nonce() }}">
   (function () {
     const block = document.getElementById('code-preview-block');
     // Past ~60 KB the block stays plain text: highlighting is the cost that froze big files (#607).

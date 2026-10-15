@@ -32,7 +32,7 @@
 {%- endmacro %}
 
 {% macro about_script(url) -%}
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   const DP = window.DetailsPanel;
   const URL = {{ url | tojson }};

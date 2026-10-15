@@ -64,7 +64,7 @@
   </form>
 </div>
 <script src="/static/js/ingest.js?v={{ static_version('js/ingest.js') }}"></script>
-<script>
+<script nonce="{{ csp_nonce() }}">
 // --- Upload drawer: shared across every authenticated page. On success,
 // dispatches "constructicon:upload-complete" on document ({detail:{failures}})
 // so each page can refresh its own data however makes sense for it.

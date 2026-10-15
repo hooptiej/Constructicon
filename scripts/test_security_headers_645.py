@@ -12,7 +12,13 @@ and COOP; user files (/f) keep #610's own headers (sandbox CSP, no app CSP, no X
 HTML Rendered view keeps its sandbox CSP and no-referrer; /preview gets the light preview policy and
 its media keep the sandbox; HSTS never over HTTP, over HTTPS only when CONSTRUCTICON_HSTS_SECONDS is
 set; the CSP env knobs; a route opt-out; and no inline event handler is left in the templates/JS (the
-CSP's script-src-attr 'none' would silently break it). Exits 1 if any check fails.
+CSP's script-src-attr 'none' would silently break it).
+
+#660 (script nonces): APP_CSP's script-src has no 'unsafe-inline', only 'self' and the per-request
+nonce; every inline <script> in web/templates carries nonce="{{ csp_nonce() }}"; on every page type
+rendered here each inline <script> carries exactly the header's nonce, which changes per request; the
+static export's templates neither need nor reference the nonce; no JS builds an inline script.
+Exits 1 if any check fails.
 """
 import io
 import os
@@ -84,9 +90,17 @@ S = {
 SANDBOX = content_security.RENDERED_HTML_CSP
 
 
+NONCE_SRC = re.compile(r"'nonce-([A-Za-z0-9_-]+)'")
+
+
+def norm(policy):
+    """A sent policy with its per-request nonce put back to the {nonce} placeholder (#660)."""
+    return NONCE_SRC.sub("'nonce-" + sh.NONCE_PLACEHOLDER + "'", policy) if policy else policy
+
+
 def app_headers_ok(name, r, csp=sh.APP_CSP):
     h = hdr(r)
-    check(f"{name}: CSP is the app policy", h.get("content-security-policy") == csp, h.get("content-security-policy"))
+    check(f"{name}: CSP is the app policy", norm(h.get("content-security-policy")) == csp, h.get("content-security-policy"))
     check(f"{name}: X-Frame-Options SAMEORIGIN", h.get("x-frame-options") == "SAMEORIGIN", h.get("x-frame-options"))
     check(f"{name}: Referrer-Policy", h.get("referrer-policy") == "strict-origin-when-cross-origin", h.get("referrer-policy"))
     check(f"{name}: nosniff", h.get("x-content-type-options") == "nosniff")
@@ -122,6 +136,11 @@ check("object-src 'none'", csp.get("object-src") == "'none'")
 check("base-uri 'self'", csp.get("base-uri") == "'self'")
 check("form-action 'self'", csp.get("form-action") == "'self'")
 check("inline handlers off (script-src-attr 'none')", csp.get("script-src-attr") == "'none'")
+check("#660: script-src has no 'unsafe-inline'", "unsafe-inline" not in csp.get("script-src", ""), csp.get("script-src"))
+check("#660: script-src is 'self' + the request nonce, nothing else",
+      csp.get("script-src") == "'self' 'nonce-" + sh.NONCE_PLACEHOLDER + "'", csp.get("script-src"))
+check("#660: styles keep 'unsafe-inline' (decided: CLAUDE.md 'Browser security headers')",
+      "'unsafe-inline'" in csp.get("style-src", ""))
 check("no 'unsafe-eval' anywhere", "unsafe-eval" not in sh.APP_CSP)
 check("no wildcard sources", not re.search(r"(^|\s)(\*|https:|http:)(\s|;|$)", sh.APP_CSP))
 check("Google Fonts allowed (base.html)", "https://fonts.googleapis.com" in csp.get("style-src", "")
@@ -195,19 +214,25 @@ os.environ.pop("CONSTRUCTICON_HSTS_SECONDS", None)
 print("\n--- the CSP env knobs ---")
 os.environ["CONSTRUCTICON_CSP_REPORT_ONLY"] = "1"
 h = hdr(client.get("/"))
-check("report-only: sent as Content-Security-Policy-Report-Only", h.get("content-security-policy-report-only") == sh.APP_CSP
+check("report-only: sent as Content-Security-Policy-Report-Only", norm(h.get("content-security-policy-report-only")) == sh.APP_CSP
       and "content-security-policy" not in h)
 check("report-only: X-Frame-Options still enforced", h.get("x-frame-options") == "SAMEORIGIN")
 check("report-only: user file sandbox untouched", client.get(f"/f/{S['svg']}").headers.get_list("content-security-policy") == [SANDBOX])
 os.environ.pop("CONSTRUCTICON_CSP_REPORT_ONLY")
 os.environ["CONSTRUCTICON_CSP"] = "default-src 'self'; frame-ancestors 'none'"
 check("override: the install's own policy", hdr(client.get("/")).get("content-security-policy") == "default-src 'self'; frame-ancestors 'none'")
+os.environ["CONSTRUCTICON_CSP"] = "default-src 'self'; script-src 'self' 'nonce-{nonce}'"
+r = client.get("/")
+got = hdr(r).get("content-security-policy", "")
+m = NONCE_SRC.search(got)
+check("override with {nonce}: filled with this request's nonce, and the page carries it",
+      bool(m) and "{nonce}" not in got and f'nonce="{m.group(1)}"' in r.text, got)
 os.environ["CONSTRUCTICON_CSP"] = "off"
 h = hdr(client.get("/"))
 check("off: no CSP on app pages", "content-security-policy" not in h and "content-security-policy-report-only" not in h)
 check("off: X-Frame-Options still sent", h.get("x-frame-options") == "SAMEORIGIN")
 os.environ.pop("CONSTRUCTICON_CSP")
-check("back to default", hdr(client.get("/")).get("content-security-policy") == sh.APP_CSP)
+check("back to default", norm(hdr(client.get("/")).get("content-security-policy")) == sh.APP_CSP)
 
 print("\n--- a route opt-out ---")
 
@@ -235,7 +260,85 @@ check("opt-out: the marker header is stripped", sh.OPT_OUT_HEADER not in h)
 h = hdr(mc.get("/own"))
 check("a route's own value wins", h.get("referrer-policy") == "no-referrer" and h.get("x-frame-options") == "DENY", h)
 check("... and is not duplicated", mc.get("/own").headers.get_list("x-frame-options") == ["DENY"])
-check("plain route: full defaults", hdr(mc.get("/plain")).get("content-security-policy") == sh.APP_CSP)
+check("plain route: full defaults", norm(hdr(mc.get("/plain")).get("content-security-policy")) == sh.APP_CSP)
+
+print("\n--- #660: every inline <script> carries this request's nonce ---")
+SCRIPT_TAG = re.compile(r"<script\b([^>]*)>", re.I)
+NONCE_ATTR = re.compile(r"""\snonce\s*=\s*["']([^"']*)["']""", re.I)
+
+
+def inline_scripts(html):
+    """(attrs) of every <script> without a src attribute."""
+    return [m.group(1) for m in SCRIPT_TAG.finditer(html) if not re.search(r"\ssrc\s*=", m.group(1), re.I)]
+
+
+def page_nonce_ok(name, r):
+    """Every inline <script> on the page carries exactly the CSP header's nonce. Returns the nonce."""
+    policy = hdr(r).get("content-security-policy", "")
+    m = NONCE_SRC.search(policy)
+    blocks = inline_scripts(r.text)
+    nonces = [(NONCE_ATTR.search(a) or [None, None])[1] for a in blocks]
+    bad = [n for n in nonces if not m or n != m.group(1)]
+    check(f"{name}: {len(blocks)} inline script(s), each with the header's nonce",
+          bool(m) and not bad and "unsafe-inline" not in policy.split("script-src", 1)[-1].split(";", 1)[0],
+          f"status {r.status_code}, header nonce {bool(m)}, mismatched {len(bad)}")
+    return m.group(1) if m else None, len(blocks)
+
+
+card = client.post("/api/projects", data={"title": "Nonce Card 660"}).json()
+hobby = client.post("/api/hobbies", data={"name": "Nonce Hobby 660"}).json()
+PAGES = ["/", "/admin", "/admin?embed=1", f"/object/{S['png']}", f"/object/{S['html']}", f"/object/{S['svg']}",
+         f"/project/{card['slug']}", "/hobbies", f"/hobby/{hobby['slug']}", "/unfiled", "/brand", "/wallpaper",
+         "/curator", "/captions/review", "/guides/capture-physical-piece", "/logout"]
+total = 0
+for path in PAGES:
+    r = client.get(path)
+    check(f"GET {path}: 200", r.status_code == 200, r.status_code)
+    _n, count = page_nonce_ok(f"GET {path}", r)
+    total += count
+r = anon.get("/setup")  # no users yet in this DB: the first-run page
+check("anonymous /setup: 200", r.status_code == 200, r.status_code)
+page_nonce_ok("anonymous /setup", r)
+r = anon.get("/login")
+page_nonce_ok("anonymous /login", r)
+check(f"pages with inline scripts were really checked ({total} blocks on {len(PAGES)} pages)", total >= 4 * len(PAGES), total)
+a = page_nonce_ok("/ again (1)", client.get("/"))[0]
+b = page_nonce_ok("/ again (2)", client.get("/"))[0]
+check("the nonce changes per request", a and b and a != b)
+check("the nonce is 16 random bytes, URL-safe (22 chars)", bool(a) and len(a) == 22 and re.fullmatch(r"[A-Za-z0-9_-]+", a))
+h = hdr(client.get("/api/version"))
+check("an API answer carries a nonce too (no placeholder ever leaks)", "{nonce}" not in h.get("content-security-policy", "x{nonce}"))
+
+print("\n--- #660: the templates (source) ---")
+missing = []
+count = 0
+for p in sorted((Path(ROOT) / "web" / "templates").rglob("*.html")):
+    text = p.read_text(encoding="utf-8")
+    for m in SCRIPT_TAG.finditer(text):
+        attrs = m.group(1)
+        if re.search(r"\ssrc\s*=", attrs, re.I):
+            continue
+        count += 1
+        if 'nonce="{{ csp_nonce() }}"' not in attrs:
+            missing.append(f"{p.relative_to(ROOT).as_posix()}:{text.count(chr(10), 0, m.start()) + 1}")
+check(f"every inline <script> in web/templates has nonce=\"{{{{ csp_nonce() }}}}\" ({count} blocks)",
+      count >= 35 and not missing, ", ".join(missing[:10]) or f"only {count} found")
+check("the template scan itself works", bool(inline_scripts('<p><script>x()</script>')) and not inline_scripts('<script src="/a.js"></script>'))
+EXPORT = Path(ROOT) / "web" / "export_templates"
+exp_hits = [p.name for p in EXPORT.rglob("*.html") if "csp_nonce" in p.read_text(encoding="utf-8")]
+check("the static export's templates don't reference csp_nonce (their env has no such global)", not exp_hits, exp_hits)
+exp_scripts = [p.name for p in EXPORT.rglob("*.html") if SCRIPT_TAG.search(p.read_text(encoding="utf-8"))]
+check("the static export has no <script> at all (it ships with no app CSP and needs no nonce)", not exp_scripts, exp_scripts)
+js_inline = []
+for p in (Path(ROOT) / "web" / "static" / "js").glob("*.js"):
+    text = p.read_text(encoding="utf-8")
+    if re.search(r"<script", text, re.I):
+        js_inline.append(p.name + " (a <script> in a string)")
+    for m in re.finditer(r"""createElement\(\s*['"]script['"]\s*\)""", text):
+        tail = text[m.end():m.end() + 300]
+        if not re.search(r"\.src\s*=\s*['\"]/static/", tail) or re.search(r"\.(text|textContent|innerHTML)\s*=", tail):
+            js_inline.append(p.name + " (createElement('script') without a /static src)")
+check("no JS builds an inline script (the nonce would block it)", not js_inline, js_inline)
 
 print("\n--- no inline event handlers left (script-src-attr 'none' would break them) ---")
 HANDLER = re.compile(r"""<[a-zA-Z][^<>]*?\son[a-z]+\s*=\s*["'{\\]""")

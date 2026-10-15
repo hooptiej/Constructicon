@@ -18,7 +18,7 @@
   <p id="hobbies-drawer-empty" class="empty-state" style="display:none">No hobbies yet.</p>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   const backdrop = document.getElementById('hobbies-drawer-backdrop');
   const drawer = document.getElementById('hobbies-drawer');

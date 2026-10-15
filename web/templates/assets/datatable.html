@@ -58,7 +58,7 @@
   }
   .data-preview-note { margin: 8px 4px 0; }
 </style>
-<script>
+<script nonce="{{ csp_nonce() }}">
   (function () {
     // #606: click a cell to read it whole (click again to fold it back).
     document.addEventListener('click', function (ev) {

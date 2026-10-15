@@ -50,7 +50,7 @@
   <p class="empty-state" id="empty-state" {% if items %}style="display:none"{% endif %}>No uploads yet.</p>
 </div>
 <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
-<script>
+<script nonce="{{ csp_nonce() }}">
 const uploaderName = {{ uploader | tojson }};
 const selectedSlugs = new Set();
 function toggleCardSelect(cb) {

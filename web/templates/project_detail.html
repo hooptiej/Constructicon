@@ -435,7 +435,7 @@
   <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
   <script src="/static/js/timeline-drag-math.js?v={{ static_version('js/timeline-drag-math.js') }}"></script>
   <script src="/static/js/project-video-timeline.js?v={{ static_version('js/project-video-timeline.js') }}"></script>
-  <script>
+  <script nonce="{{ csp_nonce() }}">
   (function () {
     const timelineChildren = {{ timeline_children | tojson }};
     const timelineItems = {{ timeline_items | tojson }};
@@ -543,7 +543,7 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 // #414 "Featured in" links open the Blog builder. #645: a delegated listener, not an inline
 // onclick (the CSP's script-src-attr 'none' blocks inline handlers).
 document.addEventListener('click', (e) => {
@@ -665,7 +665,7 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
 });
 </script>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 // #515: the project page's details-panel groups. Each group's Save calls the SAME endpoints the old
 // scattered controls called (POST /api/projects/{id}, .../whereabouts, .../provenance, .../highlight,
 // .../home, .../unnest, /api/hobby/{id}/add-project, /api/families/..., /api/links...). The generic
@@ -1020,7 +1020,7 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
 </script>
 {{ about_script("/api/projects/" ~ project.id ~ "/text") }}
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 // Inline title rename (#241). Click the title text or the pencil to swap in
 // an input; Enter or blur saves via the existing POST /api/projects/{id}
 // (title=...), Escape cancels. An empty/unchanged value is a no-op — the

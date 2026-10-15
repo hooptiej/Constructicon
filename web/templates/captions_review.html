@@ -28,7 +28,7 @@
 .cr-msg { font-size:12px; color:var(--hazard-red); }
 </style>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   const list = document.getElementById('cr-list');
   const empty = document.getElementById('cr-empty');

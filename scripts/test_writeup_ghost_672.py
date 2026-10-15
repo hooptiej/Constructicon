@@ -59,11 +59,22 @@ def on_card(card_id, slug):
 
 
 def in_trash(slug):
+    """Deleted through items.delete (the trash op): a logged, undoable item_delete row naming it.
+    A write-up document has no file, so it leaves no `trash` table row (that holds files)."""
     conn = db.get_conn()
     try:
-        return conn.execute("SELECT 1 FROM trash WHERE slug = ?", (slug,)).fetchone() is not None
+        rows = conn.execute("SELECT affected_slugs FROM audit_log WHERE op = 'item_delete' AND undone_by IS NULL"
+                            ).fetchall()
+        return any(slug in (r[0] or "") for r in rows)
     finally:
         conn.close()
+
+
+def add_to_card(card_id, slug):
+    conn = db.get_conn()
+    conn.execute("INSERT INTO project_items (project_id, post_slug, sort_order) VALUES (?, ?, 0)", (card_id, slug))
+    conn.commit()
+    conn.close()
 
 
 def new_card(title):
@@ -111,6 +122,7 @@ with actor.acting_as(actor.ACTOR_UI):
     # --- 3. a previous write-up WITH text is never touched ---
     card2 = new_card("Story Card")
     told = document("Some real words the owner wrote.")
+    add_to_card(card2["id"], told)
     cards.update(card2["id"], writeup_slug=told)  # its own blank goes; `told` is now current
     other = document("A second draft.")
     cards.update(card2["id"], writeup_slug=other)

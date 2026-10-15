@@ -1,4 +1,4 @@
-# Retired: ran on prod around 2026-09-06 (#165); do not re-run. Kept for reference.
+raise SystemExit("Retired script: ran on prod around 2026-09-06 (#165). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """Issue #165: backfill real tag-tree entries for items tagged before the fix.
 
 Background

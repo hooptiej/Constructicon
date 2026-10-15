@@ -6,6 +6,7 @@ making it suitable for deployment to any static host or viewing offline.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -280,7 +281,7 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     if assets_src.exists():
         if assets_dest.exists():
             shutil.rmtree(assets_dest)
-        shutil.copytree(assets_src, assets_dest)
+        _copy_tree_fresh(assets_src, assets_dest)
 
     # Build report
     report = {
@@ -295,6 +296,17 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         _update_current_pointer(out_dir)
 
     return report
+
+
+def _copy_tree_fresh(src: Path, dst: Path) -> None:
+    """Copy a directory tree from the code checkout, creating every directory and file new, so they
+    get the process umask's modes (#652) instead of the checkout's world-readable ones (which
+    shutil.copytree would copy over)."""
+    for root, _dirs, files in os.walk(src):
+        target = dst / Path(root).relative_to(src)
+        target.mkdir(parents=True, exist_ok=True)
+        for name in files:
+            shutil.copyfile(Path(root) / name, target / name)
 
 
 def _update_current_pointer(build_dir: Path) -> None:

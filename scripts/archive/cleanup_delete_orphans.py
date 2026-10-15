@@ -1,4 +1,4 @@
-# Retired: ran on prod around 2026-10-03 (#497); do not re-run. Kept for reference.
+raise SystemExit("Retired script: ran on prod around 2026-10-03 (#497). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """Issue #497: find (and optionally remove) the ghosts older project deletes left behind.
 
 Before #497, deleting a project left behind its auto-created write-up document, typed

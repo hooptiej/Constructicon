@@ -1818,13 +1818,40 @@ def update(card, *, title=None, description=None, cover_slug=None, cover_project
     if end is not ...:
         fields["end_date_override"] = None if end is None else float(end)
     fields["updated_at"] = time.time()
+    ghost = _blank_writeup_left_behind(row, writeup_slug)
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         with db.ImageLog(OP_UPDATE_CARD, actor, batch_id, [row["slug"]]) as log:
             log.update("projects", {"id": row["id"]}, fields)
             muts = [{"op": OP_UPDATE_CARD, "affected_slugs": [row["slug"]], "mutations": list(log.muts)}]
+        changed = _changes_from_log(muts)
+        if ghost:
+            changed += _retire_blank_writeup(row, ghost, dry_run=dry_run, actor=actor, batch_id=batch_id)
         fresh = db.get_project(row["id"])
-    return Result(True, _changes_from_log(muts), [], batch_id, dry_run, {"card": fresh})
+    return Result(True, changed, [], batch_id, dry_run, {"card": fresh})
+
+
+def _blank_writeup_left_behind(row, writeup_slug):
+    """#672: the card's previous write-up when `writeup_slug` points the card at a DIFFERENT item
+    and the previous one is an empty document (the blank write-up every card is born with), else
+    None. A previous write-up with any text is never touched."""
+    old = row.get("writeup_slug")
+    if writeup_slug is ... or not writeup_slug or not old or old == writeup_slug:
+        return None
+    return old if db.blank_document_body(old) else None
+
+
+def _retire_blank_writeup(row, slug, *, dry_run, actor, batch_id):
+    """#672: takes the card's old, empty write-up off the card and trashes it, in the caller's
+    batch (one undo restores it with the old pointer). If another card still holds it (as its
+    write-up or as a file), it only leaves this card. Returns change rows."""
+    others = [c for c in db.list_projects_for_post(slug) if c["id"] != row["id"]]
+    if others or [i for i in db.card_ids_with_writeup(slug) if i != row["id"]]:
+        res = _membership().remove_files(row["id"], [slug], dry_run=dry_run, actor=actor, batch_id=batch_id)
+        return list(res.changes)
+    from . import items  # lazy: core.items imports this module
+    res = items.delete(slug, dry_run=dry_run, actor=actor, batch_id=batch_id)
+    return list(res.changes)
 
 
 # --- Computed needs added in piece 6 -------------------------------------------------

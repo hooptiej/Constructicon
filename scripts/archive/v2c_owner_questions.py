@@ -1,3 +1,4 @@
+raise SystemExit("Retired script: ran on prod around 2026-10-02 (#489, #491). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """Archived one-time migrations about the OWNER'S OWN cards (#562; were core/db.py MIGRATIONS
 `v2c_3_alienwhoop_family` and `v2c_4_canopy_built_for`, V2 cards spec 4.5, pieces 3 and 4).
 
@@ -10,7 +11,7 @@ Both already ran (and are recorded in schema_migrations) on the owner's prod and
 taking them out of init_db changed nothing there; a fresh customer install never runs them, and a
 new card titled "AlienWhoop" no longer gets a question queued at the next restart.
 
-Kept runnable for the record. Run-once: a step whose name is already in schema_migrations is
+Kept for the record; since #633 the guard above stops it before it runs. How it used to run: run-once: a step whose name is already in schema_migrations is
 skipped (pass --force to run it anyway; each step is idempotent on its own: queue_decision_once
 never re-asks a question that exists, open or resolved). Dry run by default.
 

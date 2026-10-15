@@ -1,4 +1,4 @@
-# Retired: ran on prod around 2026-08-31 on the first dev archive (#7); do not re-run. Kept for reference.
+raise SystemExit("Retired script: ran around 2026-08-31 on the first dev archive (#7). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """One-off script: seed a handful of real, SPECIFIC `projects` rows so the
 home page's Projects column (right two-thirds, see web/app.py's home_page
 route) has something real to show, and so there's something to click into

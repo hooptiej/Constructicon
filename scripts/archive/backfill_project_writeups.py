@@ -1,4 +1,4 @@
-# Retired: ran on prod around 2026-09-06 (#156); do not re-run. Kept for reference.
+raise SystemExit("Retired script: ran on prod around 2026-09-06 (#156). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """Issue #156: backfill empty writeup documents for existing projects.
 
 Background

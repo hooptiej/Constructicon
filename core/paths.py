@@ -12,13 +12,52 @@ frozen in at import time.
 
 Unset, the defaults are exactly the paths the app has always used. The database has its own override
 (CONSTRUCTICON_DB_PATH, core/db.py).
+
+File permissions (#652): `restrict_new_files()` sets the process umask once at startup (the web app
+and the MCP server both call it), so everything the app creates after that (the SQLite DB and its
+-wal/-shm, stored uploads, thumbnails, the trash, backups, export builds) is not readable by other
+users on the host: files 0640, directories 0750 (owner rw, the app's group read, nobody else).
+Backup zips are tighter still, 0600 (core/backup.py sets it on the file itself).
+
+    CONSTRUCTICON_UMASK         override the umask, in octal (default 027). An install whose data must
+                                be readable by another account (e.g. a guest SMB share) can set 022.
 """
 
+import logging
 import os
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TRASH_DIR_NAME = ".trash"
+
+DEFAULT_UMASK = 0o027
+log = logging.getLogger("constructicon.paths")
+
+
+def configured_umask():
+    """The umask to run with: CONSTRUCTICON_UMASK (octal, e.g. "027") or DEFAULT_UMASK. A bad value
+    is logged and the default used, so a typo can never loosen permissions to 000."""
+    raw = (os.environ.get("CONSTRUCTICON_UMASK") or "").strip()
+    if not raw:
+        return DEFAULT_UMASK
+    try:
+        value = int(raw, 8)
+    except ValueError:
+        log.warning("CONSTRUCTICON_UMASK=%r is not an octal umask (e.g. 027); using %03o", raw, DEFAULT_UMASK)
+        return DEFAULT_UMASK
+    if not 0 <= value <= 0o777:
+        log.warning("CONSTRUCTICON_UMASK=%r is not an octal umask (e.g. 027); using %03o", raw, DEFAULT_UMASK)
+        return DEFAULT_UMASK
+    return value
+
+
+def restrict_new_files():
+    """Set the process umask (#652). Call once, at process start, before anything writes a file.
+    Process-wide: it covers every thread and every subprocess (ffmpeg, ghostscript) started after.
+    Returns the umask now in force."""
+    mask = configured_umask()
+    os.umask(mask)
+    return mask
 
 
 def _override(name, default):

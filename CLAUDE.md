@@ -150,7 +150,12 @@ the date and commit forward when you re-verify.
 - **`core/ocr.py`, `core/similarity.py`** — text extraction
   (tesseract via `pytesseract`) and "related items" (perceptual hash +
   sentence-transformers embedding similarity, `all-MiniLM-L6-v2`, baked
-  into the Docker image at build time — see Dockerfile).
+  into the Docker image at build time — see Dockerfile). **The model loads offline (#658):**
+  `similarity._get_model` defaults `HF_HUB_OFFLINE=1` and loads with `local_files_only`, and the
+  image sets `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1` after the bake, so a load never calls the
+  Hub (it used to: 144 s of retries with no network). An empty cache fails fast with the download
+  command; a checkout outside the image downloads once with `HF_HUB_OFFLINE=0 python -c "from core
+  import similarity; similarity._get_model()"`. Check with `scripts/test_hf_offline_658.py`.
 - **`core/captions.py`** (#239) — auto-caption *suggestions* from a local
   Ollama vision model (`moondream`) on the TrueNAS box's GPU, written to
   `type_metadata.auto_caption` (never into `description` on its own).
@@ -218,15 +223,14 @@ the date and commit forward when you re-verify.
     app's own UI would use, rather than writing to the DB directly; see each docstring for the reasoning
     and any exceptions. Since #467 step 2 each calls `_http.install(<base url>)` (`scripts/_http.py`) so
     its requests carry the install token; see "Auth enforcement".
-  - *Spent one-shots:* `scripts/archive/`. Each file starts with a "Retired: ran on prod around ...; do
-    not re-run. Kept for reference." line. Nothing imports them and no doc tells anyone to run them.
-    **Moving them did not make them safe to run:** six (`apply_project_groupings`,
-    `backfill_from_hooptiej_site`, `backfill_project_writeups`, `import_new_youtube_from_channel_rss`,
-    `seed_example_projects`, `sync_free_text_tags_to_tag_tree`) no longer find `core` from `archive/`
-    (they assume they sit in `scripts/`), but `cleanup_delete_orphans.py` (`--execute` deletes rows),
-    `link_lil_dragon_brand.py` (`--execute` writes) and `apply_curation_suggestions.py` still start
-    from there, so the header line is the only guard. A new one-shot goes in `scripts/` while it is
-    live and moves to `archive/` once it has run.
+  - *Spent one-shots:* `scripts/archive/`. Nothing imports them and no doc tells anyone to run them.
+    **Each one refuses to run (#633):** its first line, before any import or argument parsing, is
+    `raise SystemExit("Retired script: ran on prod around <date> (#N). Kept for reference only; it will
+    not run. See CLAUDE.md, Scripts.")`, so nothing else in the file executes (some of them could still
+    write from there: `cleanup_delete_orphans.py --execute` deleted rows). `scripts/check_archive_guard.py`
+    fails when a file under `archive/` lacks that guard (it also runs each guarded file to prove it
+    exits, and checks `run_checks.py` never collects `archive/`). A new one-shot goes in `scripts/`
+    while it is live and moves to `archive/` once it has run, with the guard as its first line.
   - `scripts/data/`: input files for scripts (the V2 curation suggestions JSON).
   - Outside `scripts/`: `sync_clients.py` at the repo root seeds the vestigial `clients` tables (see
     "Data model"); it stays until the owner decides whether those tables go.
@@ -1641,6 +1645,13 @@ shows what would run; `--show-output` prints the whole output of anything that d
   `golden_master.py` is a before/after snapshot tool, not a check, and is not collected.)
   It also skips **`check_dependency_audit.py`** (#650) whenever there is no network, which is always the
   case in the `--network none` run above: see "Dependency audit" below.
+- **Pin watch (#676): `scripts/check_requirements_freeze.py`** runs in the app image (no network, so it
+  is part of the `--network none` suite) and fails on any installed package that `requirements.txt`
+  (plus the Dockerfile's `torch==` pin) doesn't pin, or pins at another version, on a non-`==` line, on a
+  stale pin, and on a torch that isn't the `+cpu` build. Fix by pinning what the image actually has.
+  `pip` is allowed unpinned (its `ALLOWED` dict): it comes from the base image, which the Dockerfile pins
+  by digest (the comment above `FROM` says how to bump it). Outside the app image (Windows, a venv) it
+  prints SKIPPED. Until #668's full pin (PR #674) lands it reports the 9 unpinned py7zr/openpyxl helpers.
 - **Dependency audit (#650): run it with network before a PR that touches `requirements.txt` or the
   Dockerfile, and now and then on `main`** (new advisories appear for versions that were clean):
   ```
@@ -1654,24 +1665,27 @@ shows what would run; `--show-output` prints the whole output of anything that d
   directory and runs it in a subprocess, so the audited environment and the checkout are untouched.
   `--requirements FILE` audits a pinned file instead (e.g. a `pip freeze` from a running container).
   An advisory accepted on purpose goes in its `IGNORE` dict with the reason. `requirements.txt` is
-  nearly a full freeze (it pins transitive packages too: PyJWT comes in via `mcp`, setuptools via
-  torch), but py7zr's helpers (pyppmd, pybcj, inflate64, brotli, pycryptodomex, multivolumefile,
-  texttable, psutil) and openpyxl's `et_xmlfile` are not pinned: they resolve to the newest allowed
-  version whenever the image is rebuilt, which is another reason to audit the built image, not the file.
+  a full freeze (#668): every package in the image is pinned there (transitive ones too: PyJWT via
+  `mcp`, setuptools via torch, py7zr's and openpyxl's helpers in their own marked section), except
+  torch, which the Dockerfile pins and installs first. So a rebuild installs exactly the tested set.
+  When you change a pin, rebuild and diff `pip freeze` against the old image: nothing new may appear
+  unpinned. The audit still reads the built image, not the file, so it covers whatever is really there.
 - **Environment:** for each script the runner points `CONSTRUCTICON_DB_PATH`, `CONSTRUCTICON_STORAGE_DIR`
   and `CONSTRUCTICON_EXPORTS_DIR` at fresh temp directories (unless you already set them) and sets
   `PYTHONDONTWRITEBYTECODE`, so it works from a read-only mount. The tests also call
   `_testenv.isolate()` themselves (see "paths" above).
-- **Known failure (2026-10-08):** `scripts/test_timeline_dates.py` fails 1 of 9,
-  `test_project_span_excludes_writeup`; it fails the same way on `main` (not caused by any PR). The
-  runner shows it as FAIL; do not hide it, fix it or file it.
+- **A clean `main` is the baseline.** The old known failure (`test_timeline_dates.py`,
+  `test_project_span_excludes_writeup`) was a stale fixture, fixed in #635: since #423 every
+  `db._create_project` adds its own blank write-up, so a test that brings its own write-up passes
+  `with_writeup=False`. A new red line is a real failure: fix it or file it.
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
     `test_replace_file_617`, `test_card_faces`, `test_install_config`, `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_role_policy`,
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
-    `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `check_routes_roles`, `check_policy_doors`;
+    `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,
+    `check_policy_doors`;
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,
     `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
     `test_restart_sidecar_643`;
@@ -1681,7 +1695,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
     `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
-  - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `test_live_bugs_563`,
+  - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `check_archive_guard`
+    (every retired script in `scripts/archive/` refuses to run, #633), `test_live_bugs_563`,
     `test_round2` and `test_round3a` (the work-install shakedown rounds: several small fixes each),
     `test_release` (the CalVer logic), `check_dependency_audit` (known advisories in the installed
     packages; needs network, see above).
@@ -1832,6 +1847,8 @@ so its deploys skip the snapshot (by design, don't snapshot 2.75 TB for a test).
 **Captions: guarded, not per-image-restarted (#454, 2026-09-30).** The old per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Captions are back ON everywhere with the #454 safety valve (restart only on failure, 10-min cooldown, circuit breaker; status in `GET /api/captions/defaults` → `breaker` and `restart_valve`, reset via `POST /api/captions/reset-breaker`). All four services join `ollama_default`. **No app container mounts `/var/run/docker.sock` (#643):** web asks the `ollama-restarter` sidecar (see `core/captions.py` above), which is the only holder of the socket; MCP has neither (#458), so only web can trigger safety-valve restarts. After a reboot, check `ollama` is actually running: it can fail to start before the NVIDIA driver loads (see #454).
 
 **The app runs as a non-root user (#643):** UID/GID 1000 (`app` in the image, Dockerfile `APP_UID`/`APP_GID`), which is `hoop` on the NAS. Every read-write bind mount (storage, db, backups, exports, import) must be owned by 1000:1000 on the host; files a root container wrote before #643 need a one-time `sudo chown -R 1000:1000 <dir>`. A `Permission denied` on upload, thumbnail, backup or export after a deploy means a directory missed that chown. `docker exec <web> id` should print `uid=1000(app)`.
+
+**Data files are private to the app user (#652).** Target on the host: `storage/`, `db/`, `backups/`, `exports/` are directories `0750` owned by the app uid (1000:1000), the files in them `0640`, backup zips `0600`. The app keeps new files that way itself: `core/paths.restrict_new_files()` sets the process umask to `027` when `web/app.py` and `mcp_server/server.py` load (it covers every thread and subprocess; `CONSTRUCTICON_UMASK`, octal, overrides it, a bad value falls back to 027), and `core/backup.py` writes each zip `0600` whatever the umask. SQLite gives `-wal`/`-shm` the DB file's own mode, so an existing DB stays as loose as it was until fixed by hand. **Existing installs:** `bash ops/fix-data-permissions.sh DATA_ROOT` prints what it would change (dry run), `--apply` changes it (idempotent; never chowns, lists entries not owned by uid 1000). It leaves `DATA_ROOT` itself and `import/` alone: the import inbox is the owner's drop folder, mounted read-only into the MCP and never written by the app. **Check before applying on the NAS:** the `Media` SMB share (`/mnt/Storage Pool/Media`, which holds both instances' data) is `guestok` with guest = `nobody`, so today any guest on the LAN can read the DB and the backups over SMB; after the fix a guest can't open `storage/` / `db/` / `backups/` / `exports/` at all, and only an SMB session authenticated as `hoop` (uid 1000) can. Check with `scripts/test_private_files_652.py` (throwaway DB, Linux).
 
 Two containers run side by side on that box:
 

@@ -106,6 +106,7 @@
   </div>
 </div>
 
+<script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
 <script nonce="{{ csp_nonce() }}">
 // Blog builder — client state is the single source of truth (state.projects /
 // state.objects); the DOM is only ever rendered FROM that state, never scraped
@@ -147,17 +148,21 @@
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
   // API stores content_date as a unix timestamp (float seconds); <input type=date>
-  // works in YYYY-MM-DD. Convert both ways so the field round-trips correctly.
+  // works in YYYY-MM-DD. A picked day is MOUNTAIN midnight that day and the field
+  // shows the Mountain day a stored date falls on (mountain-time.js, #621), the
+  // same calendar every other date on the site is shown in. It used to be UTC
+  // midnight, the previous evening in Mountain, so Oct 1 showed as Sep 30.
   function tsToDateInput(ts) {
-    if (ts === null || ts === undefined || ts === '') return '';
-    const d = new Date(Number(ts) * 1000);
-    return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+    return window.MountainTime.epochToDay(ts);
   }
   function dateInputToTs(v) {
-    if (!v) return '';
-    const ms = Date.parse(v + 'T00:00:00Z');
-    return isNaN(ms) ? '' : String(ms / 1000);
+    const epoch = window.MountainTime.dayToEpoch(v);
+    return epoch === null ? '' : String(epoch);
   }
+  // The field's value when the entry was opened. An untouched date is not sent on
+  // update, so opening and saving an older entry never rewrites its stored date
+  // (entries saved before #621 hold UTC midnight; migrating them is an owner call).
+  let loadedDateValue = '';
 
   function openBuilder() { builder.classList.add('open'); backdrop.classList.add('open'); showListView(); loadEntries(); }
   function closeBuilder() { builder.classList.remove('open'); backdrop.classList.remove('open'); }
@@ -207,6 +212,7 @@
     form.reset();
     coverInput.value = '';
     dateInput.value = '';
+    loadedDateValue = '';
     renderProjects();
     renderObjects();
     deleteBtn.style.display = 'none';
@@ -228,6 +234,7 @@
       document.getElementById('blog-entry-status').value = entry.status || 'draft';
       coverInput.value = entry.cover_slug || '';
       dateInput.value = tsToDateInput(entry.content_date);
+      loadedDateValue = dateInput.value;
       state.projects = (entry.projects || []).map((p) => ({ id: p.id, title: p.title || p.name || 'Project', note: p.note || '' }));
       state.objects = (entry.items || []).map((o) => ({ slug: o.slug, label: o.title, note: o.note || '' }));
       renderProjects();
@@ -372,7 +379,10 @@
     params.set('body', document.getElementById('blog-entry-body').value);
     params.set('status', document.getElementById('blog-entry-status').value);
     params.set('cover_slug', coverInput.value.trim());       // "" clears on update
-    params.set('content_date', dateInputToTs(dateInput.value)); // "" clears on update
+    // "" clears on update; an unchanged field on an existing entry is left out (leave alone).
+    if (!state.currentEntrySlug || dateInput.value !== loadedDateValue) {
+      params.set('content_date', dateInputToTs(dateInput.value));
+    }
     try {
       let slug = state.currentEntrySlug;
       const url = slug ? `/api/blog-entries/${encodeURIComponent(slug)}` : '/api/blog-entries';

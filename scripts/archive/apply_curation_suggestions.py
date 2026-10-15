@@ -1,4 +1,4 @@
-# Retired: ran on prod around 2026-10-03 (#503); do not re-run. Kept for reference.
+raise SystemExit("Retired script: ran on prod around 2026-10-03 (#503). Kept for reference only; it will not run. See CLAUDE.md, Scripts.")
 """Issue #503: rewrite the SUGGESTED answer of open V2 card decisions from a reviewed file.
 
 The V2 card migration (#486) queues owner decisions (card_status, card_kind,

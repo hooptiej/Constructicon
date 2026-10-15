@@ -39,6 +39,27 @@
     return asUtc - offsetAt(asUtc - offsetAt(asUtc));
   }
 
+  // A picked calendar day ("YYYY-MM-DD", an <input type=date> value) -> unix seconds at MOUNTAIN midnight
+  // that day (#621), the same instant core/timeline.py's source_datetime_to_epoch gives a bare date
+  // server-side. Not UTC midnight: that is the previous evening in Mountain, so Oct 1 showed as Sep 30.
+  // null for an empty or malformed value.
+  function dayToEpoch(value) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value == null ? '' : value).trim());
+    if (!m) return null;
+    const year = +m[1], month = +m[2], day = +m[3];
+    if (month < 1 || month > 12 || day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return null;
+    return toEpoch(year, month, day, 0, 0, 0);
+  }
+
+  // unix seconds -> the Mountain calendar day it falls on, as "YYYY-MM-DD" (an <input type=date> value).
+  // The inverse of dayToEpoch; '' for a missing or non-numeric epoch.
+  function epochToDay(epoch) {
+    if (epoch === null || epoch === undefined || epoch === '' || !isFinite(Number(epoch))) return '';
+    const p = parts(Number(epoch));
+    const pad = (n, w) => String(n).padStart(w, '0');
+    return `${pad(p.year, 4)}-${pad(p.month, 2)}-${pad(p.day, 2)}`;
+  }
+
   // "9/30/2026"-style (the browser locale's short date), in Mountain Time.
   function formatDate(epoch, locale) {
     return new Intl.DateTimeFormat(locale || undefined, { timeZone: TIME_ZONE }).format(new Date(epoch * 1000));
@@ -64,5 +85,5 @@
       hour: 'numeric', minute: '2-digit' }).format(new Date(epoch * 1000));
   }
 
-  return { TIME_ZONE, parts, toEpoch, formatDate, formatTime, formatDateTime, formatLong };
+  return { TIME_ZONE, parts, toEpoch, dayToEpoch, epochToDay, formatDate, formatTime, formatDateTime, formatLong };
 });

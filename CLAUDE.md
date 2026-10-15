@@ -1622,6 +1622,13 @@ shows what would run; `--show-output` prints the whole output of anything that d
   `golden_master.py` is a before/after snapshot tool, not a check, and is not collected.)
   It also skips **`check_dependency_audit.py`** (#650) whenever there is no network, which is always the
   case in the `--network none` run above: see "Dependency audit" below.
+- **Pin watch (#676): `scripts/check_requirements_freeze.py`** runs in the app image (no network, so it
+  is part of the `--network none` suite) and fails on any installed package that `requirements.txt`
+  (plus the Dockerfile's `torch==` pin) doesn't pin, or pins at another version, on a non-`==` line, on a
+  stale pin, and on a torch that isn't the `+cpu` build. Fix by pinning what the image actually has.
+  `pip` is allowed unpinned (its `ALLOWED` dict): it comes from the base image, which the Dockerfile pins
+  by digest (the comment above `FROM` says how to bump it). Outside the app image (Windows, a venv) it
+  prints SKIPPED. Until #668's full pin (PR #674) lands it reports the 9 unpinned py7zr/openpyxl helpers.
 - **Dependency audit (#650): run it with network before a PR that touches `requirements.txt` or the
   Dockerfile, and now and then on `main`** (new advisories appear for versions that were clean):
   ```
@@ -1639,13 +1646,6 @@ shows what would run; `--show-output` prints the whole output of anything that d
   torch), but py7zr's helpers (pyppmd, pybcj, inflate64, brotli, pycryptodomex, multivolumefile,
   texttable, psutil) and openpyxl's `et_xmlfile` are not pinned: they resolve to the newest allowed
   version whenever the image is rebuilt, which is another reason to audit the built image, not the file.
-- **Pin watch (#676): `scripts/check_requirements_freeze.py`** runs in the app image (no network, so it
-  is part of the `--network none` suite) and fails on any installed package that `requirements.txt`
-  (plus the Dockerfile's `torch==` pin) doesn't pin, or pins at another version, on a non-`==` line, on a
-  stale pin, and on a torch that isn't the `+cpu` build. Fix by pinning what the image actually has.
-  `pip` is allowed unpinned (its `ALLOWED` dict): it comes from the base image, which the Dockerfile pins
-  by digest (the comment above `FROM` says how to bump it). Outside the app image (Windows, a venv) it
-  prints SKIPPED. Until #668's full pin lands it reports the unpinned py7zr/openpyxl helpers above.
 - **Environment:** for each script the runner points `CONSTRUCTICON_DB_PATH`, `CONSTRUCTICON_STORAGE_DIR`
   and `CONSTRUCTICON_EXPORTS_DIR` at fresh temp directories (unless you already set them) and sets
   `PYTHONDONTWRITEBYTECODE`, so it works from a read-only mount. The tests also call

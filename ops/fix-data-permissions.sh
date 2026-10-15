@@ -45,7 +45,8 @@ report() {  # report <label> <count> <find args...>: print a count and up to 5 e
   local label="$1" count="$2"; shift 2
   printf '  %-58s %s\n' "$label" "$count"
   if [ "$count" -gt 0 ]; then
-    find "$@" -print 2>/dev/null | head -5 | sed 's/^/      e.g. /'
+    # `|| true`: head closing the pipe early is SIGPIPE for find, which pipefail would make fatal
+    { find "$@" -print 2>/dev/null || true; } | head -5 | sed 's/^/      e.g. /' || true
   fi
 }
 

@@ -44,6 +44,11 @@ from core.errors import InvalidInput, NotFound
 from core import version as version_info
 from core import blog, changes, hobbies, membership, parse_limits, reset
 from core import tags as tags_svc
+from core import paths
+
+# #652: files this process writes (uploads, imports, thumbnails, backups) are not readable by other
+# users on the host. Set at import, before main() runs init_db.
+paths.restrict_new_files()
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 

@@ -8,6 +8,12 @@ services:
   # #643: the app image runs as a non-root user, UID/GID 1000 (Dockerfile ARG APP_UID /
   # APP_GID). Every host directory bind-mounted read-write below (storage, db, backups,
   # exports, import) must be owned by that UID, e.g. `sudo chown -R 1000:1000 ./storage ./db`.
+  #
+  # #652: and private to it. Target: data directories 0750, their files 0640, backup zips 0600
+  # (`sudo chmod 0750 ./storage ./db ./backups ./exports` on a fresh install). The app keeps new
+  # files that way itself (umask 027, set at startup; CONSTRUCTICON_UMASK overrides it, octal). For
+  # an existing install: `bash ops/fix-data-permissions.sh <data root>` (dry run; add --apply).
+  # Anything that reads these directories as another user (a guest SMB share) loses access.
   # The web container NEVER mounts /var/run/docker.sock: Ollama's caption safety-valve
   # restart goes through the ollama-restarter sidecar below.
   constructicon-web:

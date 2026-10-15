@@ -45,6 +45,12 @@ RUN groupadd --gid "$APP_GID" app \
 # exactly the kind of surprise latency this app has already had enough of.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" \
     && chmod -R a+rX "$HF_HOME"
+# #658: with the model baked in, nothing at run time needs the Hugging Face Hub. Without this, every
+# load still asked the Hub for the latest files (144 s of retries with no network; one hung
+# connection stalled OCR). core/similarity.py also defaults to offline on its own; this covers any
+# other library in the image. Set after the bake above, which is the one step that downloads.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
 
 # Where the app writes when an install doesn't bind-mount a directory there
 # (exports, backups, import, storage, data): owned by the app user, so an

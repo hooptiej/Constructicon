@@ -14,6 +14,7 @@ Local-first on purpose, same call as OCR: screenshot content doesn't leave
 the box, and there's no per-request cost or new cloud credential to manage.
 """
 
+import os
 import threading
 
 import imagehash
@@ -40,13 +41,43 @@ _model = None
 _model_lock = threading.Lock()
 
 
+# #658: the model is loaded from the local Hugging Face cache only, never from the network. Left to
+# itself, SentenceTransformer(name) asks the Hub for the latest files on every load even when they
+# are cached; with no network that retried for 144 s (measured in a --network none container), and
+# one hung connection stalled a live upload's OCR. The first download happens when the cache is
+# filled, not here: the Dockerfile bakes the model into the image at build time (HF_HOME=/opt/hf-cache).
+# A checkout run outside the image fills its cache once, deliberately online:
+#   HF_HUB_OFFLINE=0 python -c "from core import similarity; similarity._get_model()"
+# Setting HF_HUB_OFFLINE=0 (or false/no/off) in the environment is the only way this module goes online.
+_OFFLINE_ENV = "HF_HUB_OFFLINE"
+_DOWNLOAD_HINT = ('HF_HUB_OFFLINE=0 python -c "from core import similarity; similarity._get_model()" '
+                  "(or rebuild the image, which bakes the model in)")
+
+
+def _offline():
+    """True unless HF_HUB_OFFLINE is explicitly set to a false value. Unset counts as offline: it is
+    also written back into the environment before sentence_transformers (and huggingface_hub, which
+    reads it once, at import) is first imported, so no Hub call is even attempted."""
+    value = os.environ.setdefault(_OFFLINE_ENV, "1")
+    return value.strip().lower() not in ("0", "false", "no", "off")
+
+
 def _get_model():
     global _model
     if _model is None:
         with _model_lock:
             if _model is None:
+                offline = _offline()
                 from sentence_transformers import SentenceTransformer
-                _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+                try:
+                    _model = SentenceTransformer(EMBEDDING_MODEL_NAME, local_files_only=offline)
+                except Exception as e:
+                    if not offline:
+                        raise
+                    raise RuntimeError(
+                        f"embedding model {EMBEDDING_MODEL_NAME!r} is not in the local Hugging Face cache "
+                        f"(HF_HOME={os.environ.get('HF_HOME', '~/.cache/huggingface')}) and loading is "
+                        f"offline (#658); download it once with: {_DOWNLOAD_HINT}") from e
     return _model
 
 

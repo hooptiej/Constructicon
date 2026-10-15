@@ -1378,16 +1378,25 @@ def constructicon_list_blog_entries(status: str | None = None) -> list[dict]:
 
 @mcp.tool()
 def constructicon_create_blog_entry(title: str, subtitle: str = "", body: str = "", status: str = "draft",
-                                    cover_slug: str | None = None, content_date: float | None = None) -> dict:
+                                    cover_slug: str | None = None,
+                                    content_date: float | str | None = None) -> dict:
     """Create a new blog entry.
 
     title: The entry's title (required; a slug is auto-generated from this).
     subtitle, body: Optional metadata and content.
     status: The entry's status (default 'draft'). Common values: 'draft', 'published'.
     cover_slug: Optional slug of a Constructicon object to use as the entry's cover image.
-    content_date: Optional unix timestamp for the entry's content date (distinct from created_at).
+    content_date: Optional date the entry is about (distinct from created_at). Prefer a date:
+      - an ISO date or datetime string, e.g. "2026-10-01", "2026-10-01 14:30" or
+        "2026-10-01T14:30:00". A bare date or an offset-less datetime is Mountain Time
+        (America/Denver), so "2026-10-01" is Mountain midnight and shows as Oct 1; a string
+        with an explicit offset ("2026-10-01T00:00:00Z") is trusted as-is.
+      - unix seconds (a number, or a numeric string) are still accepted and used directly.
+        Don't hand-compute one: UTC midnight shows as the day before in Mountain Time.
+      Same rules as constructicon_set_content_date. Anything else is a bad_date error.
 
-    Returns the created entry with projects and items (initially empty).
+    Returns the created entry with projects and items (initially empty); its content_date is
+    unix seconds.
     """
     result = blog.create(title, subtitle=subtitle, body=body, status=status, cover_slug=cover_slug,
                          content_date=content_date)  # #541 phase D: logged + undoable
@@ -1409,13 +1418,19 @@ def constructicon_get_blog_entry(slug: str) -> dict | None:
 @mcp.tool()
 def constructicon_update_blog_entry(slug: str, title: str | None = None, subtitle: str | None = None,
                                     body: str | None = None, status: str | None = None,
-                                    cover_slug: str | None = None, content_date: float | None = None,
+                                    cover_slug: str | None = None, content_date: float | str | None = None,
                                     clear_cover_slug: bool = False, clear_content_date: bool = False) -> dict | None:
     """Update a blog entry. Every field defaults to "leave unchanged".
 
     Pass a value to set it. cover_slug/content_date can't be cleared just by
     passing None (None means "leave unchanged" here), so to clear one, set its
     clear_* flag instead: clear_cover_slug / clear_content_date.
+
+    content_date: an ISO date or datetime string ("2026-10-01", "2026-10-01 14:30"); a bare
+    date or an offset-less datetime is Mountain Time (America/Denver), so "2026-10-01" is
+    Mountain midnight; an explicit offset is trusted as-is. Unix seconds (a number or numeric
+    string) still work and are used directly; don't hand-compute one (UTC midnight shows as the
+    day before). Same rules as constructicon_set_content_date; anything else is a bad_date error.
 
     (The Ellipsis sentinel blog.update uses internally can't cross the
     MCP tool boundary — the schema generator treats an Ellipsis default as a

@@ -73,7 +73,8 @@ def api_create_blog_entry(
     content_date: str = Form(None),
 ):
     """Create a new blog entry. title is required; others are optional.
-    content_date, if provided, is parsed from a timestamp string. #541 phase D: core/blog.py,
+    content_date, if provided, is unix seconds (what the blog builder sends) or, since #679, an ISO
+    date/datetime (a bare date or naive datetime is Mountain Time). #541 phase D: core/blog.py,
     logged and undoable."""
     result = blog.create(title, subtitle=subtitle, body=body, status=status, cover_slug=cover_slug,
                          content_date=content_date or None)
@@ -111,7 +112,7 @@ def api_update_blog_entry(
     content_date = ...
     if "content_date" in form_data:
         raw_date = form_data.get("content_date")
-        content_date = raw_date or None  # blog.update refuses a non-number (400)
+        content_date = raw_date or None  # unix seconds or ISO (#679); blog.update refuses garbage (400 bad_date)
 
     result = blog.update(slug, title=title, subtitle=subtitle, body=body, status=status,
                          cover_slug=cover_slug, content_date=content_date)

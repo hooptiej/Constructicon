@@ -20,7 +20,7 @@ page can show.
 
 import time
 
-from . import actor as actor_ctx, changes, db, users
+from . import actor as actor_ctx, changes, db, items, users
 from .cards import Result, _changes_from_log
 from .errors import InvalidInput, NotFound
 
@@ -39,14 +39,11 @@ def get_entry(entry):
 
 
 def _date(value, name="content_date"):
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise InvalidInput(f"Invalid {name} format")
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        raise InvalidInput(f"Invalid {name} format") from None
+    """A content date as epoch seconds, or None (clear). #679: the same inputs as an item's
+    content_date (items.parse_date): an ISO date/datetime, where a bare date or a naive datetime
+    is Mountain Time (core/timeline.py), or unix seconds (number or numeric string, as before);
+    None or "" clears. Anything else is a 400 bad_date naming the accepted forms."""
+    return items.parse_date(value, name)
 
 
 def _done(entry_id, batch_id):

@@ -521,8 +521,7 @@ import asyncio  # noqa: E402
 for tool, args in (("constructicon_create_blog_entry", {"title": "Sdk Dated", "content_date": "2026-10-01"}),
                    ("constructicon_create_blog_entry", {"title": "Sdk Epoch", "content_date": OCT1_MT})):
     res = asyncio.run(server.mcp.call_tool(tool, args))
-    sc = res.structured_content or {}
-    sc = sc.get("result", sc)
+    sc = json.loads(res.content[0].text) if res.content else {}   # a plain dict return comes back as text
     check(f"SDK path: the schema takes content_date as {type(args['content_date']).__name__}",
           not res.is_error and sc.get("content_date") == OCT1_MT, res)
     if sc.get("slug"):

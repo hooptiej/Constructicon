@@ -447,7 +447,9 @@ check("blog update (web): title + cover", r.status_code == 200 and db.get_blog_e
       and db.get_blog_entry(ent["id"])["cover_slug"] == A)
 undo_ok("blog update", b, step)
 r = client.post(f"/api/blog-entries/{ent['slug']}", data={"content_date": "soon"})
-check("blog update, bad date: 400 same message", r.status_code == 400 and r.json()["detail"] == "Invalid content_date format")
+check("blog update, bad date: 400 bad_date naming the accepted forms (#679)",
+      r.status_code == 400 and r.json()["error"]["code"] == "bad_date"
+      and "'soon'" in r.json()["detail"] and "ISO" in r.json()["detail"], r.text[:200])
 step = snapshot()
 r = client.put(f"/api/blog-entries/{ent['slug']}/projects", json=[{"project_id": base["id"], "note": "n1"},
                                                                     {"project_id": other["slug"], "note": ""}])
@@ -483,6 +485,58 @@ mcp_ops = [r_["op"] for r_ in q("SELECT op FROM audit_log WHERE actor = 'mcp' AN
 check("MCP blog create/set_items/update/delete all logged as mcp",
       mcp_ops[-4:] == ["blog_entry_create", "blog_entry_set_items", "blog_entry_update", "blog_entry_delete"]
       and gone is True and missing["error"]["code"] == "not_found", mcp_ops)
+
+# ---- 8b. #679: blog content_date takes a date, not just a hand-rolled epoch ------------------
+from datetime import datetime as _dt  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+OCT1_MT = _dt(2026, 10, 1, tzinfo=ZoneInfo("America/Denver")).timestamp()   # Mountain midnight
+OCT1_1430_MT = _dt(2026, 10, 1, 14, 30, tzinfo=ZoneInfo("America/Denver")).timestamp()
+with actor.acting_as(actor.ACTOR_MCP):
+    d1 = server.constructicon_create_blog_entry("Dated Post", content_date="2026-10-01")
+    check("MCP create, content_date '2026-10-01' = Mountain midnight (not UTC)",
+          d1.get("content_date") == OCT1_MT and OCT1_MT - _dt(2026, 10, 1, tzinfo=ZoneInfo("UTC")).timestamp() == 6 * 3600,
+          d1)
+    u = server.constructicon_update_blog_entry(d1["slug"], content_date="2026-10-01T14:30:00")
+    check("MCP update, naive ISO datetime = Mountain", u.get("content_date") == OCT1_1430_MT, u)
+    u = server.constructicon_update_blog_entry(d1["slug"], content_date="2026-10-01T00:00:00Z")
+    check("MCP update, explicit offset trusted as-is", u.get("content_date") == OCT1_MT - 6 * 3600, u)
+    u = server.constructicon_update_blog_entry(d1["slug"], content_date=1700000000)
+    check("MCP update, unix seconds (number) still work", u.get("content_date") == 1700000000, u)
+    u = server.constructicon_update_blog_entry(d1["slug"], content_date="1700000001")
+    check("MCP update, unix seconds (numeric string) still work", u.get("content_date") == 1700000001, u)
+    u = server.constructicon_update_blog_entry(d1["slug"], title="Dated Post 2")
+    check("MCP update, content_date omitted = left alone", u.get("content_date") == 1700000001, u)
+    bad = server.constructicon_update_blog_entry(d1["slug"], content_date="next tuesday")
+    check("MCP update, garbage -> bad_date naming the forms",
+          bad.get("ok") is False and bad["error"]["code"] == "bad_date" and "ISO" in bad["error"]["message"]
+          and db.get_blog_entry(d1["slug"])["content_date"] == 1700000001, bad)
+    bad = server.constructicon_create_blog_entry("Bad Date", content_date="2026-13-45")
+    check("MCP create, impossible date -> bad_date, nothing created",
+          bad.get("ok") is False and bad["error"]["code"] == "bad_date"
+          and not [e for e in db.list_blog_entries() if e["title"] == "Bad Date"], bad)
+    u = server.constructicon_update_blog_entry(d1["slug"], clear_content_date=True)
+    check("MCP update, clear_content_date clears", u.get("content_date") is None, u)
+    server.constructicon_delete_blog_entry(d1["slug"])
+import asyncio  # noqa: E402
+for tool, args in (("constructicon_create_blog_entry", {"title": "Sdk Dated", "content_date": "2026-10-01"}),
+                   ("constructicon_create_blog_entry", {"title": "Sdk Epoch", "content_date": OCT1_MT})):
+    res = asyncio.run(server.mcp.call_tool(tool, args))
+    sc = json.loads(res.content[0].text) if res.content else {}   # a plain dict return comes back as text
+    check(f"SDK path: the schema takes content_date as {type(args['content_date']).__name__}",
+          not res.is_error and sc.get("content_date") == OCT1_MT, res)
+    if sc.get("slug"):
+        blog.delete(sc["slug"])
+r = client.post("/api/blog-entries", data={"title": "Web Dated", "content_date": "2026-10-01"})
+web_ent = r.json()
+check("web create, ISO date = Mountain midnight too", r.status_code == 200 and web_ent.get("content_date") == OCT1_MT,
+      r.text[:200])
+r = client.post(f"/api/blog-entries/{web_ent['slug']}", data={"content_date": str(int(OCT1_MT))})
+check("web update, the builder's Mountain-midnight epoch (#677) still works",
+      r.status_code == 200 and r.json().get("content_date") == OCT1_MT, r.text[:200])
+r = client.post(f"/api/blog-entries/{web_ent['slug']}", data={"content_date": ""})
+check("web update, empty content_date clears", r.status_code == 200 and r.json().get("content_date") is None,
+      r.text[:200])
+client.delete(f"/api/blog-entries/{web_ent['slug']}")
 
 # ---- 9. decisions: reads never write; the explicit sweep -------------------------------------
 gone_item = mk("gone1")

@@ -72,7 +72,7 @@ client = _testenv.client(webapp.app, raise_server_exceptions=False)
 with client:
     pass
 check("DB file is not world-readable", private(db.DB_PATH), oct(mode(db.DB_PATH)))
-wal = db.DB_PATH + "-wal"
+wal = str(db.DB_PATH) + "-wal"
 if os.path.exists(wal):
     check("DB -wal file is not world-readable", private(wal), oct(mode(wal)))
 

@@ -43,9 +43,9 @@ def configured_umask():
     try:
         value = int(raw, 8)
     except ValueError:
-        value = None
-        log.warning("CONSTRUCTICON_UMASK=%r is not an octal number", raw)
-    if value is None or not 0 <= value <= 0o777:
+        log.warning("CONSTRUCTICON_UMASK=%r is not an octal umask (e.g. 027); using %03o", raw, DEFAULT_UMASK)
+        return DEFAULT_UMASK
+    if not 0 <= value <= 0o777:
         log.warning("CONSTRUCTICON_UMASK=%r is not an octal umask (e.g. 027); using %03o", raw, DEFAULT_UMASK)
         return DEFAULT_UMASK
     return value

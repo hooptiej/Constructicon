@@ -104,8 +104,10 @@ from core import site_export  # noqa: E402
 try:
     out = os.path.join(TMP, "exports", "perm-build")
     site_export.build_site({}, out_dir=out)
-    loose = [p for p in __import__("pathlib").Path(out).rglob("*") if p.is_dir() and not private(p)]
-    check("export build directories are not world-readable", os.path.isdir(out) and private(out) and not loose,
+    built = list(__import__("pathlib").Path(out).rglob("*"))
+    loose = [p for p in built if not private(p)]
+    check("export build (dirs, pages, copied assets) is not world-readable",
+          os.path.isdir(out) and private(out) and any(p.parent.name == "assets" for p in built) and not loose,
           [(str(p), oct(mode(p))) for p in loose[:5]])
 except Exception as exc:  # the export needs nothing special here; report rather than crash
     check("export build runs", False, repr(exc))

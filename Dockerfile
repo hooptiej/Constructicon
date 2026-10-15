@@ -1,4 +1,11 @@
-FROM python:3.14-slim
+# Base image pinned by digest (#676) so a rebuild can't pick up a different Python, Debian or pip
+# underneath the pinned requirements. This is the python:3.14-slim the 2026-10-12 image was built on
+# (Python 3.14.7, built 2026-09-01; it also fixes pip, which the image doesn't upgrade).
+# To bump it: `docker pull python:3.14-slim`, then
+# `docker image inspect python:3.14-slim --format '{{index .RepoDigests 0}}'`, paste the new digest
+# here, rebuild, and run scripts/check_requirements_freeze.py (pip's version shows as a note) and
+# scripts/check_dependency_audit.py in the new image before deploying.
+FROM python:3.14-slim@sha256:656d12e70054d5fda18a045e2494c96701e9792dd1445f95b3d038df954f57e9
 
 # libcairo2: SVG thumbnail rasterization (core/svg.py, issue #30) — cairosvg
 # is a pure-Python *package* but dynamically loads a real libcairo.so.2 at

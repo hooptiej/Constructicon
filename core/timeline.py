@@ -10,6 +10,7 @@ real-world date read from a source that carries no timezone of its own is
 interpreted as Mountain Time before it becomes one.
 """
 
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -107,6 +108,20 @@ def has_real_date(row):
             or row.get("source_modified_at") is not None)
 
 
+def is_blank_writeup_document(item):
+    """#672: True for a written-post document whose body is empty or whitespace (the same test as
+    core.db.blank_document_body, on a row already in hand). type_metadata may be a dict or JSON."""
+    if item.get("media_type") != "document":
+        return False
+    meta = item.get("type_metadata") or {}
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            return False  # silent-ok: unparseable metadata is not "known empty"; keep the item
+    return not str((meta or {}).get("body") or "").strip()
+
+
 def resolve_project_span(project, items):
     """project is a core.db projects dict. items is that project's
     capture_events rows (core.db.list_project_items shape) — may be empty.
@@ -120,14 +135,19 @@ def resolve_project_span(project, items):
     when the project's actual content happened — write-ups are being
     machine-generated fresh for existing projects, which would otherwise
     drag every project's effective_end to "whenever we wrote it up,"
-    masking the real chronology entirely."""
+    masking the real chronology entirely.
+
+    #672: an EMPTY write-up document (a written post with no body, e.g. the blank write-up a card
+    was born with, left behind when the card got a different write-up) is skipped too, whether
+    or not it is the current write-up: its only date is when the card was created."""
     start_override = project.get("start_date_override")
     end_override = project.get("end_date_override")
     if start_override is not None and end_override is not None:
         return start_override, end_override
 
     writeup_slug = project.get("writeup_slug")
-    dated_items = [item for item in items if item["slug"] != writeup_slug]
+    dated_items = [item for item in items
+                   if item["slug"] != writeup_slug and not is_blank_writeup_document(item)]
     item_dates = [resolve_item_date(item) for item in dated_items]
     derived_start = min(item_dates) if item_dates else project["created_at"]
     derived_end = max(item_dates) if item_dates else project["created_at"]

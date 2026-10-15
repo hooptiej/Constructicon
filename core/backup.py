@@ -19,6 +19,7 @@ so it naturally lands at .../constructicon/backups/ wherever the app is
 deployed, without hardcoding any particular environment's path.
 """
 
+import os
 import sqlite3
 import tempfile
 import zipfile
@@ -34,6 +35,9 @@ from core import db, paths
 # library), so keep the count low — this is a rolling safety net, not an archive.
 # (#351: was 10, which quietly hoarded ~9 GB before anyone noticed.)
 BACKUP_RETENTION_COUNT = 3
+
+# #652: a backup zip is readable by the app's own user only.
+BACKUP_FILE_MODE = 0o600
 
 DB_ARCNAME = "imagerepo.db"
 STORAGE_ARCPREFIX = "storage"
@@ -90,7 +94,7 @@ def create_backup():
     return metadata about the archive. Read-only with respect to the live
     DB and storage/ — nothing in either is modified or deleted by this."""
     backup_dir = paths.backup_dir()
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True, mode=0o750)  # #652 (an existing dir keeps its mode)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     filename = f"constructicon-backup-{timestamp}.zip"
     dest = backup_dir / filename
@@ -106,7 +110,11 @@ def create_backup():
         # Write to a .part file first so a crash/kill mid-zip never leaves a
         # half-written archive sitting there looking like a real backup.
         tmp_zip = dest.with_suffix(".zip.part")
-        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        # #652: the zip holds the whole archive (sensitive items, password hashes), so it is
+        # owner-only (0600) from its first byte, whatever the process umask, and stays so.
+        fd = os.open(tmp_zip, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, BACKUP_FILE_MODE)
+        os.chmod(tmp_zip, BACKUP_FILE_MODE)  # a leftover .part keeps its old mode through O_CREAT
+        with os.fdopen(fd, "wb") as fh, zipfile.ZipFile(fh, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(tmp_db, arcname=DB_ARCNAME)
             store = paths.storage_dir()
             if store.is_dir():

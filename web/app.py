@@ -33,6 +33,10 @@ from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddlewa
 from web.security_headers import SecurityHeadersMiddleware
 from web.routes import meta, pages, admin, items, curator, files, cards, hobbies, blog_export, auth as auth_routes
 
+# #652: nothing the app writes (DB, uploads, thumbnails, backups, exports) is readable by other
+# users on the host. Set at import, before the startup hook's init_db creates or opens anything.
+paths.restrict_new_files()
+
 app = FastAPI()
 
 

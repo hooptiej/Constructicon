@@ -257,9 +257,15 @@ t0 = 1_000_000.0
 for i in range(users.LOGIN_FREE_ATTEMPTS):
     code_of(users.authenticate, admin_name, "bad-password-x", "10.9.9.9", now=t0 + i)
 last = t0 + users.LOGIN_FREE_ATTEMPTS - 1
-check("backoff: blocked right after", code_of(users.authenticate, admin_name, admin_pw2, "10.9.9.8", now=last + 1) == "too_many_attempts")
+# #647 changed this: the failing address is blocked, but the right password from a CLEAN address
+# signs in even while the username backs off ("lock the attacker, not the account";
+# scripts/test_lockout_647.py has the whole matrix).
+check("backoff: the failing address is blocked right after",
+      code_of(users.authenticate, admin_name, admin_pw2, "10.9.9.9", now=last + 1) == "too_many_attempts")
 check("backoff: per-IP too (another username, same IP)",
       code_of(users.authenticate, ed_name, new_ed_pw, "10.9.9.9", now=last + 1) == "too_many_attempts")
+check("backoff (#647): the right password from a clean address signs in meanwhile",
+      code_of(users.authenticate, admin_name, admin_pw2, "10.9.9.8", now=last + 1) is None)
 check("backoff: allowed once the delay passed", code_of(users.authenticate, admin_name, admin_pw2, "10.9.9.8",
                                                        now=last + 3) is None)
 check("backoff: a good sign-in from the IP clears the IP's count",

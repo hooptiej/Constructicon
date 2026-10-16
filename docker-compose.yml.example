@@ -24,6 +24,7 @@ services:
     networks:
       - default
       - restart-valve      # #643: reach ollama-restarter, and nothing else on that network
+      - captions           # #687: reach the ollama sidecar at http://ollama:11434
     volumes:
       - ./core:/app/core
       - ./web:/app/web
@@ -61,6 +62,14 @@ services:
       # - CONSTRUCTICON_CSP=
       #   Diagnose a page the CSP breaks: send it as Content-Security-Policy-Report-Only instead.
       # - CONSTRUCTICON_CSP_REPORT_ONLY=1
+      # #687: captions come from the `ollama` sidecar below (compose profile `captions`).
+      # The model is ONE value for the app and the sidecar's first-start pull: set
+      # CAPTION_OLLAMA_MODEL in .env (default moondream). An install that runs without the
+      # profile should set CAPTION_DISABLED=1, so uploads skip captions instead of failing
+      # each one against a missing Ollama.
+      - CAPTION_OLLAMA_URL=http://ollama:11434
+      - CAPTION_OLLAMA_MODEL=${CAPTION_OLLAMA_MODEL:-moondream}
+      # - CAPTION_DISABLED=1
       # #643: captions' safety valve. Leave both unset (and drop the sidecar) for an
       # install without Ollama: captions then just have no restart valve.
       - CAPTION_RESTART_URL=http://ollama-restarter:8080/restart
@@ -85,9 +94,12 @@ services:
   #   python3 scripts/mcp_token.py generate ./secrets/ollama_restart_token   (mode 600)
   # It runs as UID 1000 (so it can read that file) plus the group that owns the socket:
   # set group_add to `stat -c %g /var/run/docker.sock` on your host (999 on the NAS).
+  # #687: in the `captions` profile with Ollama itself, so an install without captions runs
+  # no container holding the Docker socket (web treats the missing sidecar as "no valve").
   ollama-restarter:
     build: ./ops/ollama-restarter
     container_name: constructicon-ollama-restarter
+    profiles: ["captions"]
     user: "1000:1000"
     group_add:
       - "999"
@@ -105,6 +117,42 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    restart: unless-stopped
+
+  # #687: the caption model server, owned by this compose instead of a hand-made project.
+  # Optional: it runs only with the `captions` profile, e.g.
+  #   docker compose --profile captions up -d          (or COMPOSE_PROFILES=captions in .env)
+  # Without it the app runs as before with captions off (set CAPTION_DISABLED=1 on web).
+  # - Pinned: version tag AND digest (the multi-arch index digest, as `docker buildx imagetools
+  #   inspect ollama/ollama:<tag>` prints it). To bump: pick a release, read that digest, change
+  #   both halves together, and live-test captions on constructicon-test before prod.
+  # - Not exposed: no published port. Its only networks are `captions` (internal: web and the
+  #   test instance reach it as http://ollama:11434) and `ollama-egress` (its own, used only to
+  #   pull models). For direct testing use `docker exec ollama ollama list`, or uncomment ports:
+  #   bound to 127.0.0.1, never to the LAN.
+  # - GPU: CPU works (slowly). For NVIDIA, add the override file docker-compose.gpu.yml:
+  #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile captions up -d
+  #   (or COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml in .env). Run ONE Ollama per GPU:
+  #   a second install on the same box (a test instance) should share this one, not start its own.
+  # - First start pulls CAPTION_OLLAMA_MODEL if it isn't on the volume (ops/ollama/serve-and-pull.sh;
+  #   idempotent, a restart doesn't re-pull). Models live in OLLAMA_DATA_DIR (default ./ollama-data;
+  #   point it at an existing model directory to reuse it without re-downloading).
+  # - container_name stays `ollama`: the restart sidecar's RESTARTER_CONTAINER names it.
+  ollama:
+    image: ollama/ollama:0.35.1@sha256:292ee7945dfc3d5840a181f3ab86fedb1e66703e02c8af98b50f4da56b7e278c
+    container_name: ollama
+    profiles: ["captions"]
+    entrypoint: ["/bin/sh", "/opt/constructicon/serve-and-pull.sh"]
+    networks:
+      - captions
+      - ollama-egress
+    volumes:
+      - ${OLLAMA_DATA_DIR:-./ollama-data}:/root/.ollama
+      - ./ops/ollama/serve-and-pull.sh:/opt/constructicon/serve-and-pull.sh:ro
+    environment:
+      - CAPTION_OLLAMA_MODEL=${CAPTION_OLLAMA_MODEL:-moondream}
+    # ports:
+    #   - "127.0.0.1:11434:11434"   # opt-in, for direct testing from the host only
     restart: unless-stopped
 
   constructicon-mcp:
@@ -127,6 +175,8 @@ services:
     command: python -m mcp_server.server
     depends_on:
       - constructicon-web
+    # #687: no `captions` network on purpose. The MCP never calls Ollama: its caption tools
+    # queue work that web's worker runs (#549), so it has no reason to reach the model server.
     network_mode: bridge
 
   # Test instance: isolated DB/storage for testing schema changes, migration
@@ -137,6 +187,9 @@ services:
     ports:
       - "8001:8000"
       - "8101:8100"
+    networks:
+      - default
+      - captions           # #687: shares the one `ollama` above (one GPU, one Ollama)
     volumes:
       - ./core:/app/core
       - ./web:/app/web
@@ -147,6 +200,8 @@ services:
     environment:
       - IMAGEREPO_BASE_URL=http://10.0.1.78:8001
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
+      - CAPTION_OLLAMA_URL=http://ollama:11434
+      - CAPTION_OLLAMA_MODEL=${CAPTION_OLLAMA_MODEL:-moondream}
     command: uvicorn web.app:app --host 0.0.0.0 --port 8000 --no-proxy-headers
 
   # #646: an HTTPS front door for an internet-facing install (NOT the home install, which stays
@@ -188,3 +243,11 @@ networks:
   # port; only services listed on it (constructicon-web, ollama-restarter) can reach it.
   restart-valve:
     internal: true
+  # #687: app <-> Ollama. Internal like restart-valve: no route out, nothing published, only
+  # the services listed on it (constructicon-web, constructicon-test, ollama) can reach it.
+  captions:
+    internal: true
+  # #687: Ollama's own way out, used only to pull a model (registry.ollama.ai). Nothing else
+  # joins it and nothing is published on it. An install that never pulls again (model already
+  # on the volume) can drop it from the ollama service.
+  ollama-egress: {}

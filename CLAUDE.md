@@ -175,12 +175,30 @@ the date and commit forward when you re-verify.
   It sits on an `internal: true` compose network shared only with the web service,
   no published port. Web side: `CAPTION_RESTART_URL` + `CAPTION_RESTART_TOKEN_FILE`;
   unset, unreachable, 429 or 401 = "no valve this time", logged, breaker untouched.
-  **Deploy prerequisites for the app container** — join Ollama's compose
-  network (`ollama_default`, external — the ipvlan `questlog-lan` network can't
-  reach the host's published `:11434`) so `http://ollama:11434` resolves, and
-  the `restart-valve` network for the sidecar (see `docker-compose.yml.example`).
-  Set `CAPTION_DISABLED=1` to skip captioning entirely. Check with
-  `scripts/test_restart_sidecar_643.py`. Tune with the admin
+  **Where Ollama comes from (#687): the install's own compose.** `docker-compose.yml.example`
+  defines an `ollama` service: image pinned by tag AND digest (`ollama/ollama:<tag>@sha256:...`;
+  bump both halves together, then live-test captions on constructicon-test), behind the compose
+  profile **`captions`** (`docker compose --profile captions up -d`, or `COMPOSE_PROFILES=captions`
+  in `.env`; without it the app runs with captions off, so set `CAPTION_DISABLED=1`), together with
+  the restart sidecar (no captions = no container holding the Docker socket). It publishes **no
+  port**: web (and the test instance) reach it as `http://ollama:11434` over the `internal: true`
+  network `captions`; its only other network, `ollama-egress`, is its own way out for model pulls.
+  Direct testing: `docker exec ollama ollama list`, or the commented `127.0.0.1:11434` port. GPU is
+  an override file, `docker-compose.gpu.yml` (NVIDIA reservation); CPU works as shipped. **One
+  Ollama per GPU:** a second instance on the same box shares it. Its entrypoint,
+  `ops/ollama/serve-and-pull.sh`, starts `ollama serve` and pulls `CAPTION_OLLAMA_MODEL` (the same
+  setting `core/captions.py` reads; default `moondream`) when it is not on the volume
+  (`OLLAMA_DATA_DIR`, default `./ollama-data`), so a fresh install needs no manual `ollama pull`
+  and a restart never re-pulls; a failed pull is logged and Ollama serves anyway. The app side is
+  two settings, both with the old behaviour as default: `CAPTION_OLLAMA_URL` (default
+  `http://ollama:11434`) and `CAPTION_OLLAMA_MODEL`. The MCP never calls Ollama (it queues, #549),
+  so it doesn't join `captions`. Check with `scripts/check_compose_ollama.py` (static: pin, no
+  port, profile, names) and `scripts/test_restart_sidecar_643.py`.
+  **The home install, until the owner migrates it (#687's PR has the steps):** Ollama is still a
+  separate hand-made project (`~/ollama/docker-compose.yml` on the NAS, `ollama/ollama:latest`, GPU,
+  port 11434 published to the LAN), and all four app containers join its network
+  (`ollama_default`, external) to resolve `http://ollama:11434` (the ipvlan `questlog-lan` network
+  can't reach the host's published port). Set `CAPTION_DISABLED=1` to skip captioning entirely. Tune with the admin
   page's (`/admin`) "Caption tuning" panel (`POST /api/captions/test`) before
   changing the defaults in that module.
 - **`core/embedded_metadata.py`** (#255, #265) — metadata the uploaded
@@ -1688,7 +1706,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `check_policy_doors`;
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,
     `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
-    `test_restart_sidecar_643`;
+    `test_restart_sidecar_643`, `check_compose_ollama` (the compose example's Ollama sidecar, #687);
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
     `test_email_type`, `test_traditional_media`, `test_office` (live);
   - pages, search, dates, UI: `test_search_543`, `test_item_title_542`, `test_mountain_time_544` (`.py` and
@@ -1844,7 +1862,7 @@ so its deploys skip the snapshot (by design, don't snapshot 2.75 TB for a test).
 
 **The SQLite DB lives in its own directory, never a bare file mount (#453, 2026-09-30).** Both services mount `Media/<instance>/db/` at `/app/data/` with `CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db`. WAL mode keeps `-wal`/`-shm` beside the DB, and the old single-file mount gave web and mcp private copies, which corrupted constructicon-test's DB. Read DB state with a plain `sqlite3.connect(db.DB_PATH)` inside the app container, not a `?mode=ro` URI (that can miss the WAL and show stale rows). Every `/api/backup` result now includes `integrity`.
 
-**Captions: guarded, not per-image-restarted (#454, 2026-09-30).** The old per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Captions are back ON everywhere with the #454 safety valve (restart only on failure, 10-min cooldown, circuit breaker; status in `GET /api/captions/defaults` → `breaker` and `restart_valve`, reset via `POST /api/captions/reset-breaker`). All four services join `ollama_default`. **No app container mounts `/var/run/docker.sock` (#643):** web asks the `ollama-restarter` sidecar (see `core/captions.py` above), which is the only holder of the socket; MCP has neither (#458), so only web can trigger safety-valve restarts. After a reboot, check `ollama` is actually running: it can fail to start before the NVIDIA driver loads (see #454).
+**Captions: guarded, not per-image-restarted (#454, 2026-09-30).** The old per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Captions are back ON everywhere with the #454 safety valve (restart only on failure, 10-min cooldown, circuit breaker; status in `GET /api/captions/defaults` → `breaker` and `restart_valve`, reset via `POST /api/captions/reset-breaker`). All four services join `ollama_default` (the separate `~/ollama` project's network) today; once the home install moves to the compose-owned sidecar (#687) only the two web services join the internal `captions` network and the MCPs join neither. **No app container mounts `/var/run/docker.sock` (#643):** web asks the `ollama-restarter` sidecar (see `core/captions.py` above), which is the only holder of the socket; MCP has neither (#458), so only web can trigger safety-valve restarts. After a reboot, check `ollama` is actually running: it can fail to start before the NVIDIA driver loads (see #454).
 
 **The app runs as a non-root user (#643):** UID/GID 1000 (`app` in the image, Dockerfile `APP_UID`/`APP_GID`), which is `hoop` on the NAS. Every read-write bind mount (storage, db, backups, exports, import) must be owned by 1000:1000 on the host; files a root container wrote before #643 need a one-time `sudo chown -R 1000:1000 <dir>`. A `Permission denied` on upload, thumbnail, backup or export after a deploy means a directory missed that chown. `docker exec <web> id` should print `uid=1000(app)`.
 

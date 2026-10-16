@@ -395,11 +395,20 @@ added accounts and attribution; step 2 enforces them (next section, "Auth enforc
 - `sessions(token_hash PK, user_id, csrf_token, created_at, last_seen, expires_at)`: the cookie holds
   a random 32-byte token; only its sha256 is stored. Sliding expiry 30 days (`SESSION_DAYS`), the
   row touched at most every 10 minutes (and the cookie re-sent then). Logout deletes the row.
-- Sign-in backoff (`users.limiter`, in memory, web process): after 5 failures per username or per IP,
-  each attempt must wait 2^(extra failures) s (max 15 min) after the last failure, else 429
-  `too_many_attempts` (`details.retry_after`) without checking the password; a success clears that
-  username's and that IP's counts (behind a Docker bridge or NAT every client can share one IP, so
-  the IP count must not outlive a good sign-in). The IP is `proxy_trust.client_ip`: behind a proxy
+- Sign-in backoff (`users.limiter`, in memory, web process: resets on restart, would split across
+  workers): "lock the attacker, not the account" (#647). After 5 failures a key backs off 2^(extra
+  failures) s after the last failure, else 429 `too_many_attempts` (`details.retry_after`) without
+  checking the password. The source **IP** key is the heavy one (max 15 min,
+  `LOGIN_MAX_DELAY_SECONDS`); the **username** key is capped at 5 s (`LOGIN_USER_MAX_DELAY_SECONDS`)
+  and only applies to an address that itself has recent failures (its own, or against that
+  username: the `("pair", ip, name)` key), so the right password from a clean address signs in even
+  while the account is hammered from elsewhere; a wrong one from a clean address still counts. No
+  address = one shared `unknown` key. When a key first starts backing off (once per key per window)
+  one change-log row `login_throttled` records it (`details`: `throttled` ip|username, `client_ip`,
+  the username only when it is a real account). A success clears that username's and that IP's counts
+  (behind a Docker bridge or NAT every client can share one IP, so the IP count must not outlive a good
+  sign-in), but not the address's failures against OTHER usernames. Check with
+  `scripts/test_lockout_647.py`. The IP is `proxy_trust.client_ip`: behind a proxy
   listed in `CONSTRUCTICON_TRUSTED_PROXIES` it is the real client's (#646, "Behind a reverse proxy"),
   so each client has its own bucket; without that setting a proxy's clients all share the proxy's. A wrong user, wrong
   password and disabled account all answer the same 401 `invalid_login` (an unknown user still

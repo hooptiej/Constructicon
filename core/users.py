@@ -26,11 +26,15 @@ Sessions
   at most every SESSION_TOUCH_SECONDS). Logout deletes the row. A password change, a disable or a
   delete ends the user's other sessions.
 
-Sign-in backoff (in memory, per process): after LOGIN_FREE_ATTEMPTS failures for an IP or a
-username, each further attempt must wait 2**(extra failures) seconds (capped at
-LOGIN_MAX_DELAY_SECONDS) after the last failure, else 429 `too_many_attempts` without checking the
-password. Failures older than LOGIN_WINDOW_SECONDS are forgotten; a success clears that username's
-and that IP's counts.
+Sign-in backoff (in memory, per process; #647 "lock the attacker, not the account"): after
+LOGIN_FREE_ATTEMPTS failures, each further attempt must wait 2**(extra failures) seconds after the
+last failure, else 429 `too_many_attempts` without checking the password. The source IP's key is
+the heavy one (capped at LOGIN_MAX_DELAY_SECONDS); the username's key is capped at
+LOGIN_USER_MAX_DELAY_SECONDS and only applies to an IP that itself has recent failures, so a
+correct password from a clean IP signs in even while the account is under attack from elsewhere.
+The first crossing into backoff per key and window is written to the change log
+(OP_LOGIN_THROTTLED). Failures older than LOGIN_WINDOW_SECONDS are forgotten; a success clears
+that username's and that IP's counts.
 
 Current user: a ContextVar set per request by web/auth.py. Its actor is "user:<username>"
 (core/actor.py); core/roles.role_of() reads the role through role_for_actor(). Anonymous requests
@@ -77,7 +81,10 @@ TOKEN_BYTES = 32
 
 LOGIN_FREE_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 15 * 60
-LOGIN_MAX_DELAY_SECONDS = 15 * 60
+LOGIN_MAX_DELAY_SECONDS = 15 * 60       # the heavy cap: a source IP's key (#647)
+LOGIN_USER_MAX_DELAY_SECONDS = 5        # #647: a username's key never makes anyone wait longer than this
+LOGIN_UNKNOWN_IP = "unknown"            # #647: no client address = one shared key, never a bypass
+OP_LOGIN_THROTTLED = "login_throttled"  # #647: change-log row when a key first starts backing off
 
 OP_CREATE = "user_create"
 OP_ROLE = "user_set_role"
@@ -402,13 +409,27 @@ def delete_user(user, *, actor=None):
 # --- sign-in backoff --------------------------------------------------------------------------
 
 class LoginLimiter:
-    """Per-key failure counts with exponential backoff, in memory (one web process)."""
+    """Per-key failure counts with exponential backoff.
+
+    IN MEMORY, in the one web process: the counts reset when the process restarts, and an install
+    that ran several web workers would split them (each worker keeps its own, so an attacker would
+    get the free attempts once per worker). Fine for the single uvicorn worker this app runs; a
+    multi-worker install would need a shared store (a DB table) instead.
+
+    Keys are tuples whose first item is the kind: ("ip", addr) is the heavy throttle (up to
+    LOGIN_MAX_DELAY_SECONDS), ("user", name) is capped at LOGIN_USER_MAX_DELAY_SECONDS (#647),
+    ("pair", addr, name) only marks "this address failed for this name" and never gates on its own,
+    ("setup-ip", addr) is the /setup proof's (#648, heavy cap)."""
 
     MAX_KEYS = 10000
 
     def __init__(self):
         self._lock = threading.Lock()
         self._fails = {}  # key -> (count, last_failure_time)
+
+    @staticmethod
+    def max_delay(key):
+        return LOGIN_USER_MAX_DELAY_SECONDS if key[0] == "user" else LOGIN_MAX_DELAY_SECONDS
 
     def _live(self, key, now):
         entry = self._fails.get(key)
@@ -425,19 +446,33 @@ class LoginLimiter:
             for key in keys:
                 entry = self._live(key, now)
                 if entry and entry[0] >= LOGIN_FREE_ATTEMPTS:
-                    delay = min(2 ** (entry[0] - LOGIN_FREE_ATTEMPTS + 1), LOGIN_MAX_DELAY_SECONDS)
+                    delay = min(2 ** (entry[0] - LOGIN_FREE_ATTEMPTS + 1), self.max_delay(key))
                     wait = max(wait, entry[1] + delay - now)
         return max(0.0, wait)
 
-    def failed(self, keys, now=None):
+    def has_failures(self, keys, now=None):
+        """True when any of `keys` has a failure inside the window (#647: a "dirty" address)."""
         now = time.time() if now is None else now
+        with self._lock:
+            return any(self._live(key, now) for key in keys)
+
+    def failed(self, keys, now=None):
+        """Counts one failure against each key. Returns the keys that this failure pushed INTO
+        backoff (their count just reached LOGIN_FREE_ATTEMPTS): once per key per episode, since the
+        count only climbs until the key expires or a success clears it (#647: the audit row)."""
+        now = time.time() if now is None else now
+        crossed = []
         with self._lock:
             if len(self._fails) > self.MAX_KEYS:
                 for k in [k for k, v in self._fails.items() if now - v[1] > LOGIN_WINDOW_SECONDS]:
                     self._fails.pop(k, None)
             for key in keys:
                 entry = self._live(key, now)
-                self._fails[key] = ((entry[0] if entry else 0) + 1, now)
+                count = (entry[0] if entry else 0) + 1
+                self._fails[key] = (count, now)
+                if count == LOGIN_FREE_ATTEMPTS:
+                    crossed.append(key)
+        return crossed
 
     def succeeded(self, keys):
         with self._lock:
@@ -452,14 +487,53 @@ class LoginLimiter:
 limiter = LoginLimiter()
 
 
+def _record_throttled(crossed, name, ip_label):
+    """#647: one change-log row per key that just started backing off (the limiter reports each
+    key once per episode, so an attack can't flood the log). Never the password. The attempted
+    username only when it is a real account: a name that matches nothing is often a password typed
+    into the wrong box, so it is left out (`username_known: false`). Best effort: a failed write is
+    logged and the sign-in answer is unchanged."""
+    for key in crossed:
+        if key[0] == "ip":
+            details = {"throttled": "ip", "client_ip": ip_label, "failures": LOGIN_FREE_ATTEMPTS,
+                       "max_delay_seconds": LOGIN_MAX_DELAY_SECONDS}
+        elif key[0] == "user":
+            known = bool(name) and db.get_user_credentials(name) is not None
+            details = {"throttled": "username", "username": name if known else None, "username_known": known,
+                       "client_ip": ip_label, "failures": LOGIN_FREE_ATTEMPTS,
+                       "max_delay_seconds": LOGIN_USER_MAX_DELAY_SECONDS}
+        else:
+            continue
+        details["window_seconds"] = LOGIN_WINDOW_SECONDS
+        try:
+            changes.record(OP_LOGIN_THROTTLED, None, [], details=details)
+        except Exception as e:  # noqa: BLE001 - logging an attack must never change the sign-in answer
+            besteffort.warn(log, "users: couldn't record a sign-in throttle event", e, throttled=key[0])
+
+
 def authenticate(username, password, ip=None, *, now=None):
     """The enabled user these credentials belong to. 401 `invalid_login` (the same answer for an
     unknown user, a wrong password or a disabled account); 429 `too_many_attempts` while backing
-    off (details.retry_after, seconds), without checking the password."""
+    off (details.retry_after, seconds), without checking the password.
+
+    #647, "lock the attacker, not the account", for a request from address X:
+      1. X's own key backing off (the heavy curve, up to LOGIN_MAX_DELAY_SECONDS) -> 429.
+      2. X has recent failures (its own key, or X-for-this-username) and the username's key is
+         backing off (capped at LOGIN_USER_MAX_DELAY_SECONDS) -> 429.
+      3. Otherwise the password is checked. A clean X therefore signs the real user in even while
+         the username is being hammered from elsewhere; a wrong password from a clean X still counts.
+    Every 429 is decided before the password is looked at, so no answer's content or timing says
+    whether a password was right while throttled. No address (None) is one shared "unknown" key."""
     now = time.time() if now is None else now
     name = (username or "").strip() if isinstance(username, str) else ""
-    keys = [("user", name.lower())] + ([("ip", ip)] if ip else [])
-    wait = limiter.retry_after(keys, now)
+    ip_label = ip or LOGIN_UNKNOWN_IP
+    ip_key = ("ip", ip_label)
+    user_key = ("user", name.lower())
+    pair_key = ("pair", ip_label, name.lower())  # survives X's success as another user (see below)
+    keys = [ip_key, user_key, pair_key]
+    wait = limiter.retry_after([ip_key], now)
+    if wait <= 0 and limiter.has_failures([ip_key, pair_key], now):
+        wait = limiter.retry_after([user_key], now)
     if wait > 0:
         raise AppError("too_many_attempts", f"Too many failed sign-ins. Try again in {int(wait) + 1} seconds.",
                        status=429, details={"retry_after": int(wait) + 1})
@@ -477,11 +551,13 @@ def authenticate(username, password, ip=None, *, now=None):
         ok = verify_password(password if isinstance(password, str) else "", creds["password_hash"]) \
             and not creds["disabled"]
     if not ok:
-        limiter.failed(keys, now)
+        _record_throttled(limiter.failed(keys, now), name, ip_label)
         raise AppError("invalid_login", "Wrong username or password.", status=401)
     # A success clears the IP's count too: one person's typos must not keep everyone behind that
     # address (a NAT, or a Docker bridge where every client shows as the gateway) backing off.
-    # Each account is still guarded by its own username counter.
+    # It clears only THIS username's pair key: someone who can sign in as themselves can't use that
+    # to wash their address clean and then guess another account's password without the username
+    # delay (X's failures against that account stay on its pair key).
     limiter.succeeded(keys)
     db._update_user(creds["id"], last_login_at=now)
     return db.get_user(user_id=creds["id"])

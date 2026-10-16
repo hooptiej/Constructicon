@@ -1,0 +1,16 @@
+# #687: optional NVIDIA GPU for the `ollama` sidecar in docker-compose.yml.example.
+# CPU-only works without this file (captions are just slower). Use it as an override:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile captions up -d
+# or put  COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml  in .env.
+# Needs the NVIDIA driver and the NVIDIA Container Toolkit on the host (TrueNAS has both
+# once its GPU is enabled for apps). Run one Ollama per GPU: a second instance on the same
+# card fights the first for VRAM.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

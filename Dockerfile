@@ -65,6 +65,10 @@ ENV HF_HUB_OFFLINE=1 \
 # directories must be owned by APP_UID (see docker-compose.yml.example).
 RUN mkdir -p /app/storage /app/data /app/backups /app/exports /app/import \
     && chown app:app /app/storage /app/data /app/backups /app/exports /app/import
+# #688: with the code baked in, /app itself is root-owned, so the code's own default DB location
+# (<repo>/imagerepo.db) isn't writable. Default to the app-owned data dir (#453's layout, the value
+# every compose file sets anyway), so the bare image runs as-is. Compose/env still override it.
+ENV CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
 
 # #688: the app code is baked in, so an image IS a version (prod runs one immutable, versioned
 # image; rollback = run the previous tag). Everything above changes only with the Dockerfile or

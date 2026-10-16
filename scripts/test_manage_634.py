@@ -131,9 +131,11 @@ check("check reports the local config", r.returncode == 0 and "token configured 
 check("check never prints the token", token not in r.stdout + r.stderr)
 
 # Stdlib only: import the generate path and list every module it pulled in that isn't stdlib.
-code = ("import sys\nimport core.manage.mcp_token\n"
+# Modules already loaded at startup (__main__, a site-packages .pth hook such as setuptools'
+# _distutils_hack) are not the import's doing, so only what the import ADDS is counted.
+code = ("import sys\nbefore = set(sys.modules)\nimport core.manage.mcp_token\n"
         "std = set(sys.stdlib_module_names)\n"
-        "bad = sorted(m for m in sys.modules if m.split('.')[0] not in std and m.split('.')[0] != 'core')\n"
+        "bad = sorted(m for m in set(sys.modules) - before if m.split('.')[0] not in std and m.split('.')[0] != 'core')\n"
         "core_mods = sorted(m for m in sys.modules if m.split('.')[0] == 'core')\n"
         "print('NONSTD=' + ','.join(bad))\nprint('CORE=' + ','.join(core_mods))\n")
 r = run(["-c", code])

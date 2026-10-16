@@ -32,6 +32,12 @@ sys.path.insert(0, ROOT)
 
 FAILS = []
 
+# #685: the real guard is "zero network attempts". Wall-clock time is reported for information and
+# only fails past a generous ceiling: a cached load took 120 s once while sharing the CPU under
+# run_checks.py -j 2 (with no network attempt), and about 5-12 s otherwise. The old stall (#658)
+# was retries against the Hub, which the attempts checks catch whatever the timing.
+SLOW_CEILING = 300
+
 
 def check(name, cond, extra=""):
     print(("PASS " if cond else "FAIL ") + name + (f"  [{extra}]" if (extra and not cond) else ""))
@@ -103,7 +109,8 @@ if not cached["ok"] and "not in the local Hugging Face cache" in cached.get("err
     sys.exit(0)
 check("cached model loads and embeds", cached["ok"] and cached.get("bytes") == 384 * 4, cached.get("error", ""))
 check("cached load makes no network attempt", cached["attempts"] == [], "; ".join(cached["attempts"][:5]))
-check("cached load is quick (no Hub retries)", cached["seconds"] < 60, f"{cached['seconds']:.1f}s")
+print(f"   info: cached load took {cached['seconds']:.1f}s (ceiling {SLOW_CEILING}s; timing alone is not the guard)")
+check(f"cached load finishes under {SLOW_CEILING}s", cached["seconds"] < SLOW_CEILING, f"{cached['seconds']:.1f}s")
 check("unset HF_HUB_OFFLINE is written back as 1 before the Hub is imported", cached.get("env_offline") == "1",
       repr(cached.get("env_offline")))
 
@@ -116,7 +123,8 @@ check("empty cache error names the model and the download command",
       "all-MiniLM-L6-v2" in miss.get("error", "") and "HF_HUB_OFFLINE=0" in miss.get("error", ""),
       miss.get("error", "")[:300])
 check("empty cache makes no network attempt", miss["attempts"] == [], "; ".join(miss["attempts"][:5]))
-check("empty cache fails fast", miss["seconds"] < 60, f"{miss['seconds']:.1f}s")
+print(f"   info: empty-cache refusal took {miss['seconds']:.1f}s (ceiling {SLOW_CEILING}s)")
+check(f"empty cache refuses under {SLOW_CEILING}s", miss["seconds"] < SLOW_CEILING, f"{miss['seconds']:.1f}s")
 
 # 3. The switch itself (no model load): only an explicit false value goes online.
 from core import similarity  # noqa: E402

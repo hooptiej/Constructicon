@@ -5016,14 +5016,19 @@ def get_user_password_hash(user_id):
         conn.close()
 
 
-def get_session(token_hash, now):
-    """The live session for a token hash joined with its (enabled) user, else None."""
+def get_session(token_hash, now, created_after=None):
+    """The live session for a token hash joined with its (enabled) user, else None. With
+    `created_after`, a session created at or before it is dead too (#651's absolute cap)."""
+    sql = ("SELECT s.token_hash, s.user_id, s.csrf_token, s.created_at, s.last_seen, s.expires_at, "
+           "u.username, u.display_name, u.role FROM sessions s JOIN users u ON u.id = s.user_id "
+           "WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0")
+    params = [token_hash, now]
+    if created_after is not None:
+        sql += " AND s.created_at > ?"
+        params.append(created_after)
     conn = get_conn()
     try:
-        row = conn.execute(
-            "SELECT s.token_hash, s.user_id, s.csrf_token, s.created_at, s.last_seen, s.expires_at, "
-            "u.username, u.display_name, u.role FROM sessions s JOIN users u ON u.id = s.user_id "
-            "WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0", (token_hash, now)).fetchone()
+        row = conn.execute(sql, params).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -5122,10 +5127,16 @@ def _delete_user_sessions(user_id, keep_token_hash=None):
         conn.close()
 
 
-def _purge_expired_sessions(now):
+def _purge_expired_sessions(now, created_before=None):
+    """Deletes sessions past expires_at, and (with `created_before`) those created at or before
+    it (#651's absolute cap)."""
     conn = get_conn()
     try:
-        n = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,)).rowcount
+        if created_before is None:
+            n = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,)).rowcount
+        else:
+            n = conn.execute("DELETE FROM sessions WHERE expires_at <= ? OR created_at <= ?",
+                             (now, created_before)).rowcount
         conn.commit()
         return n
     finally:

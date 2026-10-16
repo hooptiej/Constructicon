@@ -274,7 +274,9 @@ tok = client.cookies.get(users.SESSION_COOKIE)
 s = users.resolve_session(tok)
 later = s["last_seen"] + users.SESSION_TOUCH_SECONDS + 5
 s2 = users.resolve_session(tok, now=later)
-check("sliding expiry: touched after the interval", s2 and s2["refreshed"] and s2["expires_at"] == later + users.SESSION_SECONDS)
+check("sliding expiry: touched after the interval (capped at sign-in + max age, #651)",
+      s2 and s2["last_seen"] == later and s2["expires_at"] == min(
+          later + users.SESSION_SECONDS, s["created_at"] + users.SESSION_MAX_AGE_SECONDS))
 check("expired session is dead", users.resolve_session(tok, now=s2["expires_at"] + 1) is None)
 
 # --- 12. reset script -----------------------------------------------------------------------

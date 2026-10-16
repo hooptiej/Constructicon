@@ -58,7 +58,7 @@ def _client_ip(request: Request):
 def _signed_in_response(request, user, payload):
     sess = users.start_session(user)
     response = JSONResponse({"ok": True, "user": users.public(user), **payload})
-    web_auth.set_session_cookie(response, sess["token"], request)
+    web_auth.set_session_cookie(response, sess["token"], request, max_age=sess["max_age"])
     return response
 
 

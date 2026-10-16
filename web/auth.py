@@ -12,8 +12,9 @@ access -> audit -> csrf -> routes.
       - users.current_user() = that user (pages show their name; core/roles.role_of reads the role),
       - the actor "user:<username>" (core/actor.py), so change-log and request-log rows say who.
     No cookie, or a dead one: actor `anonymous` (web/middleware.py), no user.
-    When the session's expiry slid (core/users.SESSION_TOUCH_SECONDS), the cookie is re-sent with a
-    fresh Max-Age unless the response already sets it (login/logout).
+    When the session's expiry moved (slid after core/users.SESSION_TOUCH_SECONDS, or clamped by
+    the #651 cap), the cookie is re-sent with Max-Age = the session's remaining life unless the
+    response already sets it (login/logout).
 
   * AccessMiddleware (#467 step 2), right inside SessionMiddleware, before anything reads a body:
       - `Authorization: Bearer <install token>` (core/install_token.py): the request runs as actor
@@ -39,7 +40,8 @@ access -> audit -> csrf -> routes.
     every mutating request. base.html injects the token for signed-in pages (a meta tag plus
     static/js/csrf.js, which wraps fetch and XMLHttpRequest); there are no plain HTML POST forms.
 
-The cookie: HttpOnly, SameSite=Lax, Path=/, Max-Age 30 days (sliding), Secure only when the request
+The cookie: HttpOnly, SameSite=Lax, Path=/, Max-Age = the session's remaining life (30 days at
+sign-in, never past the 30-day absolute cap, #651), Secure only when the request
 is HTTPS: directly, or through a proxy listed in CONSTRUCTICON_TRUSTED_PROXIES (#646,
 web/proxy_trust.py). The home install is plain HTTP on the LAN, so its cookie has no Secure flag.
 """
@@ -105,8 +107,10 @@ def cookie_header_value(token, *, secure, max_age=users.SESSION_SECONDS):
     return "; ".join(parts)
 
 
-def set_session_cookie(response, token, request):
-    response.headers.append("set-cookie", cookie_header_value(token, secure=is_https(request)))
+def set_session_cookie(response, token, request, max_age=users.SESSION_SECONDS):
+    """`max_age`: the session's remaining life (users.start_session's `max_age`), so the cookie
+    and the server-side expiry end together (#651)."""
+    response.headers.append("set-cookie", cookie_header_value(token, secure=is_https(request), max_age=max_age))
 
 
 def clear_session_cookie(response, request):
@@ -143,7 +147,8 @@ class SessionMiddleware:
                 headers = list(message.get("headers", []))
                 prefix = f"{users.SESSION_COOKIE}=".encode("latin-1")
                 if not any(k.lower() == b"set-cookie" and v.startswith(prefix) for k, v in headers):
-                    headers.append((b"set-cookie", cookie_header_value(token, secure=is_https(scope)).encode("latin-1")))
+                    headers.append((b"set-cookie", cookie_header_value(
+                        token, secure=is_https(scope), max_age=sess["max_age"]).encode("latin-1")))
                     message = {**message, "headers": headers}
             await send(message)
 

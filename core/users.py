@@ -23,8 +23,10 @@ Users
 Sessions
   A random 32-byte token in the `constructicon_session` cookie; the table stores only its sha256,
   plus a per-session CSRF token. Sliding expiry: SESSION_DAYS from the last use (the row is touched
-  at most every SESSION_TOUCH_SECONDS). Logout deletes the row. A password change, a disable or a
-  delete ends the user's other sessions.
+  at most every SESSION_TOUCH_SECONDS), capped absolutely at SESSION_MAX_AGE_DAYS after the sign-in
+  (created_at, #651): however often it's used, a session ends then and the user signs in again
+  (a fresh window). The cookie's Max-Age follows the server-side expiry. Logout deletes the row. A
+  password change, a disable or a delete ends the user's other sessions.
 
 Sign-in backoff (in memory, per process): after LOGIN_FREE_ATTEMPTS failures for an IP or a
 username, each further attempt must wait 2**(extra failures) seconds (capped at
@@ -70,9 +72,13 @@ SALT_BYTES = 16
 _MAX_N = 2 ** 20  # refuse to verify a stored hash asking for absurd memory
 
 SESSION_COOKIE = "constructicon_session"
-SESSION_DAYS = 30
+SESSION_DAYS = 30  # sliding: a session unused this long ends
 SESSION_SECONDS = SESSION_DAYS * 24 * 3600
 SESSION_TOUCH_SECONDS = 600
+# #651: the absolute cap. A session ends this long after its sign-in (sessions.created_at), however
+# often it's used. The owner's call: 30 days, to revisit with passkeys / public exposure (#641, #664).
+SESSION_MAX_AGE_DAYS = 30
+SESSION_MAX_AGE_SECONDS = SESSION_MAX_AGE_DAYS * 24 * 3600
 TOKEN_BYTES = 32
 
 LOGIN_FREE_ATTEMPTS = 5
@@ -493,32 +499,53 @@ def _token_hash(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _session_expiry(created_at, now):
+    """Where a session's expiry lands when set or slid at `now`: SESSION_SECONDS from now, never
+    past created_at + SESSION_MAX_AGE_SECONDS (#651)."""
+    return min(now + SESSION_SECONDS, created_at + SESSION_MAX_AGE_SECONDS)
+
+
+def _cookie_max_age(expires_at, now):
+    """The cookie's Max-Age for a server-side expiry, so the browser drops it when the row dies."""
+    return max(0, int(expires_at - now))
+
+
 def start_session(user, *, now=None):
-    """A new session for `user` (a dict with id). Returns {token, csrf_token, expires_at}: the
-    token goes in the cookie and is never stored or logged."""
+    """A new session for `user` (a dict with id). Returns {token, csrf_token, expires_at, max_age}:
+    the token goes in the cookie (with that Max-Age) and is never stored or logged. Every sign-in
+    starts a fresh SESSION_MAX_AGE_DAYS window."""
     now = time.time() if now is None else now
     token = secrets.token_urlsafe(TOKEN_BYTES)
     csrf = secrets.token_urlsafe(TOKEN_BYTES)
-    db._purge_expired_sessions(now)
-    db._insert_session(_token_hash(token), user["id"], csrf, now, now + SESSION_SECONDS)
-    return {"token": token, "csrf_token": csrf, "expires_at": now + SESSION_SECONDS}
+    db._purge_expired_sessions(now, created_before=now - SESSION_MAX_AGE_SECONDS)
+    expires_at = _session_expiry(now, now)
+    db._insert_session(_token_hash(token), user["id"], csrf, now, expires_at)
+    return {"token": token, "csrf_token": csrf, "expires_at": expires_at,
+            "max_age": _cookie_max_age(expires_at, now)}
 
 
 def resolve_session(token, *, now=None):
     """The live session for a cookie token (with its user's username/display_name/role), or None.
-    Slides the expiry when the session was last touched over SESSION_TOUCH_SECONDS ago; the result
-    then carries refreshed=True (the cookie should be re-sent)."""
+    Dead = past expires_at OR past created_at + SESSION_MAX_AGE_SECONDS (#651; the second also
+    covers rows written before the cap existed, whose expires_at may reach past it). Both are
+    refused the same way and purged at the next sign-in.
+    Slides the expiry (capped by _session_expiry) when the session was last touched over
+    SESSION_TOUCH_SECONDS ago; when that changes expires_at the result carries refreshed=True and
+    max_age (the cookie should be re-sent with it)."""
     if not token or not isinstance(token, str) or len(token) > 200:
         return None
     now = time.time() if now is None else now
     th = _token_hash(token)
-    sess = db.get_session(th, now)
+    sess = db.get_session(th, now, created_after=now - SESSION_MAX_AGE_SECONDS)
     if not sess:
         return None
     sess["refreshed"] = False
     if now - sess["last_seen"] > SESSION_TOUCH_SECONDS:
-        db._touch_session(th, now, now + SESSION_SECONDS)
-        sess["last_seen"], sess["expires_at"], sess["refreshed"] = now, now + SESSION_SECONDS, True
+        expires_at = _session_expiry(sess["created_at"], now)
+        db._touch_session(th, now, expires_at)
+        sess["refreshed"] = expires_at != sess["expires_at"]
+        sess["last_seen"], sess["expires_at"] = now, expires_at
+    sess["max_age"] = _cookie_max_age(sess["expires_at"], now)
     return sess
 
 

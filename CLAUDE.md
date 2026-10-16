@@ -441,7 +441,13 @@ added accounts and attribution; step 2 enforces them (next section, "Auth enforc
   (`undo_refused`). The inverse op is the undo (enable, set the role back, reset the password).
 - `sessions(token_hash PK, user_id, csrf_token, created_at, last_seen, expires_at)`: the cookie holds
   a random 32-byte token; only its sha256 is stored. Sliding expiry 30 days (`SESSION_DAYS`), the
-  row touched at most every 10 minutes (and the cookie re-sent then). Logout deletes the row.
+  row touched at most every 10 minutes (and the cookie re-sent then when the expiry moved), **capped
+  absolutely at 30 days after sign-in** (`SESSION_MAX_AGE_DAYS`, from `created_at`; #651, owner
+  decision 2026-10-15, to revisit with passkeys / public exposure, #641 / #664): however often it's
+  used, a session dies then and the user signs in again for a fresh window. Past the cap is refused
+  exactly like past `expires_at` (anonymous: the 302 to `/login` or the 401) and purged at the next
+  sign-in; the check reads `created_at` itself, so rows from before the cap (whose `expires_at` may
+  reach past it) obey it too. Logout deletes the row. Check with `scripts/test_session_cap_651.py`.
 - Sign-in backoff (`users.limiter`, in memory, web process): after 5 failures per username or per IP,
   each attempt must wait 2^(extra failures) s (max 15 min) after the last failure, else 429
   `too_many_attempts` (`details.retry_after`) without checking the password; a success clears that
@@ -462,7 +468,7 @@ routes. A request with the
 `constructicon_session` cookie that resolves to a live session runs as actor `user:<username>`
 with `users.current_user()` set (pages' `current_user()` Jinja global; `roles.role_of` reads it).
 No cookie, or a dead one = `anonymous`. The cookie: HttpOnly, SameSite=Lax, Path=/,
-Max-Age 30 days, `Secure` only when the request is HTTPS (`proxy_trust.is_https`: directly, or via a
+Max-Age = the session's remaining life (30 days at sign-in, never past the #651 cap), `Secure` only when the request is HTTPS (`proxy_trust.is_https`: directly, or via a
 trusted proxy, #646; never on the plain-HTTP home install). Change-log rows AND
 request-log rows record `user:<name>`; request-log rows also record `client_ip` (#646).
 
@@ -1732,7 +1738,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
     `test_replace_file_617`, `test_card_faces`, `test_install_config`, `check_layering`;
-  - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_role_policy`,
+  - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,
     `check_policy_doors`, `test_manage_634` (the `core/manage/` tools, their actor, the stubs);

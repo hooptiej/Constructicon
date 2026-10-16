@@ -2,7 +2,7 @@
 
 The service module for the `users` and `sessions` tables (schema in core/db.py). Every write goes
 through here (scripts/check_layering.py); the web layer (web/auth.py, web/routes/auth.py) and the
-reset script (scripts/reset_password.py) are thin adapters.
+reset tool (core/manage/reset_password.py) are thin adapters.
 
 Users
   id, username (unique, case-insensitive, kept as typed), display_name, role (viewer | editor |
@@ -289,7 +289,7 @@ SETUP_PROOF_FIELD = "install_token"
 
 def setup_proof_available():
     """True when this install has an install token, so /setup can be claimed with it. False on an
-    install with none configured: the first admin then comes from scripts/reset_password.py
+    install with none configured: the first admin then comes from core/manage/reset_password.py
     --create-admin on the server."""
     from . import install_token
     return install_token.enabled()
@@ -311,7 +311,7 @@ def require_setup_proof(presented, ip=None, *, now=None):
         return
     if not install_token.enabled():
         raise AppError("setup_unavailable", "This install has no install token, so the admin account can't be "
-                       "created from the browser. On the server, run: python3 scripts/reset_password.py "
+                       "created from the browser. On the server, run: python3 -m core.manage.reset_password "
                        "--create-admin <username> --generate", status=403)
     now = time.time() if now is None else now
     keys = [("setup-ip", ip or "?")]

@@ -8,7 +8,8 @@ at a call site:
              overrides it with "user:<name>" (a live session) or ACTOR_TOKEN (the install token).
   * MCP   -> mcp_server/server.py's tool registration wraps every tool in acting_as(ACTOR_MCP).
   * Boot, the OCR watchdog, the caption queue worker and other background work -> ACTOR_SYSTEM.
-  * A script run from scripts/ -> ACTOR_SCRIPT by default (see _process_default).
+  * A script run from scripts/, or a tool run as `python3 -m core.manage.<tool>` (#634)
+             -> ACTOR_SCRIPT by default (see _process_default).
 
 Core operations keep an `actor=` keyword for an explicit override, defaulting to None, which
 means "whoever the context says" (resolved by `resolve()` at the point the row is written).
@@ -35,7 +36,7 @@ ACTOR_ANONYMOUS = "anonymous"  # #467 step 2: a web request with no live session
 ACTOR_TOKEN = "token"        # #467 step 2: a web request carrying the install token (scripts)
 ACTOR_MCP = "mcp"
 ACTOR_SYSTEM = "system"      # boot, migrations' surrounding work, OCR/caption workers
-ACTOR_SCRIPT = "script"      # a CLI script under scripts/ calling core directly
+ACTOR_SCRIPT = "script"      # a CLI script under scripts/ or core/manage/ calling core directly
 ACTOR_MIGRATION = "migration"  # card_migration's change-log rows (not undoable)
 
 _current = contextvars.ContextVar("constructicon_actor", default=None)
@@ -48,14 +49,20 @@ _REPO_DIR = os.path.dirname(_CORE_DIR)
 _SKIP_FILES = (contextlib.__file__, threading.__file__)
 
 
+# Where a process counts as a script: scripts/ (tests, checks, maintenance tools) and core/manage/
+# (the operational tools moved into the app by #634, run as `python3 -m core.manage.<tool>`; with -m,
+# sys.argv[0] is the module's file path, so the same check covers both).
+_SCRIPT_DIRS = (os.path.join(_REPO_DIR, "scripts"), os.path.join(_CORE_DIR, "manage"))
+
+
 def _process_default():
-    """ACTOR_SCRIPT when this process was started as a script from scripts/, else None."""
+    """ACTOR_SCRIPT when this process was started as a script from scripts/ or core/manage/, else None."""
     try:
         main = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
     except Exception as e:
         besteffort.warn(_log, "actor: reading sys.argv[0]", e)
         return None
-    if main and os.path.dirname(main) == os.path.join(_REPO_DIR, "scripts"):
+    if main and os.path.dirname(main) in _SCRIPT_DIRS:
         return ACTOR_SCRIPT
     return None
 

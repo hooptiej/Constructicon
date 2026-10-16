@@ -15,8 +15,8 @@ Where the token comes from (first hit wins; never printed):
   CONSTRUCTICON_TOKEN          the token itself
   CONSTRUCTICON_TOKEN_FILE     a file holding it (e.g. a copy of the install's secret file)
   then the install's own variables (core/install_token.py: CONSTRUCTICON_INSTALL_TOKEN(_FILE),
-  CONSTRUCTICON_MCP_TOKEN(_FILE)), so a script run inside the web container
-  (`docker exec <web container> python3 scripts/x.py`) just works.
+  CONSTRUCTICON_MCP_TOKEN(_FILE)), so a script run beside the web container
+  (`./scripts/run_tool.sh <web container> scripts/x.py`, #634) just works.
 
 No token found: `install` warns once on stderr and requests go out anonymous (expect 401).
 """

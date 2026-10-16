@@ -16,7 +16,7 @@ Proves, on a fresh install (no users):
     users.create_first_admin on one DB file at the same moment;
   * the escape hatches: /admin with the install token still shows "Create the admin account",
     the token can create the admin over the API (POST /api/users, or setup with a Bearer header),
-    and scripts/reset_password.py --create-admin works with no proof at all;
+    and `python3 -m core.manage.reset_password --create-admin` works with no proof at all;
   * an install with no token configured: /setup explains the reset script, POST is 403
     setup_unavailable;
   * the audit log never holds the install token, a wrong token or a password.
@@ -47,7 +47,7 @@ from starlette.testclient import TestClient  # noqa: E402
 from core import db, install_config, install_token, users  # noqa: E402
 _testenv.assert_isolated()
 from web import app as webapp  # noqa: E402
-import reset_password  # noqa: E402
+from core.manage import reset_password  # noqa: E402  (#634: moved from scripts/)
 
 FAILS = []
 HOST = "testhost.local"
@@ -267,7 +267,7 @@ fresh_db("hatch_script.db")
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
     rc = reset_password.main(["--create-admin", "rescue_admin", "--generate"])
-check("reset_password.py --create-admin works on a fresh install (no proof: shell access is the proof)",
+check("core.manage.reset_password --create-admin works on a fresh install (no proof: shell access is the proof)",
       rc == 0 and db.count_users() == 1 and db.get_user(username="rescue_admin")["role"] == "admin")
 check("...and /setup is 404 after it", anon().get("/setup").status_code == 404)
 
@@ -279,8 +279,9 @@ install_token.reset_cache()
 try:
     check("no token configured", not install_token.enabled())
     r = anon().get("/setup")
-    check("/setup explains reset_password.py --create-admin and shows no form",
+    check("/setup explains core.manage.reset_password --create-admin and shows no form",
           r.status_code == 200 and "setup-unavailable" in r.text and "--create-admin" in r.text
+          and "python3 -m core.manage.reset_password" in r.text and "scripts/reset_password" not in r.text
           and 'id="setup-form"' not in r.text, r.status_code)
     r = setup(anon(), proof=WRONG)
     check("POST setup -> 403 setup_unavailable", r.status_code == 403 and code(r) == "setup_unavailable", r.text[:200])

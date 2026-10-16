@@ -2545,13 +2545,13 @@ if __name__ == "__main__":
         # healthy). See CLAUDE.md "Auth enforcement" for the rollout.
         sys.exit("constructicon-mcp: refusing to start: no install token configured and roles are enforced. "
                  "Set CONSTRUCTICON_INSTALL_TOKEN_FILE (or CONSTRUCTICON_MCP_TOKEN_FILE) to a token file "
-                 "made with: python scripts/mcp_token.py generate <file>")
+                 "made with: python3 -m core.manage.mcp_token generate <file>")
     else:
         logging.basicConfig(level=logging.WARNING)
         logging.getLogger("constructicon-mcp").warning(
             "MCP is running WITHOUT a token: anyone who can reach port 8100 can read, change and "
             "delete the archive. Set CONSTRUCTICON_MCP_TOKEN or CONSTRUCTICON_MCP_TOKEN_FILE "
-            "(see scripts/mcp_token.py)."
+            "(see core/manage/mcp_token.py)."
         )
         print("constructicon-mcp: WARNING: MCP is running WITHOUT a token (open access)", flush=True)
     _app = mcp_auth.wrap(

@@ -16,6 +16,14 @@ services:
   # Anything that reads these directories as another user (a guest SMB share) loses access.
   # The web container NEVER mounts /var/run/docker.sock: Ollama's caption safety-valve
   # restart goes through the ollama-restarter sidecar below.
+  #
+  # #634: no service mounts ./scripts. The always-on containers hold app code only (core, web,
+  # mcp_server, assets). The two operational tools live in core/manage/ and run in place:
+  #   sudo docker exec -it constructicon-web python3 -m core.manage.reset_password <username>
+  #   sudo docker exec constructicon-web python3 -m core.manage.mcp_token check --web-url http://localhost:8000
+  # A maintenance script from scripts/ runs from the host in a one-off twin of the web container
+  # that mounts ./scripts read-only for that run only (see CLAUDE.md "Scripts: what runs where"):
+  #   ./scripts/run_tool.sh constructicon-web scripts/<tool>.py ...
   constructicon-web:
     build: .
     container_name: constructicon-web
@@ -32,7 +40,7 @@ services:
       - ./storage:/app/storage
       - ./db:/app/data
       # #467 step 2: the install token, ONE file shared with the MCP service below. Create it with
-      #   python3 scripts/mcp_token.py generate ./secrets/constructicon_token   (mode 600)
+      #   python3 -m core.manage.mcp_token generate ./secrets/constructicon_token   (mode 600)
       # #648: it is also what claims a fresh install: /setup asks for it before it creates the
       #   first admin, so create it BEFORE the first `up` (and before the site is reachable).
       - ./secrets/constructicon_token:/run/secrets/constructicon_token:ro
@@ -82,7 +90,7 @@ services:
   # per RESTARTER_MIN_INTERVAL_SECONDS, for a caller that presents the shared secret.
   # No published port; its only network is `internal`, shared with the web service.
   # Create the secret once:
-  #   python3 scripts/mcp_token.py generate ./secrets/ollama_restart_token   (mode 600)
+  #   python3 -m core.manage.mcp_token generate ./secrets/ollama_restart_token   (mode 600)
   # It runs as UID 1000 (so it can read that file) plus the group that owns the socket:
   # set group_add to `stat -c %g /var/run/docker.sock` on your host (999 on the NAS).
   ollama-restarter:

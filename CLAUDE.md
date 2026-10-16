@@ -216,9 +216,13 @@ the date and commit forward when you re-verify.
 - **`scripts/`** — four kinds of file; the folder says which is which (#552):
   - *Tests and checks* (`test_*.py`, `test_*.js`, `check_*.py`): run them with `scripts/run_checks.py`,
     see "Build / test / run".
-  - *Live tools* (not retired): `run_checks.py`, `deploy.sh`, `release.py`, `mcp_token.py`, `reset_password.py`,
+  - *Live tools* (not retired): `run_checks.py`, `deploy.sh`, `release.py`, `run_tool.sh`,
     `golden_master.py`, `seed_test_from_production.py`, `full_youtube_channel_sync.py`,
     `backfill_content_dates.py`, `regenerate_thumbnails.py`, and the helpers `_http.py` and `_testenv.py`.
+    **None of `scripts/` is mounted into the app containers (#634)**: where each kind runs is
+    "Scripts: what runs where" below. `reset_password.py` and `mcp_token.py` moved into the app as
+    `core/manage/` (`python3 -m core.manage.<tool>`); the files left at the old paths are stubs that
+    print the new command and exit non-zero.
     The ones that talk to a running instance do it over HTTP (`--base-url`), the same discipline the
     app's own UI would use, rather than writing to the DB directly; see each docstring for the reasoning
     and any exceptions. Since #467 step 2 each calls `_http.install(<base url>)` (`scripts/_http.py`) so
@@ -234,6 +238,14 @@ the date and commit forward when you re-verify.
   - `scripts/data/`: input files for scripts (the V2 curation suggestions JSON).
   - Outside `scripts/`: `sync_clients.py` at the repo root seeds the vestigial `clients` tables (see
     "Data model"); it stays until the owner decides whether those tables go.
+- **`core/manage/`** (#634) — the operational command-line tools that ship with the app, because
+  `core/` is mounted in every install and `scripts/` is not: `reset_password` (see "Users and
+  sessions") and `mcp_token` (see "Auth enforcement"). Run from the repo root or `/app`:
+  `python3 -m core.manage.<tool> ...`. Both run as actor `script` (`core/actor.py` treats a process
+  started from `core/manage/` like one started from `scripts/`). `mcp_token generate` must keep
+  running on a bare checkout with no app dependencies (stdlib + `core/install_token.py` only;
+  `core/__init__.py` and `core/manage/__init__.py` import nothing). Check with
+  `scripts/test_manage_634.py`.
 - **The details panel (#515)** — the project and item pages edit through one
   grouped panel: `templates/_details_group.html` (the `dp_group` macro: a
   fact-sheet view plus a per-group edit form), `static/js/details.js` (edit /
@@ -241,6 +253,40 @@ the date and commit forward when you re-verify.
   `static/css/details.css`. A group's Save calls the same `/api/...` endpoints
   the old scattered controls called; new fields go into a group, not back onto
   the page loose. Live pages only: nothing here touches the static export.
+
+## Scripts: what runs where (#634)
+
+The app containers mount app code only (`core/`, `web/`, `mcp_server/`, `assets/`), never `scripts/`
+(owner decision 2026-10-15, option (c) on #634), so `docker exec <web> python3 scripts/x.py` does not
+work on an install. What is in `scripts/` sorts into three kinds, and each runs somewhere else:
+
+- **Tests and checks** (`test_*.py`, `test_*.js`, `check_*.py`, run by `run_checks.py`): unchanged.
+  They run in a throwaway container with the checkout mounted read-only and no network (see "Tests and
+  checks"), never inside a live install. The few that need a live instance (`check_curator_queue.py`,
+  `test_office.py`) and the "run it against constructicon-test's own image" checks
+  (`check_object_types.py`, `check_routes_roles.py`) use the `run_tool.sh` form below.
+- **Deploy and release** (`deploy.sh`, `release.py`, `run_checks.py` itself): unchanged. They run on
+  the host (the box's checkout, or the dev machine for `release.py`), not in a container.
+- **Maintenance and install-cleanup tools**, which need the instance's DB, storage or token:
+  `backfill_content_dates.py`, `regenerate_thumbnails.py`, `full_youtube_channel_sync.py`,
+  `seed_test_from_production.py` (its docstring has its own throwaway-container recipe; it talks
+  HTTP to the target), `golden_master.py`. Run them from the host, in the install's checkout:
+  ```
+  ./scripts/run_tool.sh <web container> scripts/<tool>.py [args...]
+  # e.g. ./scripts/run_tool.sh constructicon-test scripts/backfill_content_dates.py --base-url http://localhost:80 --dry-run
+  ```
+  `run_tool.sh` starts a one-off `docker run --rm` twin of the running web container: the same image,
+  environment and mounts (`--volumes-from`: DB dir, storage, secrets, `core/`, `web/`), its network
+  namespace (`--network container:<web>`, so `http://localhost:<port>` is the running app, as it was
+  from `docker exec`), the image's own user (uid 1000), plus `./scripts` mounted read-only for that run
+  only. `RUN_TOOL_TTY=1` adds `-it` for a script that prompts. **Not** `sudo docker compose run --rm
+  -v ./scripts:/app/scripts:ro web ...`: on the NAS that fails with "Address already in use", because
+  the web and MCP services have a fixed `ipv4_address` on `questlog-lan` that a second container can't
+  take (checked 2026-10-15 on constructicon-test). Test a writing tool against constructicon-test before
+  production, as always.
+- **The two operational tools are not in `scripts/` any more:** `python3 -m core.manage.reset_password`
+  and `python3 -m core.manage.mcp_token` (see `core/manage/` above) run in place with `docker exec`, or
+  (`mcp_token generate`) on the host from the checkout before any container exists.
 
 ## Actor and errors (#560, #548; phase A of the service layer #541)
 
@@ -253,7 +299,8 @@ point, never a string literal at a call site.
   in-process tests still carry it, no request does.
 - MCP: every tool runs inside `acting_as("mcp")` (the `@mcp.tool()` wrapper, below).
 - Boot, the OCR watchdog and the caption queue worker run as `system`. A script
-  started from `scripts/` defaults to `script`.
+  started from `scripts/`, or a tool started as `python3 -m core.manage.<tool>` (#634), defaults to
+  `script` (`actor._process_default` reads `sys.argv[0]`; with `-m` it is the module's file).
 - Read it with `actor.current_actor()`; run a block as someone with
   `with actor.acting_as(actor.ACTOR_UI):`. Constants (`ACTOR_UI`, `ACTOR_MCP`,
   `ACTOR_SYSTEM`, `ACTOR_SCRIPT`, `ACTOR_MIGRATION`) live there; `changes.ACTOR_*`
@@ -471,17 +518,19 @@ fill is logged as actor `anonymous`: nobody is signed in yet). `/setup` is 404 o
   setups, even from the web and MCP processes, can't both win: the loser gets the 404.
 - **Escape hatches, unchanged and needing no setup proof:** the install token over the API (`POST
   /api/users` with role admin, Admin > Users, or setup with the Bearer header) and
-  `scripts/reset_password.py --create-admin` on the server (shell access is the proof).
+  `python3 -m core.manage.reset_password --create-admin` on the server (shell access is the proof).
 - Check with `scripts/test_setup_race_648.py` (throwaway DBs: refusals, the backoff, five HTTP setups
   and six OS processes at once, the hatches, a no-token install, nothing secret in the audit log).
 
-**Reset script (on the box).** `sudo docker exec -it <web container> python3 scripts/reset_password.py
-<username>` (prompts twice), `... <username> --generate` (prints a generated password once, no -it
+**Reset tool (on the box).** `sudo docker exec -it <web container> python3 -m core.manage.reset_password
+<username>` (prompts twice; `core/manage/reset_password.py`, #634, was `scripts/reset_password.py`, which
+is now a stub that prints this command), `... <username> --generate` (prints a generated password once, no -it
 needed), `--enable` (re-enable), `--create-admin <username> [--display-name N]` (creates an admin, or
 makes an existing user an enabled admin with a new password: recovery for an install with no usable
 admin), `--list`. Runs as actor `script`; never prints a hash.
 
-Check with `scripts/test_auth_step1.py` (throwaway DB).
+Check with `scripts/test_auth_step1.py` (throwaway DB) and `scripts/test_manage_634.py` (the module
+path in a real child process, its change-log actor, the stubs).
 
 ## Auth enforcement (#467 step 2: login everywhere, roles, the restricted lock, the install token)
 
@@ -702,8 +751,8 @@ proxy and no setting, which is exactly the behaviour from before #646.
   `check_curator_queue.py`, the backfill / sync / import scripts): one line,
   `_http.install(args.base_url)` (`scripts/_http.py`), adds the header to requests for that origin
   only (never to YouTube/GitHub, never across a redirect). Token from `CONSTRUCTICON_TOKEN`,
-  `CONSTRUCTICON_TOKEN_FILE`, else the install's own variables, so `docker exec <web container>
-  python3 scripts/x.py` just works. `golden_master.py --anonymous` snapshots what a stranger sees.
+  `CONSTRUCTICON_TOKEN_FILE`, else the install's own variables, so `./scripts/run_tool.sh <web
+  container> scripts/x.py` (from the host, see "Scripts: what runs where") just works. `golden_master.py --anonymous` snapshots what a stranger sees.
 - **In-process tests** (`scripts/test_*.py`): `_testenv.isolate()` configures a fresh random token
   per run (dropping the container's token variables); `_testenv.client(app)` is a TestClient that
   sends it (admin, actor `token`); a bare `TestClient` is anonymous. `_testenv.use_token()` for a
@@ -713,16 +762,17 @@ proxy and no setting, which is exactly the behaviour from before #646.
 1. Deploy the code (`./scripts/deploy.sh`). Until step 3, the MCP container keeps running its old
    process; a restart without a token makes it refuse to start.
 2. On the box, in the checkout: `mkdir -p secrets && chmod 700 secrets && python3
-   scripts/mcp_token.py generate secrets/constructicon_token` (prints only the path, mode 600).
+   -m core.manage.mcp_token generate secrets/constructicon_token` (prints only the path, mode 600;
+   stdlib only, so it runs on the host before any container or dependency exists).
 3. Compose, BOTH services: add the volume `./secrets/constructicon_token:/run/secrets/constructicon_token:ro`
    and the env `CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token`; `sudo docker
    compose up -d` (recreates both; a plain restart doesn't pick up compose changes).
-4. Check: `sudo docker exec <web> python3 scripts/mcp_token.py check --web-url http://localhost:<port>`
+4. Check: `sudo docker exec <web> python3 -m core.manage.mcp_token check --web-url http://localhost:<port>`
    (expects 401 without, 200 with the token) and the MCP log line "bearer token auth ENABLED".
 5. First admin: open the site, it redirects to `/setup`, which asks for the install token (#648):
    paste the contents of `secrets/constructicon_token` (read it on the box, e.g. `cat
    secrets/constructicon_token`; don't send it through chat or email), then your name, username and
-   password. Or skip the browser: `docker exec <web> python3 scripts/reset_password.py --create-admin
+   password. Or skip the browser: `docker exec <web> python3 -m core.manage.reset_password --create-admin
    <name> --generate`. Until step 3 the web app has no token, so `/setup` refuses everyone (it shows
    that command instead): a fresh install can't be claimed by whoever finds it first.
 6. Clients: every MCP client's config gets the `headers` block; scripts
@@ -731,9 +781,9 @@ proxy and no setting, which is exactly the behaviour from before #646.
 (Claude Code shows the server as failed); an HTTP script gets 401 (or a 302 to `/login` on a page); a hotlink to a restricted or
 redacted item 404s; an open browser tab is sent to `/login`.
 
-**Rotate:** `python3 scripts/mcp_token.py generate secrets/constructicon_token --force`, restart BOTH
+**Rotate:** `python3 -m core.manage.mcp_token generate secrets/constructicon_token --force`, restart BOTH
 containers (`sudo docker restart <web> <mcp>`), update every client. **Lost admin password:**
-`sudo docker exec -it <web> python3 scripts/reset_password.py <user>` (or `--create-admin`), see above.
+`sudo docker exec -it <web> python3 -m core.manage.reset_password <user>` (or `--create-admin`), see above.
 
 Check with `scripts/test_auth_step2.py` (throwaway DB: the whole matrix per role and for the token,
 mounts, `next`, the decision queue, the MCP refusing to start, no secrets
@@ -1177,7 +1227,7 @@ To add a new object type (issue #448 contract v2):
 
 4. **Preview guidance**: previews must escape all data (no raw HTML from untrusted sources; build with `_preview.py` helpers or `markupsafe.escape`) and handle `ctx.mode`: `"live"` (object page) and `"export"` (static site; most types render export markup via the helpers, some deliberately return the download link or `None` to keep the export as it was). A preview that needs its own file reads `ctx.file_path`; never guess at item-dict keys. **Anything expensive goes in `embedded_metadata_fn` (computed once at upload, stored in `type_metadata`), never in `preview_fn`/`properties_fn`, which run on every page view.** Measured lesson: per-view STL mesh parsing took 7.9 s on a real 22 MB file.
 
-5. **Verify BEFORE deploying**: run `docker exec <container> python3 scripts/check_object_types.py` in `constructicon-test` first. It renders every type live + export against hostile synthetic data, flags unescaped output, and exits 1 on any failure. Registration enforcement means **an incomplete type file stops the app from booting at all** (verified: restart loop with `ObjectTypeContractError`), so a bad type deployed to prod = the site is down. Then snapshot real object pages + the static export before/after the change and diff them.
+5. **Verify BEFORE deploying**: run `./scripts/run_tool.sh constructicon-test scripts/check_object_types.py` (from the host, in the test checkout; #634, see "Scripts: what runs where") first; it is also in `run_checks.py`. It renders every type live + export against hostile synthetic data, flags unescaped output, and exits 1 on any failure. Registration enforcement means **an incomplete type file stops the app from booting at all** (verified: restart loop with `ObjectTypeContractError`), so a bad type deployed to prod = the site is down. Then snapshot real object pages + the static export before/after the change and diff them.
 
    A type whose `sniff_fn` can refuse a supported extension should set `content_noun` (a string, or
    `{ext: noun}`), so the refusal reads "This .msi file isn't a valid Windows Installer package"
@@ -1505,7 +1555,7 @@ runs that app via uvicorn itself, same host/port).
 - **Where the token lives:** it is the install token, shared with the web app (`core/install_token.py`,
   see "Auth enforcement"): `CONSTRUCTICON_INSTALL_TOKEN_FILE` (preferred; the older
   `CONSTRUCTICON_MCP_TOKEN(_FILE)` still work), one file mounted read-only into both containers.
-  Create it with `python scripts/mcp_token.py generate <file>` (mode 600, prints only the path,
+  Create it with `python3 -m core.manage.mcp_token generate <file>` (mode 600, prints only the path,
   never the token); `... check [--url http://host:8100/mcp] [--web-url http://host:port]` reports
   whether a token is configured and probes both servers. Never put the token in git or in chat.
 - **Behaviour:** token set -> every request needs `Authorization: Bearer <token>`
@@ -1515,7 +1565,7 @@ runs that app via uvicorn itself, same host/port).
   32 chars, or an unreadable/empty file -> refuses to start.
 - **Client config** (Claude Code `.mcp.json` / `~/.claude.json`):
   `{"type":"http","url":"http://<host>:8100/mcp","headers":{"Authorization":"Bearer <token>"}}`
-- **Rotate:** `python scripts/mcp_token.py generate <file> --force`, restart BOTH containers (web
+- **Rotate:** `python3 -m core.manage.mcp_token generate <file> --force`, restart BOTH containers (web
   and MCP), update every client's `headers`. Old token stops working at the restart.
 - **Identity:** one install token = one identity: role **admin** (owner decision 2026-10-07), actor
   `mcp`, so the agent sees restricted items (the policy's admin role). Per-user MCP tokens are a
@@ -1635,8 +1685,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
 - **What it skips, with the reason printed:** the two **live-server** scripts, which talk to a running
   instance and write to it: `test_office.py` (give `--live-url http://host:port` to run it, against
   `constructicon-test`, never production) and `check_curator_queue.py` (it uses localhost:80, so run it
-  inside the test instance: `docker exec constructicon-test python3 scripts/check_curator_queue.py`;
-  the runner always skips it). It also skips the
+  beside the test instance: `./scripts/run_tool.sh constructicon-test scripts/check_curator_queue.py`
+  from the host; the runner always skips it). It also skips the
   **JS** tests (`test_*.js`, plus `check_item_cards.py`, which drives node) when `node` is not on PATH,
   which is the case in the app image. Run those in a Node container:
   `docker run --rm --network none -v "$PWD":/app:ro -w /app node:22-alpine sh -c 'for f in scripts/test_*.js; do echo "== $f"; node "$f"; done'`
@@ -1685,7 +1735,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_role_policy`,
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,
-    `check_policy_doors`;
+    `check_policy_doors`, `test_manage_634` (the `core/manage/` tools, their actor, the stubs);
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,
     `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
     `test_restart_sidecar_643`;
@@ -1739,10 +1789,13 @@ checkout** — this is *not* deployed via TrueNAS's "Apps"/catalog system.
 There is no `docker-compose.yml` committed to this repo; the compose file
 lives only on the TrueNAS box itself (outside this checkout), which is why
 you won't find one here. `docker-compose.yml.example` is the committed template
-(web, mcp, and the test pair); note it bind-mounts `core/`, `web/`, `mcp_server/`
-and `assets/` but **not `scripts/`**, and the image (the Dockerfile `COPY`s nothing)
-holds no repo code at all, so an install that runs `docker exec <web> python3
-scripts/...` has to mount `./scripts` in its own compose.
+(web, mcp, and the test pair); it bind-mounts `core/`, `web/`, `mcp_server/`
+and `assets/` and **deliberately not `scripts/`** (#634), and the image (the Dockerfile `COPY`s nothing)
+holds no repo code at all. The operational tools run in place (`python3 -m core.manage.<tool>`); a
+maintenance script runs with `./scripts/run_tool.sh` (see "Scripts: what runs where"). The home prod
+and test compose files on the NAS mounted `./scripts:/app/scripts` before #634; removing that line is
+the owner's deploy step once #634 is deployed (then `sudo docker compose up -d`, since a restart doesn't
+apply a compose change).
 
 **`git pull`/`git fetch` work again on both checkouts** (#71, fixed
 2026-09-06). Each checkout's `origin` remote points at

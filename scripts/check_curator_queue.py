@@ -2,7 +2,11 @@
 """Checks for the cheap Curator badge and lazy queue (#524). Run INSIDE the app container, against
 the app on localhost:80, on a COPY of real data (constructicon-test), never production:
 
-    docker exec constructicon-test python3 scripts/check_curator_queue.py [--before /path/queue-before.json]
+    ./scripts/run_tool.sh constructicon-test scripts/check_curator_queue.py [--before /path/queue-before.json]
+
+(run_tool.sh, from the host in the test checkout, starts a one-off twin of the container with the same
+DB, mounts and network, so localhost:80 is the running app; #634: scripts/ isn't mounted in the app
+containers any more.)
 
 It asserts (exit 1 on any failure):
   * the badge's count (?summary=1) equals the open, non-deferred items of the full queue, and

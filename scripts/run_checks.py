@@ -29,8 +29,8 @@ What is skipped, and why (each skip prints its reason; none counts as a pass):
   * LIVE-SERVER scripts need a running instance and write to it. test_office.py (it says "LIVE-SERVER
     TEST" and takes `--base-url`) is skipped unless you pass `--live-url http://host:port`; point that at
     constructicon-test, NEVER production. check_curator_queue.py talks to localhost:80, so it must run
-    inside the instance's own container (`docker exec constructicon-test python3
-    scripts/check_curator_queue.py`) and is always skipped here, with that command printed.
+    beside the instance (`./scripts/run_tool.sh constructicon-test scripts/check_curator_queue.py`, from
+    the host, #634) and is always skipped here, with that command printed.
   * Anything needing `node` when node is not on PATH, with the docker command to run it instead.
   * check_dependency_audit.py (#650) needs network for the advisory database, so with --network none
     it skips itself and prints how to run it (the app image, with network). Run it before a PR that
@@ -230,9 +230,9 @@ def plan(path, live_url):
     """(action, reason): action is 'run' or 'skip'."""
     kind = _live_kind(path)
     if kind == "inside":
-        return "skip", ("live-server script: it talks to the instance on localhost, so it has to run inside that "
-                        f"instance's container (constructicon-test, never production): "
-                        f"docker exec <container> python3 scripts/{path.name}")
+        return "skip", ("live-server script: it talks to the instance on localhost, so it has to run beside that "
+                        f"instance (constructicon-test, never production), from the host: "
+                        f"./scripts/run_tool.sh <container> scripts/{path.name}")
     if kind == "url" and not live_url:
         return "skip", ("live-server script: needs a running instance and writes to it; "
                         "pass --live-url http://host:port (constructicon-test, never production)")

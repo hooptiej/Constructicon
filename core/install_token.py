@@ -13,12 +13,12 @@ Where it lives (first hit wins; every name is read, so one secret file can serve
   CONSTRUCTICON_MCP_TOKEN            older names (#561), still honoured
   CONSTRUCTICON_MCP_TOKEN_FILE
 
-Create the file with `python scripts/mcp_token.py generate <file>` (mode 600, prints only the path).
+Create the file with `python3 -m core.manage.mcp_token generate <file>` (mode 600, prints only the path).
 A token shorter than MIN_TOKEN_LEN, an unreadable file or an empty file is a configuration error
 (TokenConfigError): the MCP refuses to start, and so does the web app (web/app.py startup). Rotate
 by regenerating the file and restarting BOTH containers.
 
-Stdlib only, no DB import (scripts/mcp_token.py loads it on a bare machine). Never logs, prints or
+Stdlib only, no DB import (core/manage/mcp_token.py loads it on a bare machine). Never logs, prints or
 echoes the token; error messages name the variable or path only.
 """
 
@@ -71,7 +71,7 @@ def load(env=None):
     if len(token) < MIN_TOKEN_LEN:
         raise TokenConfigError(
             f"the install token from {name} is too short (need at least {MIN_TOKEN_LEN} characters). "
-            "Generate one with: python scripts/mcp_token.py generate <file>")
+            "Generate one with: python3 -m core.manage.mcp_token generate <file>")
     return token
 
 

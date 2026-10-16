@@ -14,7 +14,7 @@ delete-all or empty-trash, and must never be changed to.
 
 Run it against constructicon-test, never production:
 
-    docker exec constructicon-test python3 scripts/test_office.py
+    ./scripts/run_tool.sh constructicon-test scripts/test_office.py   (from the host, #634)
     python3 scripts/test_office.py --base-url http://10.0.1.241
 
 Exits 1 if any check fails. Old binary .doc/.xls/.ppt aren't generated here

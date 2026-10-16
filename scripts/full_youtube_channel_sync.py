@@ -114,7 +114,7 @@ Usage:
     python scripts/full_youtube_channel_sync.py --base-url http://localhost:80 [--dry-run]
 
     Must run somewhere that can also see the target's database at
-    core.db.DB_PATH (e.g. docker exec into the app's own container) AND
+    core.db.DB_PATH (./scripts/run_tool.sh <web container> scripts/..., #634) AND
     reach the real internet (the YouTube Data API, not just the target
     instance) — see #21/#22's scripts for the identical DB-sharing
     constraint and reasoning.

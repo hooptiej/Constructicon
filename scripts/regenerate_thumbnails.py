@@ -18,9 +18,12 @@ go over HTTP -- because there is no HTTP route that regenerates an existing
 thumbnail, and adding one for a one-time repair is more surface than the
 job needs.
 
-    sudo docker exec constructicon-web python3 /app/scripts/regenerate_thumbnails.py --dry-run
-    sudo docker exec constructicon-web python3 /app/scripts/regenerate_thumbnails.py
-    sudo docker exec constructicon-web python3 /app/scripts/regenerate_thumbnails.py --slug <slug> [--slug <slug> ...]
+    ./scripts/run_tool.sh constructicon-web scripts/regenerate_thumbnails.py --dry-run
+    ./scripts/run_tool.sh constructicon-web scripts/regenerate_thumbnails.py
+    ./scripts/run_tool.sh constructicon-web scripts/regenerate_thumbnails.py --slug <slug> [--slug <slug> ...]
+
+(from the host, in the checkout: a one-off twin of the web container with the same DB and storage,
+plus scripts/ read-only; #634, the app containers don't mount scripts/ any more.)
 
 Scope: only rows whose type's thumbnail_source is UPLOADED_FILE. Fetched/captured
 thumbnails (youtube, pdf, stl, ...) never had this bug -- nothing upstream of them

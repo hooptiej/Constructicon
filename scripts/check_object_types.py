@@ -2,8 +2,10 @@
 """
 Object types contract self-check (#448).
 
-Run inside the app container before deploying:
-  docker exec <container> python3 scripts/check_object_types.py
+Run it before deploying: it is part of scripts/run_checks.py (the throwaway-container suite), or
+against the test instance's own image and mounts, from the host (#634: scripts/ isn't mounted in the
+app containers, so `docker exec <container> python3 scripts/...` no longer works there):
+  ./scripts/run_tool.sh constructicon-test scripts/check_object_types.py
 
 Verifies that all registered types comply with the contract v2:
   - preview_fn and properties_fn are present (enforced at registration)

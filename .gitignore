@@ -3,7 +3,7 @@
 .env.*
 *.key
 *.pem
-# #467: the install token file (scripts/mcp_token.py generate secrets/constructicon_token)
+# #467: the install token file (python3 -m core.manage.mcp_token generate secrets/constructicon_token)
 secrets/
 
 # Python

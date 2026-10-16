@@ -17,7 +17,7 @@ pass (--no-import):
   - Candidates are read straight from the target's own database
     (core.db.search) — this needs the row's stored_filename and the file
     itself on disk anyway, so it has to run somewhere that shares the
-    instance's DB and storage (docker exec into the app's own container).
+    instance's DB and storage (./scripts/run_tool.sh <web container> ..., #634).
   - Extraction is core.embedded_metadata.extract — literally the code
     path a fresh upload goes through, not a re-implementation — filtered
     through the same plausibility gate fill_missing applies.

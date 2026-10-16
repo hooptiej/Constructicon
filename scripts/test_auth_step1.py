@@ -34,7 +34,7 @@ from core import actor, cards, db, install_config, roles, users  # noqa: E402
 from core.errors import AppError  # noqa: E402
 _testenv.assert_isolated()
 from web import app as webapp  # noqa: E402
-import reset_password  # noqa: E402
+from core.manage import reset_password  # noqa: E402  (#634: moved from scripts/)
 
 FAILS = []
 HOST = "testhost.local"

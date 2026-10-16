@@ -10,7 +10,7 @@ dry-run and real mode, and removes everything it made.
 It calls core directly (no HTTP) on a throwaway DB (scripts/_testenv.py, #578): it used to run
 against the container's real DB and leave change-log rows there. Run it anywhere:
 
-    docker exec constructicon-test python3 scripts/test_bulk_decisions.py
+    python scripts/run_checks.py -k test_bulk_decisions   (in the throwaway container, see run_checks.py)
 
 Exits 1 if any check fails.
 """

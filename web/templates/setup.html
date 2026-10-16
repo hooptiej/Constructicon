@@ -43,7 +43,7 @@
     {% else %}
     <p class="error-text" id="setup-unavailable" role="status">This install has no install token configured, so the admin
       account can't be created here. On the server, run
-      <code>docker exec &lt;web container&gt; python3 scripts/reset_password.py --create-admin &lt;username&gt; --generate</code>
+      <code>docker exec &lt;web container&gt; python3 -m core.manage.reset_password --create-admin &lt;username&gt; --generate</code>
       (it prints the new password once), then sign in.</p>
     {% endif %}
   </section>

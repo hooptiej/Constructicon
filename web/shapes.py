@@ -72,6 +72,9 @@ def _to_public(row):
     # this themselves, so this is about the API shape being consistent for
     # any consumer that doesn't.
     has_thumb = _should_advertise_thumb(row, spec)
+    # #622: the card's date, resolved once, so the face's label and the grids' "Date" sort read the
+    # same value and can never disagree.
+    card_ts = timeline.resolve_item_date(row)
     return {
         "slug": row["slug"],
         "url": f"/f/{row['slug']}",
@@ -141,7 +144,11 @@ def _to_public(row):
         "highlight": bool(row.get("highlight")),
         # #514: the item card's date line is the item's own effective date (same
         # resolver as the project detail page's file cards), in the same label format.
-        "card_date": cards._day_label(timeline.resolve_item_date(row)),
+        "card_date": cards._day_label(card_ts),
+        # #622: the same date as epoch seconds, the key of the grids' "Date: newest / oldest" sort
+        # (static/js/item-sort.js, web/files_feed.py SORTS). Never None: the resolver falls back to
+        # the file's own modified time, then the upload time, exactly as the label does.
+        "card_date_epoch": card_ts,
         # #604 step 1 / #603: who uploaded it (a user, or None = admin-owned: token / MCP / script)
         # and the sensitive lock. `uploaded_by` above is the older free-text Source label.
         **ownership_fields(row),

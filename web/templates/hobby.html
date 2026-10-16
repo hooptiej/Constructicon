@@ -167,9 +167,7 @@
       <div class="sort-control">
         <label for="hobby-loose-sort" class="sort-label">Sort</label>
         <select class="filter-select" id="hobby-loose-sort">
-          <option value="newest">Newest</option>
-          <option value="oldest">Oldest</option>
-          <option value="az">A–Z</option>
+          {% include "_item_sort_options.html" %}
         </select>
       </div>
       {% endif %}
@@ -222,6 +220,7 @@
 
 <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
+<script src="/static/js/item-sort.js?v={{ static_version('js/item-sort.js') }}"></script>
 <script nonce="{{ csp_nonce() }}">
 (function () {
   const DP = window.DetailsPanel;
@@ -323,18 +322,14 @@
   const loose = {{ loose_items | tojson }};
   const grid = document.getElementById('hobby-loose-grid');
   const looseSort = document.getElementById('hobby-loose-sort');
-  const LOOSE_SORT = {
-    newest: (a, b) => b.uploaded_at - a.uploaded_at,
-    oldest: (a, b) => a.uploaded_at - b.uploaded_at,
-    az: (a, b) => String(a.display_name || '').localeCompare(String(b.display_name || '')),
-  };
   const loosePager = grid ? ItemCards.pager(grid, it => ItemCards.html(it, {})) : null;
+  // #622: the shared Sort (static/js/item-sort.js); with one item there is no select and the
+  // default (card date, newest first) applies.
+  const looseSortName = ItemSort.wire(looseSort, () => renderLoose());
   function renderLoose() {
     if (!grid) return;
-    const sorted = loose.slice().sort(LOOSE_SORT[looseSort ? looseSort.value : 'newest']);
-    loosePager.set(sorted);
+    loosePager.set(ItemSort.sorted(loose, looseSortName()));
   }
-  if (looseSort) looseSort.addEventListener('change', renderLoose);
   renderLoose();
 
   // Convert to card (#541 phase D): POST /api/hobby/{id}/convert-to-card; Preview sends dry_run.

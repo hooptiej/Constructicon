@@ -4,7 +4,7 @@ The panel used to embed every item in the page and sort, filter and tab over the
 browser (~1.2 MB of inline JSON on a 1,800-item archive, growing with it). Now the server keeps the
 full list and the browser asks for what it has scrolled to:
 
-  * `initial()`: what home embeds. The first BATCH items of the default view (All files, Newest),
+  * `initial()`: what home embeds. The first BATCH items of the default view (All files, Date: newest),
     per-type counts for the tabs and the All/Unfiled/Filed toggle, and the cursor for "more".
   * `page()`: one page of any view, behind GET /api/home/files. A view is (type tab, filed
     mode, sort). The same call serves the first page of every view the page didn't embed (each type
@@ -16,8 +16,10 @@ flagged items), then _split_revisions (current revisions only unless show_all_re
 adds the role check; this module never sees an item the viewer may not.
 
 Order is the order the old client produced: types merged alphabetically, then a STABLE sort by the
-sort key, so ties keep the merge order. To add a sort (#622's card_date), add one entry to SORTS and
-one <option> to home.html; nothing else knows the list of sorts.
+sort key, so ties keep the merge order. To add a sort, add one entry to SORTS here, the same entry to
+static/js/item-sort.js (the grids that sort in the browser) and one <option> to
+templates/_item_sort_options.html (every grid's Sort menu); scripts/test_item_sort_622.js checks the
+three agree.
 
 A cursor is an opaque token: the view it belongs to, the offset reached and the last slug served.
 "Continue after that slug" survives an upload landing at the top between two pages; the offset is the
@@ -29,7 +31,7 @@ import binascii
 import json
 import unicodedata
 
-from core import item_title, policy
+from core import item_title, policy, timeline
 from core import db
 from core.errors import AppError
 from web.shapes import _card_items, _split_revisions
@@ -38,7 +40,7 @@ BATCH = 120          # what #517 draws first, and the page size of the endpoint
 MAX_LIMIT = 500
 FILED_MODES = ("all", "unfiled", "filed")
 DEFAULT_FILED = "all"
-DEFAULT_SORT = "newest"
+DEFAULT_SORT = "date_newest"  # #622: the date on the card, newest first
 
 
 # ICU's (and so String.localeCompare's) order of ASCII punctuation and symbols, after whitespace and
@@ -75,8 +77,21 @@ def _az_key(row):
             tuple((upper, expanded) for _, upper, expanded in folded))  # lowercase first; ss before ß
 
 
-# sort name -> (key function over a capture_events row, reverse)
+def _card_date_key(row):
+    """#622: the date the card shows (core/timeline.py resolve_item_date, the same resolver
+    web/shapes.py uses for card_date / card_date_epoch), then the upload time to break ties. An item
+    with no content date resolves to its file's modified time, else its upload time, exactly as
+    its card face does, so it sits where the date on its card says."""
+    return (timeline.resolve_item_date(row), row["timestamp"])
+
+
+# sort name -> (key function over a capture_events row, reverse). The same names, labels and order
+# as static/js/item-sort.js (the client-sorted grids) and templates/_item_sort_options.html.
+# "newest" / "oldest" keep their pre-#622 meaning (upload time) so old links and API callers don't
+# change; "date_newest" (the card date) is the default view since #622.
 SORTS = {
+    "date_newest": (_card_date_key, True),
+    "date_oldest": (_card_date_key, False),
     "newest": (lambda r: r["timestamp"], True),
     "oldest": (lambda r: r["timestamp"], False),
     "az": (_az_key, False),
@@ -154,7 +169,7 @@ def _next_cursor(rows, end, view_key):
 
 def initial(by_type, unfiled, show_all_revs):
     """-> (seed items, meta) for home.html. The seed is the first BATCH card items of the default
-    view (All files, Newest): exactly what the panel draws first. Every other view, type tabs
+    view (All files, Date: newest): exactly what the panel draws first. Every other view, type tabs
     included, is fetched from page() on its first use. meta carries the per-type counts (tabs and
     the All/Unfiled/Filed numbers), the cursor that continues the seed view, and the seed view."""
     rows = view_rows(by_type, "all", DEFAULT_FILED, DEFAULT_SORT, unfiled)

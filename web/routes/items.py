@@ -852,11 +852,12 @@ def api_gallery(request: Request, query: str = "", client: str = "", per_user: i
 
 
 @router.get("/api/home/files", dependencies=requires(roles.VIEWER))
-def api_home_files(media_type: str = Query("all", alias="type"), filed: str = "all", sort: str = "newest",
+def api_home_files(media_type: str = Query("all", alias="type"), filed: str = "all", sort: str = files_feed.DEFAULT_SORT,
                    cursor: str = "", limit: str = "", rev: str = ""):
     """(#624) One page of the home Files panel, in the card payload the page embeds
     (core/card_payload.py). `type` is "all" or a media type; `filed` all | unfiled | filed; `sort`
-    newest | oldest | az (web/files_feed.SORTS); `rev=all` lists older revisions too, like the page's
+    date_newest (default) | date_oldest (the date the card shows, #622) | newest | oldest (upload
+    time) | az (web/files_feed.SORTS); `rev=all` lists older revisions too, like the page's
     ?rev=all. `cursor` is the previous page's next_cursor (none = the first page); `limit` 1..500,
     default 120. Answers {items, unfiled_slugs, total, next_cursor} (next_cursor null = the end).
     The visible list is built exactly as the page builds it (browse clause, policy.filter_visible,

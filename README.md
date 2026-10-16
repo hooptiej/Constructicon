@@ -170,11 +170,12 @@ get no thumbnail/OCR until a spec is added.
 ## Deployment
 
 Runs on a shared home server as two plain `docker compose` containers —
-`constructicon-web` and `constructicon-mcp` — with `core/`, `web/`, and
-`mcp_server/` bind-mounted (a code deploy is a `git pull` + restart; only
-`requirements.txt`/Dockerfile changes need `--build`). Isolated
+`constructicon-web` and `constructicon-mcp` — running one image with the app
+code baked in and tagged with the release version (`scripts/deploy.sh` builds it;
+rollback = run the previous version's image). Isolated
 `constructicon-test` / `constructicon-test-mcp` siblings mirror it for testing
-changes before production. See [`CLAUDE.md`](CLAUDE.md) for the full deployment
+changes before production; they bind-mount the checkout's code over the image
+through a compose override, so a test deploy is a file copy + restart. See [`CLAUDE.md`](CLAUDE.md) for the full deployment
 runbook, data-model notes, and gotchas.
 
 ## Running locally

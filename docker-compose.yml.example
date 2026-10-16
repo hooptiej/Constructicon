@@ -1,6 +1,12 @@
-version: "3.8"
-
 services:
+  # #688: the app code is BAKED INTO THE IMAGE. No service here bind-mounts core/, web/,
+  # mcp_server/ or assets/: prod runs exactly the image scripts/deploy.sh built and tagged with the
+  # release version (constructicon:<version>, plus constructicon:latest as the moving tag that
+  # these services name). Rollback = `./scripts/deploy.sh --rollback <previous version>`.
+  # Test/dev installs that want "copy files in, restart, no rebuild" add the code mounts back with
+  # docker-compose.override.yml (copy docker-compose.override.yml.example; compose loads it on its
+  # own), which also switches deploy.sh to its mount-and-restart mode.
+  #
   # #453: mount the DB's DIRECTORY, never the bare imagerepo.db file. SQLite runs in
   # WAL mode, which keeps -wal/-shm next to the DB; with a file-only mount each
   # container gets private copies and web + mcp corrupt the shared database.
@@ -18,6 +24,7 @@ services:
   # restart goes through the ollama-restarter sidecar below.
   constructicon-web:
     build: .
+    image: constructicon:latest   # #688: deploy.sh also tags each build constructicon:<version>
     container_name: constructicon-web
     ports:
       - "8000:8000"
@@ -25,10 +32,6 @@ services:
       - default
       - restart-valve      # #643: reach ollama-restarter, and nothing else on that network
     volumes:
-      - ./core:/app/core
-      - ./web:/app/web
-      - ./mcp_server:/app/mcp_server
-      - ./assets:/app/assets:ro
       - ./storage:/app/storage
       - ./db:/app/data
       # #467 step 2: the install token, ONE file shared with the MCP service below. Create it with
@@ -108,13 +111,9 @@ services:
     restart: unless-stopped
 
   constructicon-mcp:
-    build: .
+    image: constructicon:latest   # #688: the same image as the web service (it builds it)
     container_name: constructicon-mcp
     volumes:
-      - ./core:/app/core
-      - ./web:/app/web
-      - ./mcp_server:/app/mcp_server
-      - ./assets:/app/assets:ro
       - ./storage:/app/storage
       - ./db:/app/data
       - ./secrets/constructicon_token:/run/secrets/constructicon_token:ro
@@ -130,18 +129,15 @@ services:
     network_mode: bridge
 
   # Test instance: isolated DB/storage for testing schema changes, migration
-  # scripts, etc. before touching production
+  # scripts, etc. before touching production. #688: its code mounts live in
+  # docker-compose.override.yml.example (the fast "copy in, restart" loop).
   constructicon-test:
-    build: .
+    image: constructicon:latest
     container_name: constructicon-test
     ports:
       - "8001:8000"
       - "8101:8100"
     volumes:
-      - ./core:/app/core
-      - ./web:/app/web
-      - ./mcp_server:/app/mcp_server
-      - ./assets:/app/assets:ro
       - ./storage-test:/app/storage
       - ./db-test:/app/data
     environment:

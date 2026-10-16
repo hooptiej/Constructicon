@@ -1,10 +1,24 @@
-venv/
-storage/
-imagerepo.db
-imagerepo.db-journal
-*.log
-hudu_clients.json
-__pycache__/
-*.pyc
-.git/
-.gitignore
+# #688: an ALLOWLIST. The app code is baked into the image, so the build context must never carry
+# secrets, data, .git, agent worktrees, backups, tests or anything else a checkout collects. Start by
+# excluding everything, then let back in only what the Dockerfile COPYs. A new top-level file or
+# directory stays out until it is listed here on purpose. scripts/check_image_layout.py checks this.
+*
+
+!Dockerfile
+!requirements.txt
+!core/
+!web/
+!mcp_server/
+!assets/
+
+# ...and nothing generated or stray inside those.
+**/__pycache__
+**/*.pyc
+**/*.bak*
+**/*.backup*
+**/node_modules
+**/.DS_Store
+**/*.log
+# The build stamps its own version (Dockerfile ARG CONSTRUCTICON_VERSION); a VERSION.json left in a
+# checkout by an older deploy.sh must not ride along and contradict it.
+core/VERSION.json

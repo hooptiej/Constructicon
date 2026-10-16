@@ -1614,7 +1614,7 @@ line. **Run it before you open or merge a PR**, in a throwaway container with th
 read-only and no network (nothing in it can reach a real install):
 
 ```
-docker build -t constructicon:pr-NNN .        # layers are cached; code is mounted, not baked in
+docker build -t constructicon:pr-NNN .        # layers are cached; the code layers come last (#688)
 docker run --rm --network none -v "$PWD":/app:ro -w /app constructicon:pr-NNN python scripts/run_checks.py
 docker image rm constructicon:pr-NNN          # untag it afterwards
 ```
@@ -1699,7 +1699,9 @@ shows what would run; `--show-output` prints the whole output of anything that d
     (every retired script in `scripts/archive/` refuses to run, #633), `test_live_bugs_563`,
     `test_round2` and `test_round3a` (the work-install shakedown rounds: several small fixes each),
     `test_release` (the CalVer logic), `check_dependency_audit` (known advisories in the installed
-    packages; needs network, see above).
+    packages; needs network, see above), `check_image_layout` (#688: the Dockerfile bakes the code in
+    after the pip layers, `.dockerignore` keeps secrets/data/.git/tests out, the example compose mounts
+    no code; text only, no Docker).
 - Besides the runner, **the `constructicon-test` container** (below) is where a change is exercised
   against a copy of real data before prod.
 
@@ -1739,10 +1741,30 @@ checkout** — this is *not* deployed via TrueNAS's "Apps"/catalog system.
 There is no `docker-compose.yml` committed to this repo; the compose file
 lives only on the TrueNAS box itself (outside this checkout), which is why
 you won't find one here. `docker-compose.yml.example` is the committed template
-(web, mcp, and the test pair); note it bind-mounts `core/`, `web/`, `mcp_server/`
-and `assets/` but **not `scripts/`**, and the image (the Dockerfile `COPY`s nothing)
-holds no repo code at all, so an install that runs `docker exec <web> python3
-scripts/...` has to mount `./scripts` in its own compose.
+(web, mcp, and the test pair).
+
+**The image is the version (#688, 2026-10-15).** The Dockerfile `COPY`s `core/`, `web/`,
+`mcp_server/` and `assets/` into `/app` (root-owned, read-only to the `app` user, precompiled), after
+the pip layers so a code change rebuilds only the last few small layers. `.dockerignore` is an
+allowlist: secrets, data, `.git`, worktrees, `*.bak*` / `web.bak-*` backups, tests, `scripts/` and
+`node_modules` never enter the build context. The version is stamped at build time (build args
+`CONSTRUCTICON_VERSION` / `_COMMIT` / `_BUILT_AT` -> `/app/core/VERSION.json` + OCI labels), and
+`deploy.sh` tags each build `<repo>:<version>` next to the compose file's moving tag
+(`constructicon:latest`). So:
+- **Prod runs the baked image with NO code bind mounts.** A deploy builds and `up -d`s; rollback is
+  `./scripts/deploy.sh --rollback <previous version>` (retag + `up -d`); `sudo docker image ls
+  constructicon` lists what's on hand (the newest 5 version tags are kept).
+- **Test/dev keep the fast loop with an override file.** `docker-compose.override.yml` (copy
+  `docker-compose.override.yml.example`, rename its services to the checkout's) bind-mounts the
+  checkout's code over the baked copy; compose merges it in automatically. "Copy files in, restart, no
+  rebuild" works exactly as before. Delete the override (and `up -d`) to run the baked image the way
+  prod does, e.g. as a last check before a prod deploy.
+- **`scripts/` is not in the image** (tests, release and deploy tooling). The emergency tools move into
+  `core/manage/` with #634 (PR #689) and ride along in the image; until that lands, an install that
+  runs `docker exec <web> python3 scripts/...` has to mount `./scripts` in its own compose (prod does).
+  #689's `scripts/run_tool.sh` (`--volumes-from <web>` + a `./scripts:ro` mount for one run) works
+  unchanged on a baked image: the twin gets the image's code plus the scripts mount.
+- `scripts/check_image_layout.py` (text only, in the suite) keeps all of this true.
 
 **`git pull`/`git fetch` work again on both checkouts** (#71, fixed
 2026-09-06). Each checkout's `origin` remote points at
@@ -1763,23 +1785,34 @@ check before that reset).
 from inside either checkout —
 
 ```
-./scripts/deploy.sh            # fetch + reset to origin/main, docker compose restart
-./scripts/deploy.sh --build    # same, but `up -d --build` -- only needed when
-                                # requirements.txt or the Dockerfile changed
+./scripts/deploy.sh                  # prod: build the versioned image + up -d; test: restart
+./scripts/deploy.sh --build          # test/dev: also rebuild the image (requirements/Dockerfile)
+./scripts/deploy.sh --rollback VER   # prod: run the image built for VER again
 ```
 
-**What `scripts/deploy.sh` does, in order (read from the script, #552):** (1) unless
-`--no-snapshot`, takes the ZFS snapshot described below (aborts the deploy if the snapshot fails);
-(2) `git fetch origin --tags`; (3) `git reset --hard origin/main` (nothing if already there);
-(4) writes the gitignored `core/VERSION.json`; (5) **default:** `sudo docker compose restart`,
-**with `--build`:** `sudo docker compose up -d --build`; (6) waits 3 s and prints `docker compose ps`.
-`--write-version-only` runs step 4 alone. The two restart modes are not interchangeable:
-`restart` always restarts the running containers, which re-reads the bind-mounted `core/` / `web/` /
-`mcp_server/`, but never applies a compose-file or image change; `up -d --build` rebuilds the
-image and recreates only the containers whose image or config changed, so with nothing but code
-changed it can leave the old processes running (see the warning below).
-**So: a code-only change is `./scripts/deploy.sh`; a `requirements.txt` / Dockerfile / compose change
-is `./scripts/deploy.sh --build`; either way, verify the running process has the change.** For a
+**What `scripts/deploy.sh` does, in order (read from the script, #552, #688):** it first reads the
+checkout's EFFECTIVE compose config (`docker-compose.yml` + `docker-compose.override.yml`) to find the
+web service (`web` on the NAS, `constructicon-web` in the example), its `image:` and whether
+`/app/core` is bind-mounted. Then (1) unless `--no-snapshot`, takes the ZFS snapshot described below
+(aborts the deploy if the snapshot fails); (2) `git fetch origin --tags`; (3) `git reset --hard
+origin/main` (nothing if already there); then one of two modes:
+- **Baked (no code mounts: prod):** (4) `sudo docker compose build <web>` with the version build args
+  from `git describe --tags --always`, tagged `<repo>:<version>` as well as the compose tag; (5) `sudo
+  docker compose up -d`, which recreates web AND mcp on the new image (the image changed, so this
+  always recreates; the old "cached build left the old process running" trap is gone); prunes version
+  tags beyond the newest 5. `--build` is accepted and changes nothing (it always builds).
+- **Mounted (an override mounts the code: test/dev):** (4) writes the gitignored `core/VERSION.json`
+  into the checkout (the mount hides the baked one); with `--build`, builds the versioned image and
+  `up -d`; (5) always `sudo docker compose restart` (re-reads the mounted files).
+Both end by waiting 3 s, printing `docker compose ps` and the version the running web process reports.
+`--write-version-only` runs the VERSION.json step alone. `--rollback VER` (no git, no build): checks
+`<repo>:VER` exists, snapshots, retags it as the compose tag, `up -d`. Migrations only go forward: if
+the newer version migrated the DB in a way the old code can't read, restore the DB from the snapshot
+too (owner call).
+**So: every prod deploy is `./scripts/deploy.sh` (code, requirements and Dockerfile alike); on test, a
+code change is `./scripts/deploy.sh` and a `requirements.txt` / Dockerfile change is
+`./scripts/deploy.sh --build`; a compose-file change needs `sudo docker compose up -d` in mounted
+mode. Either way, verify the running process has the change.** For a
 requirements change that means the package versions in BOTH running containers, e.g. `sudo docker exec
 <web or mcp container> python3 -c "import importlib.metadata as m; print(m.version('py7zr'))"`; if a
 container still reports the old version, it is still running the old image: `sudo docker compose up -d`
@@ -1792,7 +1825,10 @@ the default** — reach for it only if `scripts/deploy.sh` itself can't run
 (e.g. git credentials break again). If you do fall
 back to it: `tar czf - core web mcp_server scripts assets | ssh ... 'cd
 .../constructicon && tar xzf -'`, confirmed working 2026-09-03 deploying
-#103/#95/#88+#90/#92+#93 this way.
+#103/#95/#88+#90/#92+#93 this way. **Since #688 prod runs baked code**, so files
+copied into prod's checkout do nothing until the image is rebuilt: follow the tar with
+`sudo docker compose build web && sudo docker compose up -d` there (the image is then
+unversioned unless you pass the `--build-arg CONSTRUCTICON_VERSION=...` that deploy.sh does).
 
 **Versions and the release step (#508, CalVer, from 2026-10-03).** Versions are
 `YYYY.M.D` (no leading zeros; a second release the same day is `.1`, `.2`, ...).
@@ -1809,14 +1845,18 @@ merge-and-deploy pipeline is now:
    `--version X` overrides the computed version in an emergency;
 3. `./scripts/deploy.sh` on the box.
 
-`deploy.sh` fetches tags and, after the reset, writes the gitignored
-`core/VERSION.json` (`{version, commit, deployed_at}` from `git describe --tags
---always`; `-dev` appended when the instance has `CONSTRUCTICON_ENV=dev`).
-`core/version.py` reads it (fallback `dev`); it shows in the bottom-left page
+`deploy.sh` fetches tags and takes the version from `git describe --tags --always`. **Baked (prod):**
+it passes it to the image build, which writes `/app/core/VERSION.json` (`{version, commit,
+deployed_at}`, deployed_at = build time) and the OCI labels (`sudo docker inspect <container>
+--format '{{index .Config.Labels "org.opencontainers.image.version"}}'`), and tags the image
+`<repo>:<version>`. **Mounted (test/dev):** after the reset it writes the gitignored `core/VERSION.json`
+into the checkout, as before (#508). `core/version.py` reads the file (fallback `dev`) and appends
+`-dev` at read time when the instance has `CONSTRUCTICON_ENV=dev` (unless the file already carries
+it), so one image reports correctly wherever it runs. The version shows in the bottom-left page
 badge (`base.html`), `GET /api/version` (`{version, commit, deployed_at, env}`),
 the MCP `constructicon_version` tool and server info, and the static export
 footer ("Built with Constructicon <version>"). `deploy.sh --write-version-only`
-runs just that step. A tar-over-ssh deploy has no version file, so the app
+runs just the file step. A tar-over-ssh deploy has no version file, so the app
 shows `dev` (this is expected on constructicon-test for branch work). The ZFS
 snapshot name includes the version being replaced. Check with
 `python scripts/test_release.py` (the next-version logic).
@@ -1833,7 +1873,8 @@ so its deploys skip the snapshot (by design, don't snapshot 2.75 TB for a test).
   `/mnt/Storage Pool/Media/constructicon/.zfs/snapshot/<name>/` (e.g. copy the
   DB file back with the app stopped). `sudo zfs rollback` discards everything
   newer than the snapshot, so that's an owner call, never automatic.
-- **Restore code:** git. The snapshot name records the commit that was running.
+- **Restore code:** prod: `./scripts/deploy.sh --rollback <version>` (the previous image, #688);
+  test/dev (mounted code): git. The snapshot name records the commit and version that were running.
   The old `cp -r` of code dirs is retired (it only duplicated git).
 - `POST /api/backup` (full DB+storage zip, retention 3) is now for manual or
   off-box exports, not a routine pre-deploy step. Its result includes
@@ -2055,23 +2096,29 @@ the module was actually imported with real dependencies.
    restart the container before assuming the deploy itself is broken — don't
    spend time debugging a deploy that's actually fine underneath a stale
    mount snapshot.
-- The Dockerfile comments confirm `core/`, `web/`, and `mcp_server/` are
-  **bind-mounted at run time, not baked into the image** — an ordinary code
-  deploy is `./scripts/deploy.sh` (reset to `origin/main` + `docker compose restart`), not a rebuild.
-  Only changes to `requirements.txt` or system packages (the `apt-get install` line)
-  need `./scripts/deploy.sh --build`.
+- **This recipe needs the code mounts (#688).** The image carries baked code; on
+  constructicon-test, `docker-compose.override.yml` bind-mounts the checkout's `core/`, `web/`,
+  `mcp_server/` and `assets/` over it, which is what makes "copy in, restart, no rebuild" work. If
+  a copied-in change doesn't show up after a restart, check the override is still there (`sudo
+  docker compose config | grep /app/core`). An ordinary code deploy on test is
+  `./scripts/deploy.sh` (reset + VERSION.json + restart); `requirements.txt` / Dockerfile changes need
+  `--build`. Prod has no override and always rebuilds (see "Deploy with `scripts/deploy.sh`").
+  To check a branch's BAKED image before prod, build it under a throwaway name and run it with no
+  code mounts (never retag an image a running container uses):
+  `sudo docker build -t constructicon-prNNN:check --build-arg CONSTRUCTICON_VERSION=prNNN .` then
+  `sudo docker run --rm --network none ... constructicon-prNNN:check`.
 
-Typical redeploy from a checkout on the TrueNAS box (the same two commands as "Deploy with
-`scripts/deploy.sh`" above; this used to say `git pull` + `docker compose up -d --build` "always",
-which contradicted it and is what the warning below was about):
+Typical redeploy from a checkout on the TrueNAS box (the same commands as "Deploy with
+`scripts/deploy.sh`" above):
 
 ```
-./scripts/deploy.sh            # code only
-./scripts/deploy.sh --build    # requirements.txt / Dockerfile / compose changed
+./scripts/deploy.sh            # prod: always (build + up -d); test: code only
+./scripts/deploy.sh --build    # test: requirements.txt / Dockerfile changed
 ```
 
-**`scripts/deploy.sh --build` can report success without actually
-restarting the containers** (confirmed 2026-09-07, deploying #197/#198):
+**Mounted mode: `docker compose up -d --build` can report success without actually
+restarting the containers** (confirmed 2026-09-07, deploying #197/#198, before #688; deploy.sh's
+mounted mode now always restarts after it, and baked mode's new image always recreates):
 it printed "Rebuilding and restarting" and `docker compose up -d --build`
 reported both containers as `Running`, but since the image layers were
 fully cached and compose saw no config change, it left the already-running

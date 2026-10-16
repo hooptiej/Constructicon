@@ -1,9 +1,16 @@
-"""Build version (#508).
+"""Build version (#508, #688).
 
-scripts/deploy.sh writes core/VERSION.json (gitignored, inside the
-bind-mounted core/ dir) after it resets the checkout. A tar-over-ssh deploy
-has no such file, so the app reports "dev". Read fresh on every call (the file
-is tiny) so a deploy is picked up even by a process that wasn't restarted.
+core/VERSION.json ({version, commit, deployed_at}) comes from one of two places:
+- the image build (#688): the Dockerfile writes it into the baked /app/core from
+  the CONSTRUCTICON_VERSION / _COMMIT / _BUILT_AT build args that
+  scripts/deploy.sh passes (prod runs that image with no code mounts);
+- scripts/deploy.sh on a checkout whose code is bind-mounted over the image
+  (constructicon-test, dev): it writes the gitignored file into the checkout's
+  core/ after the reset, since the mount hides the baked one.
+A tar-over-ssh deploy has no such file, so the app reports "dev". Read fresh on
+every call (the file is tiny) so a deploy is picked up even by a process that
+wasn't restarted. The "-dev" suffix for CONSTRUCTICON_ENV=dev is added here at
+read time, so one image reports correctly wherever it runs.
 """
 import json
 import logging
@@ -36,6 +43,8 @@ def get_version_info() -> dict:
     version = str(data.get("version") or "").strip()
     if not version:
         version = "dev"  # env is reported separately in the "env" field
+    elif env == "dev" and not version.endswith("-dev"):
+        version += "-dev"  # older deploy.sh runs wrote the suffix into the file already
     return {
         "version": version,
         "commit": data.get("commit") or None,

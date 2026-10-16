@@ -1,0 +1,36 @@
+# #688: the FAST TEST LOOP for a test/dev checkout. NEVER on prod.
+#
+# The image carries the app code (see the Dockerfile). This override bind-mounts the checkout's code
+# over those baked copies, so on a test box "copy the changed files in, restart, no rebuild" still
+# works (CLAUDE.md, "Live-testing a branch against constructicon-test"). Copy it next to the
+# checkout's docker-compose.yml as docker-compose.override.yml: `docker compose` merges it in on its
+# own (volumes are added to the base file's), and scripts/deploy.sh sees /app/core mounted and
+# switches to its mount-and-restart mode (writes core/VERSION.json into the checkout, restarts).
+# Delete the file (and `sudo docker compose up -d`) to run the baked image exactly as prod does.
+#
+# Service names must match the base file: on the NAS they are `web` and `mcp`; in
+# docker-compose.yml.example they are constructicon-web / constructicon-mcp / constructicon-test.
+# A checkout that runs prod AND test in one project (as the single example file does) keeps only the
+# constructicon-test entry, so prod's services stay on the baked image.
+# Mount only what the base file doesn't already (no data or secrets here).
+services:
+  constructicon-web:
+    volumes:
+      - ./core:/app/core
+      - ./web:/app/web
+      - ./mcp_server:/app/mcp_server
+      - ./assets:/app/assets:ro
+
+  constructicon-mcp:
+    volumes:
+      - ./core:/app/core
+      - ./web:/app/web
+      - ./mcp_server:/app/mcp_server
+      - ./assets:/app/assets:ro
+
+  constructicon-test:
+    volumes:
+      - ./core:/app/core
+      - ./web:/app/web
+      - ./mcp_server:/app/mcp_server
+      - ./assets:/app/assets:ro

@@ -65,12 +65,44 @@ ENV HF_HUB_OFFLINE=1 \
 # directories must be owned by APP_UID (see docker-compose.yml.example).
 RUN mkdir -p /app/storage /app/data /app/backups /app/exports /app/import \
     && chown app:app /app/storage /app/data /app/backups /app/exports /app/import
+# #688: with the code baked in, /app itself is root-owned, so the code's own default DB location
+# (<repo>/imagerepo.db) isn't writable. Default to the app-owned data dir (#453's layout, the value
+# every compose file sets anyway), so the bare image runs as-is. Compose/env still override it.
+ENV CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
+
+# #688: the app code is baked in, so an image IS a version (prod runs one immutable, versioned
+# image; rollback = run the previous tag). Everything above changes only with the Dockerfile or
+# requirements.txt, so a code change rebuilds just these last few small layers. What enters the
+# build context is decided by .dockerignore (an allowlist: no secrets, data, .git, worktrees,
+# backups, tests or scripts/). The code is owned by root and read-only to the app user: a
+# compromised parser can't rewrite the app. Precompiled here because the app user can't write
+# __pycache__ next to it.
+# scripts/ is deliberately NOT in the image (tests, release/deploy tooling; the emergency tools
+# move into core/manage/ with #634). Dev/test installs bind-mount the code over these copies with
+# a compose override (docker-compose.override.yml.example), so "copy files in, restart" still works.
+COPY core/ /app/core/
+COPY web/ /app/web/
+COPY mcp_server/ /app/mcp_server/
+COPY assets/ /app/assets/
+RUN chmod -R u=rwX,go=rX /app/core /app/web /app/mcp_server /app/assets \
+    && python -m compileall -q /app/core /app/web /app/mcp_server
+
+# #688: the version, stamped at build time (scripts/deploy.sh passes these from `git describe`).
+# core/version.py reads /app/core/VERSION.json; with no CONSTRUCTICON_VERSION the file isn't
+# written and the app reports "dev". CONSTRUCTICON_ENV=dev adds the "-dev" suffix at run time.
+# Declared here, after the code, so a new version never invalidates an earlier layer.
+ARG CONSTRUCTICON_VERSION=""
+ARG CONSTRUCTICON_COMMIT=""
+ARG CONSTRUCTICON_BUILT_AT=""
+LABEL org.opencontainers.image.title="Constructicon" \
+      org.opencontainers.image.version="$CONSTRUCTICON_VERSION" \
+      org.opencontainers.image.revision="$CONSTRUCTICON_COMMIT" \
+      org.opencontainers.image.created="$CONSTRUCTICON_BUILT_AT"
+RUN if [ -n "$CONSTRUCTICON_VERSION" ]; then \
+      python -c 'import json, os; e = os.environ; json.dump({"version": e["CONSTRUCTICON_VERSION"], "commit": e.get("CONSTRUCTICON_COMMIT") or None, "deployed_at": e.get("CONSTRUCTICON_BUILT_AT") or None}, open("/app/core/VERSION.json", "w")); print(open("/app/core/VERSION.json").read())' \
+      && chmod 644 /app/core/VERSION.json; \
+    fi
 
 USER app
-
-# core/, web/, and mcp_server/ are bind-mounted at run time, not baked in —
-# this image is just the runtime environment (Python + system deps). Code
-# deploys are a file copy + container restart, not a rebuild; only changes
-# to requirements.txt or system packages need `docker build` again.
 
 EXPOSE 8000 8100

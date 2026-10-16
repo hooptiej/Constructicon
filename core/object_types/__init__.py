@@ -27,6 +27,7 @@ codebase should need to change.
 """
 
 import importlib
+import mimetypes
 import pkgutil
 import sys
 from dataclasses import dataclass, field
@@ -422,6 +423,45 @@ def can_be_writeup(row_or_media_type):
         media_type = row_or_media_type
     spec = get_object_type(media_type)
     return spec.writeup_body_key is not None
+
+
+# #701: the media types a browser shows by itself (its PDF viewer, an image, the video/audio player,
+# plain text). /f/<slug> serves these `inline` and their link says "View original" and opens a new
+# tab; everything else (STL, PSD, ZIP, EXE, fonts, ...) is a download and its link says so.
+# Deliberately an allowlist of exact types, not "image/*": image/vnd.adobe.photoshop, image/tiff and
+# friends are image/* but no browser shows them. web/content_security.py decides the actual header
+# from this set plus #610's sniff (so an .html renamed .pdf is still a download), never the
+# extension alone.
+BROWSER_VIEWABLE_TYPES = frozenset({
+    "application/pdf",
+    "image/jpeg", "image/png", "image/gif", "image/webp", "image/avif", "image/bmp",
+    "video/mp4", "video/webm", "video/ogg",
+    "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/x-wav", "audio/wave", "audio/webm",
+    "audio/flac", "audio/x-flac", "audio/aac",
+    "text/plain",
+})
+
+
+def guess_file_type(filename):
+    """The media type a stored file is served with (the same guess Starlette's FileResponse makes
+    from the original name), or None."""
+    return mimetypes.guess_type(filename or "")[0] if filename else None
+
+
+def opens_in_browser(filename=None, media_type=None):
+    """True when the browser can show this file itself (#701), from its served media type."""
+    mt = (media_type or guess_file_type(filename) or "").split(";")[0].strip().lower()
+    return mt in BROWSER_VIEWABLE_TYPES
+
+
+def original_link(item):
+    """#701: how the object page links to an item's stored file, for every type alike:
+    {"label", "new_tab"}. A browser-viewable file says "View original <Type>" and opens in a new
+    tab; anything else says "Download original <Type>" and downloads in place."""
+    kind = item.get("type_label") or "file"
+    if opens_in_browser(item.get("filename")):
+        return {"label": f"View original {kind}", "new_tab": True}
+    return {"label": f"Download original {kind}", "new_tab": False}
 
 
 def render_preview(spec, ctx):

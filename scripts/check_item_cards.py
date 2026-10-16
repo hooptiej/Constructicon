@@ -24,7 +24,7 @@ HOSTILE = '<img src=x onerror=alert(1)>"\'&'
 
 ITEMS = [
     {"slug": "abc123", "display_name": "Desk build 01.jpg", "type_label": "Image", "card_date": "Mar 4, 2021",
-     "thumb_url": "/f/abc123/thumb", "has_thumbnail": True, "stacked": "Desk Build", "highlight": False, "codes": []},
+     "card_date_epoch": 1614884400, "thumb_url": "/f/abc123/thumb", "has_thumbnail": True, "stacked": "Desk Build", "highlight": False, "codes": []},
     {"slug": "def456", "display_name": "Frame.stl", "type_label": "3D model", "card_date": "Jan 9, 2019",
      "thumb_url": None, "has_thumbnail": False, "stacked": None, "highlight": True, "codes": ["3DP", "COL"]},
     {"slug": "x9", "display_name": HOSTILE, "type_label": HOSTILE, "card_date": HOSTILE,

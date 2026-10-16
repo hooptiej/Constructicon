@@ -48,6 +48,7 @@ JS_SOURCES = {
     "web/templates/unfiled.html": ("item", "a", "b"),
     "web/templates/user_gallery.html": ("item", "a", "b"),
     "web/templates/hobby.html": ("it", "a", "b"),
+    "web/static/js/item-sort.js": ("it",),  # #622: the one Sort every grid uses
 }
 # Properties of non-item objects that share a variable name in those files (a / b / item).
 NOT_ITEM_FIELDS = {
@@ -73,7 +74,7 @@ for rel, names in JS_SOURCES.items():
     check(not missing, "%s reads only whitelisted fields (checked %d; missing: %s)" % (rel, len(used), missing))
 
 # Spot checks the regex can't see: fields the card visibly depends on.
-for must in ("slug", "display_name", "type_label", "card_date", "thumb_url", "has_thumbnail", "redacted",
+for must in ("slug", "display_name", "type_label", "card_date", "card_date_epoch", "thumb_url", "has_thumbnail", "redacted",
              "codes", "highlight", "stacked", "ocr_status", "extracted_text", "caption_capable",
              "type_metadata", "type_icon", "client", "uploaded_by_display", "tags", "uploaded_at",
              "media_type"):
@@ -85,7 +86,7 @@ HEAVY = {"description": "x" * 500, "source": "screenshot", "artifact_link": "/f/
 LONG = "word " * 400
 record = {
     "slug": "abc", "display_name": "A", "media_type": "image", "type_label": "Image", "type_icon": "I",
-    "card_date": "Mar 4, 2021", "thumb_url": "/f/abc/thumb", "has_thumbnail": True, "redacted": False,
+    "card_date": "Mar 4, 2021", "card_date_epoch": 1614884400, "thumb_url": "/f/abc/thumb", "has_thumbnail": True, "redacted": False,
     "highlight": True, "provenance": "found", "stacked": "Desk Build", "client": "P", "uploaded_by_display": "Me",
     "uploaded_at": 5, "tags": ["t"], "codes": ["3DP"], "ocr_status": "done", "extracted_text": LONG,
     "caption_capable": True,
@@ -97,6 +98,7 @@ before = copy.deepcopy(record)
 slim = webapp.card_item_public(record)
 check(record == before, "projection does not mutate its input")
 check(set(slim) == whitelist, "projected record has exactly the whitelisted keys")
+check(slim["card_date_epoch"] == 1614884400, "#622: card_date_epoch (the Date sort's key) is carried as is")
 for gone in ("description", "source", "artifact_link", "url", "content_date", "filename", "uploaded_by",
              "provenance"):  # #596: provenance left the file face
     check(gone not in slim, "heavy/unused field dropped: %s" % gone)

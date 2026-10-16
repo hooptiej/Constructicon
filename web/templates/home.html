@@ -201,9 +201,7 @@
         <div class="sort-control">
           <label for="files-sort" class="sort-label">Sort</label>
           <select class="filter-select" id="files-sort">
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-            <option value="az">A–Z</option>
+            {% include "_item_sort_options.html" %}
           </select>
         </div>
       </div>
@@ -211,6 +209,7 @@
       <div class="file-tabs" id="files-tabs"></div>
       <div class="cx-item-grid files-scroll" id="files-grid"></div>
     </div>
+    <script src="/static/js/item-sort.js?v={{ static_version('js/item-sort.js') }}"></script>
     <script nonce="{{ csp_nonce() }}">
     (function () {
       function escapeHtml(str) {
@@ -317,7 +316,7 @@
           btn.setAttribute('aria-pressed', on ? 'true' : 'false');
           btn.querySelector('.filed-count').textContent = '(' + viewCount(activeTab, mode) + ')';
         });
-        const feed = feedFor(activeTab, activeFiled, filesSort.value);
+        const feed = feedFor(activeTab, activeFiled, filesSortName());
         currentFeed = feed;
         if (feed.items.length || feed.done) {
           filesPager.set(feed.items.slice(), false, feed.total);  // a copy: the pager appends pages to its own list. No keep: back to the first batch
@@ -342,7 +341,9 @@
         render();
       });
 
-      filesSort.addEventListener('change', render);
+      // #622: the shared Sort control (static/js/item-sort.js). The server sorts this panel (the
+      // name goes to /api/home/files, web/files_feed.py SORTS uses the same keys as ItemSort.SORTS).
+      const filesSortName = ItemSort.wire(filesSort, () => render());
       renderTabs();
       render();
 

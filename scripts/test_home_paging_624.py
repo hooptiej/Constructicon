@@ -44,7 +44,7 @@ sys.path.insert(0, HERE)
 
 from starlette.testclient import TestClient  # noqa: E402
 
-from core import actor, cards, db, items, policy, users  # noqa: E402
+from core import actor, cards, db, items, policy, timeline, users  # noqa: E402
 _testenv.assert_isolated()
 from web import app as webapp  # noqa: E402
 
@@ -104,6 +104,19 @@ def seed(n_cards=60):
                      slugs[1460], slugs[1600]]:
             conn.execute("UPDATE capture_events SET timestamp = ? WHERE slug = ?", (tie_t, slug))
         conn.execute("UPDATE capture_events SET is_brand_asset = 1 WHERE slug = ?", (out["brand"],))
+        # #622: content dates and hand-set dates on some files, so the card-date sorts differ from the
+        # upload-time ones (every 5th file gets a content date from years earlier, every 23rd a display-
+        # date override, five of them share one content date to make ties)
+        for n, slug in enumerate(slugs):
+            if n % 5 == 0:
+                conn.execute("UPDATE capture_events SET content_date = ? WHERE slug = ?",
+                             (base - rnd.randint(1, 3000) * 86400.0, slug))
+            if n % 23 == 0:
+                conn.execute("UPDATE capture_events SET display_date_override = ? WHERE slug = ?",
+                             (base - rnd.randint(1, 3000) * 86400.0, slug))
+        for slug in [slugs[15], slugs[400], slugs[905], slugs[1210], slugs[1655]]:
+            conn.execute("UPDATE capture_events SET content_date = ?, display_date_override = NULL WHERE slug = ?",
+                         (base - 1000 * 86400.0, slug))
         # a few revision chains: slugs[k] is superseded by slugs[k+1] (same type)
         out["old"] = []
         for k in (10, 30, 50, 70):
@@ -226,7 +239,11 @@ def main():
                 rows += by_type[mt]
         if filed != "all":
             rows = [r for r in rows if (filed == "unfiled") == (r["slug"] in unfiled)]
-        if sort == "newest":
+        if sort == "date_newest":  # #622: the card's date, then the upload time (both newest first)
+            rows = sorted(rows, key=lambda r: (-timeline.resolve_item_date(r), -r["timestamp"]))
+        elif sort == "date_oldest":
+            rows = sorted(rows, key=lambda r: (timeline.resolve_item_date(r), r["timestamp"]))
+        elif sort == "newest":
             rows = sorted(rows, key=lambda r: -r["timestamp"])
         elif sort == "oldest":
             rows = sorted(rows, key=lambda r: r["timestamp"])
@@ -257,12 +274,12 @@ def main():
     html = r.text
     check("GET / 200", r.status_code == 200, r.status_code)
     by_type_emb, meta = embedded(html)
-    rows_all, by_type, unfiled = oracle("admin", "all", "all", "newest")
+    rows_all, by_type, unfiled = oracle("admin", "all", "all", "date_newest")  # #622: the default view
     check("the page embeds filesSeed and FILES", by_type_emb is not None and meta is not None)
     check("the embed is one batch (120) of the default view", len(by_type_emb) == 120, len(by_type_emb))
     check("every type with files has a tab (counts keys == visible types)", set(meta["counts"]) == set(by_type),
           (sorted(meta["counts"]), sorted(by_type)))
-    check("the seed is the first 120 of All / Newest, in order",
+    check("the seed is the first 120 of All / Date: newest (#622), in order",
           [i["slug"] for i in by_type_emb] == [x["slug"] for x in rows_all[:120]])
     check("per-type counts match (all / unfiled / filed)", all(
         meta["counts"][mt] == {"all": len(rows), "unfiled": sum(1 for x in rows if x["slug"] in unfiled),
@@ -270,7 +287,7 @@ def main():
     check("unfiled_total is every unfiled slug", meta["unfiled_total"] == len(unfiled), (meta["unfiled_total"], len(unfiled)))
     emb_slugs = {i["slug"] for i in by_type_emb}
     check("unfiled_slugs lists only embedded items that are unfiled", set(meta["unfiled_slugs"]) == emb_slugs & unfiled)
-    check("the batch size and seed view are sent", meta["batch"] == 120 and meta["seed"] == {"filed": "all", "sort": "newest"})
+    check("the batch size and seed view are sent", meta["batch"] == 120 and meta["seed"] == {"filed": "all", "sort": "date_newest"})
     check("one cursor continues the seed view", isinstance(meta["cursor"], str) and "cursors" not in meta)
     print(f"      page size {len(r.content)} bytes; embedded {len(by_type_emb)} of {len(rows_all)} items; "
           f"{box['n']} connections opened")
@@ -287,7 +304,7 @@ def main():
     print("--- 2. paging every view ---")
     orders = {}
     n_views = 0
-    for sort in ("newest", "oldest", "az"):
+    for sort in ("date_newest", "date_oldest", "newest", "oldest", "az"):
         for tab in ["all"] + sorted(by_type):
             for filed in ("all", "unfiled", "filed") if tab in ("all", "image", "pdf") else ("all",):
                 got, pages, last = walk(admin, type=tab, filed=filed, sort=sort)
@@ -300,7 +317,7 @@ def main():
                     check(f"az {tab}/{filed}: every item exactly once ({len(got)} in {pages} pages)", ok, (dup, len(got), len(want)))
                 else:
                     ok = got == [r["slug"] for r in want]
-                    check(f"{sort} {tab}/{filed}: same items, same order as the old client ({len(got)} in {pages} pages)",
+                    check(f"{sort} {tab}/{filed}: same items, same order as the oracle ({len(got)} in {pages} pages)",
                           ok, (dup, len(got), len(want)))
     print(f"      {n_views} views walked")
     got, pages, _ = walk(admin, limit=7, type="stl", sort="newest")
@@ -326,13 +343,13 @@ def main():
     slugs = [i["slug"] for i in by_type_emb]
     cursor = meta["cursor"]
     while cursor:
-        body = api(admin, type="all", filed="all", sort="newest", cursor=cursor).json()
+        body = api(admin, type="all", filed="all", sort="date_newest", cursor=cursor).json()
         slugs += [i["slug"] for i in body["items"]]
         cursor = body["next_cursor"]
     check("All: embedded batch + endpoint == the old full list", slugs == [r["slug"] for r in rows_all], (len(slugs), len(rows_all)))
     for tab in sorted(by_type):  # a type tab's first click: its first page, no cursor
         body = api(admin, type=tab).json()
-        want, _, _ = oracle("admin", tab, "all", "newest")
+        want, _, _ = oracle("admin", tab, "all", "date_newest")  # no sort given = the default (#622)
         check(f"{tab}: first page from the endpoint == the first 120 of the old list",
               [i["slug"] for i in body["items"]] == [r["slug"] for r in want[:120]] and body["total"] == len(want))
 
@@ -344,7 +361,7 @@ def main():
     check("viewer's page names none of the restricted / flagged / redacted / brand items",
           not any(s in vpage.text for s in (data["cert"], data["flagged"], data["redacted"], data["brand"])))
     leaked = []
-    for sort in ("newest", "oldest", "az"):
+    for sort in ("date_newest", "date_oldest", "newest", "oldest", "az"):
         for tab in ["all", "image"]:
             for filed in ("all", "unfiled", "filed"):
                 got, _, _ = walk(viewer, type=tab, filed=filed, sort=sort, rev="all")

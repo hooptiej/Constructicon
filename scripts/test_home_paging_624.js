@@ -185,7 +185,8 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
     const view = (tab, filed, sort) => {
       let rows = archive.filter((x) => tab === 'all' || x.media_type === tab);
       if (filed !== 'all') rows = rows.filter((x) => (filed === 'unfiled') === unfiled.has(x.slug));
-      const cmp = { newest: (x, y) => y.uploaded_at - x.uploaded_at, oldest: (x, y) => x.uploaded_at - y.uploaded_at, az: (x, y) => x.display_name.localeCompare(y.display_name) }[sort];
+      const cmp = { newest: (x, y) => y.uploaded_at - x.uploaded_at, oldest: (x, y) => x.uploaded_at - y.uploaded_at, az: (x, y) => x.display_name.localeCompare(y.display_name) }[sort]
+        || require(path.join(ROOT, 'web/static/js/item-sort.js')).SORTS[sort];  // #622's date sorts
       return rows.slice().sort(cmp);
     };
     const counts = {}; types.forEach((t) => { const r = archive.filter((x) => x.media_type === t); counts[t] = { all: r.length, unfiled: r.filter((x) => unfiled.has(x.slug)).length, filed: r.filter((x) => !unfiled.has(x.slug)).length }; });
@@ -225,6 +226,9 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
       ctx.ItemCards = IC;
       // cards drawn by the real renderer would need full items; draw a marker instead (the render path is unchanged)
       IC.html = cardFn;
+      // #622: the page's Sort control is the shared static/js/item-sort.js (a <script src> before it).
+      vm.runInContext(fs.readFileSync(path.join(ROOT, 'web/static/js/item-sort.js'), 'utf8'), ctx);
+      ctx.ItemSort = ctx.window.ItemSort;
       vm.runInContext(src, ctx);
       return { grid, sortEl, tabsEl, filedEl, filedBtns, store };
     };
@@ -278,6 +282,16 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
     check('a failing first page shows the code, the message and the status, with a retry', /Could not load files: bad_sort: sort is wrong \(HTTP 400/.test(c.grid.innerHTML) && /retry/.test(c.grid.innerHTML), c.grid.innerHTML);
     c.grid.retry.click(); await settle();
     check('the retry button asks again and shows the page', requests.length === 2 && keysOf(view('all', 'all', 'az').slice(0, B)) === c.grid.cards.join(), requests);
+
+    // #622: the card-date sorts go to the server by name, like the others
+    c = mkClient(); requests.length = 0;
+    c.sortEl.value = 'date_oldest'; c.sortEl.listeners.change(); await settle();
+    check('#622 sort change to "Date: oldest": asks the server for sort=date_oldest, first page',
+      requests.length === 1 && /sort=date_oldest/.test(requests[0]) && !/cursor=/.test(requests[0]) && keysOf(view('all', 'all', 'date_oldest').slice(0, B)) === c.grid.cards.join(), requests);
+    c = mkClient(); requests.length = 0;
+    c.sortEl.value = 'bogus'; c.sortEl.listeners.change(); await settle();
+    check('#622 an unknown sort value falls back to the default (date_newest), never a bad_sort request',
+      requests.length === 1 && /sort=date_newest/.test(requests[0]), requests);
   }
 
   // ---- compare the new server orders with the old client's sorters on the old payload ------------------------------------------

@@ -1095,11 +1095,11 @@ matching the V2 mockup's Card template:
   grid) in the slim payload (`core/card_payload.py`); `provenance` left it. Check with
   `scripts/test_card_faces.py` (throwaway DB), `check_item_cards.py`, `test_home_payload.py`.
 - **The home Files panel is paged (#624).** The page embeds only the first batch (120) of each type in
-  the default view (All files, Newest), plus per-type counts and a cursor per tab (`FILES` in `home.html`);
+  the default view (All files, Date: newest), plus per-type counts and a cursor per tab (`FILES` in `home.html`);
   `GET /api/home/files` (viewer; `web/files_feed.py`) serves any other view and every later page:
-  `type` (all | a media type), `filed` (all | unfiled | filed), `sort` (newest | oldest | az, the
-  `files_feed.SORTS` registry: **to add a sort, e.g. `card_date` for #622, add one entry there and one
-  `<option>` in `home.html`**, the client passes the name through), `cursor`, `limit` (1..500), `rev=all`.
+  `type` (all | a media type), `filed` (all | unfiled | filed), `sort` (date_newest (default) |
+  date_oldest | newest | oldest | az, the `files_feed.SORTS` registry; see "Grid sort" below), `cursor`,
+  `limit` (1..500), `rev=all`.
   The answer is `{items (the card payload), unfiled_slugs (of this page), total, next_cursor}`. The
   visible list is built exactly as the page used to (browse clause, `policy.filter_visible`,
   `_split_revisions`), so restricted items never appear. A cursor is opaque (view + offset + last slug;
@@ -1110,6 +1110,22 @@ matching the V2 mockup's Card template:
   `/unfiled`, the user gallery and the hobby page still embed their whole list and can reuse this
   endpoint the same way. Check with `scripts/test_home_paging_624.py` (and `--bench`) and
   `node scripts/test_home_paging_624.js [--compare DIR]`.
+- **Grid sort: the date on the card, or the upload time (#622).** Every item grid (home Files, /unfiled,
+  the user gallery, hobby loose objects) has the same Sort menu, `templates/_item_sort_options.html`:
+  **Date: newest** (`date_newest`, the default) / **Date: oldest** (`date_oldest`), **Uploaded: newest** /
+  **Uploaded: oldest** (`newest` / `oldest`, upload time, their pre-#622 meaning, kept for old links and
+  API callers) and **A–Z** (`az`). "Date" is the date the card shows: the payload's `card_date_epoch`
+  (`web/shapes.py`, the same `timeline.resolve_item_date` value `card_date` is the label of, so the order
+  and the dates on the cards can't disagree). **No content date is not a special case:** the resolver
+  falls back to the file's own modified time, then the upload time, and the card shows that date, so the
+  item sorts where its card's date says. Ties on the card date go by upload time (same direction), then
+  keep the list's order (stable). One sorter, `static/js/item-sort.js` (`ItemSort.sorted(items, name)`,
+  `ItemSort.wire(select, onChange)`; loaded by each grid page with `?v=static_version`): /unfiled, the
+  gallery and the hobby page sort in the browser with it; home passes the name to the endpoint, where
+  `files_feed.SORTS` uses the same keys. **To add a sort:** one entry in `files_feed.SORTS`, the same in
+  `item-sort.js` `SORTS`, one `<option>` in the partial. Check with `scripts/test_card_date_sort_622.py`
+  (throwaway DB: the field per dating rule, the four pages, the server face, the endpoint order) and
+  `node scripts/test_item_sort_622.js` (the comparators, and that the three lists agree).
 - Not done (no data for it): the mockup's "From: <item>, <date>." line on a file derived from another
   file (there is no derived-from relation), and image dimensions in a file's stat box (not stored).
 

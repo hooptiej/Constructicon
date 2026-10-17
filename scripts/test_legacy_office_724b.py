@@ -327,7 +327,12 @@ try:
     check("limits: a .ppt whose stream is over MAX_PART_BYTES -> raises",
           outcome(powerpoint.ppt_text, PPT) == ("raised", "TooLarge"), outcome(powerpoint.ppt_text, PPT))
     S_BIG = mkfile("legacy_big", DOC, ".doc", "word")
-    ocr.run_ocr(S_BIG)
+    # The lowered cap lives in this process only: run this one in-process, not in a parser child.
+    os.environ["CONSTRUCTICON_PARSE_SANDBOX"] = "off"
+    try:
+        ocr.run_ocr(S_BIG)
+    finally:
+        os.environ.pop("CONSTRUCTICON_PARSE_SANDBOX", None)
     check("limits: ...and OCR settles it 'failed', saying it's too large",
           state(S_BIG)[0] == "failed" and (state(S_BIG)[1] or "").startswith("too large to read .doc: "), state(S_BIG))
 finally:

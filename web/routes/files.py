@@ -77,6 +77,30 @@ def get_file(slug: str):
     return content_security.serve_file(path, filename=row["filename"])
 
 
+@router.get("/f/{slug}/raw")  # viewer (the router default): it's the object page's link, not a hotlink
+def get_raw_file(slug: str):
+    """#703: the stored file as plain text in the browser (text/plain; charset=utf-8, inline, nosniff,
+    sandbox CSP), for types that offer it (`raw_text_fn`: source code). A file the type won't show as
+    text (binary, too big), or a type without a raw view, is the download: /f/<slug>'s response, made
+    `attachment` (Python maps .c/.h to text/plain, so /f/ alone would show a binary .c inline)."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    policy.require_file(row)  # the same door as /f/<slug>: restricted/redacted items admin only, else 404
+    if row["redacted"]:
+        raise HTTPException(status_code=410, detail="file was redacted (sensitive content) — metadata is still on the image page")
+    policy.note_access(row, access_log.HOW_FILE)  # sensitive items only; it is the file itself
+    if not row.get("stored_filename"):
+        raise HTTPException(status_code=404, detail="this object has no uploaded file — see its /object page")
+    path = storage.path_for(row["stored_filename"])
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="file missing on disk")
+    codec = object_types.raw_text_codec(object_types.get_object_type(row.get("media_type")), path)
+    if codec is None:
+        return content_security.serve_file(path, filename=row["filename"], download=True)
+    return content_security.serve_raw_text(path, row["filename"], codec)
+
+
 # #644: a request waits at most this long for a free parser slot (core/parse_limits.py) before it
 # answers 404; background work (upload, OCR) waits as long as it takes.
 _THUMB_WAIT_SECONDS = 10

@@ -150,7 +150,7 @@
 .rev-banner a { color: var(--accent); }
 .rev-stack { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .rev-stack li { overflow-wrap: anywhere; }
-.rev-stack li + li::before { content: "92 a0"; color: var(--text-3); }
+.rev-stack li + li::before { content: "\2192\00a0"; color: var(--text-3); }
 .rev-stack .rev-this { font-weight: 600; }
 .rev-tag { font-size: 11px; color: var(--text-3); margin-left: 4px; }
 .rev-picker { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }

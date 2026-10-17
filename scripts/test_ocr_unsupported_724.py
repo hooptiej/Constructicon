@@ -18,7 +18,7 @@ Covers:
   * the lamps: an 'unsupported' entry (grey #6E6B57, "Not compatible with OCR") in BOTH OCR_LAMP_META
     maps (cards.js and object_detail.html), 'none' no longer red, the reason in the tooltip; the slim
     card payload carries ocr_note; ingest.js treats anything but 'failed' as settled
-  * retry stays allowed: POST /api/image/<slug>/ocr and MCP constructicon_retry_ocr on an unsupported item
+  * retry stays allowed: POST /api/image/<slug>/ocr and MCP constructicon_run_type_action(slug, "retry_ocr") on an unsupported item
 
 Exits 1 if any check fails.
 """
@@ -328,9 +328,10 @@ if client is not None:
           state(LINK))
 
 from mcp_server import server  # noqa: E402  (imported last on purpose: it sets the MCP role)
-out = server.constructicon_retry_ocr(DOC)
-check("retry (MCP): allowed on an unsupported item", isinstance(out, dict) and "error" not in out
-      and out.get("ocr_status") in ("pending", "unsupported"), out if not isinstance(out, dict) else out.get("error"))
+out = server.constructicon_run_type_action(DOC, "retry_ocr")
+check("retry (MCP run_type_action retry_ocr): allowed on an unsupported item", isinstance(out, dict) and "error" not in out
+      and out.get("ok") is True and out["item"].get("ocr_status") in ("pending", "unsupported"),
+      out if not isinstance(out, dict) else out.get("error"))
 for _ in range(100):
     if db.get_by_slug(DOC)["ocr_status"] != "pending":
         break

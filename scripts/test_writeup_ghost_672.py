@@ -5,7 +5,7 @@ Throwaway DB (scripts/_testenv.py), the real core ops, the MCP tool and the web 
 
     python scripts/test_writeup_ghost_672.py
 
-Checks: cards.update / MCP constructicon_set_project_writeup / POST /api/projects/{id} each retire
+Checks: cards.update / MCP constructicon_update_project(fields.writeup_slug) / POST /api/projects/{id} each retire
 the blank write-up in the same batch; undo restores it (and the old pointer); a previous write-up
 with text is left alone; a blank one another card still holds only leaves this card; dry_run writes
 nothing; timeline.resolve_project_span ignores an empty write-up document wherever it sits.
@@ -178,7 +178,7 @@ from mcp_server import server as mcp  # noqa: E402
 with actor.acting_as(actor.ACTOR_UI):
     card7 = new_card("MCP Card")
 blank7 = card7["writeup_slug"]
-out = mcp.constructicon_set_project_writeup(card7["id"], document("Written through the MCP."))
+out = mcp.constructicon_update_project(card=card7["id"], fields={"writeup_slug": document("Written through the MCP.")})
 check("MCP: tool succeeds", isinstance(out, dict) and out.get("batch_id"), out)
 check("MCP: old blank write-up trashed and off the card", db.get_by_slug(blank7) is None and in_trash(blank7)
       and not on_card(card7["id"], blank7))

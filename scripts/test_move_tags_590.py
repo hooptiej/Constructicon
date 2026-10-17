@@ -173,13 +173,13 @@ cards.undo(res.batch_id)
 
 # ---- the MCP tool --------------------------------------------------------------------------
 with actor.acting_as(actor.ACTOR_MCP):
-    out = server.constructicon_move_files([F1, F2], A["slug"], B["slug"])
+    out = server.constructicon_card_files(B["slug"], [F1, F2], action="move", from_card=A["slug"])
 s = snap([F1, F2])
-check("MCP move_files: same swap", out.get("ok") and all("Desk Build" in s["post_tags"][f]
+check("MCP card_files(move): same swap", out.get("ok") and all("Desk Build" in s["post_tags"][f]
       and "Pinball Desk" not in s["post_tags"][f] and "Pinball Desk" not in s["chips"][f] for f in (F1, F2)), out)
 with actor.acting_as(actor.ACTOR_MCP):
     server.constructicon_undo(out["batch_id"])
-check("MCP move_files: constructicon_undo restores", snap([F1, F2, F3], [A["id"], B["id"]]) == before)
+check("MCP card_files(move): constructicon_undo restores", snap([F1, F2, F3], [A["id"], B["id"]]) == before)
 
 print()
 print("FAILED: " + ", ".join(FAILS) if FAILS else "all checks passed")

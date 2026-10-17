@@ -62,8 +62,8 @@ check("remove-item unknown slug 404", r.status_code == 404, r.status_code)
 # ---- 2. constructicon_run_type_action is a registered MCP tool -----------------------------
 names = {t.name for t in asyncio.run(server.mcp.list_tools())}
 check("run_type_action registered", "constructicon_run_type_action" in names)
-check("update/get_posts_for_tag/detach_tag still registered",
-      {"constructicon_update", "constructicon_get_posts_for_tag", "constructicon_detach_tag"} <= names)
+check("update/list_items/item_tags registered (#746: get_posts_for_tag / detach_tag folded into them)",
+      {"constructicon_update", "constructicon_list_items", "constructicon_item_tags"} <= names)
 
 # ---- 3. constructicon_update(type_metadata) merges + cleans --------------------------------
 make_item("md1", type_metadata={"auto_caption": "a cat", "view_count": 7, "medium": "oil"})
@@ -152,17 +152,18 @@ def tag_count():
 
 
 n = tag_count()
-r = server.constructicon_get_posts_for_tag("no-such-tag-xyz")
-check("get_posts_for_tag unknown tag errors", isinstance(r, dict) and r["error"]["code"] == "not_found"
+r = server.constructicon_list_items(which="tag", tag="no-such-tag-xyz")
+check("list_items(which=tag) unknown tag errors", isinstance(r, dict) and r["error"]["code"] == "not_found"
       and "no-such-tag-xyz" in r["error"]["message"], r)
 make_item("tg1")
-r = server.constructicon_detach_tag("tg1", "no-such-tag-xyz")
-check("detach_tag unknown tag errors", isinstance(r, dict) and r.get("ok") is False and r["error"]["code"] == "not_found", r)
+r = server.constructicon_item_tags("tg1", ["no-such-tag-xyz"], action="detach")
+check("item_tags(detach) unknown tag errors", isinstance(r, dict) and r.get("ok") is False and r["error"]["code"] == "not_found", r)
 check("neither created a tag", tag_count() == n, f"{n} -> {tag_count()}")
-server.constructicon_attach_tags("tg1", ["real-tag"])
+server.constructicon_item_tags("tg1", ["real-tag"])
 check("attach still creates", tag_count() == n + 1)
-check("lookup finds the existing tag", isinstance(server.constructicon_get_posts_for_tag("real-tag"), list))
-check("detach works on an existing tag", server.constructicon_detach_tag("tg1", "real-tag") is not None)
+check("lookup finds the existing tag", isinstance(server.constructicon_list_items(which="tag", tag="real-tag"), list))
+r = server.constructicon_item_tags("tg1", ["real-tag"], action="detach")
+check("detach works on an existing tag", isinstance(r, dict) and r.get("ok") is not False and r.get("batch_id"), r)
 
 # ---- 9. project delete confirm wording matches real undo -----------------------------------
 tpl_path = os.path.join(ROOT, "web", "templates", "project_detail.html")

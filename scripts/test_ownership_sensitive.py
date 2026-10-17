@@ -301,8 +301,8 @@ check("bulk: E2 (not the uploader) now can't see them; E1 can",
 r = C["E2"].post("/api/bulk/sensitive", data={"slugs": [b1], "sensitive": "true"}, headers=H["E2"])
 check("bulk on an item E2 can no longer see -> 404 not_found", r.status_code == 404, r.status_code)
 with actor.acting_as(actor.ACTOR_MCP):
-    out = mcp.constructicon_set_sensitive(b2, False)
-check("MCP set_sensitive(False) as the token (admin) clears it", out.get("sensitive") is False and row(b2)["sensitive"] == 0, out)
+    out = mcp.constructicon_update(b2, fields={"sensitive": False})
+check("MCP update(fields.sensitive=false) as the token (admin) clears it", out.get("sensitive") is False and row(b2)["sensitive"] == 0, out)
 
 # ---- 4. the upload-time checkbox -----------------------------------------------------------------
 print("--- 4. upload-time flag ---")
@@ -337,8 +337,8 @@ else:
 # ---- 6. captions agent and exports -----------------------------------------------------------------
 print("--- 6. agent + exports ---")
 with actor.acting_as(actor.ACTOR_MCP):
-    nc = mcp.constructicon_list_needs_caption(limit=500)
-check("list_needs_caption (as the admin MCP) never offers a flagged item", E1_ITEM not in json.dumps(nc)
+    nc = mcp.constructicon_needs(view="caption", limit=500)
+check("needs(view=caption) (as the admin MCP) never offers a flagged item", E1_ITEM not in json.dumps(nc)
       and LOCKED not in json.dumps(nc))
 with actor.acting_as("user:os_ed1"):
     from core import membership  # noqa: E402

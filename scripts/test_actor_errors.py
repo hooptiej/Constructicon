@@ -235,21 +235,23 @@ check("every registered tool is wrapped", server._check_every_tool_wrapped() is 
 check("get missing -> not_found (not None)", mcp_err(server.constructicon_get("nope"), "not_found"))
 check("get_project missing -> not_found", mcp_err(server.constructicon_get_project("nope"), "not_found"))
 check("delete missing -> not_found (not False)", mcp_err(server.constructicon_delete("nope"), "not_found"))
-check("set_status bad -> bad_status", mcp_err(server.constructicon_set_status(card["id"], "bogus"), "bad_status"))
+check("update_project bad stage -> bad_status",
+      mcp_err(server.constructicon_update_project(card=card["id"], stage="bogus"), "bad_status"))
 check("resolve unknown decision -> not_found",
       mcp_err(server.constructicon_resolve_pending_decision(999999, choice="x"), "not_found"))
-check("dismiss bad key -> bad_request", mcp_err(server.constructicon_dismiss_need("not-a-key"), "bad_request"))
-check("get_posts_for_tag unknown -> not_found (was raise ValueError)",
-      mcp_err(server.constructicon_get_posts_for_tag("no-such-tag"), "not_found"))
+check("queue_item(dismiss) bad key -> bad_request",
+      mcp_err(server.constructicon_queue_item("not-a-key", action="dismiss"), "bad_request"))
+check("list_items(which=tag) unknown -> not_found (was raise ValueError)",
+      mcp_err(server.constructicon_list_items(which="tag", tag="no-such-tag"), "not_found"))
 check("run_type_action unknown -> not_found (was {'error': str})",
       mcp_err(server.constructicon_run_type_action("nope", "x"), "not_found"))
-check("set_content_date bad -> bad_date (#541: items.parse_date)",
-      mcp_err(server.constructicon_set_content_date("item-a", "not a date"), "bad_date"))
+check("update fields.content_date bad -> bad_date (#541: items.parse_date)",
+      mcp_err(server.constructicon_update("item-a", fields={"content_date": "not a date"}), "bad_date"))
 check("update bad date_made -> bad_physical_piece",
       mcp_err(server.constructicon_update("item-a", type_metadata={"date_made": "june 2009"}), "bad_physical_piece"))
 ok = server.constructicon_get("item-a")
 check("a successful return is unchanged", isinstance(ok, dict) and ok.get("slug") == "item-a" and "ok" not in ok, ok)
-server.constructicon_set_status(card["id"], "idea")
+server.constructicon_update_project(card=card["id"], stage="idea")
 check("an MCP write is recorded as mcp", last_change_actor("set_status") == ("set_status", "mcp"), last_change_actor())
 check("an MCP call leaves no context behind", actor.current_actor() == actor.ACTOR_SCRIPT)
 
@@ -258,13 +260,13 @@ res = asyncio.run(server.mcp.call_tool("constructicon_get", {"slug": "nope"}))
 check("SDK path: refusal is an isError result", res.is_error is True)
 check("SDK path: structuredContent is the shared shape", mcp_err(res.structured_content, "not_found"), res)
 check("SDK path: text content is the same JSON", mcp_err(json.loads(res.content[0].text), "not_found"))
-res = asyncio.run(server.mcp.call_tool("constructicon_get_posts_for_tag", {"tag_name": "no-such-tag"}))
+res = asyncio.run(server.mcp.call_tool("constructicon_list_items", {"which": "tag", "tag": "no-such-tag"}))
 check("SDK path: a list-returning tool's refusal passes output validation", res.is_error is True
       and mcp_err(res.structured_content, "not_found"), res)
 res = asyncio.run(server.mcp.call_tool("constructicon_get", {"slug": "item-a"}))
-check("SDK path: success is not an error (structuredContent wraps a `dict | None` return in `result`, as before)",
-      not res.is_error and (res.structured_content.get("result") or {}).get("slug") == "item-a", res)
-res = asyncio.run(server.mcp.call_tool("constructicon_set_status", {"card": card["id"], "stage": "paused"}))
+check("SDK path: success is not an error; the result is the JSON text (#746: no outputSchema, no structuredContent)",
+      not res.is_error and res.structured_content is None and json.loads(res.content[0].text).get("slug") == "item-a", res)
+res = asyncio.run(server.mcp.call_tool("constructicon_update_project", {"card": card["id"], "stage": "paused"}))
 check("SDK path: write recorded as mcp (sync tool runs on a worker thread)",
       not res.is_error and last_change_actor("set_status") == ("set_status", "mcp"), last_change_actor())
 

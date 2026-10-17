@@ -226,7 +226,7 @@ MCP_TOOLS = {
     "constructicon_detach_tag": (I, "alias"),
     "constructicon_retry_ocr": (I, "alias"),
     "constructicon_run_type_action": (I, "the item it ran on"),
-    "constructicon_set_agent_notes": (I, "the item it changed (items.update)"),
+    "constructicon_set_agent_notes": (I, "the item it changed (items.update); card= (#745) touches no item"),
     "constructicon_set_provenance": (I, "alias (items.update)"),
     "constructicon_set_content_date": (I, "alias (items.update)"),
     "constructicon_set_highlight": (I, "alias (items.update)"),

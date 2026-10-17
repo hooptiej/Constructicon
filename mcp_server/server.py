@@ -215,7 +215,8 @@ ACTION_ROLES = {
     ("constructicon_update", None): E,
     ("constructicon_view", None): V,
     ("constructicon_set_caption", None): E,
-    ("constructicon_set_agent_notes", None): E,
+    ("constructicon_set_agent_notes", "slug"): E,  # an item's private notes (#206)
+    ("constructicon_set_agent_notes", "card"): E,  # a card's (#745); same rule as the item's
     ("constructicon_add_content", None): E,
     ("constructicon_backup", None): A,
     ("constructicon_redact", "redact"): E,
@@ -1697,8 +1698,9 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
 def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREVIEW_CHARS) -> dict | None:
     """One card in full: its fields and live status (kind, activity, stage, stop_reason + labels,
     needs_input; `status` is the frozen v1 word), items (with tags; text previews), cover, write-up
-    (whole), open_decisions, families / members / children, links (both directions), and its face
-    text (synopsis, flavor, writeup_lead, face_text, face_text_source). For a read-before-change
+    (whole), open_decisions, families / members / children, links (both directions), its face
+    text (synopsis, flavor, writeup_lead, face_text, face_text_source) and agent_notes (your private
+    notes, from constructicon_set_agent_notes(card=...); null when none). For a read-before-change
     view with level, needs and recent changes: constructicon_explain_card.
     """
     chars = text_chars_arg(text_chars)
@@ -1745,6 +1747,8 @@ def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREV
                      for c in db.list_child_projects(project["id"])],
         # #596: the face text (synopsis, flavor, the cached write-up lead, what the face shows).
         **cards.text_fields(project),
+        # #745: the card's private agent notes. Only this read (and set_agent_notes) returns them.
+        "agent_notes": db.get_card_agent_notes(project["id"]),
     }
 
 
@@ -2184,13 +2188,27 @@ def constructicon_retry_ocr(slug: str) -> dict | None:
     return _retry_ocr(slug)
 
 
-@mcp.tool()
-def constructicon_set_agent_notes(slug: str, notes: str | None = None) -> dict | None:
-    """Set (or, with null, clear) your private working notes on an item, e.g. "Fusion 360
-    screenshot, not user-facing" or "inventoried, skip on re-run". Never shown in the app, the
-    web API or exports. Read them back: constructicon_get(slug, include=["agent_notes"]).
-    -> the item plus agent_notes.
+def _agent_notes_target(args):
+    """Which notes a set_agent_notes call writes (its role row in ACTION_ROLES): a card's or an item's."""
+    return "card" if args.get("card") is not None else "slug"
+
+
+@mcp.tool(selector=(_agent_notes_target, ("slug", "card")))
+def constructicon_set_agent_notes(slug: str | None = None, notes: str | None = None,
+                                  card: str | int | None = None) -> dict | None:
+    """Set (or, with null, clear) your private working notes on an item (slug=) or a card (card=, its
+    id or slug); exactly one of them. E.g. "Fusion 360 screenshot, not user-facing", or story details
+    the owner mentioned for a later write-up. Never shown in the app, the web API, search or exports.
+    Read them back: constructicon_get(slug, include=["agent_notes"]) for an item,
+    constructicon_get_project(card) for a card. Undoable.
+    -> the item (or card) plus agent_notes; a card also gets batch_id.
     """
+    if (slug is None) == (card is None):
+        raise InvalidInput("Pass exactly one of slug= (an item) or card= (a card).")
+    if card is not None:  # #745: the card twin, through the card service (not_found if missing)
+        res = cards.set_agent_notes(card, notes)
+        return {**_to_public_project(res.data["card"]), "agent_notes": res.data["agent_notes"],
+                "batch_id": res.batch_id}
     items.update(slug, agent_notes=notes)  # #541 phase D: through the item service (not_found if missing)
     row = db.get_by_slug(slug)
     # Never return the raw DB row: it carries the `embedding` BLOB, which

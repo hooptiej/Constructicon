@@ -1831,6 +1831,34 @@ def update(card, *, title=None, description=None, cover_slug=None, cover_project
     return Result(True, changed, [], batch_id, dry_run, {"card": fresh})
 
 
+OP_CARD_AGENT_NOTES = "card_agent_notes"
+
+
+def set_agent_notes(card, notes, *, dry_run=False, actor=None, batch_id=None):
+    """(#745) Sets (or, with None, clears) the card's private agent notes: the card twin of an item's
+    agent_notes (#206, `items.update(agent_notes=...)`), stored exactly as given, the same way. ONE
+    imaged change-log row (op card_agent_notes), undoable with the generic undo; a no-op logs nothing.
+    Deliberately NOT part of `update`: it leaves updated_at alone, so a private note never reorders
+    the card lists or shows as an edit anywhere public. Only the MCP (`constructicon_set_agent_notes`)
+    calls it. Change summaries leave the text out (`_changes_from_log` strips private card
+    columns); this op's own summary says only that the field changed. data: {card: the row after
+    (no notes, see db._card_row), agent_notes: the notes after}."""
+    if notes is not None and not isinstance(notes, str):
+        raise InvalidInput("notes must be text, or null to clear them.")
+    row = get_card(card)
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_CARD_AGENT_NOTES, actor, batch_id, [row["slug"]]) as log:
+            log.update("projects", {"id": row["id"]}, {"agent_notes": notes})
+            muts = list(log.muts)
+        after = db.get_card_agent_notes(row["id"])
+        fresh = db.get_project(row["id"])
+    changed = [{"op": OP_CARD_AGENT_NOTES, "card": row["slug"], "table": "projects", "key": m["key"],
+                "field": "agent_notes", "before": "(private)", "after": "(private)"} for m in muts]
+    return Result(True, changed, [] if changed else ["Nothing changed."], batch_id if changed else None,
+                  dry_run, {"card": fresh, "agent_notes": after})
+
+
 def _blank_writeup_left_behind(row, writeup_slug):
     """#672: the card's previous write-up when `writeup_slug` points the card at a DIFFERENT item
     and the previous one is an empty document (the blank write-up every card is born with), else
@@ -2485,6 +2513,9 @@ def _changes_from_log(rows):
                             "field": "decision", "before": _state(b) if b and "resolved_at" in b else "open",
                             "after": _state(a) if a and "resolved_at" in a else None})
                 continue
+            if m["table"] == "projects":  # #745: a card's agent notes never ride in a change summary
+                b = {k: v for k, v in b.items() if k not in db.PRIVATE_CARD_COLUMNS} if b else b
+                a = {k: v for k, v in a.items() if k not in db.PRIVATE_CARD_COLUMNS} if a else a
             if b is None or a is None:
                 if m["table"] == "capture_events":  # #541: an item row can carry a megabyte of OCR text
                     from . import items as _items

@@ -861,6 +861,12 @@ def init_db(migrate=True):
         # Never exposed through public HTTP API — agent-only scratch space.
         if "agent_notes" not in existing_columns:
             _add_column(conn, "capture_events", "agent_notes", "TEXT")
+        # projects.agent_notes (#745): the same private scratch field on a CARD. Schema DDL like
+        # every other column (both processes, so the MCP that writes it never waits on web's
+        # migrations); NULL = none, so nothing to backfill. It never rides in a card row the readers
+        # below hand out (_card_row strips it); only get_card_agent_notes reads it.
+        if "agent_notes" not in existing_project_columns:
+            _add_column(conn, "projects", "agent_notes", "TEXT")
         # provenance + highlight (#341): Curator Stage 1 data model. provenance is a
         # controlled-vocab extensible field describing how the object came to be (found,
         # created, documented, result, reference, design). highlight is a boolean
@@ -2884,7 +2890,7 @@ def list_linked_projects(slug):
             "SELECT slug_a FROM project_relations WHERE slug_b = ?) ORDER BY p.updated_at DESC",
             (slug, slug),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -2899,7 +2905,7 @@ def list_related_projects(slug):
             "WHERE r.slug_a = ? AND r.type = 'related' ORDER BY p.updated_at DESC",
             (slug,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -3370,6 +3376,31 @@ def resolve_project_cover_slug(project_or_id, _depth=0):
     return None
 
 
+PRIVATE_CARD_COLUMNS = ("agent_notes",)  # #745: never in a card row a reader hands out
+
+
+def _card_row(row):
+    """A projects row as a dict WITHOUT its private columns (#745). Every reader below that hands out
+    whole card rows goes through this, so a route or shaper that dumps a row (or a future one that
+    forgets to whitelist) can't leak the agent notes. Undo and the change log read the table
+    themselves (image_get), so they still see and restore the column."""
+    d = dict(row)
+    for col in PRIVATE_CARD_COLUMNS:
+        d.pop(col, None)
+    return d
+
+
+def get_card_agent_notes(card_id):
+    """A card's private agent notes (#745), or None. The ONE reader of projects.agent_notes: MCP
+    get_project and set_agent_notes only."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT agent_notes FROM projects WHERE id = ?", (int(card_id),)).fetchone()
+        return row["agent_notes"] if row else None
+    finally:
+        conn.close()
+
+
 def get_project(id_or_slug):
     """Look up by either numeric id or slug — a project detail page will
     likely be reached by slug in a URL, but internal callers (e.g.
@@ -3380,7 +3411,7 @@ def get_project(id_or_slug):
             row = conn.execute("SELECT * FROM projects WHERE id = ?", (int(id_or_slug),)).fetchone()
         else:
             row = conn.execute("SELECT * FROM projects WHERE slug = ?", (id_or_slug,)).fetchone()
-        return dict(row) if row else None
+        return _card_row(row) if row else None
     finally:
         conn.close()
 
@@ -3398,7 +3429,7 @@ def list_projects(status=None, kind=None, activity=None, stage=None):
                 args.append(val)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         rows = conn.execute(f"SELECT * FROM projects{where} ORDER BY updated_at DESC", args).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -3473,7 +3504,7 @@ def list_child_projects(project_id):
             "SELECT * FROM projects WHERE parent_id = ? ORDER BY title",
             (project_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -3559,7 +3590,7 @@ def list_projects_for_post(post_slug):
             "WHERE pi.post_slug = ? ORDER BY p.updated_at DESC",
             (post_slug,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -4138,7 +4169,7 @@ def list_projects_referencing(card_id):
     """Cards that point at `card_id` through cover_project_id or a card home override."""
     conn = get_conn()
     try:
-        return [dict(r) for r in conn.execute(
+        return [_card_row(r) for r in conn.execute(
             "SELECT * FROM projects WHERE cover_project_id = ? OR (home_kind = 'card' AND home_ref = ?)",
             (card_id, card_id))]
     finally:
@@ -4256,7 +4287,7 @@ def list_family_members(family_id):
             "ORDER BY fm.sort_order, fm.created_at, fm.rowid",
             (family_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -4270,7 +4301,7 @@ def list_families_for_member(member_id):
             "WHERE fm.member_id = ? ORDER BY fm.created_at, fm.rowid",
             (member_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -4703,7 +4734,7 @@ def list_entry_projects(entry_id):
             "JOIN projects p ON p.id = bep.project_id WHERE bep.entry_id = ? ORDER BY bep.sort_order ASC",
             (entry_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -4925,7 +4956,7 @@ def list_projects_for_hobby(tag_id):
             "WHERE ph.hobby_tag_id = ? ORDER BY p.updated_at DESC",
             (tag_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 

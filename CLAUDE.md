@@ -1023,7 +1023,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   `delete`. Their raw writers (`db._rename_object`, `_update_content_metadata`, `_set_type_metadata`,
   `_set_provenance`, `_set_highlight`, `_set_brand_asset`, `_set_display_date_override`,
   `_set_content_date`, `_set_media_type`, `_mark_redacted`, `_unmark_redacted`, `_delete_upload`) are
-  private since phase D. The MCP's agent notes (#206) go through `items.update(agent_notes=...)`. Deliberate raw exceptions: pipeline bookkeeping (caption status/results in
+  private since phase D. The MCP's agent notes (#206) go through `items.update(agent_notes=...)`; a card's (#745) through `cards.set_agent_notes`. Deliberate raw exceptions: pipeline bookkeeping (caption status/results in
   `core/captions.py`, upload-time `core/embedded_metadata.py`, a YouTube row's fetched publish
   date, OCR state). `items.relate` / `items.unrelate` (phase C) are the item <-> item "related"
   link: relate also shares tags and card memberships both ways (#16), all imaged, so one undo
@@ -1541,6 +1541,8 @@ One generated file of every registered type and extension, to drop-test a new in
   hobby's tag), so tagging into a project also surfaces it via ordinary tag browsing. The link is the
   id, **not** the name: nothing renames the tag when the card is retitled (or the reverse), so the two
   names drift (7 of 75 prod cards had, per #552) and older cards have `tag_id` NULL.
+  `agent_notes` (#745) is the card's private agent scratch field: never in a row `core/db.py` hands
+  out, read only by `db.get_card_agent_notes` (see the MCP section, "Agent notes on cards").
 - **`project_items`** — many-to-many join, `(project_id, post_slug,
   sort_order)`, with a manual `sort_order` for deliberate (non-chronological)
   ordering within a project.
@@ -1657,7 +1659,7 @@ view `item_search_src` in `core/db.py`: `display_name`, `content_description` an
 name the item has had, so a rename never makes the old filename unfindable; `core/item_title.py`
 picks only one of them to SHOW), the free-text `tags` column plus tag-tree tag names (`post_tags`),
 the titles of the cards it is on (`project_items`), the uploader's note (`description`) and
-`extracted_text`. Not indexed: `agent_notes`, `type_metadata`, `provenance`, the slug.
+`extracted_text`. Not indexed: `agent_notes` (an item's or its card's, #745), `type_metadata`, `provenance`, the slug.
 
 - **Matching:** each run of letters/digits you type is a word-START match, all required ("tun
   gig" finds "Tuning the Gigabyte"); accents fold; case is ignored. Quotes, `*`, `-`, `:`, brackets
@@ -1724,6 +1726,22 @@ configuration gap for that session, not evidence the server itself is gone.
     stage together validate against the new kind). Agent notes are written ONLY by
     `constructicon_set_agent_notes` (`agent_notes` is refused as a `fields` key); read them with
     `constructicon_get(slug, include=["agent_notes"])` (`include` also takes "related", "revisions").
+  - **Agent notes on cards (#745).** `constructicon_set_agent_notes(slug=None, notes=None, card=None)`
+    takes exactly ONE target (neither or both: `bad_request`): `slug=` an item (#206, unchanged, still
+    positional `(slug, notes)`), `card=` a card's id or slug (`not_found` if missing). The card path is
+    `cards.set_agent_notes(card, notes)`: one imaged change-log row (op `card_agent_notes`), undoable,
+    a no-op logs nothing, **`updated_at` is not bumped** (so a private note never reorders the card
+    lists); its answer is the card plus `agent_notes` and `batch_id`. `constructicon_get_project` always
+    returns the card's `agent_notes` (null when none). Role rows: `(set_agent_notes, "slug")` and
+    `(set_agent_notes, "card")`, both editor. **Privacy is enforced at the reader:** `projects.agent_notes`
+    (schema DDL in `init_db`, both processes) is stripped from every whole card row `core/db.py` hands out
+    (`db._card_row`, `db.PRIVATE_CARD_COLUMNS`: `get_project`, `list_projects`, children, family members,
+    hobby / item / blog entry / related / referencing lists), so a route that dumps a raw row (the card
+    Save, orphan-child) can't leak it; `db.get_card_agent_notes(id)` is its one reader. Change summaries
+    (`cards._changes_from_log`, which every card / hobby / blog / undo answer uses) drop private card
+    columns too; the raw row images stay in the change log (MCP `list_changes`, admin `/api/audit-log`),
+    as for item notes, so undo still restores them. Never indexed for search, never exported.
+    Check: `scripts/test_card_agent_notes_745.py`.
   - **The whole-archive wipe** is `constructicon_delete(everything=true, confirm="DELETE EVERYTHING")`:
     both keys or nothing (either alone, or with another target, is refused); `delete`, `redact` and
     `trash` carry `destructiveHint`.

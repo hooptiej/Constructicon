@@ -20,7 +20,8 @@ from pathlib import Path
 from markupsafe import Markup, escape
 
 from .. import storage
-from . import _office, _preview, register, ObjectTypeSpec, ThumbnailSource
+from . import (_office, _preview, register, ENCRYPTED_NOTE, NotCompatibleFile, ObjectTypeSpec,
+               ThumbnailSource)
 
 STATS_KEY = "spreadsheet_stats"
 MODERN = {".xlsx", ".xlsm", ".xltx", ".xltm"}
@@ -161,7 +162,9 @@ def get_embedded_metadata(path):
 
 
 def extract_text_for_row(row):
-    """text_extract_fn: cell text from every sheet, row by row, capped."""
+    """text_extract_fn: cell text from every sheet, row by row, capped. #724: a password-protected
+    workbook raises NotCompatibleFile ("encrypted: ...", grey); a workbook that can't be read at all
+    raises UnreadableFile ("corrupt or unreadable .xls: ...", failed)."""
     path = _path(row)
     if not path:
         return ""
@@ -170,7 +173,12 @@ def extract_text_for_row(row):
     try:
         if path.suffix.lower() == ".xls":
             import xlrd
-            book = xlrd.open_workbook(path, on_demand=True)
+            try:
+                book = xlrd.open_workbook(path, on_demand=True)
+            except xlrd.XLRDError as e:
+                if "encrypted" in str(e).lower():  # xlrd: "Workbook is encrypted" (a FILEPASS record)
+                    raise NotCompatibleFile(ENCRYPTED_NOTE) from e
+                raise
             try:
                 for i in range(book.nsheets):
                     sh = book.sheet_by_index(i)
@@ -187,7 +195,9 @@ def extract_text_for_row(row):
                         break
             finally:
                 book.release_resources()
-        elif path.suffix.lower() in MODERN and not _office.is_encrypted_ooxml(path):
+        elif path.suffix.lower() in MODERN:
+            if _office.is_encrypted_ooxml(path):
+                raise NotCompatibleFile(ENCRYPTED_NOTE)
             from openpyxl import load_workbook
             wb = load_workbook(path, read_only=True, data_only=True)
             try:
@@ -204,10 +214,12 @@ def extract_text_for_row(row):
                         break
             finally:
                 wb.close()
+    except (NotCompatibleFile, MemoryError):
+        raise
     except Exception as e:
         print(f"Spreadsheet text extraction failed for {path}: {e!r}")
-        if not out:
-            raise  # #724: nothing read is a real read error (core/ocr.py: failed), not "no text"
+        if not out:  # #724: nothing read is a real read error (core/ocr.py: failed, saying so), not "no text"
+            raise _office.unreadable(path, e) from e
     return "\n".join(out)[:cap]
 
 

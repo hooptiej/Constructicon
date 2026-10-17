@@ -136,8 +136,8 @@ OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 504  # an OLE header
 import make_type_samples  # noqa: E402  (scripts/: its hand-built OLE writer)
 WORD6 = make_type_samples.ole_file({"WordDocument": struct.pack("<HH", 0xA5DC, 0x0065) + b"\x00" * 0x200})
 PPT95 = make_type_samples.ole_file({"PowerPoint Document": b"\x00" * 64})
-DOC_NOTE = "legacy .doc: older Word format or password-protected, no readable text"
-PPT_NOTE = "legacy .ppt: older PowerPoint format or password-protected, no readable text"
+DOC_NOTE = "legacy .doc: Word 6/95 or older format, no readable text"
+PPT_NOTE = "legacy .ppt: PowerPoint 95 or older format, no readable text"
 
 # ============================================================================================
 # 1. status transitions
@@ -177,7 +177,10 @@ check("a .docx that isn't a zip (the reader raised) stays 'failed'", state(BAD_D
 check("a missing stored file stays 'failed' (not 'unsupported')", state(GONE_DOC)[0] == "failed", state(GONE_DOC))
 check("a corrupt image stays 'failed'", state(BAD_IMG)[0] == "failed", state(BAD_IMG))
 check("a YouTube video whose thumbnail couldn't be fetched stays 'failed'", state(YT)[0] == "failed", state(YT))
-check("no note is left on a failed row", all(state(s)[1] is None for s in (BAD_DOCX, GONE_DOC, BAD_IMG, YT)))
+check("no note is left on a failed row whose reader gave no reason",
+      all(state(s)[1] is None for s in (GONE_DOC, BAD_IMG, YT)))
+check("a corrupt .docx's failure says so (#724 owner decision 2026-10-17)",
+      (state(BAD_DOCX)[1] or "").startswith("corrupt or unreadable .docx: "), state(BAD_DOCX))
 
 # set_ocr_status rules
 try:

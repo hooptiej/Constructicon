@@ -13,9 +13,10 @@ persist directory leads to the document, its slide list gives the slides in
 order, and each slide's text (its outline text and its own text boxes) is
 read, then the speaker notes. Masters (title/notes/handout) are never
 visited, so their "Click to edit Master title style" placeholders stay out.
-PowerPoint 95 and older, password-protected and unrecognised files have no
-text we can read (None: OCR settles "not compatible"); a broken file raises
-(failed).
+PowerPoint 95 and older, password-protected (never decrypted) and
+unrecognised files raise NotCompatibleFile (OCR settles "not compatible",
+grey, with the reason); a broken file raises UnreadableFile ("corrupt or
+unreadable .ppt: ...", failed, red).
 """
 
 import re
@@ -26,7 +27,8 @@ from pathlib import Path
 from markupsafe import Markup, escape
 
 from .. import storage
-from . import _office, _preview, register, ObjectTypeSpec, ThumbnailSource
+from . import (_office, _preview, register, ENCRYPTED_NOTE, NotCompatibleFile, ObjectTypeSpec,
+               ThumbnailSource)
 
 STATS_KEY = "powerpoint_stats"
 MAX_OUTLINE = 40
@@ -105,6 +107,8 @@ DOC_FILE_VERSION = 0x03F4            # PowerPoint 97-2003
 _MAX_RECORDS = 2_000_000             # records walked per deck, a backstop on hostile nesting
 _MAX_DEPTH = 64
 _MAX_EDITS = 10_000                  # UserEditAtoms followed (one per incremental save)
+OLD_PPT_NOTE = "legacy .ppt: PowerPoint 95 or older format, no readable text"
+UNRECOGNISED_NOTE = "legacy .ppt: not a PowerPoint 97-2003 deck we recognise, no readable text"
 
 
 def _rec(data, off, end):
@@ -200,26 +204,31 @@ def ppt_text(path, cap=None):
     text from the slide list, then its own text boxes), then the speaker notes, slides separated by
     a blank line. Master slides are never read, so their placeholder text never appears.
 
-    Returns the text (capped at `cap` characters; "" when the deck holds none), or None when this
-    isn't a format we read: no Current User stream, PowerPoint 95 or older, password-protected.
-    Raises when it is a PowerPoint 97+ deck that is broken (truncated records, bad offsets)."""
+    Returns the text (capped at `cap` characters; "" when the deck holds none). Raises
+    NotCompatibleFile (with the reason) when this isn't a format we read: no Current User stream
+    (PowerPoint 95 or older), an older version, password-protected. Raises anything else when it is
+    a PowerPoint 97+ deck that is broken (truncated records, bad offsets)."""
     import olefile
     cap = cap or storage.MAX_EXTRACTED_TEXT_CHARS
     with olefile.OleFileIO(str(path)) as ole:
-        if not ole.exists("PowerPoint Document") or not ole.exists("Current User"):
-            return None
+        if not ole.exists("PowerPoint Document"):
+            raise NotCompatibleFile(UNRECOGNISED_NOTE)
+        if ole.exists("EncryptedSummary"):
+            raise NotCompatibleFile(ENCRYPTED_NOTE)  # an encrypted deck's own marker stream
+        if not ole.exists("Current User"):
+            raise NotCompatibleFile(OLD_PPT_NOTE)
         cu = _office.read_ole_stream(ole, "Current User", cap=64 * 1024)
         data = _office.read_ole_stream(ole, "PowerPoint Document")
     if len(cu) < 28:
-        return None
+        raise ValueError("Current User stream too short")
     rtype = struct.unpack_from("<H", cu, 2)[0]
     token, first_edit, _name_len, file_version, major = struct.unpack_from("<IIHHB", cu, 12)
     if rtype != RT_CURRENT_USER or token not in (HEADER_TOKEN, HEADER_TOKEN_ENCRYPTED):
-        return None                           # not a CurrentUserAtom we know
+        raise NotCompatibleFile(UNRECOGNISED_NOTE)   # not a CurrentUserAtom we know
     if token == HEADER_TOKEN_ENCRYPTED:
-        return None                           # password-protected
+        raise NotCompatibleFile(ENCRYPTED_NOTE)      # never decrypted
     if file_version != DOC_FILE_VERSION or major != 3:
-        return None                           # PowerPoint 95 or older
+        raise NotCompatibleFile(OLD_PPT_NOTE)
     budget = [_MAX_RECORDS]
     persist, doc_ref = _persist_map(data, first_edit, budget)
     dbody, dend = _container_at(data, persist, doc_ref, RT_DOCUMENT, budget)
@@ -256,21 +265,27 @@ def ppt_text(path, cap=None):
 
 def extract_text_for_row(row):
     """text_extract_fn: every slide's text, then speaker notes, capped. A legacy .ppt reads
-    through ppt_text; None (PowerPoint 95, protected, unrecognised) settles "not compatible"."""
+    through ppt_text. #724: NotCompatibleFile (encrypted, PowerPoint 95, unrecognised) settles "not
+    compatible" with its reason; any other read error is re-raised as UnreadableFile ("corrupt or
+    unreadable .ppt: ...", failed)."""
     path = _path(row)
     if not path:
         return ""
     try:
         if path.suffix.lower() not in MODERN:
             return ppt_text(path, storage.MAX_EXTRACTED_TEXT_CHARS)
+        if _office.is_encrypted_ooxml(path):
+            raise NotCompatibleFile(ENCRYPTED_NOTE)
         with zipfile.ZipFile(path) as z:
             parts = ["\n".join(s) for s in _slides(z)]
             notes = ["\n".join(_office.paragraphs(_office.read_part(z, n), "p", "t"))
                      for n in _office.numbered(z.namelist(), _NOTES)]
             return "\n\n".join(p for p in parts + notes if p)[:storage.MAX_EXTRACTED_TEXT_CHARS]
+    except (NotCompatibleFile, MemoryError):
+        raise
     except Exception as e:
         print(f"PowerPoint text extraction failed for {path}: {e!r}")
-        raise  # #724: a real read error; core/ocr.py records it (failed), never "no text"
+        raise _office.unreadable(path, e) from e  # #724: failed, saying it's corrupt; never "no text"
 
 
 def has_thumbnail(row):
@@ -335,7 +350,7 @@ register(ObjectTypeSpec(
     preview_assets=("prose",),
     badge_icon="\U0001F4FD",  # film projector
     badge_text="PPT",
-    # #724: a .ppt whose text ppt_text can't read (PowerPoint 95 or older, password-protected, unrecognised)
-    ocr_unsupported_note={".ppt": "legacy .ppt: older PowerPoint format or password-protected, no readable text"},
+    # #724: the fallback reason; ppt_text raises NotCompatibleFile with the exact one
+    ocr_unsupported_note={".ppt": "legacy .ppt: older PowerPoint format, no readable text"},
     text_source="office",  # #724: text_extract_fn's text is read from the deck itself
 ))

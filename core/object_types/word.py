@@ -10,12 +10,15 @@ Old .doc: summary properties via olefile, and (#724) the text of a Word
 97-2003 file read from its piece table (doc_text below, olefile only, no
 antiword/LibreOffice): every text story (body, headers, footnotes, text
 boxes) in stream order, field codes dropped and their results kept. Word
-6/95 and older, password-protected and unrecognised files have no text we
-can read (None: OCR settles "not compatible"); a broken file raises (failed).
-Not handled: tracked-change deletions still in the file are read as text.
+6/95 and older and unrecognised files raise NotCompatibleFile (OCR settles
+"not compatible", grey, with the reason); a broken file raises UnreadableFile
+("corrupt or unreadable .doc: ...", failed, red). Not handled: tracked-change
+deletions still in the file are read as text.
 
-Password-protected files are recognised (an OLE "EncryptedPackage") and
-reported as protected instead of refused.
+Password-protected files are recognised (an OLE "EncryptedPackage", or a
+.doc's fEncrypted flag) and reported as protected instead of refused; their
+text settles "not compatible" with "encrypted: can't read without the
+password" (#724), never decrypted.
 """
 
 import re
@@ -26,7 +29,8 @@ from pathlib import Path
 from markupsafe import Markup, escape
 
 from .. import storage
-from . import _office, _preview, register, ObjectTypeSpec, ThumbnailSource
+from . import (_office, _preview, register, ENCRYPTED_NOTE, NotCompatibleFile, ObjectTypeSpec,
+               ThumbnailSource)
 
 STATS_KEY = "word_stats"
 PREVIEW_PARAGRAPHS = 12
@@ -89,6 +93,8 @@ FIB_WORD6 = 0xA5DC    # wIdent of some Word 6/95 files
 NFIB_WORD97 = 0x00C1  # the lowest nFib of the Word 97-2003 binary format
 _FCLX = 0x01A2        # fibRgFcLcb97.fcClx: the piece table's place in the table stream
 _MAX_PIECES = 1_000_000
+OLD_WORD_NOTE = "legacy .doc: Word 6/95 or older format, no readable text"
+UNRECOGNISED_NOTE = "legacy .doc: not a Word 97-2003 document we recognise, no readable text"
 # Characters that stand for something other than text: paragraph, line, page and cell marks
 # become breaks; picture/footnote/annotation anchors, separators and optional hyphens go.
 _DOC_CONTROL = str.maketrans({"\r": "\n", "\x0b": "\n", "\x0c": "\n", "\x07": "\t", "\x1e": "-",
@@ -124,26 +130,27 @@ def _tidy(text):
 def doc_text(path, cap=None):
     """#724: the text of a Word 97-2003 .doc, from its piece table (MS-DOC 2.4.1).
 
-    Returns the text (capped at `cap` characters; "" for a document with no text), or None when
-    this isn't a format we read: Word 6/95 or older, password-protected, or a WordDocument stream
-    that isn't a Word file at all. Raises (ValueError, or olefile's own error) when the file is a
-    Word 97+ document that is broken: truncated, a piece table pointing outside the file."""
+    Returns the text (capped at `cap` characters; "" for a document with no text). Raises
+    NotCompatibleFile (with the reason) when this isn't a format we read: Word 6/95 or older,
+    password-protected, or a WordDocument stream that isn't a Word file at all. Raises anything
+    else (ValueError, _office.TooLarge, olefile's own error) when the file is broken: truncated, a
+    piece table pointing outside the file."""
     import olefile
     cap = cap or storage.MAX_EXTRACTED_TEXT_CHARS
     with olefile.OleFileIO(str(path)) as ole:
         if not ole.exists("WordDocument"):
-            return None
+            raise NotCompatibleFile(UNRECOGNISED_NOTE)
         wd = _office.read_ole_stream(ole, "WordDocument")
         if len(wd) < 0x20:
             raise ValueError("WordDocument stream too short for a FIB")
         ident, nfib = struct.unpack_from("<HH", wd, 0)
         if ident not in (FIB_WORD97, FIB_WORD6):
-            return None                       # not a Word FIB: unrecognised
-        if nfib < NFIB_WORD97:
-            return None                       # Word 6/95 or older: another layout
+            raise NotCompatibleFile(UNRECOGNISED_NOTE)   # not a Word FIB
         flags = struct.unpack_from("<H", wd, 0x0A)[0]
         if flags & 0x0100:
-            return None                       # fEncrypted: password-protected, nothing to read
+            raise NotCompatibleFile(ENCRYPTED_NOTE)      # fEncrypted: never decrypted
+        if nfib < NFIB_WORD97:
+            raise NotCompatibleFile(OLD_WORD_NOTE)       # Word 6/95 or older: another layout
         table_name = "1Table" if flags & 0x0200 else "0Table"
         if not ole.exists(table_name):
             raise ValueError(f"{table_name} stream missing")
@@ -194,19 +201,25 @@ def doc_text(path, cap=None):
 
 
 def extract_text_for_row(row):
-    """text_extract_fn: the body text, capped, for search. A legacy .doc reads through doc_text;
-    None (Word 6/95, protected, unrecognised) settles "not compatible" in core/ocr.py."""
+    """text_extract_fn: the body text, capped, for search. A legacy .doc reads through doc_text.
+    #724: NotCompatibleFile (encrypted, Word 6/95, unrecognised) settles "not compatible" in
+    core/ocr.py with its reason; any other read error is re-raised as UnreadableFile ("corrupt or
+    unreadable .docx: ...", failed)."""
     path = _path(row)
     if not path:
         return ""
     try:
         if path.suffix.lower() not in MODERN:
             return doc_text(path, storage.MAX_EXTRACTED_TEXT_CHARS)
+        if _office.is_encrypted_ooxml(path):
+            raise NotCompatibleFile(ENCRYPTED_NOTE)
         with zipfile.ZipFile(path) as z:
             return "\n".join(_body(z))[:storage.MAX_EXTRACTED_TEXT_CHARS]
+    except (NotCompatibleFile, MemoryError):
+        raise
     except Exception as e:
         print(f"Word text extraction failed for {path}: {e!r}")
-        raise  # #724: a real read error; core/ocr.py records it (failed), never "no text"
+        raise _office.unreadable(path, e) from e  # #724: failed, saying it's corrupt; never "no text"
 
 
 def has_thumbnail(row):
@@ -270,7 +283,7 @@ register(ObjectTypeSpec(
     preview_assets=("prose",),
     badge_icon="\U0001F4C4",
     badge_text="DOC",
-    # #724: a .doc whose text doc_text can't read (Word 6/95 or older, password-protected, unrecognised)
-    ocr_unsupported_note={".doc": "legacy .doc: older Word format or password-protected, no readable text"},
+    # #724: the fallback reason; doc_text raises NotCompatibleFile with the exact one
+    ocr_unsupported_note={".doc": "legacy .doc: older Word format, no readable text"},
     text_source="office",  # #724: text_extract_fn's text is read from the document itself
 ))

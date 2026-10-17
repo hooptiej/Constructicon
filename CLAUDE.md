@@ -1424,7 +1424,9 @@ One generated file of every registered type and extension, to drop-test a new in
 - **Known findings it shows:** legacy `.doc/.ppt` and web links end OCR "not compatible" (grey,
   `ocr_status='unsupported'`, #724 part a: the sampler's `.doc/.ppt` are stubs, not real Word 97 /
   PowerPoint 97 files, so the part b readers find nothing to read; a real one gets its text, see
-  `scripts/test_legacy_office_724b.py`); the hand-built `.xls` stub
+  `scripts/test_legacy_office_724b.py`); an encrypted Office file reads "not compatible: encrypted: can't
+  read without the password", a corrupt one fails with "corrupt or unreadable .<ext>: ..." in `ocr_note`
+  (`object_types.NotCompatibleFile` / `UnreadableFile`, owner decision 2026-10-17); the hand-built `.xls` stub
   ends "failed" (xlrd can't parse it: a real read error). (WAV downloading instead of playing, #723, is fixed: its row passes.)
 - **Windows / Defender (owner rule):** the executable-class samples (PE `.exe`, every installer package,
   the zipped `.app`, ELF firmware, the `.dmg`) are written only when `sys.platform` is Linux, and never

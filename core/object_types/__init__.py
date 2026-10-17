@@ -42,6 +42,23 @@ class ObjectTypeContractError(Exception):
     pass
 
 
+class UnreadableFile(Exception):
+    """#724: a text_extract_fn raises this when the file can't be read in a way worth telling the
+    owner. The message is the plain reason, stored as type_metadata.ocr_note.
+
+    - UnreadableFile itself: the file is corrupt or unreadable ("corrupt or unreadable .doc: ...");
+      core/ocr.py settles ocr_status='failed' with that reason (never fail silently).
+    - NotCompatibleFile: the file is fine but holds nothing we can read (encrypted, an older format);
+      core/ocr.py settles 'unsupported' (grey) with that reason, like a None return but per file."""
+
+
+class NotCompatibleFile(UnreadableFile):
+    """#724: see UnreadableFile: a readable-in-principle file we can't read (grey, not red)."""
+
+
+ENCRYPTED_NOTE = "encrypted: can't read without the password"  # #724 owner wording
+
+
 class ThumbnailSource(Enum):
     """How a type's representative thumbnail image is obtained."""
 

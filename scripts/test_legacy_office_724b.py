@@ -53,7 +53,7 @@ except Exception:  # no libcairo here (e.g. Windows): object types import it
 import olefile  # noqa: E402
 
 import make_type_samples  # noqa: E402  (scripts/: its hand-built OLE writer)
-from core import actor, db, ingest, ocr, parse_limits, paths  # noqa: E402
+from core import actor, db, ingest, object_types, ocr, parse_limits, paths  # noqa: E402
 from core.object_types import _office, powerpoint, spreadsheet, word  # noqa: E402
 _testenv.assert_isolated()
 
@@ -71,6 +71,8 @@ def outcome(fn, *args, **kw):
     """('text', value) / ('none', None) / ('raised', ExceptionName)."""
     try:
         out = fn(*args, **kw)
+    except object_types.NotCompatibleFile as e:
+        return "not compatible", str(e)
     except Exception as e:  # noqa: BLE001 - the check reads it
         return "raised", type(e).__name__
     return ("none", None) if out is None else ("text", out)
@@ -86,7 +88,8 @@ def write(name, data):
 DOC = os.path.join(FIX, "synthetic-word97.doc")
 PPT = os.path.join(FIX, "synthetic-ppt97.ppt")
 XLS = os.path.join(FIX, "synthetic-numbers.xls")
-DOC_NOTE = "legacy .doc: older Word format or password-protected, no readable text"
+ENC = object_types.ENCRYPTED_NOTE
+NC = "not compatible"
 
 
 def streams(path):
@@ -150,19 +153,21 @@ check("doc: an empty document reads as '' (done, not unsupported)",
       outcome(word.doc_text, write("empty97.doc", word97([("\r", True)]))) == ("text", ""))
 
 # ============================================================================================
-# 2. formats we don't read -> None; broken files -> raise
+# 2. formats we don't read -> not compatible; broken files -> raise
 # ============================================================================================
 word6 = make_type_samples.ole_file({"WordDocument": struct.pack("<HH", 0xA5DC, 0x0065) + b"\x00" * 0x200})
-check("doc: Word 6/95 (wIdent 0xA5DC) -> None", outcome(word.doc_text, write("word6.doc", word6)) == ("none", None))
-check("doc: Word 95 with the 97 ident but an old nFib -> None",
-      outcome(word.doc_text, write("word95.doc", word97(PIECES, nfib=0x0068))) == ("none", None))
-check("doc: password-protected (fEncrypted) -> None",
-      outcome(word.doc_text, write("enc.doc", word97(PIECES, flags=0x0300))) == ("none", None))
+check("doc: Word 6/95 (wIdent 0xA5DC) -> not compatible, saying so",
+      outcome(word.doc_text, write("word6.doc", word6)) == (NC, word.OLD_WORD_NOTE))
+check("doc: Word 95 with the 97 ident but an old nFib -> not compatible",
+      outcome(word.doc_text, write("word95.doc", word97(PIECES, nfib=0x0068))) == (NC, word.OLD_WORD_NOTE))
+check("doc: password-protected (fEncrypted) -> not compatible",
+      outcome(word.doc_text, write("enc.doc", word97(PIECES, flags=0x0300))) == (NC, ENC))
 stub = make_type_samples.ole_file({"WordDocument": "not a Word FIB at all".encode("utf-16-le")})
-check("doc: an unrecognised WordDocument stream -> None", outcome(word.doc_text, write("stub.doc", stub)) == ("none", None))
-check("doc: the #720 sampler's stub -> None (stays 'not compatible')",
+check("doc: an unrecognised WordDocument stream -> not compatible",
+      outcome(word.doc_text, write("stub.doc", stub)) == (NC, word.UNRECOGNISED_NOTE))
+check("doc: the #720 sampler's stub -> not compatible (stays grey)",
       outcome(word.doc_text, write("sampler.doc", make_type_samples.legacy_office("WordDocument", "Word 97-2003")("x")))
-      == ("none", None))
+      == (NC, word.UNRECOGNISED_NOTE))
 
 with open(DOC, "rb") as f:
     doc_bytes = f.read()
@@ -208,15 +213,15 @@ def ppt_with(cu_patch=None, drop=None):
     return make_type_samples.ole_file(s)
 
 
-check("ppt: no Current User stream (PowerPoint 95 and older) -> None",
-      outcome(powerpoint.ppt_text, write("p95.ppt", ppt_with(drop="Current User"))) == ("none", None))
-check("ppt: an older docFileVersion -> None",
-      outcome(powerpoint.ppt_text, write("pver.ppt", ppt_with([(22, "<H", 0x03F3)]))) == ("none", None))
-check("ppt: password-protected (encrypted header token) -> None",
-      outcome(powerpoint.ppt_text, write("penc.ppt", ppt_with([(12, "<I", powerpoint.HEADER_TOKEN_ENCRYPTED)]))) == ("none", None))
-check("ppt: the #720 sampler's stub -> None",
+check("ppt: no Current User stream (PowerPoint 95 and older) -> not compatible",
+      outcome(powerpoint.ppt_text, write("p95.ppt", ppt_with(drop="Current User"))) == (NC, powerpoint.OLD_PPT_NOTE))
+check("ppt: an older docFileVersion -> not compatible",
+      outcome(powerpoint.ppt_text, write("pver.ppt", ppt_with([(22, "<H", 0x03F3)]))) == (NC, powerpoint.OLD_PPT_NOTE))
+check("ppt: password-protected (encrypted header token) -> not compatible",
+      outcome(powerpoint.ppt_text, write("penc.ppt", ppt_with([(12, "<I", powerpoint.HEADER_TOKEN_ENCRYPTED)]))) == (NC, ENC))
+check("ppt: the #720 sampler's stub -> not compatible",
       outcome(powerpoint.ppt_text, write("sampler.ppt",
-              make_type_samples.legacy_office("PowerPoint Document", "PowerPoint 97-2003")("x"))) == ("none", None))
+              make_type_samples.legacy_office("PowerPoint Document", "PowerPoint 97-2003")("x"))) == (NC, powerpoint.OLD_PPT_NOTE))
 check("ppt: a current-edit offset outside the stream -> raises",
       outcome(powerpoint.ppt_text, write("pbad.ppt", ppt_with([(16, "<I", 0x7FFFFFF0)])))[0] == "raised")
 check("ppt: a current-edit offset at the wrong record -> raises",
@@ -284,9 +289,14 @@ st = state(S_PPT)
 check("ocr: a real .ppt settles done with its slides' text", st[0] == "done" and "Slide two body text" in st[3], st[:3])
 check("ocr: .ppt text_source = 'office' (type_metadata was empty)", st[2] == "office", st[:3])
 check("ocr: .ppt text has no master placeholders", "Click to edit" not in st[3], st[3][:200])
-check("ocr: Word 6 settles 'unsupported' with the note", state(S_W6)[:3] == ("unsupported", DOC_NOTE, None), state(S_W6))
-check("ocr: a truncated .doc settles 'failed'", state(S_BAD)[0] == "failed", state(S_BAD))
-check("ocr: a broken .ppt settles 'failed'", state(S_BADPPT)[0] == "failed", state(S_BADPPT))
+check("ocr: Word 6 settles 'unsupported' with its reason", state(S_W6)[:3] == ("unsupported", word.OLD_WORD_NOTE, None),
+      state(S_W6))
+check("ocr: a truncated .doc settles 'failed', saying it's corrupt",
+      state(S_BAD)[0] == "failed" and (state(S_BAD)[1] or "").startswith("corrupt or unreadable .doc: "), state(S_BAD))
+check("ocr: a broken .ppt settles 'failed', saying it's corrupt",
+      state(S_BADPPT)[0] == "failed" and (state(S_BADPPT)[1] or "").startswith("corrupt or unreadable .ppt: "),
+      state(S_BADPPT))
+check("ocr: the corrupt reason is short", len(state(S_BAD)[1] or "") <= 160, state(S_BAD))
 hits = [r["slug"] for r in db.search("wheels")]
 check("search: a word from the .doc finds it (and the .ppt)", S_DOC in hits and S_PPT in hits, hits)
 check("search: a word only in the .ppt's third slide finds it", S_PPT in [r["slug"] for r in db.search("three body")])
@@ -308,17 +318,18 @@ check("limits: doc_text honours the output cap", len(word.doc_text(DOC, cap=25))
 check("limits: ppt_text honours the output cap", len(powerpoint.ppt_text(PPT, cap=30)) == 30)
 with olefile.OleFileIO(DOC) as o:
     check("limits: read_ole_stream refuses a stream over its cap",
-          outcome(_office.read_ole_stream, o, "WordDocument", 100) == ("raised", "ValueError"))
+          outcome(_office.read_ole_stream, o, "WordDocument", 100) == ("raised", "TooLarge"))
 _cap = _office.MAX_PART_BYTES
 _office.MAX_PART_BYTES = 1000
 try:
     check("limits: a .doc whose WordDocument is over MAX_PART_BYTES -> raises",
-          outcome(word.doc_text, DOC) == ("raised", "ValueError"), outcome(word.doc_text, DOC))
+          outcome(word.doc_text, DOC) == ("raised", "TooLarge"), outcome(word.doc_text, DOC))
     check("limits: a .ppt whose stream is over MAX_PART_BYTES -> raises",
-          outcome(powerpoint.ppt_text, PPT) == ("raised", "ValueError"), outcome(powerpoint.ppt_text, PPT))
+          outcome(powerpoint.ppt_text, PPT) == ("raised", "TooLarge"), outcome(powerpoint.ppt_text, PPT))
     S_BIG = mkfile("legacy_big", DOC, ".doc", "word")
     ocr.run_ocr(S_BIG)
-    check("limits: ...and OCR settles it 'failed' (a limit, not 'no text')", state(S_BIG)[0] == "failed", state(S_BIG))
+    check("limits: ...and OCR settles it 'failed', saying it's too large",
+          state(S_BIG)[0] == "failed" and (state(S_BIG)[1] or "").startswith("too large to read .doc: "), state(S_BIG))
 finally:
     _office.MAX_PART_BYTES = _cap
 
@@ -339,7 +350,73 @@ db.set_extracted_text(S_NULL, "")
 check("db: emptied text clears it", state(S_NULL)[2] is None, state(S_NULL))
 
 # ============================================================================================
-# 6. .xls whole numbers
+# 6. owner decisions 2026-10-17: encrypted = grey with the reason, corrupt = red with the reason
+# ============================================================================================
+ENC_OOXML = make_type_samples.ole_file({"EncryptionInfo": b"\x04\x00\x04\x00\x40\x00\x00\x00" + b"\x00" * 56,
+                                        "EncryptedPackage": b"\x00" * 64})
+enc_rows = {ext: mkfile(f"enc_{ext[1:]}", ENC_OOXML, ext, mt)
+            for ext, mt in ((".docx", "word"), (".pptx", "powerpoint"), (".xlsx", "spreadsheet"))}
+enc_rows[".doc"] = mkfile("enc_doc", word97(PIECES, flags=0x0300), ".doc", "word")
+enc_rows[".ppt"] = mkfile("enc_ppt", ppt_with([(12, "<I", powerpoint.HEADER_TOKEN_ENCRYPTED)]), ".ppt", "powerpoint")
+S_BADDOCX = mkfile("corrupt_docx", b"PK\x03\x04 this zip stops here", ".docx", "word")
+S_BADPPTX = mkfile("corrupt_pptx", b"not a zip at all", ".pptx", "powerpoint")
+for s in list(enc_rows.values()) + [S_BADDOCX, S_BADPPTX]:
+    ocr.run_ocr(s)
+for ext, s in enc_rows.items():
+    check(f"encrypted {ext}: 'unsupported' with \"{ENC}\"", state(s)[:2] == ("unsupported", ENC), state(s))
+check("corrupt .docx: 'failed', saying it's corrupt",
+      state(S_BADDOCX)[0] == "failed" and (state(S_BADDOCX)[1] or "").startswith("corrupt or unreadable .docx: "),
+      state(S_BADDOCX))
+check("corrupt .pptx: 'failed', saying it's corrupt",
+      state(S_BADPPTX)[0] == "failed" and (state(S_BADPPTX)[1] or "").startswith("corrupt or unreadable .pptx: "),
+      state(S_BADPPTX))
+db.set_ocr_status(S_BADDOCX, "done")
+check("db: any other status clears a failure's note", state(S_BADDOCX)[1] is None, state(S_BADDOCX))
+db.set_ocr_status(S_BADDOCX, "failed")
+check("db: 'failed' with no note leaves none", state(S_BADDOCX)[1] is None, state(S_BADDOCX))
+
+# ============================================================================================
+# 7. the one-time re-read of legacy .doc/.ppt rows that settled before the readers
+# ============================================================================================
+OLD_NOTE = "legacy .ppt: no readable text yet"  # part a's note
+M_FAILED_DOC = mkfile("mig_failed_doc", DOC, ".doc", "word")
+M_OLD_PPT = mkfile("mig_unsupported_ppt", PPT, ".ppt", "powerpoint")
+M_XLS = mkfile("mig_failed_xls", XLS, ".xls", "spreadsheet")
+M_DOCX = mkfile("mig_failed_docx", b"not a zip", ".docx", "word")
+M_RED = mkfile("mig_redacted_doc", DOC, ".doc", "word")
+M_DONE = mkfile("mig_done_doc", DOC, ".doc", "word")
+for s in (M_FAILED_DOC, M_XLS, M_DOCX, M_RED):
+    db.set_ocr_status(s, "failed")
+db.set_ocr_status(M_OLD_PPT, db.OCR_UNSUPPORTED, note=OLD_NOTE)
+db.set_ocr_status(M_DONE, "done")
+c = sqlite3.connect(db.DB_PATH)
+c.execute("UPDATE capture_events SET redacted = 1 WHERE slug = ?", (M_RED,))
+c.commit()
+c.close()
+mig_slugs = (M_FAILED_DOC, M_OLD_PPT, M_XLS, M_DOCX, M_RED, M_DONE)
+before = {s: state(s) for s in mig_slugs}
+with db.transaction():
+    db._mig_reread_legacy_office_724b()
+after = {s: state(s) for s in mig_slugs}
+check("migration: a failed .doc goes back to pending", after[M_FAILED_DOC][0] == "pending", after[M_FAILED_DOC])
+check("migration: an old 'unsupported' .ppt goes back to pending, its stale note gone",
+      after[M_OLD_PPT][:2] == ("pending", None), after[M_OLD_PPT])
+check("migration: .xls / .docx / redacted / done rows are untouched",
+      all(after[s] == before[s] for s in (M_XLS, M_DOCX, M_RED, M_DONE)),
+      {s: (before[s][:2], after[s][:2]) for s in (M_XLS, M_DOCX, M_RED, M_DONE)})
+check("migration: the startup self-heal will pick them up (list_pending_ocr)",
+      {M_FAILED_DOC, M_OLD_PPT} <= {r["slug"] for r in db.list_pending_ocr()})
+for s in (M_FAILED_DOC, M_OLD_PPT):
+    ocr.run_ocr(s)  # what the self-heal does
+check("migration: the re-read .doc settles done with its text",
+      state(M_FAILED_DOC)[0] == "done" and "six wheels" in state(M_FAILED_DOC)[3], state(M_FAILED_DOC)[:3])
+check("migration: the re-read .ppt settles done with its text",
+      state(M_OLD_PPT)[0] == "done" and "Third slide" in state(M_OLD_PPT)[3], state(M_OLD_PPT)[:3])
+check("migration: registered in MIGRATIONS", "reread_legacy_office_724b" in [n for n, _ in db.MIGRATIONS])
+check("migration: recorded once run by init_db", "reread_legacy_office_724b" in db.applied_migrations())
+
+# ============================================================================================
+# 8. .xls whole numbers (and an encrypted .xls)
 # ============================================================================================
 S_XLS = mkfile("legacy_xls", XLS, ".xls", "spreadsheet")
 try:
@@ -353,6 +430,18 @@ if xlrd:
           "Wheel\t6\t2.5" in xtext and "Motor\t2\t12" in xtext and "Year\t1999\t0.25" in xtext, repr(xtext))
     check("xls: no '.0' anywhere", ".0\t" not in xtext and not xtext.rstrip().endswith(".0") and ".0\n" not in xtext,
           repr(xtext))
+    # An encrypted .xls: a FILEPASS record (0x002F, XOR obfuscation) right after the BOF.
+    wb = streams(XLS)["Workbook"]
+    bof_end = 4 + struct.unpack_from("<H", wb, 2)[0]
+    enc_wb = wb[:bof_end] + struct.pack("<HHHHH", 0x002F, 6, 0, 0x1234, 0x5678) + wb[bof_end:]
+    S_ENC_XLS = mkfile("enc_xls", make_type_samples.ole_file({"Workbook": enc_wb}), ".xls", "spreadsheet")
+    ocr.run_ocr(S_ENC_XLS)
+    check(f"encrypted .xls: 'unsupported' with \"{ENC}\"", state(S_ENC_XLS)[:2] == ("unsupported", ENC), state(S_ENC_XLS))
+    S_BAD_XLS = mkfile("corrupt_xls", make_type_samples.legacy_office("Workbook", "Excel 97-2003")("x"), ".xls", "spreadsheet")
+    ocr.run_ocr(S_BAD_XLS)
+    check("the #720 sampler's .xls stub: 'failed', saying it's corrupt",
+          state(S_BAD_XLS)[0] == "failed" and (state(S_BAD_XLS)[1] or "").startswith("corrupt or unreadable .xls: "),
+          state(S_BAD_XLS))
 check("xls: _search_text keeps real decimals and text", (spreadsheet._search_text(12.0), spreadsheet._search_text(2.5),
       spreadsheet._search_text("12.0"), spreadsheet._search_text(-3.0)) == ("12", "2.5", "12.0", "-3"))
 

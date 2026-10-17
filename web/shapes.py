@@ -430,6 +430,39 @@ def _project_effective_cover_url(project):
     return _project_cover_url(effective_slug) if effective_slug else None
 
 
+def _hobby_cover_usable(slug):
+    """#686: a hobby cover candidate is shown only when the item policy lets this actor see it
+    AND the thumb route would serve it (_project_cover_url: exists, not redacted, has a
+    thumbnail). Otherwise the resolver moves on to the next candidate (never a broken image)."""
+    row = db.get_by_slug(slug) if slug else None
+    return bool(row) and policy.can_view(row) and _project_cover_url(slug) is not None
+
+
+def _hobby_cover(hobby_row, projects=None):
+    """#686: (resolved cover dict, flat API fields incl. `cover_url`) for one hobby."""
+    cover = cards.resolve_hobby_cover(hobby_row, projects, usable=_hobby_cover_usable)
+    fields = cards.hobby_cover_fields(cover)
+    fields["cover_url"] = _project_cover_url(cover["slug"]) if cover["slug"] else None
+    return cover, fields
+
+
+def _to_hobby_face(hobby_row, projects=None, items_by_project=None):
+    """#686: a hobby as a card (core.cards.hobby_card_face, kind 'hobby') for the hobbies index and
+    drawer: the shared card macro (_card.html), linking to the hobby page, with its resolved cover
+    and its computed mismatch flags. `items_by_project` (id -> rows) feeds the date span; missing
+    = read here, through the item policy."""
+    if projects is None:
+        projects = db.list_projects_for_hobby(hobby_row["id"])
+    if items_by_project is None:
+        items_by_project = {p["id"]: policy.filter_visible(db.list_project_items(p["id"])) for p in projects}
+    cover, fields = _hobby_cover(hobby_row, projects)
+    face = cards.hobby_card_face(hobby_row, projects, items_by_project, cover=cover)
+    face["href"] = f"/hobby/{hobby_row['slug']}"
+    face["cover_url"] = fields["cover_url"]
+    face["flags"] = db.hobby_flags(hobby_row["id"])
+    return face
+
+
 def _to_card_face(project, items=None):
     """One home-page card (docs/design/v2-cards.md 8.1): core.cards.card_face (which reuses
     card_level / resolve_home / list_links) plus the cover URL, which needs the web layer's

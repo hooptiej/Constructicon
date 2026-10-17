@@ -16,6 +16,8 @@ group_code; cards join it through `project_hobbies` (#360, V2 cards 3.3 / 3.9).
   set_activity / set_group_code        = cards.set_hobby_activity / set_group_code (already logged)
   set_physical_piece(hobby, enabled)   #562: the "shows physical-piece fields" setting (hobby_settings)
   set_text(hobby, synopsis, flavor)    #596: the hobby card's own synopsis / flavor (hobby_settings)
+  set_cover(hobby, cover_slug)         #686: the chosen cover (hobby_settings.cover_slug; "" = automatic)
+  cover(hobby)                         #686: the resolved cover (chosen, else automatic), read-only
   convert_from_card(card)              project -> hobby (was db.convert_project_to_hobby, not
                                        undoable); now fully imaged
   convert_to_card(hobby, kind, title, into_hobby)   hobby -> card, the reverse (see below)
@@ -56,6 +58,7 @@ OP_FROM_CARD = "convert_project_to_hobby"
 OP_TO_CARD = "convert_hobby_to_card"
 OP_PHYSICAL_PIECE = "hobby_physical_piece"  # #562
 OP_TEXT = "hobby_text"  # #596
+OP_COVER = "hobby_cover"  # #686
 
 CONVERT_KINDS = ("family", "collection", "project")
 
@@ -222,6 +225,46 @@ def set_text(hobby, *, synopsis=..., flavor=..., dry_run=False, actor=None, batc
         rows = db.get_change_rows(batch_id=batch_id)
     return Result(True, _flat(rows), [] if rows else ["Nothing changed."], batch_id if rows else None, dry_run,
                   {"hobby": hob["slug"], **text_fields(hob)})
+
+
+def cover(hobby, projects=None, usable=None):
+    """#686: the hobby's resolved cover (cards.resolve_hobby_cover): chosen, else its highlighted
+    project's, else its most recent project's, else none."""
+    return cards.resolve_hobby_cover(get_hobby(hobby), projects, usable)
+
+
+def set_cover(hobby, cover_slug, *, dry_run=False, actor=None, batch_id=None):
+    """#686: chooses the hobby's cover (hobby_settings.cover_slug), or clears the choice (None or
+    "") so the automatic cover shows again. The item must exist, be visible to the actor, not be
+    redacted and have a picture (404 not_found / 422 bad_cover). One imaged row (op hobby_cover),
+    undoable with the generic undo; choosing what is already chosen writes nothing. Deleting or
+    trashing the chosen item later doesn't touch this row: the hobby just shows its automatic
+    cover until the item comes back (cards.resolve_hobby_cover). data: {hobby, picked_cover_slug,
+    cover: the resolved cover fields (cards.hobby_cover_fields)}."""
+    from . import policy  # lazy, as cards does
+    hob = get_hobby(hobby)
+    slug = (cover_slug or "").strip() or None
+    if slug is not None:
+        row = db.get_by_slug(slug)
+        if row is None or not policy.can_view(row):
+            raise CardError("not_found", f"No item {slug!r}.")
+        if row.get("redacted"):
+            raise CardError("bad_cover", f"{slug} is redacted (its file was removed), so it can't be a cover.")
+        if not cards.hobby_cover_usable(slug):
+            raise CardError("bad_cover", f"{slug} has no picture to show as a cover.")
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_COVER, actor, batch_id, [hob["slug"]] + ([slug] if slug else [])) as log:
+            key = {"hobby_tag_id": hob["id"]}
+            if log.get("hobby_settings", key) is None:
+                if slug:
+                    log.insert("hobby_settings", key, {"cover_slug": slug})
+            else:
+                log.update("hobby_settings", key, {"cover_slug": slug})
+        rows = db.get_change_rows(batch_id=batch_id)
+        resolved = cards.resolve_hobby_cover(hob)
+    return Result(True, _flat(rows), [] if rows else ["Nothing changed."], batch_id if rows else None, dry_run,
+                  {"hobby": hob["slug"], "picked_cover_slug": slug, "cover": cards.hobby_cover_fields(resolved)})
 
 
 def text_fields(hobby_row):

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ hobby.name }} — Hobby — {{ app_name() }}{% endblock %}
+{% block title %}{{ hobby.name }} — {{ hobby_label.one }} — {{ app_name() }}{% endblock %}
 {% block body %}
 {% from "_card.html" import card %}
 {% from "_details_group.html" import dp_group %}
@@ -20,7 +20,7 @@
     <nav class="dp-crumbs" aria-label="Breadcrumb">
       <a href="/">Home</a>
       <span aria-hidden="true">&rsaquo;</span>
-      <a href="/hobbies">Hobbies</a>
+      <a href="{{ hobby_label.index_url }}">{{ hobby_label.many }}</a>
       <span aria-hidden="true">&rsaquo;</span>
       <span class="dp-crumb-current" aria-current="page">{{ hobby.name }}</span>
     </nav>
@@ -29,8 +29,8 @@
         <button type="button" class="dp-btn dp-more-btn" id="hobby-more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="hobby-more-menu">More <span aria-hidden="true">&#9662;</span></button>
         <div class="dp-menu" id="hobby-more-menu" role="menu" aria-labelledby="hobby-more-btn" hidden>
           <a role="menuitem" href="/curator">Open the Curator queue</a>
-          <a role="menuitem" href="/hobbies">All hobbies</a>
-          <button type="button" role="menuitem" id="hobby-convert-btn" title="Turn this hobby into a family, collection or project card">Convert to card&hellip;</button>
+          <a role="menuitem" href="{{ hobby_label.index_url }}">All {{ hobby_label.many_lc }}</a>
+          <button type="button" role="menuitem" id="hobby-convert-btn" title="Turn this {{ hobby_label.one_lc }} into a family, collection or project card">Convert to card&hellip;</button>
           {% if shows_physical_piece %}<a role="menuitem" href="/guides/capture-physical-piece">How to capture a physical piece</a>{% endif %}
         </div>
       </div>
@@ -165,9 +165,9 @@
           </select>
         </div>
         {% endif %}
-        <label class="dp-sr-label" for="hobby-add-project-select">Add a project to this hobby</label>
+        <label class="dp-sr-label" for="hobby-add-project-select">Add a project to this {{ hobby_label.one_lc }}</label>
         <select id="hobby-add-project-select" class="input">
-          <option value="">+ Add project to hobby…</option>
+          <option value="">+ Add project to {{ hobby_label.one_lc }}…</option>
         </select>
       </div>
     </div>
@@ -193,7 +193,7 @@
     <div class="home-col-header">
       <h2 id="hp-loose-heading">Loose objects</h2>
     </div>
-    <p class="dp-subtitle">Tagged with this hobby, but not in any of its projects. <span id="loose-count"></span></p>
+    <p class="dp-subtitle">Tagged with this {{ hobby_label.one_lc }}, but not in any of its projects. <span id="loose-count"></span></p>
     {# #553: the shared file grid (sort, type filter, All/Unfiled/Filed, select + bulk actions) #}
     {% include "_item_grid.html" %}
   </section>
@@ -207,7 +207,7 @@
       <button type="button" class="modal-close" id="hobby-convert-close" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
-      <p style="margin:0 0 12px;line-height:1.5">"{{ hobby.name }}" stops being a hobby and becomes a card that keeps its tag. Its cards move onto the new card (as members of a family or collection, or as parts of a project), its loose objects go onto it, and it can join another hobby. One undo reverses all of it.</p>
+      <p style="margin:0 0 12px;line-height:1.5">"{{ hobby.name }}" stops being a {{ hobby_label.one_lc }} and becomes a card that keeps its tag. Its cards move onto the new card (as members of a family or collection, or as parts of a project), its loose objects go onto it, and it can join another {{ hobby_label.one_lc }}. One undo reverses all of it.</p>
       <div class="dp-field">
         <label for="hobby-convert-kind">Kind</label>
         <select id="hobby-convert-kind" class="input">
@@ -221,7 +221,7 @@
         <input id="hobby-convert-title-input" class="input" value="{{ hobby.name }}">
       </div>
       <div class="dp-field">
-        <label for="hobby-convert-into">Put it in hobby</label>
+        <label for="hobby-convert-into">Put it in {{ hobby_label.one_lc }}</label>
         <select id="hobby-convert-into" class="input"><option value="">(none)</option></select>
       </div>
       <p id="hobby-convert-preview" style="margin:12px 0 0;line-height:1.5;display:none"></p>

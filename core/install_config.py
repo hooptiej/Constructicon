@@ -14,6 +14,14 @@ Keys (KEYS below):
   site_title        the static export's site title
   copyright_holder  the static export footer's "(c) <holder>." (nothing when unset)
   publish_targets   {name: {repo: "owner/repo", branch}} for "Publish to GitHub Pages"
+  hobby_label       #700: the word for a hobby, singular ("Department"); default "Hobby"
+  hobby_label_plural  #700: its plural ("Departments"); default "Hobbies". Set both or neither
+                    (core/hobby_label.py validates the pair). The web pages and URLs follow it at
+                    once; the MCP tool names follow it when the MCP process restarts.
+
+Not in KEYS (never edited directly): `hobby_label_known` (#700), every label slug pair the install
+has ever used, so the old pages' URLs keep redirecting (web/hobby_paths.py). Written by update()
+and NOT imaged, so an undo of a label change never drops a redirect.
 
 No secrets here, ever: the publish token stays a write-only app setting (app_settings).
 
@@ -37,6 +45,7 @@ import sqlite3
 import time
 
 from . import besteffort, changes, db
+from . import hobby_label as hobby_label_rules
 from .errors import InvalidInput
 
 log = logging.getLogger("constructicon.install_config")
@@ -65,8 +74,34 @@ KEYS = {
     "site_title": ("Export site title", "Title of the static site export."),
     "copyright_holder": ("Copyright holder", "Shown in the export footer as \"© <holder>.\" Leave blank for none."),
     "publish_targets": ("Publish targets", "GitHub repositories the export can be published to."),
+    "hobby_label": ("Hobby label (singular)", "What this install calls a hobby, e.g. \"Department\". "
+                                              "Leave both labels blank for \"Hobby / Hobbies\"."),
+    "hobby_label_plural": ("Hobby label (plural)", "The plural, e.g. \"Departments\". It also names the "
+                                                   "index page's web address (/departments)."),
 }
+HOBBY_LABEL_KEYS = ("hobby_label", "hobby_label_plural")
 TEXT_KEYS = tuple(k for k in KEYS if k != "publish_targets")
+KNOWN_LABELS_KEY = "hobby_label_known"
+# #700: what the MCP process recorded about itself when it started (app_settings; see
+# mcp_started_label). Written by mcp_server/server.py, read by the admin page.
+MCP_LABEL_SETTING = "mcp_started_hobby_label"
+
+# #700: shown on Admin > Install before a label change is saved (and kept there): what follows the
+# label at once and what needs a relaunch. One place, so the page and the tests read the same words.
+HOBBY_LABEL_WARNING = {
+    "immediate": ("Applies immediately, no web restart: every page's wording and the web addresses "
+                  "(the index page and each one's page move to the new words). The old addresses, "
+                  "/hobbies and /hobby/<name> and any earlier label's, keep working: they redirect "
+                  "to the new ones."),
+    "relaunch": ("Needs a relaunch: the MCP server reads the label when it starts. Restart the MCP "
+                 "container (constructicon-mcp, e.g. sudo docker restart constructicon-mcp). MCP "
+                 "clients such as Claude must reconnect and will see renamed tools "
+                 "(constructicon_create_hobby becomes constructicon_create_<word>). The old tool names "
+                 "keep answering as hidden aliases, but scripts and agents that call them should be "
+                 "updated to the new names."),
+    "unchanged": ("Unchanged: the API addresses (/api/hobby/..., /api/hobbies), JSON field names and "
+                  "tool parameter names stay \"hobby\"."),
+}
 
 # What the code hard-wired before #562. ONLY used to seed an install that already has content
 # (the owner's own prod/test/work installs), so they see no change. Never a fallback.
@@ -181,6 +216,61 @@ def publish_targets():
     return dict(t) if isinstance(t, dict) else {}
 
 
+def hobby_label(vals=None):
+    """#700: the install's word for a hobby, a core.hobby_label.Label (cached like every read here;
+    `vals` = an uncached _read_all() when the caller holds one). "Hobby / Hobbies" unless both
+    labels are set."""
+    vals = values() if vals is None else vals
+    return hobby_label_rules.make(vals.get("hobby_label"), vals.get("hobby_label_plural"))
+
+
+def known_label_slugs():
+    """#700: every (singular slug, plural slug) the install has used as its label, oldest first,
+    the default ("hobby", "hobbies") always included. Their URLs redirect to the current label's."""
+    pairs = [("hobby", "hobbies")]
+    raw = values().get(KNOWN_LABELS_KEY)
+    if raw:
+        try:
+            for pair in json.loads(raw):
+                if isinstance(pair, list) and len(pair) == 2 and all(isinstance(s, str) and s for s in pair):
+                    if tuple(pair) not in pairs:
+                        pairs.append(tuple(pair))
+        except ValueError as e:
+            besteffort.warn(log, "install_config: hobby_label_known is not valid JSON, ignored", e)
+    return pairs
+
+
+def mcp_started_label():
+    """#700: the label the MCP process started with ({one, many, started_at}), as it recorded it in
+    app_settings at startup; None when no MCP has started since #700 (or it can't be read)."""
+    raw = db.get_setting(MCP_LABEL_SETTING)
+    if not raw:
+        return None
+    try:
+        rec = json.loads(raw)
+    except ValueError as e:
+        besteffort.warn(log, "install_config: the MCP's started label is not valid JSON", e)
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def record_mcp_started_label(label):
+    """#700: called once by the MCP process at startup with the label it named its tools after."""
+    db.set_setting(MCP_LABEL_SETTING, json.dumps({"one": label.one, "many": label.many,
+                                                  "started_at": time.time()}))
+
+
+def hobby_label_status(vals=None):
+    """#700: the admin view of the label: the current one, what the MCP started with, and whether
+    the MCP still needs a restart (its tool names use another label). `mcp_needs_restart` is None
+    when no MCP has recorded its start yet (then the page shows a one-time notice after a save)."""
+    current = hobby_label(vals)
+    started = mcp_started_label()
+    needs = None if started is None else (started.get("one"), started.get("many")) != (current.one, current.many)
+    return {"current": current.as_dict(), "mcp_started": started, "mcp_needs_restart": needs,
+            "warning": HOBBY_LABEL_WARNING, "default": hobby_label_rules.DEFAULT.as_dict()}
+
+
 def setup_needed():
     """True until the essentials (owner_name) are set: the admin pages show the setup banner.
     #467: the first-run setup screen (first admin account) hooks in here."""
@@ -196,7 +286,10 @@ def public():
                     **({"kind": "brand_asset"} if k == "app_logo" else {})} for k, (lab, hint) in KEYS.items()],
         "setup_needed": not vals.get("owner_name"),
         "fallbacks": {"owner_name": FALLBACK_OWNER, "site_title": FALLBACK_SITE_TITLE,
-                      "app_name": FALLBACK_APP_NAME, "app_logo": "bundled logo"},
+                      "app_name": FALLBACK_APP_NAME, "app_logo": "bundled logo",
+                      "hobby_label": hobby_label_rules.DEFAULT_ONE,
+                      "hobby_label_plural": hobby_label_rules.DEFAULT_MANY},
+        "hobby_label": hobby_label_status(vals),
     }
 
 
@@ -273,9 +366,55 @@ def _clean(changes_in):
             out[key] = json.dumps(t) if t else None
         elif key == "app_logo":
             out[key] = _clean_logo(value)
+        elif key in HOBBY_LABEL_KEYS:
+            continue  # #700: validated as a pair below
         else:
             out[key] = _clean_text(key, value)
+    if any(k in changes_in for k in HOBBY_LABEL_KEYS):
+        out.update(_clean_hobby_label(changes_in))
     return out
+
+
+def _clean_hobby_label(changes_in):
+    """#700: the two label words, validated together against what is stored for the one not being
+    changed. Both blank = back to "Hobby / Hobbies"; one blank and one set is refused."""
+    stored = _read_all()
+    words = {}
+    for key in HOBBY_LABEL_KEYS:
+        value = changes_in[key] if key in changes_in else stored.get(key)
+        if value is not None and not isinstance(value, str):
+            raise InvalidInput(f"{key} must be text", code="bad_hobby_label")
+        words[key] = " ".join((value or "").split())
+    one, many = words["hobby_label"], words["hobby_label_plural"]
+    if not one and not many:
+        return {"hobby_label": None, "hobby_label_plural": None}
+    if not one or not many:
+        raise InvalidInput("Set both the singular and the plural label (or clear both for \"Hobby / Hobbies\").",
+                           code="bad_hobby_label")
+    try:
+        one, many = hobby_label_rules.validate_pair(one, many)
+    except ValueError as e:
+        raise InvalidInput(str(e), code="bad_hobby_label") from None
+    if (one, many) == (hobby_label_rules.DEFAULT_ONE, hobby_label_rules.DEFAULT_MANY):
+        return {"hobby_label": None, "hobby_label_plural": None}  # the default is "not set"
+    return {"hobby_label": one, "hobby_label_plural": many}
+
+
+def _remember_label_slugs(labels):
+    """#700: adds each label's (singular, plural) slug pair to hobby_label_known (not imaged: an
+    undo of the label never takes a redirect away). Runs inside update()'s transaction."""
+    pairs = [list(p) for p in known_label_slugs()[1:]]  # the default pair is implicit
+    for lab in labels:
+        pair = [lab.one_slug, lab.many_slug]
+        if not lab.is_default and pair not in pairs:
+            pairs.append(pair)
+    conn = db.get_conn()
+    try:
+        conn.execute(f"INSERT INTO {TABLE} (key, value, updated_at) VALUES (?, ?, ?) "
+                     f"ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                     (KNOWN_LABELS_KEY, json.dumps(pairs), time.time()))
+    finally:
+        conn.close()
 
 
 # --- writes -------------------------------------------------------------------------------
@@ -287,7 +426,12 @@ def update(changes_in, *, dry_run=False, actor=None, batch_id=None):
     clean = _clean(changes_in)
     batch_id = batch_id or changes.new_batch_id()
     now = time.time()
+    old_label = hobby_label(_read_all())
     with db.transaction(dry_run=dry_run):
+        if any(k in clean for k in HOBBY_LABEL_KEYS):
+            new_label = hobby_label_rules.make(clean.get("hobby_label"), clean.get("hobby_label_plural"))
+            if new_label != old_label:
+                _remember_label_slugs([old_label, new_label])
         with db.ImageLog(OP_UPDATE, actor, batch_id) as log:
             for key, val in clean.items():
                 cur = log.get(TABLE, {"key": key})

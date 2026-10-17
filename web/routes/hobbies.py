@@ -4,11 +4,17 @@ from fastapi import Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from core import card_rules, cards, db, hobbies
+from core import card_rules, cards, db, hobbies, install_config
 from web.common import templates
 from web.shapes import _hobby_cover, _to_hobby_face, _to_object_detail
 from core import policy, roles
 from web.roles import RoleRouter, requires
+
+
+def _not_found():
+    """#700: the 404 detail, in the install's word ("hobby not found" by default)."""
+    return f"{install_config.hobby_label().one_lc} not found"
+
 
 router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
@@ -53,7 +59,7 @@ def api_get_hobby(request: Request, id_or_slug: str):
     Returns a dict with the hobby tag, its projects, and its objects (via post_tags)."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
 
     projects = db.list_projects_for_hobby(hobby["id"])
     # Get all objects tagged with this hobby tag
@@ -84,7 +90,7 @@ def api_set_hobby_status(request: Request, id_or_slug: str, status: str = Form(.
     Returns the updated hobby dict (with computed flags) plus `warnings`."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
 
     result = cards.set_hobby_activity(hobby["id"], status)
     updated = db.get_hobby(hobby["id"])
@@ -96,7 +102,7 @@ def api_set_hobby_group_code(request: Request, id_or_slug: str, group_code: str 
     """Edit a hobby's 2-4 char group code (V2 cards 3.9). Unique across hobbies."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
     cards.set_group_code(hobby["id"], group_code)
     updated = db.get_hobby(hobby["id"])
     return JSONResponse({**updated, **cards.hobby_fields(updated)})
@@ -141,7 +147,7 @@ def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str 
     Returns the updated hobby's project list."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
 
     project = db.get_project(project_id)
     if project is None:
@@ -169,7 +175,7 @@ def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id:
     Returns the updated hobby's project list."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
 
     project = db.get_project(project_id)
     if project is None:

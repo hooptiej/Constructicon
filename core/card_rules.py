@@ -98,8 +98,15 @@ FILE_PROVENANCE_TO_CARD = {
     "purchased": "purchased",
 }
 
-# The user-visible word for a hobby (#686: one place, so #700 can make it renameable).
-HOBBY_LABEL = "Hobby"
+# The user-visible word for a hobby (#686: one place; #700 made it renameable). `HOBBY_LABEL` is
+# not a constant any more: reading `card_rules.HOBBY_LABEL` goes through the module __getattr__
+# below and returns the install's singular label (install_config.hobby_label(), "Hobby" by
+# default). New code should call install_config.hobby_label() for the other casings and URLs.
+def __getattr__(name):
+    if name == "HOBBY_LABEL":
+        from . import install_config  # lazy: this module stays importable without the DB layer
+        return install_config.hobby_label().one
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # #686: where a hobby's cover came from (cards.resolve_hobby_cover). `picked` = chosen by hand
 # (hobby_settings.cover_slug); the other two are the automatic fallback, in this order.

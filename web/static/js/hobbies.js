@@ -8,17 +8,17 @@
   window.HobbyCards = {};
 
   async function createHobby() {
-    const name = prompt('New hobby name:');
+    const name = prompt(`New ${HobbyLabel.one_lc} name:`);  // #700: the install's word
     if (!name || !name.trim()) return;
     const fd = new FormData();
     fd.append('name', name.trim());
     const res = await fetch('/api/hobbies', { method: 'POST', body: fd });
     if (res.ok) {
       const hobby = await res.json();
-      window.location.href = `/hobby/${encodeURIComponent(hobby.slug)}`;
+      window.location.href = HobbyLabel.url(hobby.slug);
     } else {
       const body = await res.json().catch(() => ({}));
-      alert((body.error && body.error.message) || body.detail || 'Failed to create hobby.');
+      alert((body.error && body.error.message) || body.detail || `Failed to create ${HobbyLabel.one_lc}.`);
     }
   }
 

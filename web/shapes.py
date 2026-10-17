@@ -2,7 +2,7 @@
 into the dicts pages and the JSON API return, plus the small pure helpers they use.
 Moved verbatim from web/app.py."""
 
-from core import (captions, card_payload, cards, datefmt, db, item_title, object_types, parse_limits, policy, revisions,
+from core import (captions, card_payload, cards, datefmt, db, install_config, item_title, object_types, parse_limits, policy, revisions,
                   storage, thumbnails, timeline, users)
 
 
@@ -457,7 +457,7 @@ def _to_hobby_face(hobby_row, projects=None, items_by_project=None):
         items_by_project = {p["id"]: policy.filter_visible(db.list_project_items(p["id"])) for p in projects}
     cover, fields = _hobby_cover(hobby_row, projects)
     face = cards.hobby_card_face(hobby_row, projects, items_by_project, cover=cover)
-    face["href"] = f"/hobby/{hobby_row['slug']}"
+    face["href"] = install_config.hobby_label().url(hobby_row["slug"])
     face["cover_url"] = fields["cover_url"]
     face["flags"] = db.hobby_flags(hobby_row["id"])
     return face

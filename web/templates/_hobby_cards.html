@@ -9,5 +9,5 @@
   {% for h in hobby_faces %}<div class="cx-slot" data-hobby-slug="{{ h.slug }}">{{ card(h, "small") }}</div>{% endfor %}
 </div>
 {% else %}
-<p class="empty-state">No hobbies yet.</p>
+<p class="empty-state">No {{ hobby_label.many_lc }} yet.</p>
 {% endif %}

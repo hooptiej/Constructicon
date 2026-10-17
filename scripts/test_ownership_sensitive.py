@@ -260,8 +260,10 @@ check("an ordinary item is untouched for V (page 200)", C["V"].get(f"/object/{TO
 # ---- 3. who may flip it, undo, bulk --------------------------------------------------------------
 print("--- 3. flipping, undo, bulk ---")
 r = C["E2"].post(f"/api/image/{E1_ITEM}/sensitive", data={"sensitive": "false"}, headers=H["E2"])
-check("E2 clearing -> 404 not_found (E2 can't see E1's sensitive item, so it doesn't exist for them)",
-      r.status_code == 404 and err_code(r) == "not_found", f"{r.status_code} {r.text[:120]}")
+check("E2 clearing -> 403 forbidden saying why (#709: E2 can't see E1's sensitive item; nothing changed)",
+      r.status_code == 403 and err_code(r) == "forbidden" and "marked sensitive" in r.json()["error"]["message"]
+      and r.json()["error"]["details"]["refused"] == [E1_ITEM] and row(E1_ITEM)["sensitive"] == 1,
+      f"{r.status_code} {r.text[:160]}")
 check("can_unmark: the uploader E1 and an admin yes; E2 and V no (owner decision on #603)",
       [policy.can_unmark_sensitive(a, row(E1_ITEM)) for a in ("user:os_ed1", "user:os_admin", "user:os_ed2", "user:os_view")]
       == [True, True, False, False])
@@ -299,7 +301,9 @@ check("E2 bulk-marks E1's two files (one batch)", r.status_code == 200 and r.jso
 check("bulk: E2 (not the uploader) now can't see them; E1 can",
       C["E2"].get(f"/api/image/{b1}").status_code == 404 and C["E1"].get(f"/api/image/{b1}").status_code == 200)
 r = C["E2"].post("/api/bulk/sensitive", data={"slugs": [b1], "sensitive": "true"}, headers=H["E2"])
-check("bulk on an item E2 can no longer see -> 404 not_found", r.status_code == 404, r.status_code)
+check("bulk on an item E2 can no longer see -> 403 forbidden naming it (#709)",
+      r.status_code == 403 and err_code(r) == "forbidden" and r.json()["error"]["details"]["refused"] == [b1],
+      r.status_code)
 with actor.acting_as(actor.ACTOR_MCP):
     out = mcp.constructicon_set_sensitive(b2, False)
 check("MCP set_sensitive(False) as the token (admin) clears it", out.get("sensitive") is False and row(b2)["sensitive"] == 0, out)

@@ -145,17 +145,21 @@ def viewable_item(slug, message="not found", actor=None):
 
 REFUSED_SENSITIVE = "sensitive"           # flagged "This is sensitive" (#603)
 REFUSED_RESTRICTED_TYPE = "restricted_type"  # a restricted file type: keys, certificates (#443)
+REFUSED_HIDDEN = "hidden"                 # neither, but can_view still said no (a future rule)
 
 
 def _refusal_reason(item):
-    return REFUSED_SENSITIVE if is_flagged(item) else REFUSED_RESTRICTED_TYPE
+    if is_flagged(item):
+        return REFUSED_SENSITIVE
+    return REFUSED_RESTRICTED_TYPE if is_type_restricted(item) else REFUSED_HIDDEN
 
 
 def refusal(refused, total):
     """(#709, owner decision 2026-10-17: "tell them no, and why") The 403 `forbidden` a write gets
     when it names items the actor may not see: says how many and why, nothing was changed.
     `refused` = [(slug, reason)], `total` = how many items the request named.
-    details: {refused: [slugs], reason: sensitive | restricted_type | mixed, reasons: {slug: reason}}."""
+    details: {refused: [slugs], reason: sensitive | restricted_type | hidden | mixed,
+    reasons: {slug: reason}}."""
     from core.errors import AppError
     n = len(refused)
     reasons = {slug: reason for slug, reason in refused}
@@ -172,6 +176,8 @@ def refusal(refused, total):
     elif reason == REFUSED_RESTRICTED_TYPE:
         why = (f"{verb} {'a restricted file type' if n == 1 else 'restricted file types'} (keys, certificates), "
                f"which only an admin or {'its' if n == 1 else 'their'} uploader can change")
+    elif reason == REFUSED_HIDDEN:
+        why = f"{verb} not visible to you, so you can't change {pron}"
     else:
         why = (f"{verb} marked sensitive or a restricted file type, and only their uploaders or an admin "
                f"can change {pron}")

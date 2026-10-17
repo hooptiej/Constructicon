@@ -210,7 +210,7 @@ for label, (path, extra) in DOORS.items():
 check("the web answer keeps `detail` = the message (the old page JS reads it)",
       FIRST.json().get("detail") == FIRST.json()["error"]["message"], FIRST.text[:200])
 for label, path, extra in (("sensitive", "/api/bulk/sensitive", {"sensitive": "true"}),
-                           ("provenance", "/api/bulk/provenance", {"provenance": ""})):
+                           ("provenance", "/api/bulk/provenance", {"provenance": "found"})):
     before = snapshot()
     r = C["E2"].post(path, data={"slugs": [VIS, SECRET], **extra}, headers=H["E2"])
     refused_ok(f"E2 bulk {label} [visible, hidden]", r, before, SENS_1_OF.format(n=2), [SECRET], "sensitive")
@@ -239,8 +239,8 @@ check("E2 add-to-card with an unknown card: still the silent no-op (200, count 1
       r.status_code == 200 and r.json() == {"count": 1}, r.text[:200])
 before = snapshot()
 r = C["E2"].post("/api/bulk/add-to-project", data={"slugs": [SECRET], "project_id": "999999"}, headers=H["E2"])
-check("E2 add-to-card of the hidden item with an unknown card: 404 too (the count can't probe it)",
-      r.status_code == 404 and not unchanged(before), r.text[:200])
+check("E2 add-to-card of the hidden item with an unknown card: refused too (403, nothing written)",
+      r.status_code == 403 and not unchanged(before), r.text[:200])
 r = C["E2"].post("/api/delete", data={"slugs": [VIS3, UNKNOWN]}, headers=H["E2"])
 check("E2 delete [own visible, unknown]: 200, deleted 1",
       r.status_code == 200 and r.json()["deleted"] == 1 and db.get_by_slug(VIS3) is None, r.text[:200])

@@ -428,6 +428,20 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   the policy fail the check below).
 - **Since #603** "restricted" = sensitive: a restricted type OR an item flagged "This is sensitive",
   visible to admins AND the item's uploader (`can_view`), see "Ownership and sensitive items" below.
+- **Writes refuse what the caller can't see (#709), in the service op itself**, so web, MCP and any
+  future per-user token are covered: `policy.viewable_rows(slugs, missing_ok=...)` for a set
+  (`items.delete`, `unrelate`, `membership.add_files` / `remove_files`, `tags.merge_item_tags`; bulk
+  delete, add-to-card and tag), `items.get_item` / `tags._get_item` for one item (update, caption,
+  relate, redact, attach / detach / set tags). **Owner decision 2026-10-17: "tell them no, and
+  why."** A hidden item refuses the WHOLE request with 403 `forbidden` (`policy.refusal`): "Nothing
+  was changed: 1 of the 3 selected items is marked sensitive, and only its uploader or an admin can
+  change it." (or "a restricted file type", or both), `details: {refused: [slugs], reason: sensitive |
+  restricted_type | hidden | mixed, reasons: {slug: reason}}`; nothing written. Same code, message and
+  details over MCP. The grid's bulk bar shows that message as is. An unknown slug keeps its old
+  meaning (`missing_ok` skips it, else 404). **Not this rule (owner, PR #727):** `set_sensitive` /
+  `set_provenance` (bulk and single) keep their own 404 for a hidden item, and the single-item WEB
+  routes still answer 404 first (`viewable_item`, the read-door rule above; saying why there is #730).
+  Check: `scripts/test_bulk_visibility_709.py`.
 - **Adding a door** (anything that hands out an item or a list of items, web or MCP): call the
   policy in it, and add it to `DOORS` in `scripts/check_policy_doors.py`. That script (AST, no
   server) fails when a known door stops calling `policy.`, when a GET route or MCP read tool reads
@@ -1946,7 +1960,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,
-    `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
+    `test_ownership_sensitive`, `test_bulk_visibility_709`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,
     `check_policy_doors`, `test_manage_634` (the `core/manage/` tools, their actor, the stubs);
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,

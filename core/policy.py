@@ -13,6 +13,10 @@ item (or a list of items) asks this module:
     has the rows in hand;
   * the static site export and the project zip (anything that leaves the install)
     ->  `filter_exportable(rows)`.
+  * writes (#709): the service ops refuse an item the actor can't see (403 forbidden saying why)
+    before they write: `viewable_rows(slugs)` for a set (items.delete, membership add/remove, tag
+    merge) and for one item (items.get_item, tags' item lookup). set_sensitive / set_provenance keep
+    their own `can_view` check and 404 (#603 / #553).
 
 scripts/check_policy_doors.py fails if a known door stops calling this module.
 
@@ -138,6 +142,78 @@ def viewable_item(slug, message="not found", actor=None):
     if row is None:
         raise NotFound(message)
     return require_view(row, actor, message)
+
+
+REFUSED_SENSITIVE = "sensitive"           # flagged "This is sensitive" (#603)
+REFUSED_RESTRICTED_TYPE = "restricted_type"  # a restricted file type: keys, certificates (#443)
+REFUSED_HIDDEN = "hidden"                 # neither, but can_view still said no (a future rule)
+
+
+def _refusal_reason(item):
+    if is_flagged(item):
+        return REFUSED_SENSITIVE
+    return REFUSED_RESTRICTED_TYPE if is_type_restricted(item) else REFUSED_HIDDEN
+
+
+def refusal(refused, total):
+    """(#709, owner decision 2026-10-17: "tell them no, and why") The 403 `forbidden` a write gets
+    when it names items the actor may not see: says how many and why, nothing was changed.
+    `refused` = [(slug, reason)], `total` = how many items the request named.
+    details: {refused: [slugs], reason: sensitive | restricted_type | hidden | mixed,
+    reasons: {slug: reason}}."""
+    from core.errors import AppError
+    n = len(refused)
+    reasons = {slug: reason for slug, reason in refused}
+    kinds = set(reasons.values())
+    reason = kinds.pop() if len(kinds) == 1 else "mixed"
+    if total == 1:
+        which, verb, pron = "this item", "is", "it"
+    elif n == 1:
+        which, verb, pron = f"1 of the {total} selected items", "is", "it"
+    else:
+        which, verb, pron = f"{n} of the {total} selected items", "are", "them"
+    if reason == REFUSED_SENSITIVE:
+        why = f"{verb} marked sensitive, and only {'its' if n == 1 else 'their'} uploader or an admin can change {pron}"
+    elif reason == REFUSED_RESTRICTED_TYPE:
+        why = (f"{verb} {'a restricted file type' if n == 1 else 'restricted file types'} (keys, certificates), "
+               f"which only an admin or {'its' if n == 1 else 'their'} uploader can change")
+    elif reason == REFUSED_HIDDEN:
+        why = f"{verb} not visible to you, so you can't change {pron}"
+    else:
+        why = (f"{verb} marked sensitive or a restricted file type, and only their uploaders or an admin "
+               f"can change {pron}")
+    return AppError("forbidden", f"Nothing was changed: {which} {why}.", status=403,
+                    details={"refused": [s for s, _ in refused], "reason": reason, "reasons": reasons})
+
+
+def viewable_rows(slugs, *, missing_ok=False, actor=None):
+    """(#709) The write-side door for a SET of items (bulk delete, add-to-card, tagging, and the
+    single-item ops; the service ops call it before they write anything). Returns (rows, missing): the
+    item rows in the order given (blanks and repeats dropped) when the actor may see EVERY one.
+      * An unknown slug raises NotFound ("No item 'x'."), unless `missing_ok` (the bulk paths that
+        always skipped unknown slugs): then it is left out and listed in `missing`.
+      * Items that exist but the actor may not see refuse the WHOLE request with `refusal(...)`:
+        403 `forbidden`, a message saying how many and why, the slugs in details. Nothing written.
+        (Owner decision on #709: say no, and why. The caller named those slugs, so echoing them
+        back reveals nothing they didn't send.)"""
+    from core import db  # lazy: core.db imports this module
+    wanted = [slugs] if isinstance(slugs, str) else list(slugs or [])
+    wanted = list(dict.fromkeys((s or "").strip() for s in wanted if (s or "").strip()))
+    who = actor_ctx.resolve(actor)
+    rows, missing, refused = [], [], []
+    for slug in wanted:
+        row = db.get_by_slug(slug)
+        if row is None:
+            if not missing_ok:
+                raise NotFound(f"No item {slug!r}.")
+            missing.append(slug)
+        elif not can_view(row, who):
+            refused.append((slug, _refusal_reason(row)))
+        else:
+            rows.append(row)
+    if refused:
+        raise refusal(refused, len(wanted))
+    return rows, missing
 
 
 def require_file(item, actor=None, message="not found"):

@@ -256,6 +256,14 @@ const mkItem = (slug, type, at) => ({ slug, media_type: type, display_name: slug
     check('a refused action: the alert says why, no Undo bar, the selection stays',
       s.alerts.length === 1 && /Delete failed: needs an editor/.test(s.alerts[0]) && s.undo.length === 0 && s.dom.get('selcount').textContent === '1 selected', s.alerts);
 
+    // #709: refused because an item is someone else's sensitive one: the server's reason, word for word
+    const why = 'Nothing was changed: 1 of the 1 selected items is marked sensitive, and only its uploader or an admin can change it.';
+    s.alerts.length = 0;
+    s.server.fail(403, { ok: false, error: { code: 'forbidden', message: why, details: { refused: ['img1'], reason: 'sensitive' } }, detail: why });
+    s.dom.get('delete').fire('click'); await settle();
+    check('#709 refusal: the alert is the server message as is, no Undo bar, the selection stays',
+      s.alerts.length === 1 && s.alerts[0] === why && s.undo.length === 0 && s.dom.get('selcount').textContent === '1 selected', s.alerts);
+
     // Select off clears the selection
     s.dom.get('select').fire('click');
     check('Select off: selecting off, the selection cleared', !s.dom.box.classes.has('is-selecting') && s.dom.get('selcount').textContent === '0 selected');

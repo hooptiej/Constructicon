@@ -1058,8 +1058,7 @@ def constructicon_add_related(slug: str, related_slug: str) -> list[dict]:
     Also merges tags and project membership between the two.
     Returns the updated list of related objects.
     """
-    if db.get_by_slug(slug) is None or db.get_by_slug(related_slug) is None:
-        raise NotFound(f"No item {slug!r}." if db.get_by_slug(slug) is None else f"No item {related_slug!r}.")
+    policy.viewable_rows([slug, related_slug])  # #709: missing = not_found, not visible = forbidden (says why)
     items.relate(slug, related_slug)  # #541 phase C: one undoable batch (link + what it shares)
     return [_to_public_listed(r) for r in db.list_related(slug)]
 
@@ -1182,8 +1181,7 @@ def constructicon_add_to_project(slug: str, project_id: str | int) -> list[dict]
     free-text tags), and a project with no cover takes this object as its cover. Undoable as
     one batch (constructicon_undo). Returns the object's updated project list.
     """
-    if db.get_by_slug(slug) is None:
-        raise NotFound(f"No item {slug!r}.")
+    policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     if db.get_project(project_id) is None:
         raise NotFound(f"No card {project_id!r}.")
     membership.add_files(project_id, [slug], **membership.UI_EFFECTS)  # #541 phase C: same flags as the web
@@ -1196,8 +1194,7 @@ def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[
 
     Returns the object's updated project list.
     """
-    if db.get_by_slug(slug) is None:
-        raise NotFound(f"No item {slug!r}.")
+    policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
@@ -1237,9 +1234,7 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
+    row = policy.viewable_rows([slug])[0][0]  # #709: missing = not_found, not visible = forbidden (says why)
     if not object_types.can_be_writeup(row):
         label = object_types.get_object_type(row.get("media_type")).label
         raise ValueError(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
@@ -1735,9 +1730,7 @@ def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
 
     Returns the updated object; a missing one returns the not_found error.
     """
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
+    policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
         raise NotFound(f"No such tag: {tag_name!r}")

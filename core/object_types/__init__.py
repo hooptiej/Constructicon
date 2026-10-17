@@ -458,6 +458,11 @@ BROWSER_TYPE_ALIASES = {
     "audio/x-flac": "audio/flac",
     "audio/x-aac": "audio/aac",
     "audio/mp3": "audio/mpeg", "audio/x-mp3": "audio/mpeg", "audio/x-mpeg": "audio/mpeg",
+    # #729: an .opus file is Ogg Opus, whose registered type is audio/ogg (RFC 7845); Python 3.14
+    # guesses audio/opus, freedesktop says audio/x-opus+ogg. Served as audio/ogg, which every browser
+    # plays. .m4v is MP4 video (Python: video/x-m4v), served as video/mp4.
+    "audio/opus": "audio/ogg", "audio/x-opus": "audio/ogg", "audio/x-opus+ogg": "audio/ogg",
+    "video/x-m4v": "video/mp4", "video/m4v": "video/mp4",
 }
 
 

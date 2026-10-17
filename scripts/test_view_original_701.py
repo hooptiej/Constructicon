@@ -12,6 +12,8 @@ Covers:
   CSP; XML CSP; an HTML file named .pdf / .jpg treated as HTML; nosniff on every one;
 - #723: WAV/M4A/FLAC/OGG/AAC inline, MOV a download; every media type alias (`BROWSER_TYPE_ALIASES`)
   folds into the allowlist; `.wav` guessed as any of its names is served inline as `audio/wav`;
+- #729: `.opus` (Python: audio/opus) inline as `audio/ogg`, `.m4v` (Python: video/x-m4v) inline as
+  `video/mp4`, under every name they may be guessed as;
 - the original filename kept (plain, with spaces, with quotes, with unicode);
 - the link label and target per type (`object_types.original_link`, the shared preview helper);
 - real `/f/<slug>` responses and object pages for uploaded PDF, PNG, TXT, STL and ZIP files.
@@ -163,6 +165,9 @@ ALIASES = {
     "audio/flac": "audio/flac", "audio/x-flac": "audio/flac",
     "audio/aac": "audio/aac", "audio/x-aac": "audio/aac",
     "audio/mpeg": "audio/mpeg", "audio/mp3": "audio/mpeg", "audio/x-mp3": "audio/mpeg",
+    # #729
+    "audio/opus": "audio/ogg", "audio/x-opus": "audio/ogg", "audio/x-opus+ogg": "audio/ogg",
+    "video/x-m4v": "video/mp4", "video/m4v": "video/mp4",
 }
 for alias, canon in ALIASES.items():
     check(f"{alias}: folds to {canon}", object_types.browser_media_type(alias) == canon,
@@ -207,6 +212,31 @@ for name, want_ct in (("x.m4a", "audio/mp4"), ("x.flac", "audio/flac"), ("x.mp3"
           ct.split(";")[0] == (object_types.browser_media_type(guess) or want_ct), ct)
 check(".mov stays a download", content_security.serve_file(d / "ctx.mov", filename="x.mov")
       .headers.get("content-disposition", "").startswith("attachment;"))
+
+print("\n--- #729: .opus and .m4v open in the browser (served as audio/ogg and video/mp4) ---")
+print(f"(this Python guesses .opus as {_real_guess('a.opus')[0]}, .m4v as {_real_guess('a.m4v')[0]})")
+for ext, names, want_ct, label in ((".opus", ("audio/opus", "audio/x-opus", "audio/x-opus+ogg", "audio/ogg"), "audio/ogg", "Audio"),
+                                   (".m4v", ("video/x-m4v", "video/m4v", "video/mp4"), "video/mp4", "Video")):
+    p = d / f"stored{ext[1:]}{ext}"
+    p.write_bytes(b"OggS" + b"\x00" * 60 if ext == ".opus" else b"\x00\x00\x00\x18ftypM4V " + b"\x00" * 40)
+    for alias in (None,) + names:  # None = this Python's own guess
+        def _fake(url, strict=True, _alias=alias, _ext=ext):
+            return (_alias, None) if str(url).lower().endswith(_ext) else _real_guess(url, strict)
+        if alias:
+            mimetypes.guess_type = _fake
+        try:
+            how = f"guessed {alias}" if alias else "real guess"
+            r = content_security.serve_file(p, filename=f"Clip 1{ext}")
+            disp = r.headers.get("content-disposition", "")
+            check(f"{ext} {how}: inline", disp.startswith("inline;"), disp)
+            check(f"{ext} {how}: content-type {want_ct}", r.headers.get("content-type", "").split(";")[0] == want_ct,
+                  r.headers.get("content-type"))
+            check(f"{ext} {how}: nosniff", r.headers.get("x-content-type-options") == "nosniff")
+            check(f"{ext} {how}: link says View", object_types.original_link({"filename": f"a{ext}", "type_label": label})
+                  == {"label": f"View original {label}", "new_tab": True})
+        finally:
+            mimetypes.guess_type = _real_guess
+check("video/quicktime still not aliased (#701)", "video/quicktime" not in object_types.BROWSER_TYPE_ALIASES)
 
 print("\n--- the link: label and target per type ---")
 for fname, tl, want_label, want_tab in (("a.pdf", "PDF", "View original PDF", True),

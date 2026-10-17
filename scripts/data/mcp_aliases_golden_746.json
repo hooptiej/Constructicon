@@ -1,0 +1,3194 @@
+{
+ "_about": "#746: what each retired MCP tool name returned BEFORE the consolidation, on the fixture in scripts/test_mcp_consolidation_746.py (batch ids and clock values masked). Written by that script's --write-golden with the pre-#746 server; the test compares every alias to it.",
+ "results": {
+  "add_items_to_project": [
+   {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "wheel.png",
+    "effective_date": "<time>",
+    "extracted_text": "",
+    "extracted_text_chars": 0,
+    "extracted_text_truncated": false,
+    "filename": "wheel.png",
+    "highlight": false,
+    "icon": "🖼️",
+    "is_brand_asset": false,
+    "media_type": "image",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "img2",
+    "tags": [
+     "Misc",
+     "Rover"
+    ],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/img2"
+   },
+   {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "more notes.md",
+    "effective_date": "<time>",
+    "extracted_text": "third doc",
+    "extracted_text_chars": 9,
+    "extracted_text_truncated": false,
+    "filename": "more notes.md",
+    "highlight": false,
+    "icon": "📝",
+    "is_brand_asset": false,
+    "media_type": "document",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "doc3",
+    "tags": [
+     "Rover"
+    ],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/doc3"
+   }
+  ],
+  "add_project_to_hobby": {
+   "id": 6,
+   "name": "Robots",
+   "project_count": 2,
+   "slug": "robots",
+   "status": "active"
+  },
+  "add_related": [
+   {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "more notes.md",
+    "effective_date": "<time>",
+    "extracted_text": "third doc",
+    "extracted_text_chars": 9,
+    "extracted_text_truncated": false,
+    "filename": "more notes.md",
+    "highlight": false,
+    "icon": "📝",
+    "is_brand_asset": false,
+    "media_type": "document",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "doc3",
+    "tags": [],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/doc3"
+   },
+   {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "wheel.png",
+    "effective_date": "<time>",
+    "extracted_text": "",
+    "extracted_text_chars": 0,
+    "extracted_text_truncated": false,
+    "filename": "wheel.png",
+    "highlight": false,
+    "icon": "🖼️",
+    "is_brand_asset": false,
+    "media_type": "image",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "img2",
+    "tags": [
+     "Misc"
+    ],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/img2"
+   }
+  ],
+  "add_to_family": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "fleet",
+     "before": null,
+     "card": "rover",
+     "field": "in_family"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "add_to_hobby": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "collecting",
+     "before": null,
+     "card": "shelf-thing",
+     "field": "in_hobby"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "add_to_project": [
+   {
+    "activity": "active",
+    "cover_slug": "img1",
+    "created_at": "<time>",
+    "created_by_user": null,
+    "description": "",
+    "effective_end": "<time>",
+    "effective_start": "<time>",
+    "end_date_override": null,
+    "highlight": true,
+    "id": 1,
+    "kind": "project",
+    "kind_label": "Project",
+    "needs_input": true,
+    "parent_id": null,
+    "provenance": null,
+    "provenance_credit": null,
+    "provenance_label": null,
+    "slug": "rover",
+    "stage": "in_progress",
+    "stage_label": "In progress",
+    "start_date_override": null,
+    "status": "active",
+    "stop_reason": null,
+    "stop_reason_label": null,
+    "title": "Rover",
+    "whereabouts": null,
+    "whereabouts_applies": true,
+    "whereabouts_label": null,
+    "whereabouts_note": null,
+    "writeup_slug": "<item:11>"
+   },
+   {
+    "activity": "active",
+    "cover_slug": "img2",
+    "created_at": "<time>",
+    "created_by_user": null,
+    "description": "",
+    "effective_end": "<time>",
+    "effective_start": "<time>",
+    "end_date_override": null,
+    "highlight": false,
+    "id": 5,
+    "kind": "project",
+    "kind_label": "Project",
+    "needs_input": false,
+    "parent_id": null,
+    "provenance": null,
+    "provenance_credit": null,
+    "provenance_label": null,
+    "slug": "misc",
+    "stage": "in_progress",
+    "stage_label": "In progress",
+    "start_date_override": null,
+    "status": "active",
+    "stop_reason": null,
+    "stop_reason_label": null,
+    "title": "Misc",
+    "whereabouts": null,
+    "whereabouts_applies": true,
+    "whereabouts_label": null,
+    "whereabouts_note": null,
+    "writeup_slug": "<item:15>"
+   }
+  ],
+  "attach_tags": {
+   "actions": [],
+   "brand_role": null,
+   "content_date": null,
+   "content_description": null,
+   "description": "",
+   "display_date_override": null,
+   "display_name": "wheel.png",
+   "effective_date": "<time>",
+   "extracted_text": "",
+   "filename": "wheel.png",
+   "highlight": false,
+   "icon": "🖼️",
+   "is_brand_asset": false,
+   "media_type": "image",
+   "ocr_status": null,
+   "provenance": null,
+   "redacted": false,
+   "sensitive": false,
+   "sensitive_reason": null,
+   "slug": "img2",
+   "tags": [
+    "Misc"
+   ],
+   "timestamp": "<time>",
+   "type_metadata": {},
+   "uploaded_by_user": null,
+   "url": "http://constructicon-web:8000/f/img2"
+  },
+  "bring_back": {
+   "changed": false,
+   "ok": true
+  },
+  "convert_hobby_to_card": {
+   "batch_id": "<batch>",
+   "card": "robots",
+   "card_id": 6,
+   "changes": [
+    {
+     "after": {
+      "activity": "active",
+      "kind": "family",
+      "parent_id": null,
+      "slug": "robots",
+      "stage": "in_progress",
+      "stop_reason": null,
+      "title": "Robots"
+     },
+     "before": null,
+     "card": "robots",
+     "field": "(row)",
+     "key": {
+      "id": 6
+     },
+     "op": "create_card",
+     "table": "projects"
+    },
+    {
+     "after": {
+      "display_name": null,
+      "filename": null,
+      "media_type": "document",
+      "slug": "<item:16>",
+      "stored_filename": null
+     },
+     "before": null,
+     "card": "robots",
+     "field": "(row)",
+     "key": {
+      "slug": "<item:16>"
+     },
+     "op": "create_writeup",
+     "table": "capture_events"
+    },
+    {
+     "after": {
+      "post_slug": "<item:16>",
+      "rowid": 13,
+      "tag_id": 6
+     },
+     "before": null,
+     "card": "robots",
+     "field": "(row)",
+     "key": {
+      "post_slug": "<item:16>",
+      "tag_id": 6
+     },
+     "op": "create_writeup",
+     "table": "post_tags"
+    },
+    {
+     "after": {
+      "post_slug": "<item:16>",
+      "project_id": 6,
+      "rowid": 11,
+      "sort_order": 0
+     },
+     "before": null,
+     "card": "robots",
+     "field": "(row)",
+     "key": {
+      "post_slug": "<item:16>",
+      "project_id": 6
+     },
+     "op": "create_writeup",
+     "table": "project_items"
+    },
+    {
+     "after": "<item:16>",
+     "before": null,
+     "card": "robots",
+     "field": "writeup_slug",
+     "key": {
+      "id": 6
+     },
+     "op": "create_writeup",
+     "table": "projects"
+    },
+    {
+     "after": {
+      "created_at": "<time>",
+      "sort_order": 0
+     },
+     "before": null,
+     "card": null,
+     "field": "(row)",
+     "key": {
+      "family_id": 6,
+      "member_id": 1
+     },
+     "op": "convert_hobby_to_card",
+     "table": "family_members"
+    },
+    {
+     "after": null,
+     "before": {
+      "hobby_tag_id": 6,
+      "project_id": 1,
+      "rowid": 1
+     },
+     "card": "robots",
+     "field": "(row)",
+     "key": {
+      "hobby_tag_id": 6,
+      "project_id": 1
+     },
+     "op": "convert_hobby_to_card",
+     "table": "project_hobbies"
+    },
+    {
+     "after": 0,
+     "before": 1,
+     "card": "robots",
+     "field": "is_hobby",
+     "key": {
+      "id": 6
+     },
+     "op": "convert_hobby_to_card",
+     "table": "blog_tags"
+    },
+    {
+     "after": null,
+     "before": "active",
+     "card": "robots",
+     "field": "hobby_status",
+     "key": {
+      "id": 6
+     },
+     "op": "convert_hobby_to_card",
+     "table": "blog_tags"
+    },
+    {
+     "after": null,
+     "before": "ROB",
+     "card": "robots",
+     "field": "group_code",
+     "key": {
+      "id": 6
+     },
+     "op": "convert_hobby_to_card",
+     "table": "blog_tags"
+    }
+   ],
+   "dry_run": false,
+   "hobby": "robots",
+   "homes_moved": [],
+   "into_hobby": null,
+   "kind": "family",
+   "loose_moved": 0,
+   "members": [
+    {
+     "how": "member",
+     "slug": "rover"
+    }
+   ],
+   "ok": true,
+   "title": "Robots",
+   "warnings": []
+  },
+  "convert_project_to_hobby": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": null,
+     "before": {
+      "post_slug": "<item:15>",
+      "project_id": 5,
+      "rowid": 5,
+      "sort_order": 0
+     },
+     "card": "misc",
+     "field": "(row)",
+     "key": {
+      "post_slug": "<item:15>",
+      "project_id": 5
+     },
+     "op": "convert_project_to_hobby",
+     "table": "project_items"
+    },
+    {
+     "after": null,
+     "before": {
+      "post_slug": "<item:15>",
+      "rowid": 5,
+      "tag_id": 5
+     },
+     "card": "misc",
+     "field": "(row)",
+     "key": {
+      "post_slug": "<item:15>",
+      "tag_id": 5
+     },
+     "op": "convert_project_to_hobby",
+     "table": "post_tags"
+    },
+    {
+     "after": null,
+     "before": {
+      "display_name": null,
+      "filename": null,
+      "media_type": "document",
+      "slug": "<item:15>",
+      "stored_filename": null
+     },
+     "card": "misc",
+     "field": "(row)",
+     "key": {
+      "slug": "<item:15>"
+     },
+     "op": "convert_project_to_hobby",
+     "table": "capture_events"
+    },
+    {
+     "after": 1,
+     "before": 0,
+     "card": "misc",
+     "field": "is_hobby",
+     "key": {
+      "id": 5
+     },
+     "op": "convert_project_to_hobby",
+     "table": "blog_tags"
+    },
+    {
+     "after": "active",
+     "before": null,
+     "card": "misc",
+     "field": "hobby_status",
+     "key": {
+      "id": 5
+     },
+     "op": "convert_project_to_hobby",
+     "table": "blog_tags"
+    },
+    {
+     "after": "MIS",
+     "before": null,
+     "card": "misc",
+     "field": "group_code",
+     "key": {
+      "id": 5
+     },
+     "op": "convert_project_to_hobby",
+     "table": "blog_tags"
+    },
+    {
+     "after": null,
+     "before": {
+      "post_slug": "img2",
+      "project_id": 5,
+      "rowid": 8,
+      "sort_order": 1
+     },
+     "card": "misc",
+     "field": "(row)",
+     "key": {
+      "post_slug": "img2",
+      "project_id": 5
+     },
+     "op": "convert_project_to_hobby",
+     "table": "project_items"
+    },
+    {
+     "after": null,
+     "before": {
+      "post_slug": "img1",
+      "project_id": 5,
+      "rowid": 9,
+      "sort_order": 2
+     },
+     "card": "misc",
+     "field": "(row)",
+     "key": {
+      "post_slug": "img1",
+      "project_id": 5
+     },
+     "op": "convert_project_to_hobby",
+     "table": "project_items"
+    },
+    {
+     "after": null,
+     "before": {
+      "activity": "active",
+      "cover_project_id": null,
+      "cover_slug": "img2",
+      "created_at": "<time>",
+      "created_by_user_id": null,
+      "description": "",
+      "end_date_override": null,
+      "flavor": null,
+      "highlight": 0,
+      "home_kind": null,
+      "home_ref": null,
+      "id": 5,
+      "kind": "project",
+      "parent_id": null,
+      "provenance": null,
+      "provenance_credit": null,
+      "slug": "misc",
+      "stage": "in_progress",
+      "start_date_override": null,
+      "status": "active",
+      "stop_reason": null,
+      "synopsis": null,
+      "tag_id": 5,
+      "title": "Misc",
+      "updated_at": "<time>",
+      "whereabouts": null,
+      "whereabouts_note": null,
+      "writeup_lead": null,
+      "writeup_slug": "<item:15>"
+     },
+     "card": "misc",
+     "field": "(row)",
+     "key": {
+      "id": 5
+     },
+     "op": "convert_project_to_hobby",
+     "table": "projects"
+    }
+   ],
+   "dry_run": false,
+   "id": 5,
+   "name": "Misc",
+   "slug": "misc",
+   "status": "active",
+   "summary": {
+    "children_moved": 0,
+    "items_moved": 2
+   },
+   "warnings": []
+  },
+  "copy_files": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "Rover (+1 file(s))",
+     "before": null,
+     "card": "rover",
+     "field": "tag"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "tags_added": 1,
+   "tags_removed": 0,
+   "warnings": [
+    "img2 is already in 'Rover'."
+   ]
+  },
+  "curation_queue": {
+   "counts": {
+    "deferred": 0,
+    "needs": 5,
+    "nudges": 17,
+    "open": 24,
+    "questions": 2
+   },
+   "deferred": [],
+   "groups": [
+    {
+     "activity": "active",
+     "card_kind": "project",
+     "href": "/project/rover",
+     "id": "card:rover",
+     "items": [
+      {
+       "answer_param": "choice",
+       "confidence": null,
+       "deferred": false,
+       "dismissible": false,
+       "field": "stage",
+       "fix_label": "Open card",
+       "group": "status",
+       "href": "/project/rover?edit=status",
+       "id": 1,
+       "key": "decision:1",
+       "kind": "card_status",
+       "label": "Still rolling?",
+       "multi": false,
+       "options": [
+        {
+         "key": "done",
+         "label": "Done",
+         "reason": null,
+         "suggested": true
+        },
+        {
+         "key": "paused",
+         "label": "Paused",
+         "reason": null,
+         "suggested": false
+        }
+       ],
+       "suggested": {
+        "labels": [
+         "Done"
+        ],
+        "picks": [
+         "done"
+        ],
+        "reason": null
+       },
+       "type": "question"
+      },
+      {
+       "deferred": false,
+       "detail": "missing_dates: Rover",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "dates",
+       "href": "/project/rover?edit=dates",
+       "id": null,
+       "key": "missing_dates:project:1",
+       "kind": "missing_dates",
+       "label": "Rover is missing content dates",
+       "priority": 5,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "thin_captions: Rover",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/rover",
+       "id": null,
+       "key": "thin_captions:project:1",
+       "kind": "thin_captions",
+       "label": "Rover has thin captions",
+       "priority": 5,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "The write-up is still blank, but the card has 3 file(s).",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/rover",
+       "id": null,
+       "key": "missing_writeup:project:1",
+       "kind": "missing_writeup",
+       "label": "Rover needs a write-up",
+       "priority": 8,
+       "type": "nudge"
+      },
+      {
+       "confidence": null,
+       "deferred": false,
+       "detail": "",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "origin",
+       "href": "/project/rover?edit=origin",
+       "id": null,
+       "key": "need:missing_provenance:rover",
+       "kind": "missing_provenance",
+       "label": "No provenance recorded (created, found, collected, referenced, client-owned, purchased).",
+       "suggested": null,
+       "type": "need"
+      }
+     ],
+     "last_touched": "<time>",
+     "slug": "rover",
+     "title": "Rover",
+     "type": "card"
+    },
+    {
+     "activity": "active",
+     "card_kind": "project",
+     "href": "/project/misc",
+     "id": "card:misc",
+     "items": [
+      {
+       "deferred": false,
+       "detail": "weak_connections: Misc",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "links",
+       "href": "/project/misc?edit=links",
+       "id": null,
+       "key": "weak_connections:project:5",
+       "kind": "weak_connections",
+       "label": "Misc needs more connections",
+       "priority": 3,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "missing_dates: Misc",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "dates",
+       "href": "/project/misc?edit=dates",
+       "id": null,
+       "key": "missing_dates:project:5",
+       "kind": "missing_dates",
+       "label": "Misc is missing content dates",
+       "priority": 5,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "thin_captions: Misc",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/misc",
+       "id": null,
+       "key": "thin_captions:project:5",
+       "kind": "thin_captions",
+       "label": "Misc has thin captions",
+       "priority": 5,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "The write-up is still blank, but the card has 2 file(s).",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/misc",
+       "id": null,
+       "key": "missing_writeup:project:5",
+       "kind": "missing_writeup",
+       "label": "Misc needs a write-up",
+       "priority": 8,
+       "type": "nudge"
+      },
+      {
+       "confidence": null,
+       "deferred": false,
+       "detail": "",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "origin",
+       "href": "/project/misc?edit=origin",
+       "id": null,
+       "key": "need:missing_provenance:misc",
+       "kind": "missing_provenance",
+       "label": "No provenance recorded (created, found, collected, referenced, client-owned, purchased).",
+       "suggested": null,
+       "type": "need"
+      }
+     ],
+     "last_touched": "<time>",
+     "slug": "misc",
+     "title": "Misc",
+     "type": "card"
+    },
+    {
+     "activity": "active",
+     "card_kind": "family",
+     "href": "/project/fleet",
+     "id": "card:fleet",
+     "items": [
+      {
+       "deferred": false,
+       "detail": "missing_cover: Fleet",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/fleet",
+       "id": null,
+       "key": "missing_cover:project:4",
+       "kind": "missing_cover",
+       "label": "Fleet needs a cover image",
+       "priority": 10,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "missing_dates: Fleet",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "dates",
+       "href": "/project/fleet?edit=dates",
+       "id": null,
+       "key": "missing_dates:project:4",
+       "kind": "missing_dates",
+       "label": "Fleet is missing content dates",
+       "priority": 5,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "missing_writeup: Fleet",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/fleet",
+       "id": null,
+       "key": "missing_writeup:project:4",
+       "kind": "missing_writeup",
+       "label": "Fleet needs a write-up",
+       "priority": 8,
+       "type": "nudge"
+      }
+     ],
+     "last_touched": "<time>",
+     "slug": "fleet",
+     "title": "Fleet",
+     "type": "card"
+    },
+    {
+     "activity": "active",
+     "card_kind": "thing",
+     "href": "/project/shelf-thing",
+     "id": "card:shelf-thing",
+     "items": [
+      {
+       "deferred": false,
+       "detail": "missing_cover: Shelf Thing",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/shelf-thing",
+       "id": null,
+       "key": "missing_cover:project:3",
+       "kind": "missing_cover",
+       "label": "Shelf Thing needs a cover image",
+       "priority": 10,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "missing_dates: Shelf Thing",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "dates",
+       "href": "/project/shelf-thing?edit=dates",
+       "id": null,
+       "key": "missing_dates:project:3",
+       "kind": "missing_dates",
+       "label": "Shelf Thing is missing content dates",
+       "priority": 5,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "missing_writeup: Shelf Thing",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/shelf-thing",
+       "id": null,
+       "key": "missing_writeup:project:3",
+       "kind": "missing_writeup",
+       "label": "Shelf Thing needs a write-up",
+       "priority": 8,
+       "type": "nudge"
+      },
+      {
+       "confidence": null,
+       "deferred": false,
+       "detail": "",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "origin",
+       "href": "/project/shelf-thing?edit=origin",
+       "id": null,
+       "key": "need:missing_provenance:shelf-thing",
+       "kind": "missing_provenance",
+       "label": "No provenance recorded (created, found, collected, referenced, client-owned, purchased).",
+       "suggested": null,
+       "type": "need"
+      },
+      {
+       "confidence": null,
+       "deferred": false,
+       "detail": "",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "status",
+       "href": "/project/shelf-thing?edit=status",
+       "id": null,
+       "key": "need:missing_whereabouts:shelf-thing",
+       "kind": "missing_whereabouts",
+       "label": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, never built).",
+       "suggested": null,
+       "type": "need"
+      }
+     ],
+     "last_touched": "<time>",
+     "slug": "shelf-thing",
+     "title": "Shelf Thing",
+     "type": "card"
+    },
+    {
+     "activity": "active",
+     "card_kind": "project",
+     "href": "/project/arm",
+     "id": "card:arm",
+     "items": [
+      {
+       "deferred": false,
+       "detail": "missing_cover: Arm",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/arm",
+       "id": null,
+       "key": "missing_cover:project:2",
+       "kind": "missing_cover",
+       "label": "Arm needs a cover image",
+       "priority": 10,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "missing_dates: Arm",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "dates",
+       "href": "/project/arm?edit=dates",
+       "id": null,
+       "key": "missing_dates:project:2",
+       "kind": "missing_dates",
+       "label": "Arm is missing content dates",
+       "priority": 5,
+       "type": "nudge"
+      },
+      {
+       "deferred": false,
+       "detail": "missing_writeup: Arm",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/project/arm",
+       "id": null,
+       "key": "missing_writeup:project:2",
+       "kind": "missing_writeup",
+       "label": "Arm needs a write-up",
+       "priority": 8,
+       "type": "nudge"
+      },
+      {
+       "confidence": null,
+       "deferred": false,
+       "detail": "",
+       "dismissible": true,
+       "fix_label": "Fix",
+       "group": "origin",
+       "href": "/project/arm?edit=origin",
+       "id": null,
+       "key": "need:missing_provenance:arm",
+       "kind": "missing_provenance",
+       "label": "No provenance recorded (created, found, collected, referenced, client-owned, purchased).",
+       "suggested": null,
+       "type": "need"
+      }
+     ],
+     "last_touched": "<time>",
+     "slug": "arm",
+     "title": "Arm",
+     "type": "card"
+    },
+    {
+     "activity": null,
+     "card_kind": null,
+     "href": "/",
+     "id": "uploads",
+     "items": [
+      {
+       "answer_param": "choice",
+       "confidence": null,
+       "current": "document",
+       "deferred": false,
+       "dismissible": false,
+       "field": null,
+       "file_title": "more notes.md",
+       "fix_label": "Open file",
+       "group": null,
+       "href": "/object/doc3",
+       "id": 2,
+       "item_slug": "doc3",
+       "key": "decision:2",
+       "kind": "retype",
+       "label": "What is it?",
+       "multi": false,
+       "options": [
+        {
+         "key": "document",
+         "label": "Document",
+         "reason": null,
+         "suggested": false
+        },
+        {
+         "key": "image",
+         "label": "Image",
+         "reason": null,
+         "suggested": false
+        }
+       ],
+       "suggested": {
+        "labels": [],
+        "picks": [],
+        "reason": null
+       },
+       "type": "question"
+      }
+     ],
+     "last_touched": 0,
+     "slug": null,
+     "title": "Uploads waiting for you",
+     "type": "uploads"
+    },
+    {
+     "activity": null,
+     "card_kind": null,
+     "href": "/",
+     "id": "collection",
+     "items": [
+      {
+       "deferred": false,
+       "detail": "4 objects not in any project",
+       "dismissible": true,
+       "fix_label": "Open",
+       "group": null,
+       "href": "/unfiled",
+       "id": null,
+       "key": "unfiled_objects:global",
+       "kind": "unfiled_objects",
+       "label": "Unfiled objects",
+       "priority": 5,
+       "type": "nudge"
+      }
+     ],
+     "last_touched": 0,
+     "slug": null,
+     "title": "Whole collection",
+     "type": "collection"
+    }
+   ]
+  },
+  "defer": {
+   "changed": true,
+   "ok": true
+  },
+  "delete_all": {
+   "batch_id": "<batch>",
+   "counts": {
+    "blog_entries": 1,
+    "blog_entry_items": 1,
+    "blog_entry_projects": 1,
+    "blog_tags": 9,
+    "caption_queue": 0,
+    "capture_event_relations": 2,
+    "capture_events": 14,
+    "curator_dismissals": 0,
+    "family_members": 1,
+    "hobby_settings": 0,
+    "item_revisions": 1,
+    "pending_decisions": 2,
+    "post_tags": 12,
+    "project_hobbies": 1,
+    "project_items": 10,
+    "project_relations": 3,
+    "projects": 5,
+    "trash": 2
+   },
+   "deleted": 14,
+   "files_removed": 8,
+   "trash_removed": 2
+  },
+  "delete_all (no phrase)": {
+   "error": {
+    "code": "confirm_required",
+    "message": "Type 'DELETE EVERYTHING' in the confirm field to delete everything"
+   },
+   "ok": false
+  },
+  "delete_blog_entry": true,
+  "delete_multiple": {
+   "batch_id": "<batch>",
+   "deleted": 1
+  },
+  "delete_project": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": null,
+     "before": "<item:15>",
+     "card": "misc",
+     "field": "writeup"
+    },
+    {
+     "after": null,
+     "before": "Misc",
+     "card": "misc",
+     "field": "deleted"
+    }
+   ],
+   "children_orphaned": 0,
+   "deleted": "misc",
+   "dry_run": false,
+   "items_detached": 2,
+   "ok": true,
+   "warnings": [],
+   "writeup": "deleted"
+  },
+  "delete_redacted_file": {
+   "bytes": 67,
+   "deleted": true,
+   "slug": "red1"
+  },
+  "delete_redacted_file (no confirm)": {
+   "error": {
+    "code": "confirm_required",
+    "message": "Pass confirm=true to permanently delete the redacted file"
+   },
+   "ok": false
+  },
+  "detach_tag": {
+   "actions": [],
+   "brand_role": null,
+   "content_date": null,
+   "content_description": null,
+   "description": "",
+   "display_date_override": null,
+   "display_name": "rover.png",
+   "effective_date": "<time>",
+   "extracted_text": "",
+   "filename": "rover.png",
+   "highlight": true,
+   "icon": "🖼️",
+   "is_brand_asset": false,
+   "media_type": "image",
+   "ocr_status": null,
+   "provenance": null,
+   "redacted": false,
+   "sensitive": false,
+   "sensitive_reason": null,
+   "slug": "img1",
+   "tags": [
+    "Rover"
+   ],
+   "timestamp": "<time>",
+   "type_metadata": {},
+   "uploaded_by_user": null,
+   "url": "http://constructicon-web:8000/f/img1"
+  },
+  "dismiss_need": {
+   "changed": true,
+   "ok": true
+  },
+  "empty_trash": {
+   "bytes": 67,
+   "held_kept": 1,
+   "message": "Purged 1 deleted item(s) (67 bytes). 1 redacted file(s) are still held (not touched).",
+   "purged": 1,
+   "slugs": [
+    "gone1"
+   ]
+  },
+  "empty_trash (wrong phrase)": {
+   "error": {
+    "code": "confirm_required",
+    "message": "Type 'EMPTY TRASH' in the confirm field to empty the trash"
+   },
+   "ok": false
+  },
+  "get_posts_for_tag": [
+   {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "wheel.png",
+    "effective_date": "<time>",
+    "extracted_text": "",
+    "extracted_text_chars": 0,
+    "extracted_text_truncated": false,
+    "filename": "wheel.png",
+    "highlight": false,
+    "icon": "🖼️",
+    "is_brand_asset": false,
+    "media_type": "image",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "img2",
+    "tags": [
+     "Misc"
+    ],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/img2"
+   },
+   {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "rover.png",
+    "effective_date": "<time>",
+    "extracted_text": "",
+    "extracted_text_chars": 0,
+    "extracted_text_truncated": false,
+    "filename": "rover.png",
+    "highlight": true,
+    "icon": "🖼️",
+    "is_brand_asset": false,
+    "media_type": "image",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "img1",
+    "tags": [
+     "Rover"
+    ],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/img1"
+   }
+  ],
+  "get_related": [
+   {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "wheel.png",
+    "effective_date": "<time>",
+    "extracted_text": "",
+    "extracted_text_chars": 0,
+    "extracted_text_truncated": false,
+    "filename": "wheel.png",
+    "highlight": false,
+    "icon": "🖼️",
+    "is_brand_asset": false,
+    "media_type": "image",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "img2",
+    "tags": [
+     "Misc"
+    ],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/img2"
+   }
+  ],
+  "list_brand_assets": [
+   {
+    "actions": [],
+    "brand_role": "logo",
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "logo.png",
+    "effective_date": "<time>",
+    "extracted_text": "",
+    "extracted_text_chars": 0,
+    "extracted_text_truncated": false,
+    "filename": "logo.png",
+    "highlight": false,
+    "icon": "🖼️",
+    "is_brand_asset": true,
+    "media_type": "image",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "brand1",
+    "tags": [],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/brand1"
+   }
+  ],
+  "list_links": [
+   {
+    "direction": "in",
+    "kind": "project",
+    "label": "Uses",
+    "note": "",
+    "slug": "arm",
+    "stage": "in_progress",
+    "title": "Arm",
+    "type": "used_in"
+   },
+   {
+    "direction": "both",
+    "kind": "project",
+    "label": "Related",
+    "note": "",
+    "slug": "rover",
+    "stage": "in_progress",
+    "title": "Rover",
+    "type": "related"
+   }
+  ],
+  "list_needs": [
+   {
+    "action": {
+     "project_slug": "fleet",
+     "type": "set_cover"
+    },
+    "base_impact": 10,
+    "deferred": false,
+    "kind": "missing_cover",
+    "nudge_key": "missing_cover:project:4",
+    "priority": 10,
+    "status_weight": 1,
+    "summary": "missing_cover: Fleet",
+    "target_id": 4,
+    "target_slug": "fleet",
+    "target_type": "project",
+    "title": "Fleet needs a cover image"
+   },
+   {
+    "action": {
+     "project_slug": "shelf-thing",
+     "type": "set_cover"
+    },
+    "base_impact": 10,
+    "deferred": false,
+    "kind": "missing_cover",
+    "nudge_key": "missing_cover:project:3",
+    "priority": 10,
+    "status_weight": 1,
+    "summary": "missing_cover: Shelf Thing",
+    "target_id": 3,
+    "target_slug": "shelf-thing",
+    "target_type": "project",
+    "title": "Shelf Thing needs a cover image"
+   },
+   {
+    "action": {
+     "project_slug": "arm",
+     "type": "set_cover"
+    },
+    "base_impact": 10,
+    "deferred": false,
+    "kind": "missing_cover",
+    "nudge_key": "missing_cover:project:2",
+    "priority": 10,
+    "status_weight": 1,
+    "summary": "missing_cover: Arm",
+    "target_id": 2,
+    "target_slug": "arm",
+    "target_type": "project",
+    "title": "Arm needs a cover image"
+   },
+   {
+    "action": {
+     "project_slug": "misc",
+     "type": "add_related_or_tags"
+    },
+    "base_impact": 3,
+    "deferred": false,
+    "kind": "weak_connections",
+    "nudge_key": "weak_connections:project:5",
+    "priority": 3,
+    "status_weight": 1,
+    "summary": "weak_connections: Misc",
+    "target_id": 5,
+    "target_slug": "misc",
+    "target_type": "project",
+    "title": "Misc needs more connections"
+   },
+   {
+    "action": {
+     "project_slug": "fleet",
+     "type": "add_dates"
+    },
+    "base_impact": 5,
+    "deferred": false,
+    "kind": "missing_dates",
+    "nudge_key": "missing_dates:project:4",
+    "priority": 5,
+    "status_weight": 1,
+    "summary": "missing_dates: Fleet",
+    "target_id": 4,
+    "target_slug": "fleet",
+    "target_type": "project",
+    "title": "Fleet is missing content dates"
+   },
+   {
+    "action": {
+     "project_slug": "shelf-thing",
+     "type": "add_dates"
+    },
+    "base_impact": 5,
+    "deferred": false,
+    "kind": "missing_dates",
+    "nudge_key": "missing_dates:project:3",
+    "priority": 5,
+    "status_weight": 1,
+    "summary": "missing_dates: Shelf Thing",
+    "target_id": 3,
+    "target_slug": "shelf-thing",
+    "target_type": "project",
+    "title": "Shelf Thing is missing content dates"
+   },
+   {
+    "action": {
+     "project_slug": "arm",
+     "type": "add_dates"
+    },
+    "base_impact": 5,
+    "deferred": false,
+    "kind": "missing_dates",
+    "nudge_key": "missing_dates:project:2",
+    "priority": 5,
+    "status_weight": 1,
+    "summary": "missing_dates: Arm",
+    "target_id": 2,
+    "target_slug": "arm",
+    "target_type": "project",
+    "title": "Arm is missing content dates"
+   },
+   {
+    "action": {
+     "project_slug": "rover",
+     "type": "add_dates"
+    },
+    "base_impact": 5,
+    "deferred": false,
+    "kind": "missing_dates",
+    "nudge_key": "missing_dates:project:1",
+    "priority": 5,
+    "status_weight": 1,
+    "summary": "missing_dates: Rover",
+    "target_id": 1,
+    "target_slug": "rover",
+    "target_type": "project",
+    "title": "Rover is missing content dates"
+   },
+   {
+    "action": {
+     "project_slug": "misc",
+     "type": "add_dates"
+    },
+    "base_impact": 5,
+    "deferred": false,
+    "kind": "missing_dates",
+    "nudge_key": "missing_dates:project:5",
+    "priority": 5,
+    "status_weight": 1,
+    "summary": "missing_dates: Misc",
+    "target_id": 5,
+    "target_slug": "misc",
+    "target_type": "project",
+    "title": "Misc is missing content dates"
+   },
+   {
+    "action": {
+     "project_slug": "rover",
+     "type": "add_captions"
+    },
+    "base_impact": 5,
+    "deferred": false,
+    "kind": "thin_captions",
+    "nudge_key": "thin_captions:project:1",
+    "priority": 5,
+    "status_weight": 1,
+    "summary": "thin_captions: Rover",
+    "target_id": 1,
+    "target_slug": "rover",
+    "target_type": "project",
+    "title": "Rover has thin captions"
+   },
+   {
+    "action": {
+     "project_slug": "misc",
+     "type": "add_captions"
+    },
+    "base_impact": 5,
+    "deferred": false,
+    "kind": "thin_captions",
+    "nudge_key": "thin_captions:project:5",
+    "priority": 5,
+    "status_weight": 1,
+    "summary": "thin_captions: Misc",
+    "target_id": 5,
+    "target_slug": "misc",
+    "target_type": "project",
+    "title": "Misc has thin captions"
+   },
+   {
+    "action": {
+     "project_slug": "fleet",
+     "type": "draft_writeup"
+    },
+    "base_impact": 8,
+    "deferred": false,
+    "kind": "missing_writeup",
+    "nudge_key": "missing_writeup:project:4",
+    "priority": 8,
+    "status_weight": 1,
+    "summary": "missing_writeup: Fleet",
+    "target_id": 4,
+    "target_slug": "fleet",
+    "target_type": "project",
+    "title": "Fleet needs a write-up"
+   },
+   {
+    "action": {
+     "project_slug": "shelf-thing",
+     "type": "draft_writeup"
+    },
+    "base_impact": 8,
+    "deferred": false,
+    "kind": "missing_writeup",
+    "nudge_key": "missing_writeup:project:3",
+    "priority": 8,
+    "status_weight": 1,
+    "summary": "missing_writeup: Shelf Thing",
+    "target_id": 3,
+    "target_slug": "shelf-thing",
+    "target_type": "project",
+    "title": "Shelf Thing needs a write-up"
+   },
+   {
+    "action": {
+     "project_slug": "arm",
+     "type": "draft_writeup"
+    },
+    "base_impact": 8,
+    "deferred": false,
+    "kind": "missing_writeup",
+    "nudge_key": "missing_writeup:project:2",
+    "priority": 8,
+    "status_weight": 1,
+    "summary": "missing_writeup: Arm",
+    "target_id": 2,
+    "target_slug": "arm",
+    "target_type": "project",
+    "title": "Arm needs a write-up"
+   },
+   {
+    "action": {
+     "project_slug": "rover",
+     "type": "draft_writeup"
+    },
+    "base_impact": 8,
+    "deferred": false,
+    "kind": "missing_writeup",
+    "nudge_key": "missing_writeup:project:1",
+    "priority": 8,
+    "status_weight": 1,
+    "summary": "missing_writeup: Rover",
+    "target_id": 1,
+    "target_slug": "rover",
+    "target_type": "project",
+    "title": "Rover needs a write-up"
+   },
+   {
+    "action": {
+     "project_slug": "misc",
+     "type": "draft_writeup"
+    },
+    "base_impact": 8,
+    "deferred": false,
+    "kind": "missing_writeup",
+    "nudge_key": "missing_writeup:project:5",
+    "priority": 8,
+    "status_weight": 1,
+    "summary": "missing_writeup: Misc",
+    "target_id": 5,
+    "target_slug": "misc",
+    "target_type": "project",
+    "title": "Misc needs a write-up"
+   },
+   {
+    "action": {
+     "type": "file_unfiled"
+    },
+    "base_impact": 5,
+    "deferred": false,
+    "kind": "unfiled_objects",
+    "nudge_key": "unfiled_objects:global",
+    "priority": 5,
+    "status_weight": 1,
+    "summary": "4 objects not in any project",
+    "target_id": null,
+    "target_slug": null,
+    "target_type": "global",
+    "title": "Unfiled objects"
+   }
+  ],
+  "list_needs_caption": {
+   "items": [
+    {
+     "caption_status": null,
+     "filename": "logo.png",
+     "hobbies": [],
+     "name": "logo.png",
+     "projects": [],
+     "slug": "brand1",
+     "type": "image"
+    },
+    {
+     "caption_status": null,
+     "filename": "wheel.png",
+     "hobbies": [
+      "Robots"
+     ],
+     "name": "wheel.png",
+     "projects": [
+      {
+       "kind": "project",
+       "slug": "rover",
+       "title": "Rover"
+      },
+      {
+       "kind": "project",
+       "slug": "misc",
+       "title": "Misc"
+      }
+     ],
+     "slug": "img2",
+     "type": "image"
+    },
+    {
+     "caption_status": null,
+     "filename": "rover.png",
+     "hobbies": [
+      "Robots"
+     ],
+     "name": "rover.png",
+     "projects": [
+      {
+       "kind": "project",
+       "slug": "rover",
+       "title": "Rover"
+      },
+      {
+       "kind": "project",
+       "slug": "misc",
+       "title": "Misc"
+      }
+     ],
+     "slug": "img1",
+     "type": "image"
+    }
+   ],
+   "total": 3
+  },
+  "list_needs_decision": [
+   {
+    "card_slug": "arm",
+    "confidence": null,
+    "decision_id": null,
+    "detail": "No provenance recorded (created, found, collected, referenced, client-owned, purchased).",
+    "need": "missing_provenance",
+    "options": [
+     {
+      "key": "created",
+      "label": "Created"
+     },
+     {
+      "key": "found",
+      "label": "Found"
+     },
+     {
+      "key": "collected",
+      "label": "Collected"
+     },
+     {
+      "key": "referenced",
+      "label": "Referenced"
+     },
+     {
+      "key": "client_owned",
+      "label": "Client-owned"
+     },
+     {
+      "key": "purchased",
+      "label": "Purchased"
+     }
+    ],
+    "suggested": null,
+    "suggested_reason": null,
+    "title": "Arm"
+   },
+   {
+    "card_slug": "misc",
+    "confidence": null,
+    "decision_id": null,
+    "detail": "The write-up is still blank, but the card has 2 file(s).",
+    "need": "blank_writeup_with_files",
+    "options": [],
+    "suggested": null,
+    "suggested_reason": null,
+    "title": "Misc"
+   },
+   {
+    "card_slug": "misc",
+    "confidence": null,
+    "decision_id": null,
+    "detail": "No provenance recorded (created, found, collected, referenced, client-owned, purchased).",
+    "need": "missing_provenance",
+    "options": [
+     {
+      "key": "created",
+      "label": "Created"
+     },
+     {
+      "key": "found",
+      "label": "Found"
+     },
+     {
+      "key": "collected",
+      "label": "Collected"
+     },
+     {
+      "key": "referenced",
+      "label": "Referenced"
+     },
+     {
+      "key": "client_owned",
+      "label": "Client-owned"
+     },
+     {
+      "key": "purchased",
+      "label": "Purchased"
+     }
+    ],
+    "suggested": null,
+    "suggested_reason": null,
+    "title": "Misc"
+   },
+   {
+    "card_slug": "rover",
+    "confidence": null,
+    "decision_id": null,
+    "detail": "The write-up is still blank, but the card has 3 file(s).",
+    "need": "blank_writeup_with_files",
+    "options": [],
+    "suggested": null,
+    "suggested_reason": null,
+    "title": "Rover"
+   },
+   {
+    "card_slug": "rover",
+    "confidence": null,
+    "decision_id": 1,
+    "detail": "Still rolling?",
+    "need": "card_status",
+    "options": [
+     {
+      "key": "done",
+      "label": "Done"
+     },
+     {
+      "key": "paused",
+      "label": "Paused"
+     }
+    ],
+    "suggested": "done",
+    "suggested_reason": null,
+    "title": "Rover"
+   },
+   {
+    "card_slug": "rover",
+    "confidence": null,
+    "decision_id": null,
+    "detail": "No provenance recorded (created, found, collected, referenced, client-owned, purchased).",
+    "need": "missing_provenance",
+    "options": [
+     {
+      "key": "created",
+      "label": "Created"
+     },
+     {
+      "key": "found",
+      "label": "Found"
+     },
+     {
+      "key": "collected",
+      "label": "Collected"
+     },
+     {
+      "key": "referenced",
+      "label": "Referenced"
+     },
+     {
+      "key": "client_owned",
+      "label": "Client-owned"
+     },
+     {
+      "key": "purchased",
+      "label": "Purchased"
+     }
+    ],
+    "suggested": null,
+    "suggested_reason": null,
+    "title": "Rover"
+   },
+   {
+    "card_slug": "shelf-thing",
+    "confidence": null,
+    "decision_id": null,
+    "detail": "No provenance recorded (created, found, collected, referenced, client-owned, purchased).",
+    "need": "missing_provenance",
+    "options": [
+     {
+      "key": "created",
+      "label": "Created"
+     },
+     {
+      "key": "found",
+      "label": "Found"
+     },
+     {
+      "key": "collected",
+      "label": "Collected"
+     },
+     {
+      "key": "referenced",
+      "label": "Referenced"
+     },
+     {
+      "key": "client_owned",
+      "label": "Client-owned"
+     },
+     {
+      "key": "purchased",
+      "label": "Purchased"
+     }
+    ],
+    "suggested": null,
+    "suggested_reason": null,
+    "title": "Shelf Thing"
+   },
+   {
+    "card_slug": "shelf-thing",
+    "confidence": null,
+    "decision_id": null,
+    "detail": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, never built).",
+    "need": "missing_whereabouts",
+    "options": [
+     {
+      "key": "have_it",
+      "label": "Have it"
+     },
+     {
+      "key": "partial",
+      "label": "Partial"
+     },
+     {
+      "key": "parted_out",
+      "label": "Parted out"
+     },
+     {
+      "key": "sold",
+      "label": "Sold"
+     },
+     {
+      "key": "gifted",
+      "label": "Gifted"
+     },
+     {
+      "key": "lost",
+      "label": "Lost"
+     },
+     {
+      "key": "never_built",
+      "label": "Never built"
+     }
+    ],
+    "suggested": null,
+    "suggested_reason": null,
+    "title": "Shelf Thing"
+   }
+  ],
+  "list_needs_decision (kind)": [
+   {
+    "card_slug": "shelf-thing",
+    "confidence": null,
+    "decision_id": null,
+    "detail": "No provenance recorded (created, found, collected, referenced, client-owned, purchased).",
+    "need": "missing_provenance",
+    "options": [
+     {
+      "key": "created",
+      "label": "Created"
+     },
+     {
+      "key": "found",
+      "label": "Found"
+     },
+     {
+      "key": "collected",
+      "label": "Collected"
+     },
+     {
+      "key": "referenced",
+      "label": "Referenced"
+     },
+     {
+      "key": "client_owned",
+      "label": "Client-owned"
+     },
+     {
+      "key": "purchased",
+      "label": "Purchased"
+     }
+    ],
+    "suggested": null,
+    "suggested_reason": null,
+    "title": "Shelf Thing"
+   },
+   {
+    "card_slug": "shelf-thing",
+    "confidence": null,
+    "decision_id": null,
+    "detail": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, never built).",
+    "need": "missing_whereabouts",
+    "options": [
+     {
+      "key": "have_it",
+      "label": "Have it"
+     },
+     {
+      "key": "partial",
+      "label": "Partial"
+     },
+     {
+      "key": "parted_out",
+      "label": "Parted out"
+     },
+     {
+      "key": "sold",
+      "label": "Sold"
+     },
+     {
+      "key": "gifted",
+      "label": "Gifted"
+     },
+     {
+      "key": "lost",
+      "label": "Lost"
+     },
+     {
+      "key": "never_built",
+      "label": "Never built"
+     }
+    ],
+    "suggested": null,
+    "suggested_reason": null,
+    "title": "Shelf Thing"
+   }
+  ],
+  "list_pending_decisions": [
+   {
+    "card_slug": "rover",
+    "confidence": null,
+    "created_at": "<time>",
+    "id": 1,
+    "kind": "card_status",
+    "legacy_status": null,
+    "media_type": null,
+    "options": [
+     {
+      "key": "done",
+      "label": "Done"
+     },
+     {
+      "key": "paused",
+      "label": "Paused"
+     }
+    ],
+    "provisional": null,
+    "question": "Still rolling?",
+    "slug": "card:rover",
+    "suggested": "done",
+    "suggested_reason": null,
+    "title": "rover"
+   },
+   {
+    "created_at": "<time>",
+    "id": 2,
+    "kind": "retype",
+    "media_type": "document",
+    "options": [
+     {
+      "key": "document",
+      "label": "Document"
+     },
+     {
+      "key": "image",
+      "label": "Image"
+     }
+    ],
+    "question": "What is it?",
+    "slug": "doc3",
+    "title": "more notes.md"
+   }
+  ],
+  "list_redacted": [
+   {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "secret.png",
+    "effective_date": "<time>",
+    "extracted_text": "",
+    "extracted_text_chars": 0,
+    "extracted_text_truncated": false,
+    "filename": "secret.png",
+    "highlight": false,
+    "icon": "🖼️",
+    "is_brand_asset": false,
+    "media_type": "image",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": true,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "red1",
+    "tags": [],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/red1"
+   }
+  ],
+  "list_restricted": [
+   {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "key.md",
+    "effective_date": "<time>",
+    "extracted_text": "k",
+    "extracted_text_chars": 1,
+    "extracted_text_truncated": false,
+    "filename": "key.md",
+    "highlight": false,
+    "icon": "📝",
+    "is_brand_asset": false,
+    "media_type": "document",
+    "ocr_status": null,
+    "projects": [],
+    "provenance": null,
+    "redacted": false,
+    "sensitive": true,
+    "sensitive_reason": {
+     "at": "<time>",
+     "by": "script",
+     "kind": "flag"
+    },
+    "slug": "sens1",
+    "tags": [],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/sens1"
+   }
+  ],
+  "list_revisions": {
+   "chain": [
+    {
+     "filename": "notes.md",
+     "is_current": false,
+     "is_this": true,
+     "redacted": false,
+     "rev": 1,
+     "slug": "doc1",
+     "title": "notes.md"
+    },
+    {
+     "filename": "notes v2.md",
+     "is_current": true,
+     "is_this": false,
+     "redacted": false,
+     "rev": 2,
+     "slug": "doc2",
+     "title": "notes v2.md"
+    }
+   ],
+   "current": {
+    "filename": "notes v2.md",
+    "is_current": true,
+    "is_this": false,
+    "redacted": false,
+    "rev": 2,
+    "slug": "doc2",
+    "title": "notes v2.md"
+   },
+   "in_chain": true,
+   "of": 2,
+   "ok": true,
+   "rev": 1,
+   "superseded": true
+  },
+  "list_trash": {
+   "bytes": 67,
+   "count": 1,
+   "days": 7,
+   "held": {
+    "bytes": 67,
+    "count": 1,
+    "items": [
+     {
+      "batch_id": "<batch>",
+      "created_at": "<time>",
+      "expires_at": null,
+      "reason": "redact",
+      "size_bytes": 67,
+      "slug": "red1",
+      "title": "secret.png"
+     }
+    ]
+   },
+   "items": [
+    {
+     "batch_id": "<batch>",
+     "created_at": "<time>",
+     "expires_at": "<time>",
+     "reason": "delete",
+     "size_bytes": 67,
+     "slug": "gone1",
+     "title": "old.png"
+    }
+   ],
+   "next_expiry": "<time>",
+   "oldest": "<time>"
+  },
+  "mark_superseded": {
+   "batch_id": "<batch>",
+   "chain": [
+    "doc1",
+    "doc2",
+    "doc3"
+   ],
+   "dry_run": false,
+   "new": "doc3",
+   "ok": true,
+   "old": "doc2"
+  },
+  "move_files": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": null,
+     "before": "img2",
+     "card": "misc",
+     "field": "file"
+    },
+    {
+     "after": "Rover (+1 file(s))",
+     "before": null,
+     "card": "rover",
+     "field": "tag"
+    },
+    {
+     "after": null,
+     "before": "Misc (-1 file(s))",
+     "card": "misc",
+     "field": "tag"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "tags_added": 1,
+   "tags_removed": 1,
+   "warnings": [
+    "img2 is already in 'Rover'.",
+    "'Misc' still has img2 as its cover; pick another if you want."
+   ]
+  },
+  "recover_redacted": {
+   "actions": [],
+   "batch_id": "<batch>",
+   "brand_role": null,
+   "content_date": null,
+   "content_description": null,
+   "description": "",
+   "display_date_override": null,
+   "display_name": "secret.png",
+   "effective_date": "<time>",
+   "extracted_text": "",
+   "filename": "secret.png",
+   "highlight": false,
+   "icon": "🖼️",
+   "is_brand_asset": false,
+   "media_type": "image",
+   "ocr_status": null,
+   "provenance": null,
+   "redacted": false,
+   "sensitive": false,
+   "sensitive_reason": null,
+   "slug": "red1",
+   "tags": [],
+   "timestamp": "<time>",
+   "type_metadata": {},
+   "uploaded_by_user": null,
+   "url": "http://constructicon-web:8000/f/red1"
+  },
+  "remove_from_family": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": null,
+     "before": "fleet",
+     "card": "shelf-thing",
+     "field": "in_family"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "remove_from_hobby": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": null,
+     "before": "robots",
+     "card": "rover",
+     "field": "in_hobby"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "remove_from_project": [
+   {
+    "activity": "active",
+    "cover_slug": "img2",
+    "created_at": "<time>",
+    "created_by_user": null,
+    "description": "",
+    "effective_end": "<time>",
+    "effective_start": "<time>",
+    "end_date_override": null,
+    "highlight": false,
+    "id": 5,
+    "kind": "project",
+    "kind_label": "Project",
+    "needs_input": false,
+    "parent_id": null,
+    "provenance": null,
+    "provenance_credit": null,
+    "provenance_label": null,
+    "slug": "misc",
+    "stage": "in_progress",
+    "stage_label": "In progress",
+    "start_date_override": null,
+    "status": "active",
+    "stop_reason": null,
+    "stop_reason_label": null,
+    "title": "Misc",
+    "whereabouts": null,
+    "whereabouts_applies": true,
+    "whereabouts_label": null,
+    "whereabouts_note": null,
+    "writeup_slug": "<item:15>"
+   }
+  ],
+  "remove_from_revisions": {
+   "batch_id": "<batch>",
+   "chain": [],
+   "dry_run": false,
+   "ok": true,
+   "removed": true,
+   "slug": "doc2"
+  },
+  "remove_related": [],
+  "retry_ocr": {
+   "actions": [],
+   "brand_role": null,
+   "content_date": null,
+   "content_description": null,
+   "description": "",
+   "display_date_override": null,
+   "display_name": "manual.zip",
+   "effective_date": "<time>",
+   "extracted_text": "",
+   "filename": "manual.zip",
+   "highlight": false,
+   "icon": "🗄️",
+   "is_brand_asset": false,
+   "media_type": "archive",
+   "ocr_status": "pending",
+   "provenance": null,
+   "redacted": false,
+   "sensitive": false,
+   "sensitive_reason": null,
+   "slug": "pdf1",
+   "tags": [],
+   "timestamp": "<time>",
+   "type_metadata": {},
+   "uploaded_by_user": null,
+   "url": "http://constructicon-web:8000/f/pdf1"
+  },
+  "retry_ocr (no OCR for the type)": {
+   "error": {
+    "code": "bad_request",
+    "message": "OCR isn't available for Written post content"
+   },
+   "ok": false
+  },
+  "retry_ocr (redacted)": {
+   "error": {
+    "code": "bad_request",
+    "message": "File was redacted — there's no content left to OCR"
+   },
+   "ok": false
+  },
+  "retype_link": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "inspired_by shelf-thing",
+     "before": "related shelf-thing",
+     "card": "rover",
+     "field": "link"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "set_blog_entry_items": {
+   "batch_id": "<batch>",
+   "body": "",
+   "content_date": null,
+   "cover_slug": null,
+   "created_at": "<time>",
+   "id": 1,
+   "items": [
+    {
+     "actions": [],
+     "brand_role": null,
+     "content_date": null,
+     "content_description": null,
+     "description": "",
+     "display_date_override": null,
+     "display_name": "wheel.png",
+     "effective_date": "<time>",
+     "extracted_text": "",
+     "extracted_text_chars": 0,
+     "extracted_text_truncated": false,
+     "filename": "wheel.png",
+     "highlight": false,
+     "icon": "🖼️",
+     "is_brand_asset": false,
+     "media_type": "image",
+     "note": "w",
+     "ocr_status": null,
+     "provenance": null,
+     "redacted": false,
+     "sensitive": false,
+     "sensitive_reason": null,
+     "slug": "img2",
+     "sort_order": 0,
+     "tags": [
+      "Misc"
+     ],
+     "timestamp": "<time>",
+     "type_metadata": {},
+     "uploaded_by_user": null,
+     "url": "http://constructicon-web:8000/f/img2"
+    }
+   ],
+   "projects": [
+    {
+     "activity": "active",
+     "cover_slug": "img1",
+     "created_at": "<time>",
+     "created_by_user": null,
+     "description": "",
+     "effective_end": "<time>",
+     "effective_start": "<time>",
+     "end_date_override": null,
+     "highlight": true,
+     "id": 1,
+     "kind": "project",
+     "kind_label": "Project",
+     "needs_input": true,
+     "note": "the rover",
+     "parent_id": null,
+     "provenance": null,
+     "provenance_credit": null,
+     "provenance_label": null,
+     "slug": "rover",
+     "sort_order": 0,
+     "stage": "in_progress",
+     "stage_label": "In progress",
+     "start_date_override": null,
+     "status": "active",
+     "stop_reason": null,
+     "stop_reason_label": null,
+     "title": "Rover",
+     "whereabouts": null,
+     "whereabouts_applies": true,
+     "whereabouts_label": null,
+     "whereabouts_note": null,
+     "writeup_slug": "<item:11>"
+    }
+   ],
+   "slug": "post",
+   "status": "draft",
+   "subtitle": "",
+   "title": "Post",
+   "updated_at": "<time>"
+  },
+  "set_blog_entry_projects": {
+   "batch_id": "<batch>",
+   "body": "",
+   "content_date": null,
+   "cover_slug": null,
+   "created_at": "<time>",
+   "id": 1,
+   "items": [
+    {
+     "actions": [],
+     "brand_role": null,
+     "content_date": null,
+     "content_description": null,
+     "description": "",
+     "display_date_override": null,
+     "display_name": "rover.png",
+     "effective_date": "<time>",
+     "extracted_text": "",
+     "extracted_text_chars": 0,
+     "extracted_text_truncated": false,
+     "filename": "rover.png",
+     "highlight": true,
+     "icon": "🖼️",
+     "is_brand_asset": false,
+     "media_type": "image",
+     "note": "a photo",
+     "ocr_status": null,
+     "provenance": null,
+     "redacted": false,
+     "sensitive": false,
+     "sensitive_reason": null,
+     "slug": "img1",
+     "sort_order": 0,
+     "tags": [
+      "Rover"
+     ],
+     "timestamp": "<time>",
+     "type_metadata": {},
+     "uploaded_by_user": null,
+     "url": "http://constructicon-web:8000/f/img1"
+    }
+   ],
+   "projects": [
+    {
+     "activity": "active",
+     "cover_slug": null,
+     "created_at": "<time>",
+     "created_by_user": null,
+     "description": "",
+     "effective_end": "<time>",
+     "effective_start": "<time>",
+     "end_date_override": null,
+     "highlight": false,
+     "id": 3,
+     "kind": "thing",
+     "kind_label": "Thing",
+     "needs_input": false,
+     "note": "n",
+     "parent_id": null,
+     "provenance": null,
+     "provenance_credit": null,
+     "provenance_label": null,
+     "slug": "shelf-thing",
+     "sort_order": 0,
+     "stage": "in_progress",
+     "stage_label": "In progress",
+     "start_date_override": null,
+     "status": "active",
+     "stop_reason": null,
+     "stop_reason_label": null,
+     "title": "Shelf Thing",
+     "whereabouts": null,
+     "whereabouts_applies": true,
+     "whereabouts_label": null,
+     "whereabouts_note": null,
+     "writeup_slug": "<item:13>"
+    },
+    {
+     "activity": "active",
+     "cover_slug": "img1",
+     "created_at": "<time>",
+     "created_by_user": null,
+     "description": "",
+     "effective_end": "<time>",
+     "effective_start": "<time>",
+     "end_date_override": null,
+     "highlight": true,
+     "id": 1,
+     "kind": "project",
+     "kind_label": "Project",
+     "needs_input": true,
+     "note": "",
+     "parent_id": null,
+     "provenance": null,
+     "provenance_credit": null,
+     "provenance_label": null,
+     "slug": "rover",
+     "sort_order": 1,
+     "stage": "in_progress",
+     "stage_label": "In progress",
+     "start_date_override": null,
+     "status": "active",
+     "stop_reason": null,
+     "stop_reason_label": null,
+     "title": "Rover",
+     "whereabouts": null,
+     "whereabouts_applies": true,
+     "whereabouts_label": null,
+     "whereabouts_note": null,
+     "writeup_slug": "<item:11>"
+    }
+   ],
+   "slug": "post",
+   "status": "draft",
+   "subtitle": "",
+   "title": "Post",
+   "updated_at": "<time>"
+  },
+  "set_brand_asset (mark)": {
+   "actions": [],
+   "brand_role": "icon",
+   "content_date": null,
+   "content_description": null,
+   "description": "",
+   "display_date_override": null,
+   "display_name": "wheel.png",
+   "effective_date": "<time>",
+   "extracted_text": "",
+   "filename": "wheel.png",
+   "highlight": false,
+   "icon": "🖼️",
+   "is_brand_asset": true,
+   "media_type": "image",
+   "ocr_status": null,
+   "provenance": null,
+   "redacted": false,
+   "sensitive": false,
+   "sensitive_reason": null,
+   "slug": "img2",
+   "tags": [
+    "Misc"
+   ],
+   "timestamp": "<time>",
+   "type_metadata": {},
+   "uploaded_by_user": null,
+   "url": "http://constructicon-web:8000/f/img2"
+  },
+  "set_brand_asset (old default clears)": {
+   "actions": [],
+   "brand_role": null,
+   "content_date": null,
+   "content_description": null,
+   "description": "",
+   "display_date_override": null,
+   "display_name": "logo.png",
+   "effective_date": "<time>",
+   "extracted_text": "",
+   "filename": "logo.png",
+   "highlight": false,
+   "icon": "🖼️",
+   "is_brand_asset": false,
+   "media_type": "image",
+   "ocr_status": null,
+   "provenance": null,
+   "redacted": false,
+   "sensitive": false,
+   "sensitive_reason": null,
+   "slug": "brand1",
+   "tags": [],
+   "timestamp": "<time>",
+   "type_metadata": {},
+   "uploaded_by_user": null,
+   "url": "http://constructicon-web:8000/f/brand1"
+  },
+  "set_card_highlight (old default unmarks)": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": 0,
+     "before": 1,
+     "card": "rover",
+     "field": "highlight"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "set_card_provenance": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "created",
+     "before": null,
+     "card": "rover",
+     "field": "provenance"
+    },
+    {
+     "after": "me",
+     "before": null,
+     "card": "rover",
+     "field": "provenance_credit"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "set_card_text (card)": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "A rover.",
+     "before": null,
+     "card": "rover",
+     "field": "synopsis",
+     "key": {
+      "id": 1
+     },
+     "op": "set_card_text",
+     "table": "projects"
+    },
+    {
+     "after": "Vroom.",
+     "before": null,
+     "card": "rover",
+     "field": "flavor",
+     "key": {
+      "id": 1
+     },
+     "op": "set_card_text",
+     "table": "projects"
+    }
+   ],
+   "dry_run": false,
+   "face_text": "A rover.",
+   "face_text_source": "synopsis",
+   "flavor": "Vroom.",
+   "ok": true,
+   "synopsis": "A rover.",
+   "warnings": [],
+   "writeup_lead": null
+  },
+  "set_card_text (hobby)": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": {
+      "cover_slug": null,
+      "created_by_user_id": null,
+      "flavor": null,
+      "hobby_tag_id": 6,
+      "shows_physical_piece": 0,
+      "synopsis": "Robots I built."
+     },
+     "before": null,
+     "card": "robots",
+     "field": "(row)",
+     "key": {
+      "hobby_tag_id": 6
+     },
+     "op": "hobby_text",
+     "table": "hobby_settings"
+    }
+   ],
+   "dry_run": false,
+   "flavor": null,
+   "hobby": "robots",
+   "ok": true,
+   "synopsis": "Robots I built.",
+   "warnings": []
+  },
+  "set_content_date": {
+   "actions": [],
+   "brand_role": null,
+   "content_date": 1501480800.0,
+   "content_description": null,
+   "description": "",
+   "display_date_override": null,
+   "display_name": "rover.png",
+   "effective_date": 1501480800.0,
+   "extracted_text": "",
+   "filename": "rover.png",
+   "highlight": true,
+   "icon": "🖼️",
+   "is_brand_asset": false,
+   "media_type": "image",
+   "ocr_status": null,
+   "provenance": null,
+   "redacted": false,
+   "sensitive": false,
+   "sensitive_reason": null,
+   "slug": "img1",
+   "tags": [
+    "Rover"
+   ],
+   "timestamp": "<time>",
+   "type_metadata": {},
+   "uploaded_by_user": null,
+   "url": "http://constructicon-web:8000/f/img1"
+  },
+  "set_highlight (old default unmarks)": {
+   "actions": [],
+   "brand_role": null,
+   "content_date": null,
+   "content_description": null,
+   "description": "",
+   "display_date_override": null,
+   "display_name": "rover.png",
+   "effective_date": "<time>",
+   "extracted_text": "",
+   "filename": "rover.png",
+   "highlight": 0,
+   "icon": "🖼️",
+   "is_brand_asset": false,
+   "media_type": "image",
+   "ocr_status": null,
+   "provenance": null,
+   "redacted": false,
+   "sensitive": false,
+   "sensitive_reason": null,
+   "slug": "img1",
+   "tags": [
+    "Rover"
+   ],
+   "timestamp": "<time>",
+   "type_metadata": {},
+   "uploaded_by_user": null,
+   "url": "http://constructicon-web:8000/f/img1"
+  },
+  "set_hobby_code": {
+   "batch_id": "<batch>",
+   "changes": [],
+   "group_code": "ROB",
+   "id": 6,
+   "name": "Robots",
+   "slug": "robots"
+  },
+  "set_hobby_cover": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": {
+      "cover_slug": "img1",
+      "created_by_user_id": null,
+      "flavor": null,
+      "hobby_tag_id": 6,
+      "shows_physical_piece": 0,
+      "synopsis": null
+     },
+     "before": null,
+     "card": null,
+     "field": "(row)",
+     "key": {
+      "hobby_tag_id": 6
+     },
+     "op": "hobby_cover",
+     "table": "hobby_settings"
+    }
+   ],
+   "cover": {
+    "cover_picked": true,
+    "cover_project": null,
+    "cover_slug": "img1",
+    "cover_source": "picked",
+    "cover_source_label": "Chosen by hand",
+    "picked_cover_slug": "img1",
+    "picked_cover_unavailable": false
+   },
+   "dry_run": false,
+   "hobby": "robots",
+   "ok": true,
+   "picked_cover_slug": "img1",
+   "warnings": []
+  },
+  "set_hobby_status": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "inactive",
+     "before": "active",
+     "card": "robots",
+     "field": "hobby_status"
+    }
+   ],
+   "flags": [
+    {
+     "code": "inactive_with_active_work",
+     "count": 1,
+     "detail": "Active: Rover",
+     "label": "Inactive, but has active work",
+     "projects": [
+      {
+       "slug": "rover",
+       "title": "Rover"
+      }
+     ]
+    }
+   ],
+   "group_code": "ROB",
+   "id": 6,
+   "name": "Robots",
+   "slug": "robots",
+   "status": "inactive",
+   "warnings": [
+    "'dormant' is deprecated; hobbies are now just active or inactive. Stored as 'inactive'."
+   ]
+  },
+  "set_home": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "card:shelf-thing",
+     "before": null,
+     "card": "arm",
+     "field": "home"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "set_kind": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "project",
+     "before": "thing",
+     "card": "shelf-thing",
+     "field": "kind"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "set_project_status": {
+   "activity": "inactive",
+   "cover_slug": "img1",
+   "created_at": "<time>",
+   "created_by_user": null,
+   "description": "",
+   "effective_end": "<time>",
+   "effective_start": "<time>",
+   "end_date_override": null,
+   "highlight": true,
+   "id": 1,
+   "kind": "project",
+   "kind_label": "Project",
+   "needs_input": true,
+   "parent_id": null,
+   "provenance": null,
+   "provenance_credit": null,
+   "provenance_label": null,
+   "slug": "rover",
+   "stage": "paused",
+   "stage_label": "Paused",
+   "start_date_override": null,
+   "status": "active",
+   "stop_reason": null,
+   "stop_reason_label": null,
+   "title": "Rover",
+   "warnings": [
+    "Legacy status 'shelved' translated to stage 'paused'; prefer constructicon_update_project with a stage.",
+    "Legacy 'shelved' applied as 'paused'."
+   ],
+   "whereabouts": null,
+   "whereabouts_applies": true,
+   "whereabouts_label": null,
+   "whereabouts_note": null,
+   "writeup_slug": "<item:11>"
+  },
+  "set_project_writeup": {
+   "activity": "active",
+   "batch_id": "<batch>",
+   "cover_slug": "img1",
+   "created_at": "<time>",
+   "created_by_user": null,
+   "description": "",
+   "effective_end": "<time>",
+   "effective_start": "<time>",
+   "end_date_override": null,
+   "highlight": true,
+   "id": 1,
+   "kind": "project",
+   "kind_label": "Project",
+   "needs_input": true,
+   "parent_id": null,
+   "provenance": null,
+   "provenance_credit": null,
+   "provenance_label": null,
+   "slug": "rover",
+   "stage": "in_progress",
+   "stage_label": "In progress",
+   "start_date_override": null,
+   "status": "active",
+   "stop_reason": null,
+   "stop_reason_label": null,
+   "title": "Rover",
+   "whereabouts": null,
+   "whereabouts_applies": true,
+   "whereabouts_label": null,
+   "whereabouts_note": null,
+   "writeup_slug": "doc3"
+  },
+  "set_provenance": {
+   "actions": [],
+   "brand_role": null,
+   "content_date": null,
+   "content_description": null,
+   "description": "",
+   "display_date_override": null,
+   "display_name": "rover.png",
+   "effective_date": "<time>",
+   "extracted_text": "",
+   "filename": "rover.png",
+   "highlight": true,
+   "icon": "🖼️",
+   "is_brand_asset": false,
+   "media_type": "image",
+   "ocr_status": null,
+   "provenance": "created",
+   "redacted": false,
+   "sensitive": false,
+   "sensitive_reason": null,
+   "slug": "img1",
+   "tags": [
+    "Rover"
+   ],
+   "timestamp": "<time>",
+   "type_metadata": {},
+   "uploaded_by_user": null,
+   "url": "http://constructicon-web:8000/f/img1"
+  },
+  "set_sensitive": {
+   "batch_id": "<batch>",
+   "changed": [
+    "img2"
+   ],
+   "dry_run": false,
+   "item": {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "wheel.png",
+    "effective_date": "<time>",
+    "extracted_text": "",
+    "filename": "wheel.png",
+    "highlight": false,
+    "icon": "🖼️",
+    "is_brand_asset": false,
+    "media_type": "image",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": true,
+    "sensitive_reason": {
+     "at": "<time>",
+     "by": "mcp",
+     "kind": "flag"
+    },
+    "slug": "img2",
+    "tags": [
+     "Misc"
+    ],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/img2"
+   },
+   "ok": true,
+   "sensitive": true,
+   "slug": "img2"
+  },
+  "set_sensitive (clear)": {
+   "batch_id": "<batch>",
+   "changed": [
+    "sens1"
+   ],
+   "dry_run": false,
+   "item": {
+    "actions": [],
+    "brand_role": null,
+    "content_date": null,
+    "content_description": null,
+    "description": "",
+    "display_date_override": null,
+    "display_name": "key.md",
+    "effective_date": "<time>",
+    "extracted_text": "k",
+    "filename": "key.md",
+    "highlight": false,
+    "icon": "📝",
+    "is_brand_asset": false,
+    "media_type": "document",
+    "ocr_status": null,
+    "provenance": null,
+    "redacted": false,
+    "sensitive": false,
+    "sensitive_reason": null,
+    "slug": "sens1",
+    "tags": [],
+    "timestamp": "<time>",
+    "type_metadata": {},
+    "uploaded_by_user": null,
+    "url": "http://constructicon-web:8000/f/sens1"
+   },
+   "ok": true,
+   "sensitive": false,
+   "slug": "sens1"
+  },
+  "set_status": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "done",
+     "before": "in_progress",
+     "card": "rover",
+     "field": "stage"
+    },
+    {
+     "after": "inactive",
+     "before": "active",
+     "card": "rover",
+     "field": "activity"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": [
+    "Marked done while nested card(s) are still in progress: Arm."
+   ]
+  },
+  "set_whereabouts": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": "have_it",
+     "before": null,
+     "card": "shelf-thing",
+     "field": "whereabouts"
+    },
+    {
+     "after": "on the shelf",
+     "before": null,
+     "card": "shelf-thing",
+     "field": "whereabouts_note"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "unlink": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": null,
+     "before": "related shelf-thing",
+     "card": "rover",
+     "field": "link"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "unnest": {
+   "batch_id": "<batch>",
+   "changes": [
+    {
+     "after": null,
+     "before": "rover",
+     "card": "arm",
+     "field": "parent"
+    }
+   ],
+   "dry_run": false,
+   "ok": true,
+   "warnings": []
+  },
+  "unredact (held: refused)": {
+   "error": {
+    "code": "redact_hold_exists",
+    "message": "The redacted file is still stored on the NAS. Recover it (which un-redacts the item), or delete the file permanently first."
+   },
+   "ok": false
+  }
+ }
+}

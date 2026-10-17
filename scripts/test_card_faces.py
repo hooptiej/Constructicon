@@ -263,21 +263,23 @@ check("web set text: too long -> 422 bad_card_text, nothing written",
       r.status_code == 422 and r.json()["error"]["code"] == "bad_card_text" and snapshot() == before, r.text[:200])
 
 # MCP: set, then clear back to the lead
-out = server.constructicon_set_card_text(card=clod["slug"], synopsis="An MCP synopsis.", flavor="An MCP flavor.")
-check("MCP set text: ok, actor mcp", out.get("ok") and ops_of(out["batch_id"]) == [("set_card_text", "mcp")], out)
+out = server.constructicon_update_project(card=clod["slug"], fields={"synopsis": "An MCP synopsis.",
+                                                                      "flavor": "An MCP flavor."})
+check("MCP set text (update_project fields): ok, actor mcp",
+      out.get("ok") is not False and ("set_card_text", "mcp") in ops_of(out["batch_id"]), out)
 f = cards.card_face(clod["id"])
 check("MCP set text: the face follows", f["text"] == "An MCP synopsis." and f["flavor"] == "An MCP flavor.")
-out2 = server.constructicon_set_card_text(card=clod["slug"], clear_synopsis=True, clear_flavor=True)
+out2 = server.constructicon_update_project(card=clod["slug"], fields={"synopsis": None, "flavor": ""})
 f = cards.card_face(clod["id"])
 check("MCP clear: face falls back to the write-up lead, no flavor",
-      out2.get("ok") and f["text_source"] == "writeup" and f["flavor"] == "", (out2, f["text_source"]))
+      out2.get("ok") is not False and f["text_source"] == "writeup" and f["flavor"] == "", (out2, f["text_source"]))
 cards.undo(out2["batch_id"])
 check("undo of the clear restores the MCP synopsis", cards.card_face(clod["id"])["text"] == "An MCP synopsis.")
 cards.undo(out["batch_id"])
 check("undo of the set: back to the lead", cards.card_face(clod["id"])["text_source"] == "writeup")
 bad = server.constructicon_set_card_text(card=clod["slug"], hobby=H["slug"], synopsis="x")
-check("MCP: card AND hobby -> error", bad.get("ok") is False, bad)
-bad = server.constructicon_set_card_text(card=clod["slug"], flavor="x" * 200)
+check("MCP set_card_text (#746 alias): card AND hobby -> error", bad.get("ok") is False, bad)
+bad = server.constructicon_update_project(card=clod["slug"], fields={"flavor": "x" * 200})
 check("MCP: too long -> bad_card_text", bad.get("ok") is False and bad["error"]["code"] == "bad_card_text", bad)
 gp = server.constructicon_get_project(clod["slug"])
 check("MCP get_project exposes synopsis / flavor / writeup_lead / face_text_source",
@@ -346,8 +348,8 @@ page = client.get(f"/hobby/{H['slug']}").text
 check("hobby page: 200, card shows the synopsis and the group-code line",
       "Everything with wheels." in page and "carries its group code, RCA." in page)
 undo_ok("web hobby text (settings row inserted)", r.json()["batch_id"], before)
-out = server.constructicon_set_card_text(hobby=H["slug"], synopsis="Via MCP.")
-check("MCP hobby text", out.get("ok") and hobbies.text_fields(db.get_hobby(H["id"]))["synopsis"] == "Via MCP.", out)
+out = server.constructicon_update_hobby(hobby=H["slug"], synopsis="Via MCP.")
+check("MCP hobby text (update_hobby)", out.get("ok") and hobbies.text_fields(db.get_hobby(H["id"]))["synopsis"] == "Via MCP.", out)
 cards.undo(out["batch_id"])
 check("MCP hobby text undone", snapshot() == before)
 

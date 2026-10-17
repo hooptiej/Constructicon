@@ -34,6 +34,7 @@ Prints PASS/FAIL per check, then FAILED: <names> or ALL PASS.
 """
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -316,8 +317,8 @@ names = sorted(t.name for t in listed)
 check("MCP default: tools/list equals the snapshot exactly", names == sorted(SNAP),
       f"extra {sorted(set(names) - set(SNAP))} missing {sorted(set(SNAP) - set(names))}")
 funcs = {n: f for n, f in server._WRAPPED_TOOLS.items() if n not in server._HIDDEN_ALIASES}
-check("MCP default: every description is the docstring, unchanged",
-      all(t.description == (funcs[t.name].__doc__ or "") for t in listed))
+check("MCP default: every description is the docstring (indentation removed, #746)",
+      all(t.description == inspect.cleandoc(funcs[t.name].__doc__ or "") for t in listed))
 check("MCP default: earlier labels' names are hidden aliases (not listed)",
       "constructicon_create_department" in server._HIDDEN_ALIASES and "constructicon_list_teams" in server._HIDDEN_ALIASES
       and "constructicon_create_department" not in names)
@@ -327,10 +328,12 @@ renamed = sorted(r[0][0] for r in regs.values())
 expect = sorted(n.replace("_hobbies", "_departments").replace("_hobby", "_department") for n in SNAP)
 check("MCP Department: names = the snapshot with hobby->department, nothing else changed", renamed == expect,
       sorted(set(renamed) ^ set(expect)))
-check("MCP Department: e.g. create/list/add_project_to/convert",
-      {"constructicon_create_department", "constructicon_list_departments", "constructicon_add_project_to_department",
-       "constructicon_convert_department_to_card", "constructicon_convert_project_to_department",
-       "constructicon_set_department_code"} <= set(renamed))
+check("MCP Department: e.g. create/list/card_department/update/unmark",
+      {"constructicon_create_department", "constructicon_list_departments", "constructicon_card_department",
+       "constructicon_update_department", "constructicon_unmark_department"} <= set(renamed))
+check("MCP Department: #746's retired hobby names are hidden under every label",
+      {"constructicon_add_project_to_department", "constructicon_set_department_code",
+       "constructicon_add_project_to_hobby"} <= server._HIDDEN_ALIASES)
 desc = regs["constructicon_create_hobby"][0][1] or ""
 check("MCP Department: create's description says department, no stray 'hobby' word",
       "epartment" in desc and not re.search(r"(?<![`\w/'\"-])hobb(y|ies)(?![`\w=:/'\"-])", desc, re.I),
@@ -355,7 +358,7 @@ except Exception:
 from mcp_server import server
 tools = asyncio.run(server.mcp.list_tools())
 res = asyncio.run(server.mcp.call_tool("constructicon_list_hobbies", {}))
-schema = next(t for t in tools if t.name == "constructicon_add_to_department").input_schema
+schema = next(t for t in tools if t.name == "constructicon_card_department").input_schema
 print(json.dumps({"names": sorted(t.name for t in tools), "started": [server.STARTED_LABEL.one, server.STARTED_LABEL.many],
                   "alias_call_error": bool(getattr(res, "is_error", False)), "params": sorted(schema.get("properties", {})),
                   "desc": next(t.description for t in tools if t.name == "constructicon_list_departments")}))

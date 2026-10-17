@@ -286,20 +286,22 @@ undo_ok("web set", body["batch_id"], before)
 
 # ---- 6. MCP ------------------------------------------------------------------------------------
 before = snapshot()
-out = server.constructicon_set_hobby_cover(hobby=H["slug"], cover_slug=p_new)
+out = server.constructicon_update_hobby(hobby=H["slug"], cover_slug=p_new)
 check("MCP set: ok, one hobby_cover row as mcp", out.get("ok") and ops_of(out["batch_id"]) == [("hobby_cover", "mcp")]
       and out["cover"]["cover_slug"] == p_new, out)
 lst = {x["slug"]: x for x in server.constructicon_list_hobbies()}[H["slug"]]
 check("MCP list_hobbies carries the resolved cover", lst["cover_slug"] == p_new and lst["cover_picked"] is True
       and lst["cover_source"] == "picked", lst)
-out2 = server.constructicon_set_hobby_cover(hobby=H["id"], clear=True)
+out2 = server.constructicon_update_hobby(hobby=H["id"], clear_cover=True)
 check("MCP clear: back to automatic", out2.get("ok") and out2["cover"]["cover_picked"] is False
       and out2["cover"]["cover_source"] == "highlighted_project", out2)
-both = server.constructicon_set_hobby_cover(hobby=H["slug"], cover_slug=p_new, clear=True)
+both = server.constructicon_update_hobby(hobby=H["slug"], cover_slug=p_new, clear_cover=True)
 check("MCP: cover_slug + clear is refused", both.get("ok") is False, both)
-nope = server.constructicon_set_hobby_cover(hobby=H["slug"], cover_slug="nope")
+nope = server.constructicon_update_hobby(hobby=H["slug"], cover_slug="nope")
 check("MCP: unknown item is not_found", nope.get("ok") is False and nope["error"]["code"] == "not_found", nope)
-dry = server.constructicon_set_hobby_cover(hobby=H["slug"], cover_slug=p_old, dry_run=True)
+dry = server.constructicon_update_hobby(hobby=H["slug"], cover_slug=p_old, dry_run=True)
+alias = server.constructicon_set_hobby_cover(hobby=H["slug"], cover_slug=p_old, dry_run=True)
+check("the #746 alias set_hobby_cover still answers (dry run)", alias.get("ok") and alias["dry_run"] is True, alias)
 check("MCP dry run", dry.get("ok") and dry["dry_run"] is True)
 cards.undo(out2["batch_id"])
 undo_ok("MCP set", out["batch_id"], before)

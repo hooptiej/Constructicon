@@ -15,21 +15,30 @@ Conventions shared by every tool (#560, #548; enforced by the `@mcp.tool()` wrap
     error too: a getter or setter whose target doesn't exist returns code "not_found"
     rather than None or False. Input validation is "bad_request" unless a more specific
     code applies (bad_status, invalid_choice, ...). Successful returns are unchanged.
-  * Extracted text (#697): a tool that returns MANY items (search, get_posts_for_tag, get_project,
-    get_related, list_redacted, list_restricted, list_brand_assets, a blog entry's items, ...)
-    sends a ~300-character preview of each item's extracted_text plus extracted_text_chars and
-    extracted_text_truncated (_to_public_listed). A single-item tool (constructicon_get, the
-    setters) sends the whole text (_to_public).
+  * Extracted text (#697): a tool that returns MANY items (search, list_items, get_project,
+    get(include=related), related, a blog entry's items, ...) sends a ~300-character preview of
+    each item's extracted_text plus extracted_text_chars and extracted_text_truncated
+    (_to_public_listed). A single-item tool (constructicon_get, the setters) sends the whole
+    text (_to_public).
+  * #746: these conventions are told to the client ONCE, in the server's startup instructions
+    (SERVER_INSTRUCTIONS), so the tool descriptions don't repeat them. Several old single-purpose
+    tools were folded into fewer tools with an `action` (or `view` / `which` / `direction`)
+    selector; every old name stays callable as a HIDDEN, logged alias (`@mcp.tool(alias_of=...)`)
+    with its old signature, defaults and return shape. Who may run which (tool, action) is
+    ACTION_ROLES below (all admin today: the MCP is one admin identity; ready for per-user tokens).
 """
 
 import base64
 import binascii
 import functools
+import inspect
 import io
 import json
+import logging
 import os
 import re
 import sys
+import typing
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -43,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ["CONSTRUCTICON_ROLE"] = "mcp"
 
 from mcp.server.mcpserver import Image as McpImage, MCPServer
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from core import access_log, actor as actor_ctx, policy, roles, users
 from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
@@ -78,7 +87,61 @@ IMPORT_DIR = Path(os.getenv("CONSTRUCTICON_IMPORT_DIR", "/app/import"))
 # a 500 MB file would be ~670 MB of JSON
 DOWNLOAD_INLINE_MAX_BYTES = 25 * 1024 * 1024
 
-mcp = MCPServer(name="constructicon-mcp", version=version_info.get_version())  # #508: version in server info (read at start; restart picks up a deploy)
+# --- #700: tool names and descriptions follow the install's hobby label ---
+# The label is read ONCE, when this module loads (= when the MCP process starts): a label saved
+# later in Admin > Install reaches the tools only after the MCP restarts (and clients reconnect).
+# With the default "Hobby / Hobbies" every name is exactly as before. With e.g.
+# "Department / Departments": `constructicon_create_hobby` is registered as
+# `constructicon_create_department`, `constructicon_list_hobbies` as `constructicon_list_departments`,
+# and the descriptions say department(s) (core.hobby_label.relabel_text: identifiers, `backticked`
+# words, `hobby=` parameters and paths stay). PARAMETER names and JSON fields stay `hobby` (stable
+# API). The old names (`*_hobby*`, and each earlier label's) stay callable as HIDDEN aliases: they
+# answer tools/call but tools/list leaves them out, so clients see only the new names while old
+# scripts keep working until they are updated. The process records the label it started with
+# (install_config.record_mcp_started_label, in __main__ below) so Admin can say "restart the MCP".
+STARTED_LABEL = install_config.hobby_label()
+_ALIAS_LABELS = [hobby_label_rules.Label(one, many) for one, many in
+                 ((o.replace("-", " "), m.replace("-", " ")) for o, m in install_config.known_label_slugs())]
+_HIDDEN_ALIASES = set()
+_TOOL_WORD = re.compile(r"(?<=_)(hobby|hobbies)(?=_|\b)")
+
+
+def tool_name_for(name, label):
+    """#700: the registered name of tool `name` (its function name) under `label`: the `hobby` /
+    `hobbies` parts of the name become the label's words ("_" for any "-")."""
+    if label.is_default:
+        return name
+    return _TOOL_WORD.sub(lambda m: label.one_ident if m.group(1) == "hobby" else label.many_ident, name)
+
+
+def tool_description_for(doc, label):
+    """#700: a tool's description under `label`: the words relabelled, and every tool name it
+    mentions (`constructicon_list_hobbies`) given as that tool's name under the label. #746: the
+    docstring's indentation is removed (inspect.cleandoc), which is all it does for the default label."""
+    doc = inspect.cleandoc(doc) if doc else doc
+    if label.is_default or not doc:
+        return doc
+    doc = re.sub(r"\bconstructicon_\w+", lambda m: tool_name_for(m.group(0), label), doc)
+    return hobby_label_rules.relabel_text(doc, label)
+
+
+# #746: the conventions every tool shares, said ONCE (MCP initialize -> instructions) instead of in
+# each tool's description. Relabelled like the descriptions (#700).
+SERVER_INSTRUCTIONS = """Constructicon: a personal archive. Items are files or links (by slug); cards are projects, things, actions, families, collections and events (by id or slug); hobbies group cards; plus tags and blog entries.
+
+Conventions for every tool:
+- Errors: a refusal is an error result {"ok": false, "error": {"code", "message", "details"?}}, with the HTTP API's codes, and nothing is written. A missing target is "not_found" (never null/false); bad input is "bad_request" unless a more specific code applies; "forbidden" says who may do it and why.
+- Undo: every write is logged with row images and returns "batch_id" (null when nothing changed). One call is one batch: constructicon_undo(batch_id) reverses all of it; constructicon_list_changes shows the log. A tool that takes batch_id joins an earlier call's batch.
+- dry_run=true answers as the write would and writes nothing. constructicon_bulk_edit, constructicon_resolve_decisions and constructicon_retype_links are dry-run by DEFAULT.
+- Visibility: sensitive and restricted items are admin-only (or their uploader's). A hidden item reads as not_found; a write that names one is refused as forbidden, saying why.
+- Text: a tool returning many items sends a ~300-character preview of each one's extracted_text, plus extracted_text_chars and extracted_text_truncated (text_chars=0..5000 where offered). constructicon_get(slug) returns one item's whole text.
+- Dates: an ISO date or datetime with no offset is Mountain Time (America/Denver); unix seconds also work.
+- Selector tools take action= (or view=, which=, direction=); each value is listed with what it returns.
+- Names retired in 2026-10 (#746) still answer but are not listed; use the listed tools."""
+
+# #508: version in server info (read at start; restart picks up a deploy)
+mcp = MCPServer(name="constructicon-mcp", version=version_info.get_version(),
+                instructions=tool_description_for(SERVER_INSTRUCTIONS, STARTED_LABEL))
 
 
 # --- One wrapper around every tool (#560 actor, #548 errors) ---
@@ -108,10 +171,13 @@ def _error_payload(exc):
     return None
 
 
-def _call_as_mcp(fn, args, kwargs):
-    """(True, result) or (False, error payload)."""
+def _call_as_mcp(fn, args, kwargs, need_role=None):
+    """(True, result) or (False, error payload). `need_role` (#746, ACTION_ROLES): the role the
+    caller must hold for this (tool, action); checked first, as the actor the call runs as."""
     with actor_ctx.acting_as(actor_ctx.ACTOR_MCP):
         try:
+            if need_role is not None:
+                _require_role(need_role)
             return True, fn(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001 -- re-raised below unless it's a refusal
             payload = _error_payload(exc)
@@ -120,54 +186,135 @@ def _call_as_mcp(fn, args, kwargs):
             return False, payload
 
 
+def _require_role(need):
+    """#746: refuse (403 forbidden) unless the acting actor holds `need` or above. Today every MCP
+    call runs as `mcp` (admin), so this never refuses; it is the per-(tool, action) gate that
+    per-user MCP tokens (#604 step 5) will rely on."""
+    have = roles.role_of(actor_ctx.current_actor())
+    if not roles.at_least(have, need):
+        raise errors.AppError("forbidden", f"This needs the {need} role; you have {have}.", status=403)
+
+
+# --- #746: who may run which (tool, action) ---------------------------------------------------
+# One row per visible tool, and per action for a tool with a selector (action=, view=, which=,
+# direction=, or delete's target). Mirrors the web's role labels (#557): reads viewer, curation
+# writes editor, anything permanent or install-wide admin. The MCP is one admin identity today
+# (mcp_server/auth.py), so nothing is refused yet; the table is what per-user tokens will check.
+# Startup refuses a tool or an action value with no row (_check_action_roles). A hidden alias
+# uses the row of the call it stands for (its alias_of).
+V, E, A = roles.VIEWER, roles.EDITOR, roles.ADMIN
+ACTION_ROLES = {
+    ("constructicon_version", None): V,
+    ("constructicon_upload", None): E,
+    ("constructicon_replace_file", None): E,
+    ("constructicon_search", None): V,
+    ("constructicon_get", None): V,
+    ("constructicon_download", None): V,
+    ("constructicon_import", None): E,
+    ("constructicon_list_import", None): E,
+    ("constructicon_update", None): E,
+    ("constructicon_view", None): V,
+    ("constructicon_set_caption", None): E,
+    ("constructicon_set_agent_notes", None): E,
+    ("constructicon_add_content", None): E,
+    ("constructicon_backup", None): A,
+    ("constructicon_redact", "redact"): E,
+    ("constructicon_redact", "unredact"): E,
+    ("constructicon_redact", "recover"): E,
+    ("constructicon_redact", "delete_file"): A,  # permanent
+    ("constructicon_delete", "slug"): E,
+    ("constructicon_delete", "slugs"): E,
+    ("constructicon_delete", "card"): E,
+    ("constructicon_delete", "blog_entry"): E,
+    ("constructicon_delete", "everything"): A,  # the whole archive, permanent
+    ("constructicon_trash", "list"): A,
+    ("constructicon_trash", "empty"): A,  # permanent
+    ("constructicon_item_tags", "attach"): E,
+    ("constructicon_item_tags", "detach"): E,
+    ("constructicon_related", "add"): E,
+    ("constructicon_related", "remove"): E,
+    ("constructicon_list_items", "redacted"): A,
+    ("constructicon_list_items", "restricted"): A,
+    ("constructicon_list_items", "brand_assets"): V,
+    ("constructicon_list_items", "tag"): V,
+    ("constructicon_revision", "supersede"): E,
+    ("constructicon_revision", "remove"): E,
+    ("constructicon_run_type_action", None): E,
+    ("constructicon_list_projects", None): V,
+    ("constructicon_create_project", None): E,
+    ("constructicon_update_project", None): E,
+    ("constructicon_get_project", None): V,
+    ("constructicon_explain_card", None): V,
+    ("constructicon_card_files", "add"): E,
+    ("constructicon_card_files", "remove"): E,
+    ("constructicon_card_files", "move"): E,
+    ("constructicon_card_files", "copy"): E,
+    ("constructicon_card_hobby", "add"): E,
+    ("constructicon_card_hobby", "remove"): E,
+    ("constructicon_family", "add"): E,
+    ("constructicon_family", "remove"): E,
+    ("constructicon_nest", "nest"): E,
+    ("constructicon_nest", "unnest"): E,
+    ("constructicon_link", "add"): E,
+    ("constructicon_link", "remove"): E,
+    ("constructicon_link", "retype"): E,
+    ("constructicon_link", "list"): V,
+    ("constructicon_retype_links", None): E,
+    ("constructicon_split_card", None): E,
+    ("constructicon_merge_cards", None): E,
+    ("constructicon_convert", "card_to_hobby"): A,  # whole-card conversion (web: admin)
+    ("constructicon_convert", "hobby_to_card"): A,
+    ("constructicon_bulk_edit", None): E,
+    ("constructicon_undo", None): E,
+    ("constructicon_list_changes", None): E,
+    ("constructicon_list_hobbies", None): V,
+    ("constructicon_create_hobby", None): E,
+    ("constructicon_update_hobby", None): E,
+    ("constructicon_unmark_hobby", None): E,
+    ("constructicon_list_blog_entries", None): V,
+    ("constructicon_get_blog_entry", None): V,
+    ("constructicon_create_blog_entry", None): E,
+    ("constructicon_update_blog_entry", None): E,
+    ("constructicon_list_tags", None): V,
+    ("constructicon_create_tag", None): E,
+    ("constructicon_list_provenance_options", None): V,
+    ("constructicon_needs", "queue"): V,
+    ("constructicon_needs", "nudges"): V,
+    ("constructicon_needs", "caption"): V,
+    ("constructicon_needs", "card_decisions"): V,
+    ("constructicon_needs", "pending"): V,
+    ("constructicon_queue_item", "dismiss"): E,
+    ("constructicon_queue_item", "defer"): E,
+    ("constructicon_queue_item", "bring_back"): E,
+    ("constructicon_resolve_pending_decision", None): E,
+    ("constructicon_resolve_decisions", None): E,
+    ("constructicon_sweep_stale_decisions", None): E,
+}
+del V, E, A
+
+
+def role_for(tool, action=None):
+    """#746: the role a (tool, action) needs; an unknown pair fails closed (admin)."""
+    return ACTION_ROLES.get((tool, action), roles.ADMIN)
+
+
 _sdk_tool = mcp.tool
 _WRAPPED_TOOLS = {}  # registered tool name (aliases included) -> the wrapped function
+_TOOL_FUNCS = {}     # tool function name -> the undecorated function (visible tools and aliases)
+_SELECTORS = {}      # tool function name -> (how to read its action from the call, the allowed values)
+_ALIAS_OF = {}       # #746: retired tool function name -> (the tool it stands for, its action or None)
+_alias_log = logging.getLogger("constructicon.mcp.alias")
 
 
-# --- #700: tool names and descriptions follow the install's hobby label ---
-# The label is read ONCE, when this module loads (= when the MCP process starts): a label saved
-# later in Admin > Install reaches the tools only after the MCP restarts (and clients reconnect).
-# With the default "Hobby / Hobbies" every name and description is exactly as before. With e.g.
-# "Department / Departments": `constructicon_create_hobby` is registered as
-# `constructicon_create_department`, `constructicon_list_hobbies` as `constructicon_list_departments`,
-# and the descriptions say department(s) (core.hobby_label.relabel_text: identifiers, `backticked`
-# words, `hobby=` parameters and paths stay). PARAMETER names and JSON fields stay `hobby` (stable
-# API). The old names (`*_hobby*`, and each earlier label's) stay callable as HIDDEN aliases: they
-# answer tools/call but tools/list leaves them out, so clients see only the new names while old
-# scripts keep working until they are updated. The process records the label it started with
-# (install_config.record_mcp_started_label, in __main__ below) so Admin can say "restart the MCP".
-STARTED_LABEL = install_config.hobby_label()
-_ALIAS_LABELS = [hobby_label_rules.Label(one, many) for one, many in
-                 ((o.replace("-", " "), m.replace("-", " ")) for o, m in install_config.known_label_slugs())]
-_HIDDEN_ALIASES = set()
-_TOOL_WORD = re.compile(r"(?<=_)(hobby|hobbies)(?=_|\b)")
-
-
-def tool_name_for(name, label):
-    """#700: the registered name of tool `name` (its function name) under `label`: the `hobby` /
-    `hobbies` parts of the name become the label's words ("_" for any "-")."""
-    if label.is_default:
-        return name
-    return _TOOL_WORD.sub(lambda m: label.one_ident if m.group(1) == "hobby" else label.many_ident, name)
-
-
-def tool_description_for(doc, label):
-    """#700: a tool's description under `label`: the words relabelled, and every tool name it
-    mentions (`constructicon_list_hobbies`) given as that tool's name under the label."""
-    if label.is_default or not doc:
-        return doc
-    doc = re.sub(r"\bconstructicon_\w+", lambda m: tool_name_for(m.group(0), label), doc)
-    return hobby_label_rules.relabel_text(doc, label)
-
-
-def tool_registrations(name, doc, label=None):
+def tool_registrations(name, doc, label=None, hidden_all=False):
     """#700: [(registered name, description, hidden)] for one tool function under `label` (default:
     the label this process started with): the visible tool, then its hidden aliases (the original
-    name and each earlier label's name, when they differ). `description` None = the SDK's own (the
-    docstring, unchanged). Pure: the tests build the whole list with any label."""
+    name and each earlier label's name, when they differ). `description` is the docstring with its
+    indentation removed (#746), relabelled under a non-default label. `hidden_all` (#746): every
+    registration hidden (a retired name). Pure: the tests build the whole list with any label."""
     label = STARTED_LABEL if label is None else label
     visible = tool_name_for(name, label)
-    out = [(visible, None if label.is_default else tool_description_for(doc, label), False)]
+    out = [(visible, tool_description_for(doc, label), hidden_all)]
     seen = {visible}
     for old in [hobby_label_rules.DEFAULT] + _ALIAS_LABELS:
         alias = tool_name_for(name, old)
@@ -177,23 +324,83 @@ def tool_registrations(name, doc, label=None):
     return out
 
 
-def _tool(*dargs, **dkwargs):
+def _selector_values(fn, param):
+    """The allowed values of a selector parameter, from its Literal[...] annotation."""
+    hint = typing.get_type_hints(fn).get(param)
+    for part in (typing.get_args(hint) if typing.get_origin(hint) not in (typing.Literal, None) else (hint,)):
+        if typing.get_origin(part) is typing.Literal:
+            return tuple(typing.get_args(part))
+    raise RuntimeError(f"{fn.__name__}: selector {param!r} needs a Literal[...] annotation")
+
+
+def _action_of(name, sig, args, kwargs):
+    """The action a call asks for (None for a tool without a selector), read from its arguments."""
+    how = _SELECTORS.get(name)
+    if how is None:
+        return None
+    try:
+        bound = sig.bind_partial(*args, **kwargs)
+    except TypeError:  # silent-ok: a bad call; the tool itself refuses it, the role check fails closed
+        return "?"
+    bound.apply_defaults()
+    reader = how[0]
+    return reader(bound.arguments) if callable(reader) else bound.arguments.get(reader)
+
+
+def _empty_list_visible(value):
+    """#746: tools/list carries no outputSchema, so a result reaches the client as text only. The
+    SDK turns a list into one text block per entry, which makes an empty list NO content at all;
+    send "[]" instead so "nothing found" is visible."""
+    if isinstance(value, list) and not value:
+        return CallToolResult(content=[TextContent(type="text", text="[]")])
+    return value
+
+
+def _tool(*dargs, alias_of=None, selector=None, **dkwargs):
+    """This module's `@mcp.tool()` (#560, #548, #700, #746).
+    alias_of=(tool, action): a RETIRED name. Every registration of it is hidden (tools/call answers,
+      tools/list doesn't), each call is logged ("old -> new"), and its role is that call's.
+    selector: the parameter naming the action (its values from its Literal annotation), or
+      (function(bound arguments) -> action, values) when the action is derived (delete's target).
+    No tool publishes an outputSchema (#746, structured_output=False): results are the JSON text."""
     def decorate(fn):
+        name = fn.__name__
+        sig = inspect.signature(fn)
+        _TOOL_FUNCS[name] = fn
+        if selector is not None:
+            _SELECTORS[name] = (selector, _selector_values(fn, selector)) if isinstance(selector, str) else selector
+        if alias_of is not None:
+            _ALIAS_OF[name] = alias_of
+
+        def run(args, kwargs):
+            if alias_of is not None:
+                target, act = alias_of
+                _alias_log.warning("MCP alias call: %s -> %s%s (deprecated name, #746)", name, target,
+                                   f" [{act}]" if act else "")
+                need = role_for(*alias_of)
+            else:
+                need = role_for(name, _action_of(name, sig, args, kwargs))
+            return _call_as_mcp(fn, args, kwargs, need)
+
         @functools.wraps(fn)
         def for_sdk(*args, **kwargs):
-            ok, value = _call_as_mcp(fn, args, kwargs)
+            ok, value = run(args, kwargs)
             if ok:
-                return value
+                return _empty_list_visible(value)
             return CallToolResult(is_error=True, content=[TextContent(type="text", text=json.dumps(value))],
                                   structured_content=value)
 
         @functools.wraps(fn)
         def direct(*args, **kwargs):
-            return _call_as_mcp(fn, args, kwargs)[1]
+            return run(args, kwargs)[1]
 
-        for reg_name, description, hidden in tool_registrations(fn.__name__, fn.__doc__):
+        doc = fn.__doc__
+        if alias_of is not None:
+            doc = f"Deprecated name (#746): use {alias_of[0]}" + (f"(action={alias_of[1]!r})." if alias_of[1] else ".")
+        for reg_name, description, hidden in tool_registrations(name, doc, hidden_all=alias_of is not None):
             kwargs = dict(dkwargs)
-            if reg_name != fn.__name__:
+            kwargs.setdefault("structured_output", False)
+            if reg_name != name:
                 kwargs["name"] = reg_name
             if description is not None:
                 kwargs["description"] = description
@@ -201,6 +408,7 @@ def _tool(*dargs, **dkwargs):
             _WRAPPED_TOOLS[reg_name] = for_sdk
             if hidden:
                 _HIDDEN_ALIASES.add(reg_name)
+        direct.alias_of = alias_of
         return direct
 
     return decorate
@@ -435,11 +643,89 @@ def _to_public_blog_entry(entry):
     }
 
 
+# --- #746: helpers the merged tools and their aliases share ------------------------------------
+
+_NOTHING_CHANGED = "Nothing changed."
+
+
+def _viewable_item(slug):
+    """One item row for a read door: not_found when missing OR hidden by the item policy."""
+    row = db.get_by_slug(slug)
+    if row is None:
+        raise NotFound(f"No item {slug!r}.")
+    policy.require_view(row, message=f"No item {slug!r}.")  # #557
+    return row
+
+
+def _related_listed(slug):
+    """The items related to `slug`, as the item policy lets the caller see them (listed shape)."""
+    return [_to_public_listed(r) for r in policy.filter_visible(db.list_related(slug))]
+
+
+def _written(batch_id):
+    """`batch_id` when that batch wrote anything (so undo has something to reverse), else None."""
+    return batch_id if batch_id and db.get_change_rows(batch_id=batch_id) else None
+
+
+def _dedupe(rows):
+    """Change rows of several ops in one batch, each once (some ops report the whole batch so far)."""
+    out, seen = [], set()
+    for r in rows:
+        key = json.dumps(r, sort_keys=True, default=str)
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
+class _Collect:
+    """Gathers the changes and warnings of several core ops run under one batch."""
+
+    def __init__(self):
+        self.changes, self.warnings = [], []
+
+    def __call__(self, res):
+        self.changes.extend(getattr(res, "changes", None) or [])
+        self.warnings.extend(w for w in (getattr(res, "warnings", None) or []) if w != _NOTHING_CHANGED)
+        return res
+
+    def result(self):
+        return {"changes": _dedupe(self.changes), "warnings": list(dict.fromkeys(self.warnings))}
+
+
+def _fields_arg(fields, spec, tool):
+    """Validates a `fields={...}` argument against `spec` ({key: allowed python types}). Key present
+    = set it (None clears where the field allows it), key absent = leave it."""
+    if fields is None:
+        return {}
+    if not isinstance(fields, dict):
+        raise InvalidInput("fields must be an object, e.g. {\"highlight\": true}.", code="bad_fields")
+    if "agent_notes" in fields:
+        raise InvalidInput("agent_notes are written only with constructicon_set_agent_notes.", code="unknown_field")
+    unknown = sorted(set(fields) - set(spec))
+    if unknown:
+        raise InvalidInput(f"Unknown field(s) for {tool}: {', '.join(unknown)}. Allowed: {', '.join(sorted(spec))}.",
+                           code="unknown_field", details={"unknown": unknown, "allowed": sorted(spec)})
+    for key, value in fields.items():
+        types = spec[key]
+        if not isinstance(value, types) or (bool not in types and isinstance(value, bool)):
+            names = " or ".join("null" if t is type(None) else t.__name__ for t in types)
+            raise InvalidInput(f"fields.{key} must be {names}.", code="bad_fields")
+    return dict(fields)
+
+
+def _only_for(what, **passed):
+    """Refuses parameters that don't apply to the chosen action: {name: (value, default)}."""
+    extra = [k for k, (value, default) in passed.items() if value != default]
+    if extra:
+        raise InvalidInput(f"{', '.join(extra)} {'does' if len(extra) == 1 else 'do'} not apply to {what}. "
+                           "Nothing was changed.")
+
+
 @mcp.tool()
 def constructicon_version() -> dict:
-    """Report which Constructicon build is running (#508): {version, commit,
-    deployed_at, env}. Version is CalVer (YYYY.M.D, .N for repeats the same day),
-    suffixed -dev on the test instance; "dev" means no deploy.sh version file."""
+    """Which build is running: {version, commit, deployed_at, env}. CalVer YYYY.M.D (.N for a
+    second release that day), "-dev" on a test instance; "dev" = no version file."""
     return version_info.get_version_info()
 
 
@@ -447,34 +733,18 @@ def constructicon_version() -> dict:
 def constructicon_upload(filename: str, content_base64: str, description: str = "", tags: list[str] | None = None,
                       uploaded_by: str = db.SOURCE_AUTHORED,
                       source_modified_at: float | None = None, sensitive: bool = False) -> dict:
-    """Upload an image, document, or other file to Constructicon.
+    """Upload a file (base64) as a new item. Returns the item, with its hotlink url.
 
-    Returns a JSON object with the new object's metadata, including a stable hotlink URL.
-
-    filename: original filename; extension (.png/.jpg/.pdf/.stl/.psd/.svg/.eps/.mp3/.wav, etc.)
-      determines the media type.
-    content_base64: raw file bytes, base64-encoded.
-    tags: optional list of tag names to attach to the object.
-    description: optional metadata description for the object.
-    uploaded_by: the Source string to record (capture_events.tech). Defaults to
-      "Claude — authored" (this tool call created the content). For content migrated from
-      an external source, pass db.source_migrated_from("<source>") instead.
-    source_modified_at: the source file's own last-modified time (unix seconds), if known.
-      Used for duplicate detection; omit to skip checking for re-uploads of the same file.
-    sensitive: #603: lock it from the start (only admins see it; an MCP upload has no user
-      uploader). Same as the upload dialog's checkbox.
-
-    If filename, file size, and source_modified_at all match an existing upload, returns
-    the existing object instead with "duplicate": true.
-
-    OCR (for OCR-capable types) runs in the background, same as the web app's
-    /api/upload: the returned object has ocr_status "pending" -- call
-    constructicon_get on the slug later to read extracted_text once it's "done".
-
-    An audio file's own tags (#255) are read synchronously, same as /api/upload:
-    the tag title becomes the object's display_name/content_description and
-    artist/album/track/year/genre land in type_metadata, so the returned object
-    already reflects them. A tagless file simply gets none of that.
+    filename: its extension decides the type (.png .pdf .stl .psd .svg .mp3 ...).
+    tags: tag names to attach. description: the uploader's note.
+    uploaded_by: the Source label; default "Claude — authored". For migrated content pass
+      db.source_migrated_from("<source>").
+    source_modified_at: the file's own mtime (unix seconds). When filename, size and this match an
+      existing item, that item comes back with "duplicate": true instead.
+    sensitive: lock it from the start (admins only).
+    OCR runs in the background (ocr_status "pending"; read extracted_text later with
+    constructicon_get). An audio file's own tags fill its title and type_metadata at once.
+    For big files use constructicon_import.
     """
     content = base64.b64decode(content_base64)
     return _ingest(filename, io.BytesIO(content), len(content), description, tags, uploaded_by, source_modified_at,
@@ -483,37 +753,21 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
 
 @mcp.tool()
 def constructicon_replace_file(slug: str, content_base64: str, filename: str | None = None) -> dict:
-    """Replace an existing item's file bytes and KEEP the item (#617): same slug (so /f/<slug> and
-    every link keep working), cards, tags, title, captions, relations and revision chain. Use this
-    to revise a file instead of uploading a new item, adding it to the card and trashing the old one.
+    """Replace an item's file bytes and KEEP the item: same slug and links, cards, tags, title,
+    captions, relations and revision chain. Use it to revise a file in place.
 
-    content_base64: the new file's raw bytes, standard base64 (same convention as
-      constructicon_upload; whitespace/newlines are ignored, a data: prefix is not accepted).
-      The whole payload rides one MCP message, so the limit is the server's upload cap
-      (constructicon_list_import reports it as max_upload_mb; default 25 MB). Over it the call
-      is refused with file_too_large before anything is decoded or written; for a larger file
-      upload it with constructicon_import and link it with constructicon_mark_superseded.
-    filename: optional, the NEW file's name (it decides the type check, e.g. "notes-v3.md"). Omit
-      it to keep the item's own name. The item keeps its name (so its title stays) unless the
-      extension differs, in which case the stem is kept and the extension swapped.
-
-    Re-processing is the same as an upload: type check (a different TYPE is refused, see below),
-    embedded metadata (fill-only), thumbnail, text extraction / OCR (runs in the background:
-    ocr_status is "pending" until it finishes, extracted_text is empty meanwhile), perceptual hash,
-    captions, and the search index (by trigger). Sensitive / restricted items stay so; the item
-    must be one the caller may see.
-
-    UNDOABLE: the previous bytes go to the trash (reason "replace", kept 7 days) in the same change
-    as the row update, so constructicon_undo(batch_id) restores the old file, size and name.
-    Returns the object plus {replaced: true, batch_id, previous_size, new_size, trash_days}.
-
-    Errors ({"ok": false, "error": {code, message}}): not_found; forbidden (needs editor+);
-    replace_redacted (a redacted item has no file: recover it first); no_file (a content-only item);
-    bad_base64 (not valid base64); empty_file (0 bytes); file_too_large; unsupported_type /
-    content_mismatch (as an upload); replace_type_mismatch (the bytes are another type than the
-    item, e.g. a .md replaced with a .pdf: upload a new item and use constructicon_mark_superseded);
-    replace_needs_decision / replace_rejected (the type's upload hook would not simply accept it);
-    file_unchanged (identical bytes).
+    content_base64: the new bytes, standard base64 (no data: prefix). One MCP message, so at most
+      the upload cap (constructicon_list_import's max_upload_mb); over it: file_too_large, nothing
+      decoded. For a bigger file, constructicon_import it and use
+      constructicon_revision(old, action="supersede", new=...).
+    filename: the NEW file's name (decides the type check); omit to keep the item's name. A new
+      extension keeps the stem and swaps the extension.
+    Re-processed like an upload (thumbnail, text/OCR in the background, hash, captions, search).
+    The old bytes go to the trash for 7 days; undo restores file, size and name.
+    Returns the item plus {replaced, batch_id, previous_size, new_size, trash_days, expires_at}.
+    Errors: replace_redacted, no_file, bad_base64, empty_file, file_too_large, unsupported_type,
+    content_mismatch, replace_type_mismatch (another type: upload a new item and supersede),
+    replace_needs_decision, replace_rejected, file_unchanged.
     """
     encoded = "".join((content_base64 or "").split())
     if len(encoded) * 3 // 4 > storage.MAX_BYTES + 3:
@@ -534,21 +788,13 @@ def constructicon_replace_file(slug: str, content_base64: str, filename: str | N
 @mcp.tool()
 def constructicon_search(query: str | None = None, tags: list[str] | None = None,
                          text_chars: int = TEXT_PREVIEW_CHARS) -> list[dict]:
-    """Search objects by name (display name, title, any filename it has had), tags, card titles,
-    description or extracted text.
-
-    Each word you type matches the START of a word ("tun" finds "Tuning"), all words are
-    required, best match first. It is not a substring search.
-
-    Returns a JSON list of matching objects. If both query and tags are
-    provided, filters by both (AND logic). Redacted objects are excluded
-    (#282) -- use constructicon_list_redacted to see those.
-
-    extracted_text (OCR / document / transcript text) is a PREVIEW, not the whole text (#697): about
-    text_chars characters (default 300) around the first query word found in it, else its start,
-    with "…" where it was cut. extracted_text_chars is the full length and extracted_text_truncated
-    says whether anything was left out. text_chars: 0 = no text at all, up to 5000 (more is capped
-    at 5000). For one item's full text, call constructicon_get(slug).
+    """Search items by name (title, any filename it has had), tags, card titles, note or extracted
+    text. Each word matches the START of a word ("tun" finds "Tuning"); all words are required;
+    best match first. Not a substring search. query and tags together: both must match.
+    A tag search here matches the item's own tags only; for everything under a tag (child tags
+    too) use constructicon_list_items(which="tag", tag=...). Redacted items are left out
+    (constructicon_list_items(which="redacted")). The text preview is centred on the first query
+    word found. Older revisions are found too, marked superseded_by.
     """
     chars = text_chars_arg(text_chars)
     # #477: old revisions are still found, marked with `superseded_by` (the current revision's slug) and `rev`.
@@ -557,35 +803,56 @@ def constructicon_search(query: str | None = None, tags: list[str] | None = None
                                for r in policy.filter_visible(db.search(query=query, tags=tags))])
 
 
-@mcp.tool()
-def constructicon_get(slug: str) -> dict | None:
-    """Get one object's metadata and hotlink URL by its slug.
+GET_INCLUDES = ("related", "revisions", "agent_notes")
 
-    extracted_text is the item's WHOLE extracted text (tools that list many items send only a
-    preview of it, #697). A missing slug returns the not_found error. `superseded_by` (the current revision's slug, or null)
-    and `rev` (position in its revision chain, or null) say where it sits in a chain (#477).
+
+@mcp.tool()
+def constructicon_get(slug: str,
+                      include: list[typing.Literal["related", "revisions", "agent_notes"]] | None = None) -> dict:
+    """One item by slug: metadata, hotlink url, its WHOLE extracted_text, and `superseded_by` /
+    `rev` (its place in a revision chain).
+    include adds, on request: "related" -> `related`, the items linked to it (listed shape);
+    "revisions" -> `revisions`, its chain {in_chain, chain: [{slug, title, filename, rev,
+    is_current, is_this, redacted}], current, superseded, rev, of}; "agent_notes" ->
+    `agent_notes`, the private notes from constructicon_set_agent_notes.
+    E.g. constructicon_get(slug, include=["related"]).
     """
+    wanted = list(dict.fromkeys(include or []))
+    bad = [w for w in wanted if w not in GET_INCLUDES]
+    if bad:
+        raise InvalidInput(f"include: unknown {', '.join(map(str, bad))}; use {', '.join(GET_INCLUDES)}.")
     row = db.get_by_slug(slug)
     if row is None:
         raise NotFound(f"No item {slug!r}.")
     policy.require_view(row, message=f"No item {slug!r}.")  # #557
     policy.note_access(row, access_log.HOW_MCP_GET)  # #604 follow-up 7: sensitive items only
-    return revisions.decorate([_to_public(row)])[0]
+    out = revisions.decorate([_to_public(row)])[0]
+    if "related" in wanted:
+        out["related"] = _related_listed(slug)
+    if "revisions" in wanted:
+        out["revisions"] = revisions.revision_view(slug)
+    if "agent_notes" in wanted:
+        out["agent_notes"] = row.get("agent_notes")
+    return out
+
+
+@mcp.tool(alias_of=("constructicon_get", None))
+def constructicon_get_related(slug: str) -> list[dict]:
+    _viewable_item(slug)
+    return _related_listed(slug)
+
+
+@mcp.tool(alias_of=("constructicon_get", None))
+def constructicon_list_revisions(slug: str) -> dict:
+    _viewable_item(slug)
+    return {"ok": True, **revisions.revision_view(slug)}
 
 
 @mcp.tool()
 def constructicon_download(slug: str) -> dict | None:
-    """Download a file's actual bytes from Constructicon.
-
-    Takes a slug and returns the file's content base64-encoded, along with
-    filename and media_type for round-trip upload/download cycles.
-
-    For files larger than the inline limit (~25MB), returns metadata + a stable
-    hotlink URL instead of base64 — fetch it from the URL to avoid inflating
-    the MCP message payload beyond practical limits (#433).
-
-    Errors: not_found (no such object), no_file (the object has no uploaded file, e.g. a
-    YouTube link or other content-only object), file_missing (the file is gone from disk).
+    """An item's file bytes, base64, with filename and media_type. Over ~25 MB: metadata and the
+    hotlink url instead (content_base64 null); fetch the url.
+    Errors: no_file (a link or other file-less item), file_missing (gone from disk).
     """
     row = db.get_by_slug(slug)
     if row is None:
@@ -622,17 +889,11 @@ def constructicon_download(slug: str) -> dict | None:
 def constructicon_import(path: str, description: str = "", tags: list[str] | None = None,
                         uploaded_by: str = db.SOURCE_AUTHORED,
                         source_modified_at: float | None = None, sensitive: bool = False) -> dict:
-    """Import a file already sitting in the server-side import inbox.
-
-    Use this for large files (up to the server's upload limit, e.g. hundreds of MB)
-    that are impractical to send base64 via constructicon_upload. Path is relative
-    to the inbox (e.g. "drawings/set-A.pdf"); anything resolving outside the inbox
-    is refused. The file is COPIED into storage and left in place in the inbox.
-
-    The stored filename is the file's basename. source_modified_at defaults to the
-    file's own mtime, so re-importing the same unchanged file returns the existing
-    object with duplicate: true. Same OCR/metadata behavior and return shape as
-    constructicon_upload; `sensitive` (#603) locks it from the start.
+    """Import a file from the server's import inbox (for files too big to send base64, up to the
+    upload limit). path is relative to the inbox, e.g. "drawings/set-A.pdf"; nothing outside it.
+    The file is COPIED (it stays in the inbox) and named by its basename. source_modified_at
+    defaults to its mtime, so re-importing an unchanged file returns the existing item with
+    duplicate: true. Otherwise as constructicon_upload. Error: import_unavailable (no inbox).
     """
     if not IMPORT_DIR.is_dir():
         raise errors.AppError("import_unavailable", f"Import inbox {IMPORT_DIR} is not mounted on this server",
@@ -648,15 +909,9 @@ def constructicon_import(path: str, description: str = "", tags: list[str] | Non
 
 @mcp.tool()
 def constructicon_list_import() -> dict:
-    """List files waiting in the import inbox (recursive).
-
-    Returns {"inbox": str(IMPORT_DIR), "max_upload_mb": storage.MAX_MB,
-    "files": [{"path": <posix path relative to inbox>, "size_bytes": n,
-    "modified_at": mtime, "supported": bool(detect_media_type)}]} sorted by path,
-    skipping hidden files/dirs (name starting with ".") and anything that resolves
-    outside the inbox. If the inbox isn't mounted: the import_unavailable error.
-
-    Caps the listing at 1000 files and adds "truncated": True if more.
+    """The files waiting in the import inbox (recursive, hidden ones skipped), sorted by path:
+    {inbox, max_upload_mb, files: [{path, size_bytes, modified_at, supported}], truncated?}
+    (at most 1000 files). Error: import_unavailable.
     """
     if not IMPORT_DIR.is_dir():
         raise errors.AppError("import_unavailable", f"Import inbox {IMPORT_DIR} is not mounted on this server",
@@ -695,51 +950,77 @@ def constructicon_list_import() -> dict:
     return result
 
 
+# #746: what constructicon_update(fields={...}) takes beyond its named parameters.
+ITEM_FIELDS = {
+    "provenance": (str, type(None)),
+    "content_date": (str, int, float, type(None)),
+    "highlight": (bool,),
+    "is_brand_asset": (bool,),
+    "brand_role": (str, type(None)),
+    "sensitive": (bool,),
+}
+
+
 @mcp.tool()
 def constructicon_update(slug: str, description: str | None = None, tags: list[str] | None = None,
                    display_name: str | None = None,
                    type_metadata: dict | None = None, display_date: float | None = None,
-                   reset_display_date: bool = False, content_description: str | None = None) -> dict | None:
-    """Update an object's metadata: description, tags, display name, type-specific fields,
-    its content description, and/or its timeline display date.
-
-    Pass None for any field you don't want to change. type_metadata is MERGED by top-level key
-    (same as the web app's POST /api/image/{slug}); set a key to "" to clear it.
-    content_description (#587/#588) is the item's own description or caption (a YouTube video's
-    title, an accepted image caption): set it to correct or fill one in; "" clears it. It goes
-    through the same items.update as the web route.
-
-    display_date sets a manual override for this object's position on the Constructicon
-    timeline (unix timestamp, e.g. what time.time() or a datetime's .timestamp() returns).
-    reset_display_date=True clears the override, reverting to the computed default
-    (content_date, falling back to the upload timestamp) — it wins over display_date if both
-    are passed.
-
-    #541: one change-log batch for the whole call (undo it with constructicon_undo); every
-    field is validated before anything is written. Returns the updated object; a missing one
-    returns the not_found error.
+                   reset_display_date: bool = False, content_description: str | None = None,
+                   fields: dict | None = None, dry_run: bool = False) -> dict:
+    """Edit an item, every change in ONE batch. Parameters left out (None) are left alone.
+    description: the uploader's note. content_description: the item's own title/caption ("" clears).
+    display_name: its title override. tags: the full free-text tag list (replaces it).
+    type_metadata: MERGED by top-level key; a key set to "" is cleared.
+    display_date: timeline position override (unix seconds); reset_display_date=true clears it.
+    fields: more fields, key present = set it, absent = leave it:
+      provenance: an active file key (constructicon_list_provenance_options(scope="file")) or null;
+      content_date: the content's own date, ISO or unix seconds, null clears;
+      highlight: bool; is_brand_asset: bool; brand_role: "logo"/"icon"/... or null;
+      sensitive: bool (marking: editor+; clearing: admin).
+    E.g. fields={"provenance": "created", "highlight": true, "content_date": "2017-07-31"}.
+    dry_run=true returns the item as it would be, writing nothing.
+    Returns the item plus batch_id. Private notes: constructicon_set_agent_notes.
     """
     items.get_item(slug)
-    fields = {}
+    extra = _fields_arg(fields, ITEM_FIELDS, "constructicon_update")
+    cols = {}
     if description is not None:
-        fields["description"] = description
+        cols["description"] = description
     if display_name is not None:
-        fields["display_name"] = display_name
+        cols["display_name"] = display_name
     if content_description is not None:
-        fields["content_description"] = content_description
+        cols["content_description"] = content_description
     if type_metadata is not None:
         # #563: merge (top-level keys), same as the web route; #425 keys cleaned in core.
-        fields["type_metadata"] = dict(type_metadata)
+        cols["type_metadata"] = dict(type_metadata)
     if reset_display_date:
-        fields["display_date_override"] = None
+        cols["display_date_override"] = None
     elif display_date is not None:
-        fields["display_date_override"] = display_date
-    if fields or tags is not None:
-        # #541 phase C: free-text tags ride in the same call, so the whole update is ONE batch.
-        row = items.update(slug, tags=tags, **fields).item
-    else:
-        row = db.get_by_slug(slug)
-    return _to_public(row) if row else None
+        cols["display_date_override"] = display_date
+    for key in ("provenance", "highlight"):
+        if key in extra:
+            cols[key] = extra[key]
+    if "content_date" in extra:
+        cols["content_date"] = items.parse_date(extra["content_date"], "content_date")  # naive ISO = Mountain
+    if "is_brand_asset" in extra:
+        cols["is_brand_asset"] = extra["is_brand_asset"]
+        if extra["is_brand_asset"] and "brand_role" not in extra:
+            cols["brand_role"] = items.get_item(slug).get("brand_role")  # absent = leave the role as it is
+    if "brand_role" in extra:
+        cols["brand_role"] = extra["brand_role"]
+    batch_id = changes.new_batch_id()
+    # #746: one transaction for the whole call; a dry run is the real thing rolled back, so every
+    # field is checked against the item as the earlier fields left it.
+    with db.transaction(dry_run=dry_run):
+        if cols or tags is not None:
+            # #541 phase C: free-text tags ride in the same call, so the whole update is ONE batch.
+            items.update(slug, tags=tags, batch_id=batch_id, **cols)
+        if "sensitive" in extra:
+            items.set_sensitive(slug, extra["sensitive"], batch_id=batch_id)
+        out = {**_to_public(db.get_by_slug(slug)), "batch_id": None if dry_run else _written(batch_id)}
+    if dry_run:
+        out["dry_run"] = True
+    return out
 
 
 # --- Captioning by an agent (#588): list what needs a caption, look at it, write one ---
@@ -758,21 +1039,8 @@ def _caption_context(row):
     return cards_in, hobbies_in
 
 
-@mcp.tool()
-def constructicon_list_needs_caption(limit: int = 50, include_failed: bool = True) -> dict:
-    """List caption-capable items (images, GIFs, PSD/SVG/EPS, video frames) that have no caption yet,
-    newest first, so an agent can caption them (#588). Needs no Ollama: it works with captions
-    switched off (CAPTION_DISABLED), the install that needs it most.
-
-    An item is listed when it has no accepted description AND its caption status is absent or, with
-    include_failed=True, "failed"/"skipped" (what a captions-off install leaves behind). Items already
-    captioned (waiting in /captions/review or accepted) and ones still queued are not listed.
-    Redacted and restricted items never appear (the item policy decides). limit is 1 to 500.
-
-    Returns {"items": [{slug, name, type, filename, caption_status, projects: [{slug, title, kind}],
-    hobbies: [names]}], "total": how many match in all}. Next:
-    constructicon_view(slug) to look, then constructicon_set_caption(slug, text).
-    """
+def _needs_caption(limit, include_failed):
+    """#588: caption-capable items with no caption yet, with their cards and hobbies."""
     rows = captions.needs_caption(limit=limit, include_failed=include_failed)
     out = []
     for row in rows:
@@ -789,18 +1057,17 @@ def constructicon_list_needs_caption(limit: int = 50, include_failed: bool = Tru
     return {"items": out, "total": captions.count_needs_caption(include_failed=include_failed)}
 
 
+@mcp.tool(alias_of=("constructicon_needs", "caption"))
+def constructicon_list_needs_caption(limit: int = 50, include_failed: bool = True) -> dict:
+    return _needs_caption(limit, include_failed)
+
+
 @mcp.tool()
 def constructicon_view(slug: str, size: str = "preview") -> list[McpImage | str]:
-    """Look at an item: returns its picture as MCP IMAGE content (PNG or JPEG the model can see)
-    plus a short text block (name, type, description, OCR text truncated) (#588).
-
-    size="preview" (default) is up to 1024 px on the long edge (the uploaded image itself, downscaled,
-    for image types); size="thumb" is the 400 px stored thumbnail. Non-image types are shown through
-    their own renderer: a PDF's first page, an STL render, a video frame, a PSD composite, wherever
-    the type has a thumbnail. The encoded picture is capped at about 1.5 MB.
-
-    Errors: not_found (no such item, or the item policy hides it), bad_size, not_viewable (redacted,
-    or the item has no visual, e.g. a certificate, an archive, a spreadsheet).
+    """Look at an item: its picture as IMAGE content you can see, plus a text block (name, type,
+    description, suggested caption, OCR text). size="preview" (default): up to 1024 px;
+    "thumb": the 400 px thumbnail. Other types show through their renderer (a PDF's first page, an
+    STL render, a video frame). Errors: bad_size, not_viewable (redacted, or no picture).
     """
     if size not in thumbnails.VIEW_SIZES:
         raise InvalidInput(f"size must be one of: {', '.join(thumbnails.VIEW_SIZES)}", code="bad_size")
@@ -840,19 +1107,12 @@ def constructicon_view(slug: str, size: str = "preview") -> list[McpImage | str]
 
 @mcp.tool()
 def constructicon_set_caption(slug: str, text: str, accept: bool = False) -> dict:
-    """Write a caption for an item (#588), for an agent that has looked at it (constructicon_view).
-    Works with CAPTION_DISABLED: no model runs.
-
-    The text is stored as the item's caption SUGGESTION (type_metadata.auto_caption, status "done",
-    model "mcp-agent"; change log actor "mcp"), so it shows up in the caption-review queue
-    (/captions/review) for the owner to approve, and the processing view reads it as done.
-    accept=True ALSO sets content_description to the text, exactly like "Use this caption" in that
-    review page (replaces the description, records which caption was used), so it is accepted in
-    one call. One change-log batch: constructicon_undo(batch_id) reverts all of it.
-
-    text: 1 to 2000 characters after trimming. Errors: not_found, bad_caption (empty or too long),
-    redacted. Returns the updated object plus "batch_id", "accepted" and "in_review_queue" (false
-    when the item already has a description, since the review queue only lists undescribed items).
+    """Write a caption for an item you have looked at (constructicon_view). No model runs.
+    The text becomes the item's caption SUGGESTION (type_metadata.auto_caption, model "mcp-agent"),
+    which waits in the owner's caption review. accept=true also sets content_description to it
+    (like "Use this caption"). Workflow: constructicon_needs(view="caption") -> view -> set_caption.
+    text: 1-2000 characters. Errors: bad_caption, redacted.
+    Returns the item plus batch_id, accepted, in_review_queue.
     """
     row = items.get_item(slug)
     policy.require_view(row, message=f"No item {slug!r}.")  # #557
@@ -861,144 +1121,258 @@ def constructicon_set_caption(slug: str, text: str, accept: bool = False) -> dic
             "in_review_queue": not (result.item.get("content_description") or "").strip()}
 
 
-@mcp.tool()
-def constructicon_redact(slug: str) -> dict | None:
-    """Remove a file while keeping its metadata (for sensitive content cleanup).
+_DESTRUCTIVE = ToolAnnotations(destructiveHint=True)
 
-    The file is HELD in the trash with no expiry: never auto-deleted, and constructicon_empty_trash
-    skips it. The owner decides: constructicon_recover_redacted(slug) restores it,
-    constructicon_delete_redacted_file(slug, confirm=True) erases it for good.
-    Metadata (description, tags, etc.) is preserved. Returns the object plus "batch_id";
-    errors: not_found, no_file.
-    """
+
+def _redact(slug):
     result = items.redact(slug)
     return {**_to_public(result.item), "batch_id": result.batch_id}
 
 
-@mcp.tool()
-def constructicon_unredact(slug: str) -> dict | None:
-    """Reverse of constructicon_redact (#282): clear the redacted flag so the
-    object shows up in searches, project listings and tag walks again.
-
-    Visibility only: it does NOT bring the file back, and it is for redactions whose file is
-    already gone. While the file is still held it refuses (redact_hold_exists): use
-    constructicon_recover_redacted to restore it, or constructicon_delete_redacted_file first.
-    Returns the updated object; errors: not_found, not_redacted, redact_hold_exists.
-    """
+def _unredact(slug):
     return _to_public(items.unredact(slug).item)
 
 
-@mcp.tool()
-def constructicon_recover_redacted(slug: str) -> dict:
-    """Recover a redacted object's held file and un-redact it: the object is exactly as it was
-    before the redact (file, stored_filename, visible). Returns the object plus "batch_id" (undo
-    re-holds the file). Errors: not_found, not_redacted, no_redact_hold (the file was already
-    permanently deleted, or the redaction predates held files)."""
+def _recover_redacted(slug):
     result = items.recover_redacted(slug)
     return {**_to_public(result.item), "batch_id": result.batch_id}
 
 
-@mcp.tool()
-def constructicon_delete_redacted_file(slug: str, confirm: bool = False) -> dict:
-    """PERMANENTLY delete a redacted object's held file. Pass confirm=true. The object stays
-    redacted with metadata only; constructicon_recover_redacted refuses afterwards. Not undoable.
-    Returns {"deleted": true, "slug", "bytes"}; errors: confirm_required, not_found, no_redact_hold."""
+def _delete_redacted_file(slug, confirm):
     result = items.delete_redacted_file(slug, confirm)
     return {"deleted": True, "slug": slug, "bytes": result.data["bytes"]}
 
 
-@mcp.tool()
-def constructicon_list_redacted() -> list[dict]:
-    """List every redacted object (#282).
-
-    Redacted objects are hidden from constructicon_search,
-    constructicon_get_project and constructicon_get_posts_for_tag; this is
-    the only listing that includes them. constructicon_get still works for
-    one by slug.
+@mcp.tool(selector="action", annotations=_DESTRUCTIVE)
+def constructicon_redact(slug: str, action: typing.Literal["redact", "unredact", "recover", "delete_file"] = "redact",
+                         confirm: bool = False) -> dict:
+    """Remove an item's file but keep its metadata (sensitive-content cleanup), and what follows:
+    "redact" (default): the file is HELD in the trash, no expiry (empty-trash skips it), and the
+      item is hidden from every listing. -> the item + batch_id.
+    "recover": file back, un-redacted, exactly as before. -> the item + batch_id.
+      Error no_redact_hold (the file was already deleted for good).
+    "delete_file": PERMANENTLY erase the held file; needs confirm=true; NOT undoable. The item
+      stays redacted, metadata only. -> {deleted: true, slug, bytes}. Error confirm_required.
+    "unredact": visibility only, for a redaction whose file is already gone (refused with
+      redact_hold_exists while a file is held: recover or delete_file first). -> the item.
+    Errors: no_file, not_redacted. List them: constructicon_list_items(which="redacted").
     """
-    return [_to_public_listed(r) for r in db.list_redacted()]
+    if action == "redact":
+        _only_for('action="redact"', confirm=(confirm, False))
+        return _redact(slug)
+    if action == "unredact":
+        _only_for('action="unredact"', confirm=(confirm, False))
+        return _unredact(slug)
+    if action == "recover":
+        _only_for('action="recover"', confirm=(confirm, False))
+        return _recover_redacted(slug)
+    if action == "delete_file":
+        return _delete_redacted_file(slug, confirm)
+    raise InvalidInput(f"Unknown action {action!r}: use redact, unredact, recover or delete_file.")
 
 
-@mcp.tool()
-def constructicon_list_restricted() -> list[dict]:
-    """List every sensitive object: private keys, certificates, CSRs (#443), plus every item flagged
-    "This is sensitive" (#603, constructicon_set_sensitive).
+@mcp.tool(alias_of=("constructicon_redact", "unredact"))
+def constructicon_unredact(slug: str) -> dict | None:
+    return _unredact(slug)
 
-    Restricted types stay out of constructicon_search and tag walks (flagged items are found there
-    by admins and their uploader only), and none is ever exported to the public site, but they DO
-    appear in constructicon_get_project for projects they're attached to (e.g. a repo's deploy key).
-    This is the full list. Each entry adds "projects" (titles and slugs it's attached to) and
-    `sensitive_reason` ({kind: "type", type} or {kind: "flag", by, at}).
-    """
+
+@mcp.tool(alias_of=("constructicon_redact", "recover"))
+def constructicon_recover_redacted(slug: str) -> dict:
+    return _recover_redacted(slug)
+
+
+@mcp.tool(alias_of=("constructicon_redact", "delete_file"))
+def constructicon_delete_redacted_file(slug: str, confirm: bool = False) -> dict:
+    return _delete_redacted_file(slug, confirm)
+
+
+def _list_redacted(text_chars=TEXT_PREVIEW_CHARS):
+    """Every redacted item (#282): the only listing that includes them (an admin listing)."""
+    return [_to_public_listed(r, text_chars=text_chars) for r in db.list_redacted()]
+
+
+def _list_restricted(text_chars=TEXT_PREVIEW_CHARS):
+    """Every sensitive item (#443 types, #603 flags), with the cards each is on (an admin listing)."""
     return [
-        {**_to_public_listed(r), "projects": [{"title": p["title"], "slug": p["slug"]} for p in db.list_projects_for_post(r["slug"])]}
+        {**_to_public_listed(r, text_chars=text_chars),
+         "projects": [{"title": p["title"], "slug": p["slug"]} for p in db.list_projects_for_post(r["slug"])]}
         for r in db.list_restricted()
     ]
 
 
-@mcp.tool()
-def constructicon_delete(slug: str) -> dict:
-    """Delete an object: its row, its project/tag/relation/revision-chain/blog links and any
-    open question about it. #541: the file goes to the trash for 7 days; until it is purged,
-    constructicon_undo(batch_id) restores everything (row, links and file). After that the
-    undo answers trash_expired.
-    Returns {"deleted": true, "batch_id", "expires_at"}; an unknown slug returns not_found."""
-    result = items.delete([slug])
-    return {"deleted": True, "batch_id": result.batch_id, "expires_at": result.data["expires_at"]}
+def _list_brand_assets(text_chars=TEXT_PREVIEW_CHARS):
+    assets = policy.filter_visible(db.list_brand_assets())  # #557
+    return [
+        {**_to_public_listed(asset, text_chars=text_chars), "is_brand_asset": bool(asset.get("is_brand_asset")),
+         "brand_role": asset.get("brand_role")}
+        for asset in assets
+    ]
 
 
-@mcp.tool()
-def constructicon_delete_multiple(slugs: list[str]) -> dict:
-    """Delete multiple objects by slug, as ONE undoable batch (files to the trash for 7 days,
-    like constructicon_delete). Unknown slugs are silently skipped.
-    Returns {"deleted": count, "batch_id"}.
+def _posts_for_tag(tag_name, text_chars):
+    tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
+    if tag is None:
+        raise NotFound(f"No such tag: {tag_name!r}")
+    rows = db.list_posts_for_tag(tag["id"], limit=10000)  # the policy's browse clause applies in db
+    return [_to_public_listed(r, text_chars=text_chars) for r in policy.filter_visible(rows)]  # #557
+
+
+@mcp.tool(selector="which")
+def constructicon_list_items(which: typing.Literal["redacted", "restricted", "brand_assets", "tag"],
+                             tag: str | None = None, text_chars: int = TEXT_PREVIEW_CHARS) -> list[dict]:
+    """List items of one kind (listed shape, text previews):
+    "tag": everything tagged `tag` or any tag under it (walks the tag tree; tag required).
+    "brand_assets": logos, icons and other brand assets, with is_brand_asset and brand_role.
+    "redacted": every redacted item (the only listing that has them; admin).
+    "restricted": every sensitive item (keys, certificates, items marked sensitive), each with
+      `projects` [{title, slug}] and `sensitive_reason` (admin).
+    E.g. constructicon_list_items(which="tag", tag="3D Printing").
     """
+    chars = text_chars_arg(text_chars)
+    if which == "tag":
+        if not (tag or "").strip():
+            raise InvalidInput('which="tag" needs tag (a tag name).')
+        return _posts_for_tag(tag, chars)
+    _only_for(f'which="{which}"', tag=(tag, None))
+    if which == "redacted":
+        return _list_redacted(chars)
+    if which == "restricted":
+        return _list_restricted(chars)
+    if which == "brand_assets":
+        return _list_brand_assets(chars)
+    raise InvalidInput(f"Unknown which {which!r}: use tag, brand_assets, redacted or restricted.")
+
+
+@mcp.tool(alias_of=("constructicon_list_items", "redacted"))
+def constructicon_list_redacted() -> list[dict]:
+    return _list_redacted()
+
+
+@mcp.tool(alias_of=("constructicon_list_items", "restricted"))
+def constructicon_list_restricted() -> list[dict]:
+    return _list_restricted()
+
+
+def _delete_target(args):
+    """Which delete a call asks for (its role row in ACTION_ROLES)."""
+    if args.get("everything"):
+        return "everything"
+    return next((k for k in ("slugs", "card", "blog_entry") if args.get(k) is not None), "slug")
+
+
+def _delete_card(card, dry_run, batch_id):
+    res = cards.delete_card(card, dry_run=dry_run, batch_id=batch_id)
+    return {**res.to_dict(), **res.data}
+
+
+@mcp.tool(selector=(_delete_target, ("slug", "slugs", "card", "blog_entry", "everything")),
+          annotations=_DESTRUCTIVE)
+def constructicon_delete(slug: str | None = None, slugs: list[str] | None = None, card: str | int | None = None,
+                         blog_entry: str | None = None, everything: bool = False, confirm: str | None = None,
+                         missing_ok: bool = False, dry_run: bool = False, batch_id: str | None = None) -> dict:
+    """Delete ONE kind of thing per call (undoable unless said otherwise):
+    slug="x": an item, with its card/tag/relation/revision/blog links and open questions. The file
+      goes to the trash for 7 days; undo restores all of it (after that: trash_expired).
+      -> {deleted: true, batch_id, expires_at}.
+    slugs=[...]: several items in one batch; unknown slugs are not_found unless missing_ok=true
+      (then skipped). -> {deleted: <count>, slugs, batch_id, expires_at}.
+    card=<id or slug>: a card. Its blank write-up goes too (a written one stays, with a warning);
+      links, memberships and blog attachments go; nested cards stand alone; files stay.
+      -> {ok, dry_run, changes, warnings, batch_id, deleted, children_orphaned, items_detached, writeup}.
+    blog_entry=<slug>: a blog entry (its cards and files stay). -> {deleted: true, slug, batch_id}.
+    everything=true AND confirm="DELETE EVERYTHING", nothing else: WIPE THE WHOLE ARCHIVE (items,
+      files, cards, tags, hobbies, blog, questions, trash). PERMANENT, NOT undoable; settings,
+      users and the change log stay. Either one alone is refused. Back up first
+      (constructicon_backup). -> {deleted, counts, files_removed, trash_removed, batch_id}.
+    dry_run and batch_id work for every kind except everything.
+    """
+    targets = [k for k, v in (("slug", slug), ("slugs", slugs), ("card", card), ("blog_entry", blog_entry))
+               if v is not None]
+    if everything:
+        if targets:
+            raise InvalidInput(f"everything=true wipes the whole archive and takes no other target (got "
+                               f"{', '.join(targets)}). Nothing was deleted.")
+        if confirm != reset.CONFIRM_PHRASE:
+            raise errors.AppError("confirm_required", "Wiping the whole archive needs BOTH everything=true AND "
+                                  f"confirm=\"{reset.CONFIRM_PHRASE}\". Nothing was deleted.", status=400)
+        _only_for("everything=true (it is permanent: no dry run, no batch to join)",
+                  dry_run=(dry_run, False), batch_id=(batch_id, None), missing_ok=(missing_ok, False))
+        return reset.delete_everything(confirm)
+    if confirm is not None:
+        raise InvalidInput(f"confirm is only for everything=true (the whole-archive wipe); "
+                           f"{'without everything=true it wipes nothing' if confirm == reset.CONFIRM_PHRASE else 'it is not needed here'}. "
+                           "Nothing was deleted.")
+    if len(targets) != 1:
+        raise InvalidInput("Pass exactly one of slug, slugs, card or blog_entry (or everything=true with "
+                           f"confirm=\"{reset.CONFIRM_PHRASE}\"). Nothing was deleted.")
+    target = targets[0]
+    if target != "slugs":
+        _only_for(f"{target}=", missing_ok=(missing_ok, False))
+    extra = {"dry_run": True} if dry_run else {}
+    if target == "slug":
+        result = items.delete([slug], dry_run=dry_run, batch_id=batch_id)
+        return {"deleted": True, "batch_id": result.batch_id, "expires_at": result.data["expires_at"], **extra}
+    if target == "slugs":
+        if isinstance(slugs, str):
+            raise InvalidInput("slugs must be a list; for one item pass slug=.")
+        result = items.delete(slugs, missing_ok=missing_ok, dry_run=dry_run, batch_id=batch_id)
+        return {"deleted": result.data["deleted"], "slugs": result.data["slugs"], "batch_id": result.batch_id,
+                "expires_at": result.data["expires_at"], **extra}
+    if target == "card":
+        return _delete_card(card, dry_run, batch_id)
+    res = blog.delete(blog_entry, dry_run=dry_run, batch_id=batch_id)
+    return {"deleted": True, "slug": res.data["deleted"], "batch_id": res.batch_id, **extra}
+
+
+@mcp.tool(alias_of=("constructicon_delete", "slugs"))
+def constructicon_delete_multiple(slugs: list[str]) -> dict:
     result = items.delete(slugs, missing_ok=True)
     return {"deleted": result.data["deleted"], "batch_id": result.batch_id}
 
 
-@mcp.tool()
-def constructicon_list_trash() -> dict:
-    """What the trash holds (#541). Ordinary deletes, kept 7 days so the delete can be undone:
-    {count, bytes, oldest, next_expiry, days, items: [{slug, title, batch_id, reason,
-    size_bytes, created_at, expires_at}]}. Redact holds (no expiry, kept until the owner
-    recovers or deletes them) are listed separately under `held`: {count, bytes, items}.
-    Undo a delete with constructicon_undo(batch_id)."""
-    return items.trash_summary()
+@mcp.tool(alias_of=("constructicon_delete", "everything"), annotations=_DESTRUCTIVE)
+def constructicon_delete_all(confirm: str = "") -> dict:
+    return reset.delete_everything(confirm)
 
 
-@mcp.tool()
-def constructicon_empty_trash(confirm: str) -> dict:
-    """Permanently purge every ORDINARY deleted object's file now (#541). Pass confirm="EMPTY TRASH".
-    Redact holds are NOT touched (they wait for the owner). The deletes those files came from
-    can no longer be undone (trash_expired). Returns {purged, bytes, slugs, held_kept, message};
-    a wrong phrase returns confirm_required."""
+def _empty_trash(confirm):
     r = items.empty_trash(confirm)
     return {**r, "message": f"Purged {r['purged']} deleted item(s) ({r['bytes']} bytes). "
                             f"{r['held_kept']} redacted file(s) are still held (not touched)."}
 
 
-@mcp.tool()
-def constructicon_delete_all(confirm: str = "") -> dict:
-    """Wipe the whole archive: every object (and its files), card, tag, hobby, blog entry,
-    question and the trash. A full reset: permanent, NOT undoable, nothing goes to the trash.
-
-    Pass confirm="DELETE EVERYTHING" (the same typed phrase /admin asks for); anything else
-    returns confirm_required and changes nothing. Call constructicon_backup first if you want to
-    keep the current content. Settings, users, provenance lists and the change log are
-    kept. Returns {deleted, counts: {table: rows}, files_removed, trash_removed, batch_id}; one
-    change-log row (op delete_all) records the counts.
+@mcp.tool(selector="action", annotations=_DESTRUCTIVE)
+def constructicon_trash(action: typing.Literal["list", "empty"] = "list", confirm: str | None = None) -> dict:
+    """The trash. Deleted items' files wait there 7 days (undo brings them back); redacted files
+    are held until the owner decides.
+    "list" (default): {count, bytes, oldest, next_expiry, days, items: [{slug, title, batch_id,
+      reason, size_bytes, created_at, expires_at}], held: {count, bytes, items}}.
+    "empty": PERMANENTLY purge every ordinary deleted file now; needs confirm="EMPTY TRASH".
+      Redact holds are not touched; those deletes can no longer be undone.
+      -> {purged, bytes, slugs, held_kept, message}. Error confirm_required.
     """
-    return reset.delete_everything(confirm)
+    if action == "list":
+        _only_for('action="list"', confirm=(confirm, None))
+        return items.trash_summary()
+    if action == "empty":
+        return _empty_trash(confirm or "")
+    raise InvalidInput(f"Unknown action {action!r}: use list or empty.")
+
+
+@mcp.tool(alias_of=("constructicon_trash", "list"))
+def constructicon_list_trash() -> dict:
+    return items.trash_summary()
+
+
+@mcp.tool(alias_of=("constructicon_trash", "empty"))
+def constructicon_empty_trash(confirm: str) -> dict:
+    return _empty_trash(confirm)
 
 
 @mcp.tool()
 def constructicon_backup() -> dict:
-    """Create a timestamped backup of the entire database and storage.
-
-    Returns {"filename": ..., "path": ..., "size": ..., "created_at": ...}
-    (see core.backup.create_backup).
-    """
+    """Back up the whole database and storage to a timestamped zip:
+    {filename, path, size, created_at, integrity}."""
     return backup.create_backup()
 
 
@@ -1006,17 +1380,10 @@ def constructicon_backup() -> dict:
 def constructicon_add_content(media_type: str, external_url: str | None = None, content_description: str | None = None,
                            description: str = "", tags: list[str] | None = None,
                            uploaded_by: str = db.SOURCE_AUTHORED, sensitive: bool = False) -> dict:
-    """Create an object with no uploaded file (e.g., a YouTube link or external document).
-
-    Use constructicon_upload instead for file-backed content. sensitive (#603) locks it from
-    the start (only admins see it).
-
-    For OCR-capable types, OCR runs in the background (#225) -- the returned
-    object has ocr_status "pending"; read it back with constructicon_get later.
-
-    Returns a JSON object with the new object's metadata; a refusal returns the shared
-    error shape (code content_refused).
-    Unknown media_type values are rejected (issue #448).
+    """Create an item with no uploaded file: a YouTube link, a web page, a written post.
+    media_type must be a type that takes no file (e.g. "youtube"); external_url its link;
+    content_description its own title. Files go through constructicon_upload. sensitive locks it
+    from the start. Text extraction runs in the background. Error: content_refused.
     """
     result = ingest.ingest_content(
         source=uploaded_by,
@@ -1037,69 +1404,56 @@ def constructicon_add_content(media_type: str, external_url: str | None = None, 
     return _to_public(result.row)
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update", None))
 def constructicon_set_sensitive(slug: str, sensitive: bool = True, dry_run: bool = False) -> dict:
-    """Mark an item "This is sensitive" (#603), or clear that flag.
-
-    A flagged item is locked exactly like a key or a certificate: only admins and the user who
-    uploaded it see it, on every page, hotlink, thumbnail, search, export and MCP read; it is never
-    offered by constructicon_list_needs_caption. Marking is any editor; clearing is admin only (the
-    MCP acts as admin with the install token). One change-log entry: constructicon_undo(batch_id)
-    reverses it. Opening a sensitive item (get / download / view) is recorded in its access log.
-    Returns {ok, dry_run, batch_id, slug, sensitive, changed: [slugs actually changed], item}.
-    Errors: not_found (no such item, or one you may not see), forbidden (clearing without admin).
-    """
     result = items.set_sensitive(slug, sensitive, dry_run=dry_run)
     return {"ok": True, "dry_run": dry_run, "batch_id": result.batch_id, "slug": slug,
             "sensitive": result.data["sensitive"], "changed": result.data["changed"],
             "item": _to_public(result.item) if result.item else None}
 
 
-@mcp.tool()
+def _relate(slug, other):
+    policy.viewable_rows([slug, other])  # #709: missing = not_found, not visible = forbidden (says why)
+    items.relate(slug, other)  # #541 phase C: one undoable batch (link + what it shares)
+    return _related_listed(slug)
+
+
+def _unrelate(slug, other):
+    items.unrelate(slug, other)  # a door in core (#709)
+    return _related_listed(slug)
+
+
+@mcp.tool(selector="action")
+def constructicon_related(slug: str, other: str, action: typing.Literal["add", "remove"] = "add") -> list[dict]:
+    """Link two items as related (both directions), or unlink them.
+    "add" (default): also shares their tags and card memberships both ways, as one batch (undo
+      takes all of it back). "remove": the link only; what it shared stays.
+    Returns the items now related to `slug` (listed shape). To read them:
+    constructicon_get(slug, include=["related"]).
+    """
+    if action == "add":
+        return _relate(slug, other)
+    if action == "remove":
+        return _unrelate(slug, other)
+    raise InvalidInput(f"Unknown action {action!r}: use add or remove.")
+
+
+@mcp.tool(alias_of=("constructicon_related", "add"))
 def constructicon_add_related(slug: str, related_slug: str) -> list[dict]:
-    """Link two objects as related (bidirectional).
-
-    Also merges tags and project membership between the two.
-    Returns the updated list of related objects.
-    """
-    policy.viewable_rows([slug, related_slug])  # #709: missing = not_found, not visible = forbidden (says why)
-    items.relate(slug, related_slug)  # #541 phase C: one undoable batch (link + what it shares)
-    return [_to_public_listed(r) for r in db.list_related(slug)]
+    return _relate(slug, related_slug)
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_related", "remove"))
 def constructicon_remove_related(slug: str, related_slug: str) -> list[dict]:
-    """Remove a related-object link (both directions). The tags and projects the link shared
-    stay; undo the add (constructicon_undo) to take those back too.
-
-    Returns the updated list of related objects.
-    """
-    items.unrelate(slug, related_slug)
-    return [_to_public_listed(r) for r in db.list_related(slug)]
-
-
-@mcp.tool()
-def constructicon_get_related(slug: str) -> list[dict]:
-    """Get all objects related to this one.
-
-    Returns a list of related objects, both manually linked and auto-detected.
-    """
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
-    policy.require_view(row, message=f"No item {slug!r}.")  # #557
-    return [_to_public_listed(r) for r in policy.filter_visible(db.list_related(slug))]
+    return _unrelate(slug, related_slug)
 
 
 @mcp.tool()
 def constructicon_list_projects(kind: str | None = None, activity: str | None = None,
                                 stage: str | None = None) -> list[dict]:
-    """List all projects (cards), most-recently-updated first.
-
-    Optional filters on the live V2 status: kind (project|thing|action|family|
-    collection|event), activity (active|inactive), stage (in_progress|in_use|idea|
-    paused|done|stopped). Each card carries kind, activity, stage, stop_reason,
-    their labels, and needs_input (true while a question about it is still open).
+    """All cards, most recently updated first. Filters: kind (project | thing | action | family |
+    collection | event), activity (active | inactive), stage (in_progress | in_use | idea | paused |
+    done | stopped). Each card has its status fields and labels, and needs_input (an open question).
     """
     return [_to_public_project(p) for p in db.list_projects(kind=kind, activity=activity, stage=stage)]
 
@@ -1107,20 +1461,11 @@ def constructicon_list_projects(kind: str | None = None, activity: str | None = 
 @mcp.tool()
 def constructicon_create_project(title: str, description: str = "", cover_slug: str | None = None, parent_id: int | None = None,
                                  kind: str | None = None, stage: str | None = None, stop_reason: str | None = None) -> dict:
-    """Create a new project (card).
-
-    Also creates a root-level tag with the same name and links it, so tagged
-    objects surface through both project and tag browsing.
-
-    parent_id optionally makes this card "part of" a parent card (#133). Nesting
-    rules apply (a family or collection can't be a parent or be nested; the parent
-    must exist): a violation returns {"ok": false, "error": {"code": "nest_group_kind"
-    | "not_found", ...}}.
-
-    kind: project (default) | thing | action | family | collection | event.
-    stage: in_progress (default) | in_use | idea | paused | done | stopped
-    (stopped needs stop_reason failed|abandoned). Invalid combinations return
-    {"ok": false, "error": {"code": "bad_status", ...}}.
+    """Create a card, with a root tag of the same name linked to it and a blank write-up, as one
+    batch. kind: project (default) | thing | action | family | collection | event. stage:
+    in_progress (default) | in_use | idea | paused | done | stopped (stopped needs stop_reason
+    failed | abandoned). parent_id makes it "part of" that card (a family/collection can't nest or
+    be a parent: nest_group_kind). Errors: bad_status, not_found. Returns the card + batch_id.
     """
     # #541 phase D: core validates everything first; tag + card + write-up are ONE undoable batch.
     result = cards.create(title, description=description, cover_slug=cover_slug, parent=parent_id,
@@ -1128,32 +1473,77 @@ def constructicon_create_project(title: str, description: str = "", cover_slug: 
     return {**_to_public_project(result.data["card"]), "batch_id": result.batch_id}
 
 
+# #746: what constructicon_update_project(fields={...}) takes beyond its named parameters.
+CARD_FIELDS = {
+    "activity": (str, type(None)),
+    "force_kind": (bool,),
+    "whereabouts": (str, type(None)),
+    "whereabouts_note": (str, type(None)),
+    "provenance": (str, type(None)),
+    "provenance_credit": (str, type(None)),
+    "highlight": (bool,),
+    "home": (str, int, type(None)),
+    "synopsis": (str, type(None)),
+    "flavor": (str, type(None)),
+    "writeup_slug": (str,),
+    "owner_words": (bool,),
+}
+
+
+def _set_writeup(project, slug, owner_words, batch_id):
+    """#541 phase D: the write-up item goes on the card (no side effects), the owner-words mark, and
+    writeup_slug: the caller's transaction and batch. Returns the card row after."""
+    row = policy.viewable_rows([slug])[0][0]  # #709: missing = not_found, not visible = forbidden (says why)
+    if not object_types.can_be_writeup(row):
+        label = object_types.get_object_type(row.get("media_type")).label
+        raise ValueError(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
+    membership.add_files(project["id"], [slug], batch_id=batch_id, **membership.NO_EFFECTS)
+    if owner_words is not None:
+        items.update(slug, type_metadata={"owner_words": bool(owner_words)}, batch_id=batch_id)
+    return cards.update(project["id"], writeup_slug=slug, batch_id=batch_id)
+
+
 @mcp.tool()
-def constructicon_update_project(project_id: str | int, title: str | None = None,
+def constructicon_update_project(project_id: str | int | None = None, title: str | None = None,
                                  description: str | None = None, cover_slug: str | None = None,
                                  status: str | None = None, start_date: float | None = None,
                                  reset_start_date: bool = False, end_date: float | None = None,
                                  reset_end_date: bool = False, kind: str | None = None,
-                                 stage: str | None = None, stop_reason: str | None = None) -> dict | None:
-    """Update a project's metadata, including its timeline span.
-
-    kind / stage / stop_reason set the live V2 status through the same rules as
-    constructicon_set_kind / constructicon_set_status (a violation returns
-    {"ok": false, "error": {code, message}}). `status` is the DEPRECATED v1 word
-    (wip, complete, shelved, ...): it is translated to a stage (a warning says so).
-
-    start_date/end_date set manual overrides for this project's position on the Constructicon
-    timeline (unix timestamps). reset_start_date/reset_end_date each clear that one override,
-    reverting it to the computed default (earliest/latest item date, falling back to the
-    project's created_at when it has no items) — a reset flag wins over its corresponding
-    date param if both are passed.
-
-    Returns the updated project; a missing one returns the not_found error.
+                                 stage: str | None = None, stop_reason: str | None = None,
+                                 card: str | int | None = None, fields: dict | None = None,
+                                 dry_run: bool = False) -> dict:
+    """Edit a card, every change in ONE batch, applied in order (kind, status, whereabouts,
+    provenance, highlight, home, face text, write-up, then title and the rest).
+    card (or project_id): its id or slug. Parameters left out (None) are left alone.
+    kind: project | thing | action | family | collection | event. stage: in_progress | in_use
+    (active) | idea | paused | done | stopped (inactive); stopped needs stop_reason failed |
+    abandoned; an event can't be in_use or paused. status: the old v1 word (wip, complete,
+    shelved ...), translated to a stage with a warning.
+    start_date / end_date: timeline overrides (unix seconds); reset_start_date / reset_end_date clear.
+    fields: more fields, key present = set it, absent = leave it; null or "" clears:
+      activity (must agree with the stage), force_kind (bool: leave a family/collection that has
+      members), whereabouts (have_it | partial | parted_out | sold | gifted | lost | never_built;
+      thing / project / collection only), whereabouts_note, provenance (an active card key,
+      constructicon_list_provenance_options(scope="card")), provenance_credit, highlight (bool),
+      home ("card:<slug>" | "hobby:<slug>" | a card; null = automatic), synopsis (max 600: a few
+      sentences saying what the card is; set it whenever you write a write-up), flavor (one italic
+      line, max 140), writeup_slug (an item that can be a write-up; it joins the card),
+      owner_words (bool: the write-up is the owner's own words).
+    E.g. fields={"whereabouts": "have_it", "synopsis": "A 3D-printed rover."}.
+    dry_run=true answers as the call would and writes nothing.
+    Returns the card plus batch_id, changes and warnings (if any). Codes: bad_status, bad_kind,
+    bad_whereabouts, bad_provenance, bad_home, bad_card_text, unknown_field.
     """
+    if (project_id is None) == (card is None):
+        raise InvalidInput("Pass the card as card= (or project_id=), exactly one of them.")
+    ref = card if card is not None else project_id
     card_warnings = []
-    project = db.get_project(project_id)
+    project = db.get_project(ref)
     if project is None:
-        raise NotFound(f"No card {project_id!r}.")
+        raise NotFound(f"No card {ref!r}.")
+    f = _fields_arg(fields, CARD_FIELDS, "constructicon_update_project")
+    if "force_kind" in f and not kind:
+        raise InvalidInput("fields.force_kind only goes with kind=.")
     if status:
         legacy = card_rules.legacy_to_status(status)
         kind = kind or legacy["kind"]
@@ -1162,29 +1552,56 @@ def constructicon_update_project(project_id: str | int, title: str | None = None
         card_warnings.extend(legacy["warnings"])
     new_start = None if reset_start_date else (start_date if start_date is not None else ...)
     new_end = None if reset_end_date else (end_date if end_date is not None else ...)
+    cid = project["id"]
+    take = _Collect()
     # #541 phase D: one transaction, one batch (one constructicon_undo reverses the whole call).
+    # #746: a dry run is the same calls rolled back, so each step sees what the earlier ones did.
     batch_id = changes.new_batch_id()
-    with db.transaction():
+    with db.transaction(dry_run=dry_run):
         if kind:
-            card_warnings.extend(cards.set_kind(project["id"], kind, batch_id=batch_id).warnings)
-        if stage or stop_reason:
-            card_warnings.extend(cards.set_status(project["id"], stage, stop_reason, batch_id=batch_id).warnings)
-        cards.update(project["id"], title=title, description=description, cover_slug=cover_slug,
-                     start=new_start, end=new_end, batch_id=batch_id)
-    result = {**_to_public_project(db.get_project(project["id"])), "batch_id": batch_id}
+            take(cards.set_kind(cid, kind, force=f.get("force_kind", False), batch_id=batch_id))
+        if stage or stop_reason or "activity" in f:
+            if not (stage or stop_reason):  # activity alone: checked against the current stage
+                now = db.get_project(cid)
+                stage, stop_reason = now.get("stage"), now.get("stop_reason")
+            take(cards.set_status(cid, stage, stop_reason, activity=f.get("activity"), batch_id=batch_id))
+        if "whereabouts" in f or "whereabouts_note" in f:
+            now = db.get_project(cid)
+            take(cards.set_whereabouts(cid, f["whereabouts"] if "whereabouts" in f else now.get("whereabouts"),
+                                       f["whereabouts_note"] if "whereabouts_note" in f else ...,
+                                       batch_id=batch_id))
+        if "provenance" in f or "provenance_credit" in f:
+            now = db.get_project(cid)
+            take(cards.set_provenance(cid, f["provenance"] if "provenance" in f else now.get("provenance"),
+                                      f["provenance_credit"] if "provenance_credit" in f else ...,
+                                      batch_id=batch_id))
+        if "highlight" in f:
+            take(cards.set_highlight(cid, f["highlight"], batch_id=batch_id))
+        if "home" in f:
+            take(cards.set_home(cid, f["home"], batch_id=batch_id))
+        if "synopsis" in f or "flavor" in f:
+            take(cards.set_text(cid, synopsis=f.get("synopsis", ...), flavor=f.get("flavor", ...), batch_id=batch_id))
+        if "writeup_slug" in f:
+            take(_set_writeup(project, f["writeup_slug"], f.get("owner_words"), batch_id))
+        elif "owner_words" in f:
+            current = db.get_project(cid).get("writeup_slug")
+            if not current:
+                raise InvalidInput("This card has no write-up yet: pass fields.writeup_slug too.")
+            take(items.update(current, type_metadata={"owner_words": f["owner_words"]}, batch_id=batch_id))
+        take(cards.update(cid, title=title, description=description, cover_slug=cover_slug,
+                          start=new_start, end=new_end, batch_id=batch_id))
+        result = {**_to_public_project(db.get_project(cid)), "batch_id": None if dry_run else batch_id}
+    collected = take.result()
+    result["changes"] = collected["changes"]
+    card_warnings.extend(collected["warnings"])
     if card_warnings:
         result["warnings"] = card_warnings
+    if dry_run:
+        result["dry_run"] = True
     return result
 
 
-@mcp.tool()
-def constructicon_add_to_project(slug: str, project_id: str | int) -> list[dict]:
-    """Add an object to a project, exactly like the web app's item page.
-
-    If the project has a linked tag, the object is tagged with it (and the tag name joins its
-    free-text tags), and a project with no cover takes this object as its cover. Undoable as
-    one batch (constructicon_undo). Returns the object's updated project list.
-    """
+def _add_to_project(slug, project_id):
     policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     if db.get_project(project_id) is None:
         raise NotFound(f"No card {project_id!r}.")
@@ -1192,12 +1609,7 @@ def constructicon_add_to_project(slug: str, project_id: str | int) -> list[dict]
     return [_to_public_project(p) for p in db.list_projects_for_post(slug)]
 
 
-@mcp.tool()
-def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[dict]:
-    """Remove an object from a project (does not untag it).
-
-    Returns the object's updated project list.
-    """
+def _remove_from_project(slug, project_id):
     policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     project = db.get_project(project_id)
     if project is None:
@@ -1206,14 +1618,61 @@ def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[
     return [_to_public_project(p) for p in db.list_projects_for_post(slug)]
 
 
-@mcp.tool()
-def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) -> list[dict]:
-    """Add multiple objects to a project in a single call.
-
-    Same effects as constructicon_add_to_project (linked tag, free-text tag name, cover when the
-    project has none), as ONE undoable batch. Unknown slugs are skipped.
-    Returns the list of added objects.
+@mcp.tool(selector="action")
+def constructicon_card_files(card: str | int, slugs: list[str],
+                             action: typing.Literal["add", "remove", "move", "copy"] = "add",
+                             from_card: str | int | None = None, missing_ok: bool = False,
+                             dry_run: bool = False, batch_id: str | None = None) -> dict:
+    """Put files (item slugs) on a card, take them off, or move / copy them between cards.
+    "add" (default): like the web's add-to-card: the files get the card's linked tag (both tag
+      stores) and a card with no cover takes the first. Unknown slugs: not_found, unless
+      missing_ok=true (skipped). -> {ok, dry_run, changes, warnings, batch_id, card, slugs, added,
+      already, skipped, tagged, cover, items: [the files, listed shape]}.
+    "remove": membership only (tags and cover stay). -> {ok, ..., card, removed, items}.
+    "move" / "copy": from from_card to card. A move drops from_card's linked tag and adds card's; a
+      copy keeps the files on from_card and only adds card's tag. A card's own write-up can't move;
+      bad_files if a file isn't on from_card. -> {ok, ..., tags_added, tags_removed}.
+    E.g. constructicon_card_files("rover", ["a1b2", "c3d4"], action="move", from_card="misc").
     """
+    if action in ("move", "copy"):
+        if from_card is None:
+            raise InvalidInput(f'action="{action}" needs from_card (the card the files are on now).')
+        _only_for(f'action="{action}"', missing_ok=(missing_ok, False))
+        op = cards.move_files if action == "move" else cards.copy_files
+        return op(slugs, from_card, card, dry_run=dry_run, batch_id=batch_id).to_dict()
+    if action not in ("add", "remove"):
+        raise InvalidInput(f"Unknown action {action!r}: use add, remove, move or copy.")
+    _only_for(f'action="{action}"', from_card=(from_card, None))
+    if isinstance(slugs, str):
+        raise InvalidInput("slugs must be a list of item slugs.")
+    project = db.get_project(card)
+    if project is None:
+        raise NotFound(f"No card {card!r}.")
+    if not missing_ok:
+        policy.viewable_rows(slugs)  # #709: unknown = not_found, hidden = forbidden (says why), before any write
+    if action == "add":
+        res = membership.add_files(project["id"], slugs, missing_ok=missing_ok, dry_run=dry_run, batch_id=batch_id,
+                                   **membership.UI_EFFECTS)
+        listed = res.data["slugs"]
+    else:
+        res = membership.remove_files(project["id"], slugs, dry_run=dry_run, batch_id=batch_id)
+        listed = res.data["removed"]
+    return {**res.to_dict(), "items": [_to_public_listed(r) for r in policy.filter_visible(
+        [db.get_by_slug(s) for s in listed if db.get_by_slug(s)])]}
+
+
+@mcp.tool(alias_of=("constructicon_card_files", "add"))
+def constructicon_add_to_project(slug: str, project_id: str | int) -> list[dict]:
+    return _add_to_project(slug, project_id)
+
+
+@mcp.tool(alias_of=("constructicon_card_files", "remove"))
+def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[dict]:
+    return _remove_from_project(slug, project_id)
+
+
+@mcp.tool(alias_of=("constructicon_card_files", "add"))
+def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) -> list[dict]:
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
@@ -1221,63 +1680,26 @@ def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) 
     return [_to_public_listed(db.get_by_slug(slug)) for slug in slugs if slug in result.data["slugs"]]
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_words: bool | None = None) -> dict | None:
-    """Set a project's write-up document to a given object.
-
-    The object must exist and be an item whose type declares writeup_body_key
-    (i.e., can serve as a write-up). The item is also added to the project's
-    items if not already present.
-    owner_words (optional): true marks the write-up as holding the OWNER'S OWN wording (the
-    oral-history flow), which earns the card its "owner words" pip (V2 cards 3.11); false
-    clears the mark; omit to leave it alone.
-    Every write-up gets a synopsis (#596): after setting or rewriting a write-up, also give the card
-    a few-sentence synopsis with constructicon_set_card_text (the card face shows it first).
-    Returns the updated project; a missing one returns the not_found error.
-    """
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
-    row = policy.viewable_rows([slug])[0][0]  # #709: missing = not_found, not visible = forbidden (says why)
-    if not object_types.can_be_writeup(row):
-        label = object_types.get_object_type(row.get("media_type")).label
-        raise ValueError(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
-
     # #541 phase D: membership (no side effects, as before) + the owner-words mark + writeup_slug
     # are one transaction and one batch.
     batch_id = changes.new_batch_id()
     with db.transaction():
-        membership.add_files(project["id"], [slug], batch_id=batch_id, **membership.NO_EFFECTS)
-        if owner_words is not None:
-            items.update(slug, type_metadata={"owner_words": bool(owner_words)}, batch_id=batch_id)
-        updated = cards.update(project["id"], writeup_slug=slug, batch_id=batch_id).data["card"]
+        updated = _set_writeup(project, slug, owner_words, batch_id).data["card"]
     return {**_to_public_project(updated), "batch_id": batch_id}
 
 
 @mcp.tool()
 def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREVIEW_CHARS) -> dict | None:
-    """Get a project with full details: metadata, items, tags, cover, and write-up body.
-
-    Each item's (and the cover's) extracted_text is a preview of its first text_chars characters
-    (default 300; 0 = none, at most 5000), with extracted_text_chars (the full length) and
-    extracted_text_truncated (#697); constructicon_get(slug) has one item's whole text. The
-    write-up object is sent whole.
-
-    Returns a comprehensive dict with:
-    - id, slug, title, description, cover_slug, writeup_slug, parent_id
-    - kind, activity, stage, stop_reason (+ labels) and needs_input: the live V2 status;
-      `status` is the frozen legacy v1 word
-    - open_decisions: any still-open questions about this card (with the suggested answer)
-    - families: the families/collections this card is in; members: the members of this
-      card when it is a family or collection; children: cards nested under it ("part of")
-    - links: typed links in both directions (see constructicon_list_links)
-    - items: list of objects in the project (with their tags)
-    - cover: the cover object if cover_slug is set, else None
-    - writeup: the writeup document object if writeup_slug is set, else None
-    - synopsis, flavor, writeup_lead, face_text, face_text_source: what the card FACE's text box
-      shows and where it came from (#596; set them with constructicon_set_card_text)
-
-    A missing card returns the not_found error.
+    """One card in full: its fields and live status (kind, activity, stage, stop_reason + labels,
+    needs_input; `status` is the frozen v1 word), items (with tags; text previews), cover, write-up
+    (whole), open_decisions, families / members / children, links (both directions), and its face
+    text (synopsis, flavor, writeup_lead, face_text, face_text_source). For a read-before-change
+    view with level, needs and recent changes: constructicon_explain_card.
     """
     chars = text_chars_arg(text_chars)
     project = db.get_project(id_or_slug)
@@ -1330,20 +1752,10 @@ def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREV
 
 @mcp.tool()
 def constructicon_list_hobbies() -> list[dict]:
-    """List all hobbies (tags marked is_hobby=1) with their metadata and project counts.
-
-    Each hobby: {id, name, slug, status, group_code, project_count, flags}.
-    status is the manual Active/Inactive switch ('active' | 'inactive'); group_code is the
-    2-4 char code shown on cards. flags are COMPUTED on every call (never stored), a list of
-    {code, label, detail}: inactive_with_active_work (an inactive hobby that has an active
-    project) and active_untouched (an active hobby nothing in has been touched for ~2 years).
-    A flag only points at a mismatch; the owner flips the switch by hand.
-    #686: each also carries its resolved cover: cover_slug (null = none), cover_picked (chosen by
-    hand with constructicon_set_hobby_cover), cover_source (picked | highlighted_project |
-    recent_project | null), cover_project (the project an automatic cover came from),
-    picked_cover_slug and picked_cover_unavailable (a chosen cover that was deleted, redacted or
-    hidden: the automatic one shows instead).
-    Ordered by name."""
+    """All hobbies, by name: {id, name, slug, status (active | inactive, set by hand), group_code,
+    project_count, flags, cover_slug, cover_picked, cover_source (picked | highlighted_project |
+    recent_project | null), cover_project, picked_cover_slug, picked_cover_unavailable}.
+    flags are computed, never stored: inactive_with_active_work, active_untouched (~2 years)."""
     out = []
     for h in db.list_hobbies():
         f = cards.hobby_fields(h)
@@ -1362,33 +1774,13 @@ def constructicon_list_hobbies() -> list[dict]:
 
 @mcp.tool()
 def constructicon_create_hobby(name: str, status: str = "active") -> dict:
-    """Create an empty hobby from just a name (#418).
-
-    Mirrors POST /api/hobbies: creates (or reuses) a top-level blog_tags row with the
-    given name and marks it as a hobby, as one undoable batch (core/hobbies.py). The
-    HTTP route always uses status='active'; this tool also accepts an explicit
-    status so a hobby can be stood up inactive in one call.
-
-    status: 'active' or 'inactive' (default 'active'); the deprecated v1 words
-    'dormant'/'abandoned' are accepted and stored as 'inactive'.
-    Raises ValueError if the name is blank or the status is invalid.
-    Returns the new hobby dict {id, name, slug, status, group_code, batch_id}."""
+    """Create a hobby from a name (a top-level tag, reused if it exists, marked as a hobby).
+    status: active (default) | inactive. Returns {id, name, slug, status, group_code, batch_id}."""
     result = hobbies.create(name, status)
     return {**result.data["hobby"], "batch_id": result.batch_id}
 
 
-@mcp.tool()
-def constructicon_convert_project_to_hobby(project_slug: str, dry_run: bool = False) -> dict | None:
-    """Convert an existing project into a hobby (DESTRUCTIVE, but one undoable batch).
-
-    The project is converted into a hobby tag, its child projects are moved to the hobby
-    via project_hobbies, its items are tagged with the hobby, and the project row is deleted
-    (its links, family rows, blog-entry attachments and a blank write-up are cleared first, as a
-    delete does). constructicon_undo(batch_id) restores the card exactly. The reverse is
-    constructicon_convert_hobby_to_card. dry_run=true reports the changes and writes nothing.
-
-    Returns the new hobby tag dict with a summary of what was moved, plus batch_id and changes;
-    not_found if the project doesn't exist."""
+def _convert_card_to_hobby(project_slug, dry_run):
     project = db.get_project(project_slug)
     if project is None:
         raise NotFound(f"No card {project_slug!r}.")
@@ -1410,43 +1802,118 @@ def constructicon_convert_project_to_hobby(project_slug: str, dry_run: bool = Fa
     }
 
 
-@mcp.tool()
+@mcp.tool(selector="direction")
+def constructicon_convert(direction: typing.Literal["card_to_hobby", "hobby_to_card"], card: str | int | None = None,
+                          hobby: str | int | None = None, kind: str | None = None, title: str | None = None,
+                          into_hobby: str | int | None = None, dry_run: bool = False) -> dict:
+    """Turn a card into a hobby or a hobby into a card, as ONE undoable batch.
+    "card_to_hobby" (card=): the card becomes a hobby tag; nested cards join the hobby, its files
+      get the tag, the card row goes (links, families, blog attachments, a blank write-up cleared).
+      -> {id, name, slug, status, summary: {children_moved, items_moved}, dry_run, batch_id,
+      changes, warnings}.
+    "hobby_to_card" (hobby=, kind = family | collection | project, title (default the hobby's
+      name), into_hobby (a hobby it joins)): the card reuses the hobby's tag; stage follows the
+      hobby (active -> in_progress, inactive -> paused); member cards become family members or
+      nested parts; loose files go onto it; homes that named the hobby name the card; the hobby is
+      unmarked. Refused whole (nothing written): bad_membership, nest_group_kind,
+      nest_second_parent. -> {ok, dry_run, changes, warnings, batch_id, card, card_id, kind,
+      title, into_hobby, hobby, members: [{slug, how}], loose_moved, homes_moved}.
+    E.g. direction="hobby_to_card", hobby="gi-joe", kind="family", into_hobby="collecting".
+    """
+    if direction == "card_to_hobby":
+        if card is None:
+            raise InvalidInput('direction="card_to_hobby" needs card.')
+        _only_for('direction="card_to_hobby"', hobby=(hobby, None), kind=(kind, None), title=(title, None),
+                  into_hobby=(into_hobby, None))
+        return _convert_card_to_hobby(card, dry_run)
+    if direction == "hobby_to_card":
+        if hobby is None or not kind:
+            raise InvalidInput('direction="hobby_to_card" needs hobby and kind (family, collection or project).')
+        _only_for('direction="hobby_to_card"', card=(card, None))
+        return hobbies.convert_to_card(hobby, kind, title, into_hobby, dry_run=dry_run).to_dict()
+    raise InvalidInput(f"Unknown direction {direction!r}: use card_to_hobby or hobby_to_card.")
+
+
+@mcp.tool(alias_of=("constructicon_convert", "card_to_hobby"))
+def constructicon_convert_project_to_hobby(project_slug: str, dry_run: bool = False) -> dict | None:
+    return _convert_card_to_hobby(project_slug, dry_run)
+
+
+@mcp.tool(alias_of=("constructicon_convert", "hobby_to_card"))
 def constructicon_convert_hobby_to_card(hobby: str | int, kind: str, title: str | None = None,
                                         into_hobby: str | int | None = None, dry_run: bool = False) -> dict:
-    """Turn a hobby into a card (the reverse of constructicon_convert_project_to_hobby), as ONE
-    undoable batch. E.g. the "GI Joe" hobby -> a family card inside the Collecting hobby:
-    hobby="gi-joe", kind="family", into_hobby="collecting".
-
-    kind: family | collection | project. title: defaults to the hobby's name.
-    into_hobby: optional hobby the new card joins.
-    Rules: the card reuses the hobby's tag as its linked tag and gets the usual blank write-up;
-    its stage follows the hobby (active -> in_progress, inactive -> paused). The hobby's top-level
-    member cards become family members (family / collection) or nested parts (project); members
-    nested under another member stay under it. A member that is a family/collection, or (for
-    project) already part of a card outside the hobby, refuses the whole conversion
-    (bad_membership / nest_group_kind / nest_second_parent; nothing written). Loose objects go onto
-    the card, home overrides that named the hobby now name the card, and the hobby is unmarked.
-    dry_run=true reports every change and writes nothing.
-    Returns {ok, dry_run, changes, warnings, batch_id, card, card_id, kind, title, into_hobby,
-    hobby, members: [{slug, how}], loose_moved, homes_moved}."""
     return hobbies.convert_to_card(hobby, kind, title, into_hobby, dry_run=dry_run).to_dict()
 
 
 @mcp.tool()
 def constructicon_unmark_hobby(hobby: str | int, dry_run: bool = False) -> dict:
-    """Stop treating a tag as a hobby: its activity and group code are cleared, its card
-    memberships removed, and cards whose home override named it go back to an automatic home.
-    The tag itself (and every file tagged with it) stays. One undoable batch.
-    Returns {ok, dry_run, changes, warnings, batch_id, hobby, cards_removed, homes_cleared}."""
+    """Stop treating a tag as a hobby: its status and group code go, its card memberships are
+    removed, and cards whose home was it go back to automatic. The tag and its files stay.
+    -> {ok, dry_run, changes, warnings, batch_id, hobby, cards_removed, homes_cleared}."""
     return hobbies.unmark(hobby, dry_run=dry_run).to_dict()
 
 
-@mcp.tool()
-def constructicon_add_project_to_hobby(project_slug: str, hobby_slug: str) -> dict | None:
-    """Add a project to a hobby's many-to-many relation.
+@mcp.tool(selector="action")
+def constructicon_card_hobby(card: str | int, hobby: str | int, action: typing.Literal["add", "remove"] = "add",
+                             dry_run: bool = False, batch_id: str | None = None) -> dict:
+    """Put a card in a hobby ("add", default; a card can be in several; twice is a no-op) or take
+    it out ("remove"). -> {ok, dry_run, changes, warnings, batch_id}."""
+    if action == "add":
+        return cards.add_to_hobby(card, hobby, dry_run=dry_run, batch_id=batch_id).to_dict()
+    if action == "remove":
+        return cards.remove_from_hobby(card, hobby, dry_run=dry_run, batch_id=batch_id).to_dict()
+    raise InvalidInput(f"Unknown action {action!r}: use add or remove.")
 
-    Both project_slug and hobby_slug are resolved to their respective ids.
-    Returns the updated hobby with its project count; not_found if either doesn't exist."""
+
+def _hobby_or_404(hobby):
+    row = db.get_hobby(hobby)
+    if row is None:
+        raise NotFound(f"No hobby {hobby!r}.")
+    return row
+
+
+@mcp.tool()
+def constructicon_update_hobby(hobby: str | int, status: str | None = None, group_code: str | None = None,
+                               cover_slug: str | None = None, clear_cover: bool = False,
+                               synopsis: str | None = None, flavor: str | None = None,
+                               dry_run: bool = False) -> dict:
+    """Edit a hobby, every change in ONE batch. hobby: id or slug. Left out (None) = left alone.
+    status: active | inactive (the old words dormant / abandoned are stored as inactive, with a
+      warning). group_code: 2-4 letters/digits shown on cards, unique, stored upper case.
+    cover_slug: an item with a picture as its cover; clear_cover=true goes back to the automatic
+      cover (its highlighted project's, else its latest project's).
+    synopsis (max 600) / flavor (max 140): its card face text; "" clears.
+    dry_run=true answers as the call would and writes nothing.
+    -> {ok, id, name, slug, status, group_code, flags, synopsis, flavor, cover: {cover_slug,
+    cover_picked, cover_source, ...}, changes, warnings, batch_id, dry_run}.
+    Codes: bad_hobby_activity, bad_group_code, group_code_conflict, bad_cover, bad_card_text.
+    """
+    if clear_cover and cover_slug:
+        raise InvalidInput("Pass either cover_slug or clear_cover=true, not both.")
+    hid = _hobby_or_404(hobby)["id"]
+    take = _Collect()
+    batch_id = changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        if cover_slug is not None or clear_cover:  # first: set_cover reports the whole batch so far
+            take(hobbies.set_cover(hid, None if clear_cover else cover_slug, batch_id=batch_id))
+        if status is not None:
+            take(cards.set_hobby_activity(hid, status, batch_id=batch_id))
+        if group_code is not None:
+            take(cards.set_group_code(hid, group_code, batch_id=batch_id))
+        if synopsis is not None or flavor is not None:
+            take(hobbies.set_text(hid, synopsis=synopsis if synopsis is not None else ...,
+                                  flavor=flavor if flavor is not None else ..., batch_id=batch_id))
+        row = db.get_hobby(hid)
+        f = cards.hobby_fields(row)
+        out = {"ok": True, "id": f["id"], "name": f["name"], "slug": f["slug"], "status": f["status"],
+               "group_code": f["group_code"], "flags": f["flags"], **hobbies.text_fields(row),
+               "cover": cards.hobby_cover_fields(cards.resolve_hobby_cover(row)),
+               **take.result(), "batch_id": None if dry_run else _written(batch_id), "dry_run": dry_run}
+    return out
+
+
+@mcp.tool(alias_of=("constructicon_card_hobby", "add"))
+def constructicon_add_project_to_hobby(project_slug: str, hobby_slug: str) -> dict | None:
     project = db.get_project(project_slug)
     if project is None:
         raise NotFound(f"No card {project_slug!r}.")
@@ -1470,19 +1937,8 @@ def constructicon_add_project_to_hobby(project_slug: str, hobby_slug: str) -> di
     }
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_hobby", None))
 def constructicon_set_hobby_status(hobby_slug: str, status: str) -> dict | None:
-    """Set a hobby's manual Active/Inactive switch (V2 cards 3.3).
-
-    status: 'active' | 'inactive'. The v1 words 'dormant' and 'abandoned' are deprecated
-    aliases: they are stored as 'inactive' and the result carries a `warnings` entry.
-    The change is recorded in the change log. Mismatch flags (an inactive hobby with
-    active work, an active hobby untouched ~2 years) are computed, never stored: the
-    result's `flags` shows them as of now.
-
-    Returns {id, name, slug, status, group_code, flags, warnings, changes, batch_id}, the
-    not_found error if the hobby isn't found, or {"ok": false, "error": {code: "bad_hobby_activity",
-    message}} for an unknown value."""
     hobby = db.get_hobby(hobby_slug)
     if hobby is None:
         raise NotFound(f"No hobby {hobby_slug!r}.")
@@ -1501,13 +1957,8 @@ def constructicon_set_hobby_status(hobby_slug: str, status: str) -> dict | None:
     }
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_hobby", None))
 def constructicon_set_hobby_code(hobby_slug: str, group_code: str) -> dict | None:
-    """Set a hobby's 2-4 char group code (the code shown on cards, e.g. COL, 3DP, RCA).
-
-    Letters/digits only, unique across hobbies; stored uppercase. Returns
-    {id, name, slug, group_code, changes, batch_id}, not_found if the hobby isn't found, or
-    {"ok": false, "error": {code: "bad_group_code" | "group_code_conflict", message}}."""
     hobby = db.get_hobby(hobby_slug)
     if hobby is None:
         raise NotFound(f"No hobby {hobby_slug!r}.")
@@ -1517,24 +1968,9 @@ def constructicon_set_hobby_code(hobby_slug: str, group_code: str) -> dict | Non
             "group_code": updated["group_code"], "changes": result.changes, "batch_id": result.batch_id}
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_hobby", None))
 def constructicon_set_hobby_cover(hobby: str | int, cover_slug: str | None = None, clear: bool = False,
                                   dry_run: bool = False) -> dict:
-    """Choose a HOBBY's cover picture (#686), or go back to its automatic cover.
-
-    The hobby-level twin of a card's cover (constructicon_update_project(cover_slug=...)), named
-    like the other hobby setters (constructicon_set_hobby_status / _code). hobby: id or slug.
-    cover_slug: any item (file slug) with a picture, e.g. one of its projects' photos or a loose
-    object. clear=true (or no cover_slug) removes the choice, and the hobby shows its automatic
-    cover again: its highlighted project's cover, else its most recently updated project that has
-    a cover, else none. A chosen cover whose item is later deleted, trashed or redacted is not
-    shown (the automatic one is) until it comes back.
-    Refused: {"ok": false, "error": {"code": "not_found" | "bad_cover", ...}} (no such item, or a
-    redacted / picture-less one). dry_run=true previews. Returns {ok, dry_run, changes, warnings,
-    batch_id, hobby, picked_cover_slug, cover: {cover_slug, cover_picked, cover_source,
-    cover_source_label, cover_project, picked_cover_slug, picked_cover_unavailable}}; undo with
-    constructicon_undo(batch_id).
-    """
     if clear and cover_slug:
         raise InvalidInput("Pass either cover_slug or clear=true, not both.")
     return hobbies.set_cover(hobby, None if clear else cover_slug, dry_run=dry_run).to_dict()
@@ -1542,10 +1978,7 @@ def constructicon_set_hobby_cover(hobby: str | int, cover_slug: str | None = Non
 
 @mcp.tool()
 def constructicon_list_blog_entries(status: str | None = None) -> list[dict]:
-    """List all blog entries, optionally filtered by status (e.g. 'draft', 'published').
-
-    Returns entries ordered by most-recently-updated first.
-    """
+    """All blog entries, most recently updated first; status filters (e.g. "draft", "ready")."""
     entries = db.list_blog_entries(status=status)
     return [
         {
@@ -1567,23 +2000,10 @@ def constructicon_list_blog_entries(status: str | None = None) -> list[dict]:
 def constructicon_create_blog_entry(title: str, subtitle: str = "", body: str = "", status: str = "draft",
                                     cover_slug: str | None = None,
                                     content_date: float | str | None = None) -> dict:
-    """Create a new blog entry.
-
-    title: The entry's title (required; a slug is auto-generated from this).
-    subtitle, body: Optional metadata and content.
-    status: The entry's status (default 'draft'). Common values: 'draft', 'published'.
-    cover_slug: Optional slug of a Constructicon object to use as the entry's cover image.
-    content_date: Optional date the entry is about (distinct from created_at). Prefer a date:
-      - an ISO date or datetime string, e.g. "2026-10-01", "2026-10-01 14:30" or
-        "2026-10-01T14:30:00". A bare date or an offset-less datetime is Mountain Time
-        (America/Denver), so "2026-10-01" is Mountain midnight and shows as Oct 1; a string
-        with an explicit offset ("2026-10-01T00:00:00Z") is trusted as-is.
-      - unix seconds (a number, or a numeric string) are still accepted and used directly.
-        Don't hand-compute one: UTC midnight shows as the day before in Mountain Time.
-      Same rules as constructicon_set_content_date. Anything else is a bad_date error.
-
-    Returns the created entry with projects and items (initially empty); its content_date is
-    unix seconds.
+    """Create a blog entry (its slug comes from the title). status: "draft" (default), "ready" ...
+    cover_slug: an item as its cover. content_date: the date it is about, best as an ISO date
+    ("2026-10-01"); don't hand-compute unix seconds (UTC midnight shows as the day before).
+    Attach cards and items with constructicon_update_blog_entry. -> the entry + batch_id.
     """
     result = blog.create(title, subtitle=subtitle, body=body, status=status, cover_slug=cover_slug,
                          content_date=content_date)  # #541 phase D: logged + undoable
@@ -1592,67 +2012,63 @@ def constructicon_create_blog_entry(title: str, subtitle: str = "", body: str = 
 
 @mcp.tool()
 def constructicon_get_blog_entry(slug: str) -> dict | None:
-    """Get a single blog entry by slug, with full hydration: projects and items.
-
-    A missing one returns the not_found error.
-    """
+    """One blog entry with its cards and items (each with its note and sort_order)."""
     entry = db.get_blog_entry(slug)
     if entry is None:
         raise NotFound(f"No blog entry {slug!r}.")
     return _to_public_blog_entry(entry)
 
 
+def _attachments(rows, key, what):
+    """[(key value, note)] from [{key, note?}], refusing anything else (bad_request, nothing written)."""
+    if isinstance(rows, (str, dict)) or not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        raise InvalidInput(f"{what} must be a list of {{\"{key}\": ..., \"note\": \"...\"}} objects.")
+    return [(r.get(key), r.get("note", "")) for r in rows]
+
+
 @mcp.tool()
 def constructicon_update_blog_entry(slug: str, title: str | None = None, subtitle: str | None = None,
                                     body: str | None = None, status: str | None = None,
                                     cover_slug: str | None = None, content_date: float | str | None = None,
-                                    clear_cover_slug: bool = False, clear_content_date: bool = False) -> dict | None:
-    """Update a blog entry. Every field defaults to "leave unchanged".
-
-    Pass a value to set it. cover_slug/content_date can't be cleared just by
-    passing None (None means "leave unchanged" here), so to clear one, set its
-    clear_* flag instead: clear_cover_slug / clear_content_date.
-
-    content_date: an ISO date or datetime string ("2026-10-01", "2026-10-01 14:30"); a bare
-    date or an offset-less datetime is Mountain Time (America/Denver), so "2026-10-01" is
-    Mountain midnight; an explicit offset is trusted as-is. Unix seconds (a number or numeric
-    string) still work and are used directly; don't hand-compute one (UTC midnight shows as the
-    day before). Same rules as constructicon_set_content_date; anything else is a bad_date error.
-
-    (The Ellipsis sentinel blog.update uses internally can't cross the
-    MCP tool boundary — the schema generator treats an Ellipsis default as a
-    required arg — so this tool maps None/clear-flags onto that sentinel.)
-
-    Returns the updated entry with full hydration; a missing one returns the not_found error.
+                                    clear_cover_slug: bool = False, clear_content_date: bool = False,
+                                    projects: list[dict] | None = None, items: list[dict] | None = None) -> dict:
+    """Edit a blog entry, every change in ONE batch. Left out (None) = left alone.
+    clear_cover_slug / clear_content_date clear those two. content_date as in create.
+    projects: the cards attached, in order, as a FULL replace: [{"project_id": <card id or
+      slug>, "note": "..."}]; [] removes them all. items: the same for items: [{"slug": "...",
+      "note": "..."}]. An unknown card or item is not_found (nothing written).
+    -> the entry (with its cards and items) + batch_id.
     """
+    entry = db.get_blog_entry(slug)
+    if entry is None:
+        raise NotFound(f"No blog entry {slug!r}.")
+    card_rows = _attachments(projects, "project_id", "projects") if projects is not None else None
+    item_rows = _attachments(items, "slug", "items") if items is not None else None
     cover = None if clear_cover_slug else (cover_slug if cover_slug is not None else ...)
     cdate = None if clear_content_date else (content_date if content_date is not None else ...)
-    result = blog.update(slug, title=title, subtitle=subtitle, body=body, status=status,
-                         cover_slug=cover, content_date=cdate)  # not_found for an unknown slug
-    return {**_to_public_blog_entry(result.data["entry"]), "batch_id": result.batch_id}
+    entry_fields = any(v is not None for v in (title, subtitle, body, status, cover_slug, content_date)) or \
+        clear_cover_slug or clear_content_date
+    batch_id = changes.new_batch_id()
+    with db.transaction():
+        if entry_fields or (card_rows is None and item_rows is None):  # as before: an update bumps updated_at
+            blog.update(entry["id"], title=title, subtitle=subtitle, body=body, status=status,
+                        cover_slug=cover, content_date=cdate, batch_id=batch_id)
+        if card_rows is not None:
+            blog.set_projects(entry["id"], card_rows, batch_id=batch_id)
+        if item_rows is not None:
+            blog.set_items(entry["id"], item_rows, batch_id=batch_id)
+        fresh = db.get_blog_entry(entry["id"])
+    return {**_to_public_blog_entry(fresh), "batch_id": batch_id}
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_delete", "blog_entry"))
 def constructicon_delete_blog_entry(slug: str) -> bool:
-    """Delete a blog entry and all its attached projects/items (the cards and files stay).
-    Undoable since #541 phase D: find the batch with constructicon_list_changes and pass it to
-    constructicon_undo.
-
-    Returns True if deleted; an unknown slug returns the not_found error.
-    """
     blog.delete(slug)
     return True
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_blog_entry", None))
 def constructicon_set_blog_entry_projects(slug: str, items: list[dict]) -> dict | None:
-    """Set the ordered list of projects attached to a blog entry.
-
-    items: list of dicts with 'project_id' (int) and optional 'note' (str) keys,
-      in desired display order. Each dict becomes a (project_id, note) tuple.
-
-    Returns the updated entry with full hydration; a missing one returns the not_found error.
-    """
     entry = db.get_blog_entry(slug)
     if entry is None:
         raise NotFound(f"No blog entry {slug!r}.")
@@ -1664,15 +2080,8 @@ def constructicon_set_blog_entry_projects(slug: str, items: list[dict]) -> dict 
     return {**_to_public_blog_entry(result.data["entry"]), "batch_id": result.batch_id}
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_blog_entry", None))
 def constructicon_set_blog_entry_items(slug: str, items: list[dict]) -> dict | None:
-    """Set the ordered list of Constructicon objects attached to a blog entry.
-
-    items: list of dicts with 'slug' (str) and optional 'note' (str) keys,
-      in desired display order. Each dict becomes a (post_slug, note) tuple.
-
-    Returns the updated entry with full hydration; a missing one returns the not_found error.
-    """
     entry = db.get_blog_entry(slug)
     if entry is None:
         raise NotFound(f"No blog entry {slug!r}.")
@@ -1685,55 +2094,23 @@ def constructicon_set_blog_entry_items(slug: str, items: list[dict]) -> dict | N
 
 @mcp.tool()
 def constructicon_list_tags() -> list[dict]:
-    """Get the complete tag tree (hierarchical).
-
-    Returns the root-level tags, each with a nested children array.
-    """
+    """The tag tree: root tags, each with nested `children`."""
     return db.list_tag_tree()
 
 
 @mcp.tool()
 def constructicon_create_tag(name: str, parent_name: str | None = None) -> dict:
-    """Create a tag or return the existing one if it already exists under the parent.
-
-    Returns the tag metadata.
-    """
+    """Create a tag (under parent_name, or at the root), or return the one already there."""
     # #541 phase C: a created tag (and parent) is imaged, so constructicon_undo removes it.
     return tags_svc.create(name, parent_name).data["tag"]
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_list_items", "tag"))
 def constructicon_get_posts_for_tag(tag_name: str, text_chars: int = TEXT_PREVIEW_CHARS) -> list[dict]:
-    """Get all objects tagged with a specific tag (including all descendant tags).
-
-    Returns a list of objects. Each one's extracted_text is a preview of its first text_chars
-    characters (default 300; 0 = none, at most 5000), with extracted_text_chars (the full length)
-    and extracted_text_truncated (#697); constructicon_get(slug) has one item's whole text.
-    """
-    chars = text_chars_arg(text_chars)
-    tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
-    if tag is None:
-        raise NotFound(f"No such tag: {tag_name!r}")
-    rows = db.list_posts_for_tag(tag["id"], limit=10000)  # the policy's browse clause applies in db
-    return [_to_public_listed(r, text_chars=chars) for r in policy.filter_visible(rows)]  # #557
+    return _posts_for_tag(tag_name, text_chars_arg(text_chars))
 
 
-@mcp.tool()
-def constructicon_attach_tags(slug: str, tag_names: list[str]) -> dict | None:
-    """Add tags to an object.
-
-    Returns the updated object; a missing one returns the not_found error.
-    """
-    tags_svc.attach(slug, tag_names)  # #541 phase C: one batch; tags it creates are imaged too
-    return _to_public(db.get_by_slug(slug))
-
-
-@mcp.tool()
-def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
-    """Remove a tag from an object.
-
-    Returns the updated object; a missing one returns the not_found error.
-    """
+def _detach_tag(slug, tag_name):
     policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
@@ -1742,16 +2119,55 @@ def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
     return _to_public(db.get_by_slug(slug))
 
 
-@mcp.tool()
-def constructicon_retry_ocr(slug: str) -> dict | None:
-    """Force OCR to run (or re-run) on an object.
-
-    Returns the updated object; a missing one returns the not_found error. Raises an error if
-    the object is redacted or doesn't support OCR.
+@mcp.tool(selector="action")
+def constructicon_item_tags(slug: str, tag_names: list[str],
+                            action: typing.Literal["attach", "detach"] = "attach") -> dict:
+    """Add tags to an item ("attach", default; missing root tags are created) or take them off
+    ("detach"; an unknown tag is not_found and nothing is changed). One batch either way. This is
+    the tag tree; constructicon_update(tags=[...]) replaces the free-text tag list.
+    -> the item + batch_id.
     """
+    if isinstance(tag_names, str) or not isinstance(tag_names, list):
+        raise InvalidInput("tag_names must be a list of tag names.")
+    if action == "attach":
+        batch_id = tags_svc.attach(slug, tag_names).batch_id  # #541 phase C: one batch; created tags imaged too
+    elif action == "detach":
+        policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
+        found = []
+        for name in dict.fromkeys(tag_names):
+            tag = tags_svc.find_any(name)  # #563: a lookup must not create the tag
+            if tag is None:
+                raise NotFound(f"No such tag: {name!r}. Nothing was changed.")
+            found.append(tag["id"])
+        batch_id = changes.new_batch_id()
+        with db.transaction():
+            for tag_id in found:
+                tags_svc.detach(slug, tag_id, batch_id=batch_id)
+    else:
+        raise InvalidInput(f"Unknown action {action!r}: use attach or detach.")
+    return {**_to_public(db.get_by_slug(slug)), "batch_id": _written(batch_id)}
+
+
+@mcp.tool(alias_of=("constructicon_item_tags", "attach"))
+def constructicon_attach_tags(slug: str, tag_names: list[str]) -> dict | None:
+    tags_svc.attach(slug, tag_names)  # #541 phase C: one batch; tags it creates are imaged too
+    return _to_public(db.get_by_slug(slug))
+
+
+@mcp.tool(alias_of=("constructicon_item_tags", "detach"))
+def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
+    return _detach_tag(slug, tag_name)
+
+
+RESERVED_ACTION = "retry_ocr"  # #746: built into constructicon_run_type_action; no type may declare it
+
+
+def _retry_ocr(slug):
+    """Force OCR to run (or re-run) on an item; refusals are bad_request, as they always were."""
     row = db.get_by_slug(slug)
     if row is None:
         raise NotFound(f"No item {slug!r}.")
+    policy.require_view(row, message=f"No item {slug!r}.")  # #746: was missing (the old net never reached it)
     if row["redacted"]:
         raise ValueError("File was redacted — there's no content left to OCR")
     spec = object_types.get_object_type(row.get("media_type"))
@@ -1763,17 +2179,17 @@ def constructicon_retry_ocr(slug: str) -> dict | None:
     return _to_public(db.get_by_slug(slug))
 
 
+@mcp.tool(alias_of=("constructicon_run_type_action", None))
+def constructicon_retry_ocr(slug: str) -> dict | None:
+    return _retry_ocr(slug)
+
+
 @mcp.tool()
 def constructicon_set_agent_notes(slug: str, notes: str | None = None) -> dict | None:
-    """Set or clear agent-authored working notes for an object (#206).
-
-    Agent-only scratch space for Claude working state, never exposed in the
-    public API. For example: "this is a Fusion 360 screenshot, not user-facing"
-    or "already inventoried, skip on re-run."
-
-    notes: the note text, or None to clear existing notes.
-    Returns the updated object (the usual public shape plus "agent_notes"),
-    (a missing one returns the not_found error).
+    """Set (or, with null, clear) your private working notes on an item, e.g. "Fusion 360
+    screenshot, not user-facing" or "inventoried, skip on re-run". Never shown in the app, the
+    web API or exports. Read them back: constructicon_get(slug, include=["agent_notes"]).
+    -> the item plus agent_notes.
     """
     items.update(slug, agent_notes=notes)  # #541 phase D: through the item service (not_found if missing)
     row = db.get_by_slug(slug)
@@ -1785,125 +2201,48 @@ def constructicon_set_agent_notes(slug: str, notes: str | None = None) -> dict |
 
 @mcp.tool()
 def constructicon_list_provenance_options(scope: str = "card", include_retired: bool = False) -> dict:
-    """The live, owner-editable provenance lists (#529). Read-only; the owner adds,
-    renames, retires and reorders options in /admin.
-
-    scope: "card" (what constructicon_set_card_provenance accepts) or "file" (what
-    constructicon_set_provenance accepts). include_retired=true also returns retired
-    options (retired ones can't be set on anything new).
-    Returns {"ok": true, "scope", "options": [{key, label, sort_order, retired}]}.
+    """The provenance lists the owner edits in /admin. scope: "card" (for
+    constructicon_update_project fields.provenance) or "file" (for constructicon_update
+    fields.provenance). include_retired=true adds retired keys (not settable on anything new).
+    -> {ok, scope, options: [{key, label, sort_order, retired}]}.
     """
     opts = provenance_options.list_options(scope, include_retired=include_retired)
     return {"ok": True, "scope": scope,
             "options": [{k: o[k] for k in ("key", "label", "sort_order", "retired")} for o in opts]}
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update", None))
 def constructicon_set_provenance(slug: str, provenance: str | None = None) -> dict | None:
-    """Set or clear an object's provenance classification (#341).
-
-    Provenance describes how an object came to be captured. The allowed values are
-    an editable list (#529) the owner manages in /admin; it starts as found, created,
-    documented, result (outcome of a process), reference (cited or sourced from
-    elsewhere), design (drafted/designed) and purchased. Call
-    constructicon_list_provenance_options(scope="file") for the live list. A value
-    that isn't an active key returns {"ok": false, "error": {"code":
-    "bad_provenance", ...}} naming the active keys; an object that already holds a
-    since-retired key keeps it.
-
-    provenance: an active key, or None to clear.
-    Returns the updated object (the usual public shape plus "provenance"),
-    (a missing one returns the not_found error).
-    """
     row = items.update(slug, provenance=provenance).item
     return {**_to_public(row), "provenance": row.get("provenance")}
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update", None))
 def constructicon_set_content_date(slug: str, date: str | None = None) -> dict | None:
-    """Set or clear an object's content_date — the content's OWN real-world date
-    (#415), the date sibling of constructicon_set_provenance. Distinct from the
-    upload timestamp; it's what the Timeline and date displays key off.
-
-    date:
-      - an ISO date or datetime string, e.g. "2017-07-31" or "2017-07-31 14:30"
-        or "2017-07-31T14:30:00". A naive (offset-less) value is interpreted as
-        Mountain Time (America/Denver), matching the archive's timeline
-        convention; a string carrying an explicit offset is trusted as-is.
-      - a bare unix-seconds number (as a string) is used directly.
-      - None or "" clears the date.
-
-    Returns the updated object (usual public shape plus "content_date" in unix
-    seconds); not_found if the object doesn't exist.
-    """
     items.get_item(slug)
     row = items.update(slug, content_date=items.parse_date(date)).item  # naive ISO -> Mountain Time
     return {**_to_public(row), "content_date": row.get("content_date")}
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update", None))
 def constructicon_set_highlight(slug: str, on: bool = False) -> dict | None:
-    """Mark or unmark an object as highlighted (#341).
-
-    Highlight is an orthogonal boolean flag for "cool/unique" objects —
-    featured in project exports and curated views.
-
-    on: True to mark as highlighted, False to clear.
-    Returns the updated object (the usual public shape plus "highlight"),
-    (a missing one returns the not_found error).
-    """
-    row = items.update(slug, highlight=on).item
+    row = items.update(slug, highlight=on).item  # the old default: no `on` UNmarks
     return {**_to_public(row), "highlight": row.get("highlight")}
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update", None))
 def constructicon_set_brand_asset(slug: str, is_brand: bool = False, brand_role: str | None = None) -> dict | None:
-    """Mark or unmark an object as a brand asset (#350).
-
-    Brand assets are reusable branding objects (logos, icons, colors, etc.)
-    that live outside the project/hobby structure and are consumed by
-    export templates.
-
-    slug: the object's slug.
-    is_brand: True to mark as a brand asset, False to clear.
-    brand_role: optional role label (e.g., "logo", "icon", "color").
-                One of the standard BRAND_ROLES or a custom value.
-                Ignored when is_brand is False; brand_role is cleared
-                when the flag is cleared.
-
-    Returns the updated object (the usual public shape plus
-    "is_brand_asset" and "brand_role"); a missing one returns the not_found error.
-    """
-    row = items.update(slug, is_brand_asset=is_brand, brand_role=brand_role).item
+    row = items.update(slug, is_brand_asset=is_brand, brand_role=brand_role).item  # old default: clears both
     return {**_to_public(row), "is_brand_asset": bool(row.get("is_brand_asset")), "brand_role": row.get("brand_role")}
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_list_items", "brand_assets"))
 def constructicon_list_brand_assets() -> list[dict]:
-    """List all brand assets (#350), grouped by role and ordered by recency.
-
-    Returns a list of brand asset dicts (the usual public shape plus
-    "is_brand_asset" and "brand_role").
-    """
-    assets = policy.filter_visible(db.list_brand_assets())  # #557
-    return [
-        {**_to_public_listed(asset), "is_brand_asset": bool(asset.get("is_brand_asset")), "brand_role": asset.get("brand_role")}
-        for asset in assets
-    ]
+    return _list_brand_assets()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_project_status(id_or_slug: str, status: str) -> dict | None:
-    """DEPRECATED alias of constructicon_set_status that still accepts the v1 words.
-
-    Legacy words are translated to a stage and the result carries `warnings`
-    saying so: wip/active -> in_progress; complete/archived/published/
-    means-to-an-end -> done (ambiguous: use set_status with in_use if it is still
-    in use); shelved -> paused; abandoned -> stopped (abandoned); failed -> stopped
-    (failed); idea -> idea; reference-only -> kind collection + in_use. A v2 stage
-    name is accepted too. Returns the updated project dict (with `warnings`), not_found
-    if it doesn't exist, or {"ok": false, "error": {code, message}} for an invalid status.
-    """
     if db.get_project(id_or_slug) is None:
         raise NotFound(f"No card {id_or_slug!r}.")
     legacy = card_rules.legacy_to_status(status)
@@ -1914,85 +2253,29 @@ def constructicon_set_project_status(id_or_slug: str, status: str) -> dict | Non
     return {**_to_public_project(db.get_project(id_or_slug)), "warnings": warnings}
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_status(card: str | int, stage: str, stop_reason: str | None = None,
                              activity: str | None = None, dry_run: bool = False) -> dict:
-    """Set a card's status: stage (+ stop_reason when stopped). V2 cards 3.2.
-
-    stage: in_progress | in_use (both active) or idea | paused | done | stopped
-    (all inactive). Activity is derived from the stage; passing `activity` that
-    disagrees with it is an error. stopped REQUIRES stop_reason failed|abandoned,
-    and a stop_reason on any other stage is an error. An idea can never be active.
-    An event only allows idea / in_progress / done / stopped. Any stage can follow
-    any other (no state machine). Rule violations return
-    {"ok": false, "error": {"code": "bad_status", "message": ...}}; nothing is written.
-
-    card: project id or slug. dry_run=true previews without writing.
-    Returns {ok, dry_run, changes: [{card, field, before, after}], warnings, batch_id}.
-    """
     return cards.set_status(card, stage, stop_reason, activity=activity, dry_run=dry_run).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_kind(card: str | int, kind: str, force: bool = False, dry_run: bool = False) -> dict:
-    """Set a card's kind: project | thing | action | family | collection | event.
-
-    A thing is one physical object (a one-object build is a Thing, not a Project).
-    family and collection are group kinds: they can't be nested under another
-    card or have nested children. Leaving a group kind that has members is refused
-    unless force=true (drops the memberships). The card's current stage must stay
-    valid for the new kind (an event can't be in use or paused).
-
-    Returns {ok, dry_run, changes, warnings, batch_id} or
-    {"ok": false, "error": {code, message}}.
-    """
     return cards.set_kind(card, kind, force=force, dry_run=dry_run).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_whereabouts(card: str | int, whereabouts: str | None = None, note: str | None = None,
                                   clear_note: bool = False, dry_run: bool = False) -> dict:
-    """Set (or clear) where a card's physical thing is now. V2 cards 3.4.
-
-    whereabouts: have_it | partial | parted_out | sold | gifted | lost | never_built,
-    or omit/null to CLEAR it (null = not recorded). Applies to thing, project and
-    collection cards only; an action, event or family is refused. Cross-rules with
-    the card's stage: an in_use card can only be have_it or partial; a never_built
-    card can't be in_progress or in_use. Violations return
-    {"ok": false, "error": {"code": "bad_whereabouts", "message": ...}}; nothing is written.
-    note: optional free text ("Skyhawk model on the shelf; parts printed, not
-    assembled"); leave it out to keep the existing note, pass clear_note=true to erase it.
-
-    card: project id or slug. dry_run=true previews without writing.
-    Returns {ok, dry_run, changes: [{card, field, before, after}], warnings, batch_id}.
-    """
     return cards.set_whereabouts(card, whereabouts, "" if clear_note else (note if note is not None else ...),
                                  dry_run=dry_run).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_card_text(card: str | int | None = None, hobby: str | int | None = None,
                                 synopsis: str | None = None, flavor: str | None = None,
                                 clear_synopsis: bool = False, clear_flavor: bool = False,
                                 dry_run: bool = False) -> dict:
-    """Set (or clear) the text on a card's FACE (#596): its synopsis and its flavor line.
-
-    The card face's text box shows, in order: the synopsis, else the opening of the card's
-    write-up (cached, returned as `writeup_lead`), else its description; then the flavor line in
-    italics. Whereabouts and provenance never appear on a face.
-    synopsis: a few plain sentences (max 600 chars; one paragraph per line) saying what the card
-      IS. Every card with a write-up should get one: when you write or rewrite a write-up
-      (constructicon_set_project_writeup / constructicon_update of its body), also set the synopsis
-      here. Read the current state with constructicon_get_project (synopsis, flavor, writeup_lead,
-      face_text, face_text_source).
-    flavor: one short italic line (max 140 chars), e.g. a quip or the story of the name.
-    Leave a field out (null) to keep it; pass clear_synopsis / clear_flavor (or "") to erase it.
-
-    Target exactly one of `card` (project id or slug) or `hobby` (hobby id or slug; a hobby card
-    shows its synopsis above its project list). dry_run=true previews without writing.
-    Returns {ok, dry_run, changes, warnings, batch_id, synopsis, flavor, ...}; undo with
-    constructicon_undo(batch_id). Too long: {"ok": false, "error": {"code": "bad_card_text"}}.
-    """
     if (card is None) == (hobby is None):
         raise InvalidInput("Pass exactly one of card or hobby.")
     syn = "" if clear_synopsis else (synopsis if synopsis is not None else ...)
@@ -2002,189 +2285,139 @@ def constructicon_set_card_text(card: str | int | None = None, hobby: str | int 
     return hobbies.set_text(hobby, synopsis=syn, flavor=fla, dry_run=dry_run).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_card_provenance(card: str | int, provenance: str | None = None, credit: str | None = None,
                                       clear_credit: bool = False, dry_run: bool = False) -> dict:
-    """Set (or clear) a CARD's provenance and optional credit. V2 cards 3.5.
-
-    provenance: an active key of the editable card list (#529; starts as created |
-    found | collected | referenced | client_owned | purchased; the owner manages it in
-    /admin, and constructicon_list_provenance_options(scope="card") returns the live
-    list), or omit/null to CLEAR it. A card that already holds a since-retired key
-    keeps it. One value per card; a card with mixed origins should be split into
-    separate cards, never "found + own". credit: who designed it / where it came from
-    (leave out to keep the existing credit; clear_credit=true erases it). Bad values
-    return {"ok": false, "error": {"code": "bad_provenance", ...}}.
-
-    This is NOT constructicon_set_provenance, which sets the per-FILE provenance
-    (found/created/documented/result/reference/design) on one object by file slug and
-    is unchanged. A file with no provenance of its own shows its card's for display only.
-
-    card: project id or slug. dry_run=true previews without writing.
-    Returns {ok, dry_run, changes, warnings, batch_id}.
-    """
     return cards.set_provenance(card, provenance, "" if clear_credit else (credit if credit is not None else ...),
                                 dry_run=dry_run).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_card_highlight(card: str | int, on: bool = False, dry_run: bool = False) -> dict:
-    """Mark or unmark a CARD as highlighted ("this one is special"). V2 cards 3.12.
-    Independent of the per-file highlight (constructicon_set_highlight, which takes a
-    file slug). card: project id or slug. Returns {ok, dry_run, changes, warnings, batch_id}."""
-    return cards.set_highlight(card, on, dry_run=dry_run).to_dict()
+    return cards.set_highlight(card, on, dry_run=dry_run).to_dict()  # the old default: no `on` UNmarks
 
 
-@mcp.tool()
-def constructicon_nest(child: str | int, parent: str | int, replace: bool = False, dry_run: bool = False) -> dict:
-    """Make `child` PART OF `parent` (nesting: the child only makes sense inside its
-    parent, e.g. a Lua script inside the truck it runs on). V2 cards 3.7.
-
-    Refused with {"ok": false, "error": {code, message}}:
-    - nest_self: a card can't be part of itself
-    - nest_cycle: the parent is already nested under the child
-    - nest_group_kind: a family or collection can't be nested or be a parent (use
-      constructicon_add_to_family instead)
-    - nest_second_parent: the child is already part of another card; pass
-      replace=true to move it (or constructicon_unnest first)
-
-    Independent of family membership. dry_run=true previews. Returns
-    {ok, dry_run, changes, warnings, batch_id}.
+@mcp.tool(selector="action")
+def constructicon_nest(child: str | int, parent: str | int | None = None, replace: bool = False,
+                       dry_run: bool = False, action: typing.Literal["nest", "unnest"] = "nest") -> dict:
+    """Make `child` PART OF `parent` ("nest", default; it only makes sense inside it, e.g. a Lua
+    script inside the truck it runs on), or take it out of its parent ("unnest"; no-op if none).
+    Not family membership (constructicon_family). Refused: nest_self, nest_cycle, nest_group_kind
+    (a family/collection can't nest or be a parent), nest_second_parent (already part of another
+    card: replace=true moves it). -> {ok, dry_run, changes, warnings, batch_id}.
     """
-    return cards.nest(child, parent, replace=replace, dry_run=dry_run).to_dict()
+    if action == "nest":
+        if parent is None:
+            raise InvalidInput('action="nest" needs parent.')
+        return cards.nest(child, parent, replace=replace, dry_run=dry_run).to_dict()
+    if action == "unnest":
+        _only_for('action="unnest"', parent=(parent, None), replace=(replace, False))
+        return cards.unnest(child, dry_run=dry_run).to_dict()
+    raise InvalidInput(f"Unknown action {action!r}: use nest or unnest.")
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_nest", "unnest"))
 def constructicon_unnest(child: str | int, dry_run: bool = False) -> dict:
-    """Take `child` out of its parent so it stands on its own (no-op if it has none)."""
     return cards.unnest(child, dry_run=dry_run).to_dict()
 
 
-@mcp.tool()
-def constructicon_add_to_family(family: str | int, member: str | int, dry_run: bool = False) -> dict:
-    """Put `member` in a family or collection (V2 cards 3.6). Membership is
-    many-to-many: a card can be in several families, and a family has many members;
-    it is NOT nesting and moves no files. Adding twice is a no-op.
+@mcp.tool(selector="action")
+def constructicon_family(family: str | int, member: str | int, action: typing.Literal["add", "remove"] = "add",
+                         dry_run: bool = False) -> dict:
+    """Put a card in a family or collection ("add", default; many-to-many, moves no files, twice is
+    a no-op) or take it out ("remove"). `family` must be a family/collection card and `member` must
+    not be one (bad_membership). -> {ok, dry_run, changes, warnings, batch_id}."""
+    if action == "add":
+        return cards.add_to_family(family, member, dry_run=dry_run).to_dict()
+    if action == "remove":
+        return cards.remove_from_family(family, member, dry_run=dry_run).to_dict()
+    raise InvalidInput(f"Unknown action {action!r}: use add or remove.")
 
-    `family` must be a card of kind family or collection; `member` must not be one
-    (families don't contain each other). Violations return
-    {"ok": false, "error": {"code": "bad_membership", ...}}. dry_run=true previews.
-    Returns {ok, dry_run, changes, warnings, batch_id}.
-    """
+
+@mcp.tool(alias_of=("constructicon_family", "add"))
+def constructicon_add_to_family(family: str | int, member: str | int, dry_run: bool = False) -> dict:
     return cards.add_to_family(family, member, dry_run=dry_run).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_family", "remove"))
 def constructicon_remove_from_family(family: str | int, member: str | int, dry_run: bool = False) -> dict:
-    """Take `member` out of a family or collection (no-op if it wasn't in it).
-    Neither card is otherwise changed."""
     return cards.remove_from_family(family, member, dry_run=dry_run).to_dict()
 
 
 # --- Typed links (V2 cards 3.8) ---
 
-@mcp.tool()
-def constructicon_link(a: str | int, b: str | int, type: str, note: str = "", dry_run: bool = False,
-                       batch_id: str | None = None) -> dict:
-    """Link two cards: "a <type> b". V2 cards 3.8.
-
-    type: built_for (a was built for b) | applies_to (a is applied to b) | used_in
-    (a is used in b) | inspired_by (a was inspired by b) | related (symmetric, stored
-    both ways). Directed types are stored once and read in reverse from b's side
-    (constructicon_list_links shows both). A pair can't be both typed and related:
-    a typed link over a related pair UPGRADES it (the related rows are removed),
-    while related over a typed pair is refused.
-
-    Errors come back as {"ok": false, "error": {code, message}}, same codes as HTTP:
-    bad_link (unknown type, self-link, a family/collection as the source of
-    built_for/applies_to/used_in), link_conflict (already linked, or related over a
-    typed pair), not_found (no such card). dry_run=true previews.
-    batch_id (optional): join an earlier call's batch so one constructicon_undo reverses
-    them together (e.g. the split_card, link, add_to_hobby of a reorganization).
-    Returns {ok, dry_run, changes, warnings, batch_id}.
+@mcp.tool(selector="action")
+def constructicon_link(a: str | int, b: str | int | None = None, type: str | None = None, note: str | None = None,
+                       dry_run: bool = False, batch_id: str | None = None,
+                       action: typing.Literal["add", "remove", "retype", "list"] = "add",
+                       from_type: str | None = None, to_type: str | None = None) -> dict | list:
+    """Typed links between cards, read "a <type> b". type: built_for | applies_to | used_in |
+    inspired_by (directed) | related (symmetric).
+    "add" (default; b, type, note): a typed link over a related pair UPGRADES it; related over a
+      typed pair is refused. Errors: bad_link (unknown type, self-link, a family/collection as the
+      source of built_for/applies_to/used_in), link_conflict.
+    "remove" (b, type optional): only that type, or with no type every link between the pair
+      (no-op with a warning when nothing matches).
+    "retype" (b, from_type, to_type): swap the type in one step; the note carries over unless note
+      is given.
+    "list": every link on card `a`, both directions: [{slug, title, kind, stage, type, direction
+      (out | in | both), label, note}].
+    Writes -> {ok, dry_run, changes, warnings, batch_id}; batch_id joins an earlier call's batch.
+    E.g. constructicon_link("lua-script", "rc-truck", "used_in").
     """
-    return cards.link(a, b, type, note, dry_run=dry_run, batch_id=batch_id).to_dict()
+    if action == "list":
+        _only_for('action="list"', b=(b, None), type=(type, None), note=(note, None), dry_run=(dry_run, False),
+                  batch_id=(batch_id, None), from_type=(from_type, None), to_type=(to_type, None))
+        return cards.list_links(a)
+    if b is None:
+        raise InvalidInput(f'action="{action}" needs b (the other card).')
+    if action == "add":
+        if not type:
+            raise InvalidInput('action="add" needs type.')
+        _only_for('action="add"', from_type=(from_type, None), to_type=(to_type, None))
+        return cards.link(a, b, type, "" if note is None else note, dry_run=dry_run, batch_id=batch_id).to_dict()
+    if action == "remove":
+        _only_for('action="remove"', note=(note, None), from_type=(from_type, None), to_type=(to_type, None))
+        return cards.unlink(a, b, type, dry_run=dry_run, batch_id=batch_id).to_dict()
+    if action == "retype":
+        if not (from_type and to_type):
+            raise InvalidInput('action="retype" needs from_type and to_type.')
+        _only_for('action="retype" (use from_type / to_type)', type=(type, None))
+        return cards.retype_link(a, b, from_type, to_type, note=note, dry_run=dry_run, batch_id=batch_id).to_dict()
+    raise InvalidInput(f"Unknown action {action!r}: use add, remove, retype or list.")
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_link", "remove"))
 def constructicon_unlink(a: str | int, b: str | int, type: str | None = None, dry_run: bool = False) -> dict:
-    """Remove link(s) between two cards. With `type`, only that type ("a <type> b"
-    exactly for a directed type; related removes both rows); without it, every link
-    between the pair in either direction. A no-op (with a warning) when nothing matches.
-    Returns {ok, dry_run, changes, warnings, batch_id} or {"ok": false, "error": ...}."""
     return cards.unlink(a, b, type, dry_run=dry_run).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_link", "retype"))
 def constructicon_retype_link(a: str | int, b: str | int, from_type: str, to_type: str,
                               note: str | None = None, dry_run: bool = False) -> dict:
-    """Change a link's type in one step (the upgrade/downgrade path): replaces the
-    `from_type` link between the pair (found in either direction) with
-    "a <to_type> b". The note carries over unless `note` is given. Errors: not_found
-    (no such link), bad_link (same type / unknown type / group-kind source),
-    link_conflict (the new link already exists, or related while another typed link
-    is on the pair). dry_run=true previews."""
     return cards.retype_link(a, b, from_type, to_type, note=note, dry_run=dry_run).to_dict()
 
 
 @mcp.tool()
 def constructicon_retype_links(mapping: list[dict], dry_run: bool = True, partial_ok: bool = False) -> dict:
-    """Bulk-retype v1 `related` links to typed ones. DRY-RUN BY DEFAULT: pass
-    dry_run=false to write.
-
-    mapping: [{a, b, to_type, from_type?='related'}] where each item reads
-    "a <to_type> b" (card ids or slugs). Every item is validated first; the whole
-    batch is applied in one transaction (all-or-nothing) unless partial_ok=true,
-    which applies the valid items and reports the rest. Find candidates with
-    constructicon_list_needs_decision(need='untyped_link').
-    Returns {ok, dry_run, applied, changes: [{card, field, before, after}], warnings,
-    batch_id, items: [{a, b, to_type, ok, changes, error?}]}."""
+    """Retype many v1 `related` links at once. DRY-RUN BY DEFAULT (dry_run=false writes).
+    mapping: [{a, b, to_type, from_type="related"}], each read "a <to_type> b". All-or-nothing
+    in one transaction unless partial_ok=true (valid ones applied, the rest reported). Candidates:
+    constructicon_needs(view="card_decisions", need="untyped_link").
+    -> {ok, dry_run, applied, changes, warnings, batch_id, items: [{a, b, to_type, ok, changes,
+    error?}]}."""
     return cards.retype_links(mapping, dry_run=dry_run, partial_ok=partial_ok)
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_link", "list"))
 def constructicon_list_links(card: str | int) -> list[dict] | dict:
-    """Every link on a card, both directions: [{slug, title, kind, stage, type,
-    direction, label, note}]. direction is out (this card is the source: "this
-    <type> that"), in (this card is the target: labelled in reverse, e.g. "Made
-    for this") or both (related, symmetric)."""
     return cards.list_links(card)
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_needs", "card_decisions"))
 def constructicon_list_needs_decision(kind: str | None = None, need: str | None = None,
                                       hobby: str | None = None, limit: int | None = None,
                                       card: str | int | None = None) -> list[dict]:
-    """List cards waiting on an owner decision, with a suggested answer for each.
-
-    Two sources. STORED questions queued by the v1 -> v2 migration:
-    need = card_status (done vs in use / paused vs collection), card_built_for
-    (a means-to-an-end card: which card was it built for), card_kind (Thing or
-    Project?), card_family_members (is this nested-parent really a family, and which
-    cards belong in it: pick several); answer one with constructicon_resolve_pending_decision
-    (decision_id, choice = an option key). COMPUTED needs, recomputed on every
-    call and never stored (decision_id is null; card_slug is null and hobby_slug
-    is set, since they belong to a hobby): need = hobby_inactive_with_active_work
-    (an Inactive hobby that has an active project) and hobby_active_untouched (an
-    Active hobby untouched for ~2 years). Fix those with constructicon_set_hobby_status.
-    Also computed: need = untyped_link (a v1 'related' pair where a typed reading is
-    plausible; `link` = {a, b, type} is the suggestion, apply with constructicon_retype_links).
-    Also computed: need = missing_provenance (a card with no provenance; `suggested` is the
-    majority file provenance mapped to a card value when >50% of its non-write-up files
-    agree, never applied; fix with constructicon_set_card_provenance),
-    missing_provenance_credit (a found/collected card with no credit) and
-    missing_whereabouts (a Thing with none; fix with constructicon_set_whereabouts).
-    Also computed: need = status_conflict (active/inactive disagrees with the parent card, or Done
-    with nested work still in progress) and blank_writeup_with_files (the auto-made write-up is
-    still empty although the card has files). To clear many stored questions at once, see
-    constructicon_resolve_decisions (accept_suggested + dry-run).
-
-    Filters: card (one card, slug or id), kind (the card's kind, or 'hobby' for hobby needs only; any other kind
-    leaves hobby needs out), need, hobby (slug), limit.
-    Each row: {need, card_slug, title, detail, suggested, suggested_reason,
-    confidence, decision_id, options: [{key, label}]}. `suggested` is only a
-    suggestion; nothing is applied until the decision is resolved.
-    """
     return cards.list_needs_decision(kind=kind, need=need, hobby=hobby, limit=limit, card=card)
 
 
@@ -2195,331 +2428,259 @@ def constructicon_list_needs_decision(kind: str | None = None, need: str | None 
 @mcp.tool()
 def constructicon_split_card(source: str | int, parts: list[dict], keep_in_source: bool = False,
                              dry_run: bool = False, batch_id: str | None = None) -> dict:
-    """Carve files (and a description) out of one card into new cards. V2 cards 6 / 7.4.
-
-    `parts` is a list; each part is {title, kind='project', relation='sibling'|'child',
-    stage, stop_reason, provenance, provenance_credit, whereabouts, whereabouts_note,
-    description, move_description, file_slugs: [file slugs], link_to_source: {type, note?}
-    or null, hobbies: 'inherit'|[hobby slugs], families: 'inherit'|[family slugs], highlight}.
-    A `child` is nested under the source (nest rules apply); a `sibling` has no parent and,
-    by default, gets the source's hobbies and family memberships copied (a child gets none
-    unless you say so). Each part gets its own kind, provenance, stage and whereabouts, and
-    is a full card with the usual blank write-up. Files in file_slugs are MOVED out of the
-    source (one file may be named by several parts; it lands in each) unless
-    keep_in_source=true (then copied); the source's write-up can't be split out.
-
-    All in one transaction under one batch_id: any rule violation writes nothing. Pass that
-    batch_id to later calls (constructicon_link, constructicon_add_to_hobby) to keep the
-    whole reorganization in one batch, and constructicon_undo(batch_id) reverses it.
-    dry_run=true previews exactly what would happen. Returns {ok, dry_run, changes, warnings,
-    batch_id, created: [{id, slug, title, kind, relation, files}]}."""
+    """Carve files (and description) out of one card into new cards, in one batch.
+    parts: [{title, kind="project", relation="sibling" | "child", stage, stop_reason, provenance,
+    provenance_credit, whereabouts, whereabouts_note, description, move_description, file_slugs,
+    link_to_source: {type, note?} | null, hobbies: "inherit" | [slugs], families: "inherit" |
+    [slugs], highlight}]. A child is nested under the source; a sibling copies the source's hobbies
+    and families by default. Each part is a full card with a blank write-up. Files are MOVED out of
+    the source unless keep_in_source=true; the source's write-up can't be split out. Pass the
+    returned batch_id to later calls (constructicon_link, constructicon_card_hobby) to keep a
+    reorganization in one undo.
+    -> {ok, dry_run, changes, warnings, batch_id, created: [{id, slug, title, kind, relation,
+    files}]}."""
     return cards.split_card(source, parts, keep_in_source=keep_in_source, dry_run=dry_run,
                             batch_id=batch_id).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_delete", "card"))
 def constructicon_delete_project(card: str | int, dry_run: bool = False, batch_id: str | None = None) -> dict:
-    """Delete a project/card cleanly (#497). Its own auto-made write-up goes with it only while
-    it is still blank; a write-up with text is kept as an ordinary unfiled document and named in
-    a warning. Links in either direction, family/hobby/file memberships and blog-entry attachments
-    are removed; open questions about the card are resolved as stale. Nested children are
-    orphaned (stand on their own), never deleted; files themselves are never deleted. Every row
-    is imaged: constructicon_undo(batch_id) restores the whole thing. dry_run=true previews.
-    Returns {ok, dry_run, changes, warnings, batch_id, deleted, children_orphaned, items_detached, writeup}."""
-    res = cards.delete_card(card, dry_run=dry_run, batch_id=batch_id)
-    return {**res.to_dict(), **res.data}
+    return _delete_card(card, dry_run, batch_id)
 
 
 @mcp.tool()
 def constructicon_merge_cards(keep: str | int, absorb: list[str | int], dry_run: bool = False,
                               batch_id: str | None = None) -> dict:
-    """Fold one or more cards into `keep` (the reverse of split). V2 cards 6.
-
-    Files are unioned (deduped); hobbies and family memberships unioned; the absorbed
-    cards' children are re-parented to `keep`; links are re-pointed (self-links and duplicates
-    dropped; a typed link beats a related one on the same pair); blog-entry attachments
-    re-pointed. keep's cover and write-up win; an absorbed card's blank write-up goes with it
-    and a real one stays as an ordinary file. Open questions about absorbed cards are resolved
-    as stale. The absorbed card rows are deleted but row-imaged: constructicon_undo(batch_id)
-    brings them back with the same id and files. Refused (nothing written) with nest_cycle, or
-    bad_merge for a family/collection merged with a non-group card. dry_run=true previews.
-    Returns {ok, dry_run, changes, warnings, batch_id, keep, absorbed}."""
+    """Fold cards into `keep` (the reverse of split), in one batch. Files, hobbies and families are
+    unioned; children re-parented; links and blog attachments re-pointed (duplicates dropped; typed
+    beats related). keep's cover and write-up win; an absorbed blank write-up goes, a real one stays
+    as a file. Undo restores the absorbed cards with their ids. Refused: nest_cycle, bad_merge (a
+    family/collection with a non-group card). -> {ok, dry_run, changes, warnings, batch_id, keep,
+    absorbed}."""
     return cards.merge_cards(keep, absorb, dry_run=dry_run, batch_id=batch_id).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_card_files", "move"))
 def constructicon_move_files(slugs: list[str], from_card: str | int, to_card: str | int, dry_run: bool = False,
                              batch_id: str | None = None) -> dict:
-    """Move files (by slug) from one card to another: they leave from_card and join to_card.
-    A card's own write-up can't be moved. Refused with bad_files if a file isn't in from_card.
-    Tags follow the move (#590), in both tag stores (the tag tree and the free-text chips): the files
-    gain to_card's linked tag and lose from_card's own linked tag (tags added by hand stay; a file
-    still on another card with the same linked tag keeps it). One batch, so one undo reverses the
-    move and the tag swap together. dry_run=true previews. Returns {ok, dry_run, changes, warnings,
-    batch_id, tags_added, tags_removed}."""
     return cards.move_files(slugs, from_card, to_card, dry_run=dry_run, batch_id=batch_id).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_card_files", "copy"))
 def constructicon_copy_files(slugs: list[str], from_card: str | int, to_card: str | int, dry_run: bool = False,
                              batch_id: str | None = None) -> dict:
-    """Add files from one card to another WITHOUT removing them (files are many-to-many, so
-    a photo can live in a project and in a Thing). Same rules as constructicon_move_files, except the
-    files keep from_card's tag and only gain to_card's linked tag (#590)."""
     return cards.copy_files(slugs, from_card, to_card, dry_run=dry_run, batch_id=batch_id).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_card_hobby", "add"))
 def constructicon_add_to_hobby(card: str | int, hobby: str | int, dry_run: bool = False,
                                batch_id: str | None = None) -> dict:
-    """Put a card in a hobby (many allowed; adding twice is a no-op). Logged and undoable.
-    (constructicon_add_project_to_hobby is the older name for the same thing.)
-    Returns {ok, dry_run, changes, warnings, batch_id}."""
     return cards.add_to_hobby(card, hobby, dry_run=dry_run, batch_id=batch_id).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_card_hobby", "remove"))
 def constructicon_remove_from_hobby(card: str | int, hobby: str | int, dry_run: bool = False,
                                     batch_id: str | None = None) -> dict:
-    """Take a card out of a hobby (no-op if it wasn't in it). Logged and undoable."""
     return cards.remove_from_hobby(card, hobby, dry_run=dry_run, batch_id=batch_id).to_dict()
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_home(card: str | int, target: str | int | None = None, dry_run: bool = False) -> dict:
-    """Override a card's home (the breadcrumb parent / export link target), or clear the override.
-    V2 cards 3.10. The automatic home is: the parent, else the first family the card is in, else
-    its first hobby, else the home page; a manual override beats all of that.
-
-    target: 'card:<slug>', 'hobby:<slug>', or a bare card slug/id (a bare name that is no card
-    is tried as a hobby). Omit/null to CLEAR the override (back to automatic). A card can't be its
-    own home (bad_home). A dangling override (target deleted) silently falls back to automatic and
-    shows up in constructicon_explain_card's warnings. Home is not something to curate: this is for
-    the rare correction. Returns {ok, dry_run, changes, warnings, batch_id}."""
     return cards.set_home(card, target, dry_run=dry_run).to_dict()
 
 
 @mcp.tool()
 def constructicon_explain_card(card: str | int) -> dict:
-    """Everything about a card in one call: what to read BEFORE proposing a change. Read-only.
-    V2 cards 6.
-
-    Returns identity (id, slug, title, description), kind, activity/stage/stop_reason (+ labels),
-    `provisional` (true while the status is still the migration's guess), whereabouts/provenance
-    (+ notes, credits), highlight, `hobbies` (with group codes and activity), `families`,
-    `members` (for a family/collection), `parent`, `children`, `links` (typed, with direction),
-    `home` (resolved + source: override|parent|family|hobby|none, + dangling_override) and
-    `home_chain` (the breadcrumb), `files` (total, counts per media type, earliest/latest date),
-    `level` (the 0-5 pips: cover, dates, writeup, owner_words, stack, each with a reason),
-    `open_decisions` (stored questions, with suggested answers), `needs` (computed needs for this
-    card), `warnings`, `suggestions` (computed provenance, suggested typed links) and
-    `recent_changes` (the last 5 change-log rows, with batch ids for undo)."""
+    """Everything about a card, to read BEFORE proposing a change (read-only): identity, status (+
+    labels, `provisional`), whereabouts, provenance, highlight, hobbies, families, members, parent,
+    children, links, `home` (+ source, dangling_override) and `home_chain`, `files` (counts, date
+    range), `level` (the 0-5 pips, each with a reason), open_decisions, needs, warnings,
+    suggestions (provenance, typed links) and recent_changes (last 5, with batch ids)."""
     return cards.explain_card(card)
 
 
 @mcp.tool()
 def constructicon_bulk_edit(op: str, items: list[dict], dry_run: bool = True, partial_ok: bool = False) -> dict:
-    """Run ONE setter over many cards. DRY-RUN BY DEFAULT: pass dry_run=false to write. V2 cards 6.
-
-    op (allow-listed): set_status, set_kind, set_whereabouts, set_card_provenance, set_home,
-    set_card_highlight, add_to_hobby, remove_from_hobby, add_to_family, remove_from_family, nest,
-    unnest, link, unlink, retype_link, set_hobby_activity.
-    items: [{card, args: {...}}] where `card` is the subject and args are that setter's other
-    arguments, e.g. op='set_status' -> {card: 'x', args: {stage: 'done'}}; op='add_to_hobby' ->
-    {card: 'x', args: {hobby: '3d-printing'}}; op='add_to_family' -> {card: <member>, args:
-    {family: <family>}}; op='nest' -> {card: <child>, args: {parent: <parent>}}; op='link' ->
-    {card: a, args: {b, type, note?}}; op='set_hobby_activity' -> {card: <hobby slug>, args:
-    {value: 'inactive'}}. Unknown arguments are refused.
-
-    Items run in order inside one transaction (later ones see earlier ones). Every item is
-    validated and reported with its before/after. All-or-nothing: if ANY item fails nothing is
-    written, unless partial_ok=true, which applies the valid ones and reports the rest. One
-    batch_id: constructicon_undo(batch_id) reverses the lot.
-    Returns {ok, dry_run, op, applied, changes, warnings, batch_id, items: [{card, ok, applied,
-    changes, warnings, error?}]}."""
+    """Run ONE setter over many cards. DRY-RUN BY DEFAULT (dry_run=false writes).
+    op: set_status, set_kind, set_whereabouts, set_card_provenance, set_home, set_card_highlight,
+    add_to_hobby, remove_from_hobby, add_to_family, remove_from_family, nest, unnest, link, unlink,
+    retype_link, set_hobby_activity (these are the core operation names).
+    items: [{card, args}]: e.g. set_status {card: "x", args: {stage: "done"}}; add_to_hobby {card:
+    "x", args: {hobby: "3d-printing"}}; add_to_family {card: <member>, args: {family: <family>}};
+    nest {card: <child>, args: {parent}}; link {card: a, args: {b, type, note?}};
+    set_hobby_activity {card: <hobby>, args: {value: "inactive"}}. Unknown args are refused.
+    In order, one transaction; all-or-nothing unless partial_ok=true.
+    -> {ok, dry_run, op, applied, changes, warnings, batch_id, items: [{card, ok, applied, changes,
+    warnings, error?}]}."""
     return cards.bulk(op, items, dry_run=dry_run, partial_ok=partial_ok)
 
 
 @mcp.tool()
 def constructicon_resolve_decisions(items: list, accept_suggested: bool = False, dry_run: bool = True,
                                     partial_ok: bool = False) -> dict:
-    """Clear many card questions (card_status / card_built_for / card_kind / card_family_members)
-    at once. DRY-RUN BY DEFAULT: pass dry_run=false to write. V2 cards 7.3.
-
-    items: [{decision_id, choice}] (or {decision_id, choices: [..]} for multi-answer questions);
-    with accept_suggested=true, just a list of decision ids: each is answered with ITS OWN
-    suggested option, and a question with no suggestion is skipped (reported, not an error).
-    Find ids and suggestions with constructicon_list_needs_decision. Each answer runs through the
-    same validators as a manual edit. One transaction, one batch_id (undoable): if a decision can't
-    be applied nothing is written, unless partial_ok=true.
-    Returns {ok, dry_run, batch_id, applied, would_apply, skipped, failed, changes, warnings,
-    items: [{decision_id, card_slug, choice, status: applied|would_apply|skipped|failed|rolled_back,
-    changes, reason?, error?}]}."""
+    """Answer many card questions (card_status, card_built_for, card_kind, card_family_members) at
+    once. DRY-RUN BY DEFAULT (dry_run=false writes).
+    items: [{decision_id, choice}] (or choices: [...] for multi-answer); with
+    accept_suggested=true just decision ids, each answered with its OWN suggestion (none:
+    skipped). Find them with constructicon_needs(view="card_decisions"). All-or-nothing unless
+    partial_ok=true. -> {ok, dry_run, batch_id, applied, would_apply, skipped, failed, changes,
+    warnings, items: [{decision_id, card_slug, choice, status, changes, reason?, error?}]}."""
     return cards.resolve_decisions(items, accept_suggested=accept_suggested, dry_run=dry_run,
                                    partial_ok=partial_ok)
 
 
 @mcp.tool()
 def constructicon_undo(audit_id: str | int, force: bool = False, dry_run: bool = False) -> dict:
-    """Reverse a change-log entry, or a whole batch. V2 cards 3.13.
-
-    audit_id: one change-log row id (from constructicon_list_changes), or a batch_id (every row
-    of that operation or bulk call, reversed newest-first in one transaction). Writes its own
-    log row, so an undo can itself be undone. REFUSES, writing nothing, with
-    {"ok": false, "error": {code}}: undo_conflict (a row it would restore was changed since;
-    the message names the field and values; force=true overrides), undo_refused (a migration row,
-    an entry that was already undone, or one that recorded no row images), not_found.
-    dry_run=true reports what would be reversed. Returns {ok, dry_run, changes, warnings,
-    batch_id, undone: [audit ids], undone_ops}."""
+    """Reverse a change-log row, or a whole batch (audit_id = a row id or a batch_id), newest
+    first, in one transaction. An undo is logged, so it can be undone too. Refused: undo_conflict
+    (changed since; the message says what; force=true overrides), undo_refused (a migration, an
+    already-undone entry, no row images), trash_expired. -> {ok, dry_run, changes, warnings,
+    batch_id, undone, undone_ops}."""
     return cards.undo(audit_id, force=force, dry_run=dry_run).to_dict()
 
 
 @mcp.tool()
 def constructicon_list_changes(card: str | int | None = None, batch_id: str | None = None, limit: int = 50) -> list[dict]:
     """The change log, newest first: [{id, op, actor, batch_id, timestamp, affected_slugs,
-    undone_by, mutations}]. Every core write is recorded with row images (table, key, before,
-    after). `card` narrows to one card's slug/id; `batch_id` to one operation. Feed an `id` or a
-    `batch_id` to constructicon_undo."""
+    undone_by, mutations: [{table, key, before, after}]}]. Filter by card or batch_id."""
     return cards.list_changes(card=card, batch_id=batch_id, limit=limit)
 
 
 @mcp.tool()
 def constructicon_sweep_stale_decisions(dry_run: bool = False) -> dict:
-    """Resolve every open question that can't be answered any more (#551): its file or card was
-    deleted, a project-match question has fewer than 2 candidate cards left, or a "does this
-    replace...?" question has no candidate left. The web app runs this sweep at startup and hourly;
-    listing questions never resolves anything. Logged (op sweep_stale_decisions) and undoable with
-    constructicon_undo(batch_id). Returns {ok, dry_run, changes, warnings, batch_id, resolved:
-    [{id, kind, post_slug, reason}], count, by_kind}."""
+    """Resolve every open question nothing can answer any more (its file or card is gone, a
+    card-match question has under 2 candidates left, a "does this replace ...?" question has no
+    candidate). The web app also runs this hourly; listing never resolves anything.
+    -> {ok, dry_run, changes, warnings, batch_id, resolved: [{id, kind, post_slug, reason}], count,
+    by_kind}."""
     return decisions.sweep_stale(dry_run=dry_run).to_dict()
 
 
 
 
-# --- Curator Stage 3a: Nudges ---
+# --- Curator: the queue, nudges, needs and questions ---
 
-@mcp.tool()
-def constructicon_list_needs(kind: str | None = None, limit: int | None = None) -> list[dict]:
-    """Curator Stage 3a: list current nudges (actionable needs).
-
-    Returns a ranked list of nudges, sorted by priority DESC. Each nudge includes:
-        - nudge_key: stable id for dismissal
-        - kind: nudge type (missing_cover, unfiled_objects, confirm_automatch, etc.)
-        - target_type: 'project' or 'global'
-        - target_id, target_slug: project id/slug or None for global nudges
-        - title, summary: human-readable text
-        - priority: computed score (base_impact * status_weight)
-        - base_impact, status_weight: components of priority
-        - action: descriptor dict (type, project_slug, etc.) for the UI/agent to interpret
-
-    Optional filters:
-        - kind: filter by nudge kind (e.g., 'missing_cover', 'unfiled_objects')
-        - limit: cap the result count (default: all)
-
-    Dismissed nudges are excluded automatically. Deferred ones stay in the list with
-    deferred=true. For the whole picture (questions + nudges + needs grouped by card, with
-    deferred items split out) use constructicon_curation_queue.
-    """
+def _nudges(kind, limit):
+    """Curator nudges (dismissed ones left out), filtered by kind, then capped."""
     needs = curator_needs.list_needs()
-
-    # Filter by kind if requested
     if kind is not None:
         needs = [n for n in needs if n["kind"] == kind]
-
-    # Limit if requested
     if limit is not None:
         needs = needs[:limit]
-
     return needs
 
 
-@mcp.tool()
-def constructicon_dismiss_need(nudge_key: str) -> dict:
-    """Dismiss a nudge or computed need for good. (The timed snooze is gone: to set
-    something aside without losing it, use constructicon_defer.)
-
-    nudge_key: the `key` of a nudge/need from constructicon_curation_queue (or the
-        nudge_key from constructicon_list_needs). A question ("decision:<id>") can't be
-        dismissed: answer it or defer it.
-
-    Returns {ok: true, changed}. Recorded in the change log, so it can be undone."""
-    return curation_queue.dismiss(nudge_key)  # a QueueError (400 bad_request) becomes the shared error shape
-
-
-@mcp.tool()
-def constructicon_curation_queue(card: str | None = None, include_deferred: bool = True) -> dict:
-    """The Curator queue: every open question, nudge and need in ONE list, grouped by card
-    (the same thing the owner sees in the Curator tab).
-
-    Returns {groups, deferred, counts}. Each group is one card (type 'card': slug, title,
-    card_kind, activity, last_touched) or a non-card bucket (type 'hobby' = one hobby's
-    flags, 'uploads' = file-level questions about fresh uploads, 'collection' = whole-
-    collection nudges like unfiled objects). Order: Active cards first, then most recently
-    touched; then hobbies, uploads, collection. Inside a group: questions first (lowest
-    confidence first), then nudges, then needs.
-
-    Each item: {type: question|nudge|need, key, label, kind, group, href, deferred,
-    dismissible} plus, for a question, {id, options, suggested: {picks, labels, reason},
-    confidence, multi}. `group` is the details-panel group that fixes it (the page
-    /project/<slug>?edit=<group>). Answer a question with constructicon_resolve_pending_decision
-    (id, choice) or constructicon_resolve_decisions (accept_suggested). Set something aside with
-    constructicon_defer (no timer); bring it back with constructicon_bring_back; dismiss a
-    nudge/need for good with constructicon_dismiss_need. counts.open is the number on the
-    Curator tab's badge (open, non-deferred items).
-
-    card: limit to one card's slice (slug). include_deferred=false drops the Deferred section."""
-    q = curation_queue.build_queue(card=card)
+def _queue(card, include_deferred):
+    """The Curator queue as the caller may see it (curation_queue.for_actor: the registered door;
+    unchanged for an admin)."""
+    q = curation_queue.for_actor(curation_queue.build_queue(card=card))
     if not include_deferred:
         q = {**q, "deferred": []}
     return q
 
 
-@mcp.tool()
-def constructicon_defer(key: str) -> dict:
-    """Defer a queue item (a question, nudge or need) from constructicon_curation_queue.
-    It moves to the trailing Deferred section, with no timer, and stays there until it
-    is answered or brought back (constructicon_bring_back). Recorded in the change log.
+@mcp.tool(selector="view")
+def constructicon_needs(view: typing.Literal["queue", "nudges", "caption", "card_decisions", "pending"] = "queue",
+                        card: str | int | None = None, include_deferred: bool = True, nudge_kind: str | None = None,
+                        card_kind: str | None = None, need: str | None = None, hobby: str | None = None,
+                        limit: int | None = None, include_failed: bool = True) -> dict | list:
+    """What waits on curation, in one of five views:
+    "queue" (default; card, include_deferred): every open question, nudge and need, grouped by
+      card, as the owner's Curator tab shows it -> {groups, deferred, counts}. Groups: cards
+      (active first, then most recently touched), then hobby / uploads / collection buckets;
+      inside, questions first. Item: {type: question | nudge | need, key, label, kind, group,
+      href, deferred, dismissible} (+ for a question: id, options, suggested, confidence, multi).
+      counts.open is the tab's badge.
+    "card_decisions" (card, card_kind, need, hobby, limit): cards waiting on a decision, each with
+      a suggestion: [{need, card_slug, hobby_slug, title, detail, suggested, suggested_reason,
+      confidence, decision_id, options, link?}]. Stored questions (card_status, card_built_for,
+      card_kind, card_family_members: answer with constructicon_resolve_pending_decision or
+      constructicon_resolve_decisions) and computed needs (hobby_inactive_with_active_work,
+      hobby_active_untouched, untyped_link, missing_provenance, missing_provenance_credit,
+      missing_whereabouts, status_conflict, blank_writeup_with_files: fix the field).
+      card_kind "hobby" = hobby needs only.
+    "pending" (no filters): every open stored question with its options: card questions,
+      project_match (candidates), retype (options; the item's current type = keep it),
+      item_supersedes (options, suggested).
+    "nudges" (nudge_kind, limit): Curator nudges by priority: [{nudge_key, kind, target_type,
+      target_id, target_slug, title, summary, priority, base_impact, status_weight, action,
+      deferred}].
+    "caption" (limit default 50, max 500; include_failed): items with no caption yet (never
+      sensitive) -> {items: [{slug, name, type, filename, caption_status, projects, hobbies}],
+      total}. Then constructicon_view and constructicon_set_caption.
+    Act on an item with constructicon_queue_item(key, action).
+    """
+    defaults = {"card": (card, None), "include_deferred": (include_deferred, True), "nudge_kind": (nudge_kind, None),
+                "card_kind": (card_kind, None), "need": (need, None), "hobby": (hobby, None), "limit": (limit, None),
+                "include_failed": (include_failed, True)}
+    applies = {"queue": ("card", "include_deferred"), "nudges": ("nudge_kind", "limit"),
+               "caption": ("limit", "include_failed"), "card_decisions": ("card", "card_kind", "need", "hobby", "limit"),
+               "pending": ()}
+    if view not in applies:
+        raise InvalidInput(f"Unknown view {view!r}: use {', '.join(applies)}.")
+    _only_for(f'view="{view}"', **{k: v for k, v in defaults.items() if k not in applies[view]})
+    if view == "queue":
+        return _queue(card, include_deferred)
+    if view == "nudges":
+        return _nudges(nudge_kind, limit)
+    if view == "caption":
+        return _needs_caption(50 if limit is None else limit, include_failed)
+    if view == "card_decisions":
+        return cards.list_needs_decision(kind=card_kind, need=need, hobby=hobby, limit=limit, card=card)
+    return _pending_decisions()
 
-    key: the item's `key` ("decision:<id>", "<kind>:project:<id>", "need:<need>:<slug>")."""
+
+@mcp.tool(alias_of=("constructicon_needs", "nudges"))
+def constructicon_list_needs(kind: str | None = None, limit: int | None = None) -> list[dict]:
+    return _nudges(kind, limit)
+
+
+@mcp.tool(alias_of=("constructicon_needs", "queue"))
+def constructicon_curation_queue(card: str | None = None, include_deferred: bool = True) -> dict:
+    return _queue(card, include_deferred)
+
+
+@mcp.tool(selector="action")
+def constructicon_queue_item(key: str, action: typing.Literal["defer", "bring_back", "dismiss"]) -> dict:
+    """Act on one Curator queue item by its `key` (from constructicon_needs: "decision:<id>",
+    "<kind>:project:<id>", "need:<need>:<slug>"):
+    "defer": set it aside in the Deferred section, no timer, until answered or brought back.
+    "bring_back": back into the main queue (a dismissed one is not).
+    "dismiss": a nudge or need, for good. A question can't be dismissed: answer or defer it.
+    Logged and undoable. -> {ok, changed}.
+    """
+    if action == "dismiss":
+        return curation_queue.dismiss(key)  # a QueueError (400 bad_request) becomes the shared error shape
+    if action == "defer":
+        return curation_queue.defer(key)
+    if action == "bring_back":
+        return curation_queue.bring_back(key)
+    raise InvalidInput(f"Unknown action {action!r}: use defer, bring_back or dismiss.")
+
+
+@mcp.tool(alias_of=("constructicon_queue_item", "dismiss"))
+def constructicon_dismiss_need(nudge_key: str) -> dict:
+    return curation_queue.dismiss(nudge_key)  # a QueueError (400 bad_request) becomes the shared error shape
+
+
+@mcp.tool(alias_of=("constructicon_queue_item", "defer"))
+def constructicon_defer(key: str) -> dict:
     return curation_queue.defer(key)  # a QueueError (400 bad_request) becomes the shared error shape
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_queue_item", "bring_back"))
 def constructicon_bring_back(key: str) -> dict:
-    """Bring a deferred queue item back into the main queue (undo constructicon_defer).
-    key: the item's `key`. A dismissed nudge is not brought back by this."""
     return curation_queue.bring_back(key)  # a QueueError (400 bad_request) becomes the shared error shape
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_needs", "pending"))
 def constructicon_list_pending_decisions() -> list[dict]:
-    """#240/#446/#448: List all open pending decisions, with automatic stale-cleanup.
+    return _pending_decisions()
 
-    The "Needs your input" queue surfaces two decision kinds:
-    - project_match: an upload matched multiple project titles (pick which to attach to)
-    - retype: a file's type was deferred (pick the actual media type)
 
-    Returns a list of dicts, each with:
-        {
-            "id": int (decision id),
-            "kind": "project_match" | "retype",
-            "slug": str (capture_events.slug),
-            "title": str (object display name),
-            "media_type": str (current media_type),
-            "created_at": float (UTC unix seconds),
-            "question": str (retype only),
-            "options": [{"key": str, "label": str, ...}] (retype only),
-            "candidates": [{"id": int, "title": str, "slug": str}] (project_match only),
-        }
-
-    Decisions become stale and are automatically resolved if:
-    - The object (post_slug) has been deleted
-    - A project_match has fewer than 2 candidates remaining
-
-    For a retype question, answer with constructicon_resolve_pending_decision
-    and one option's key as `choice`; the option whose key equals the item's
-    current media_type means "keep it as it is".
-    """
+def _pending_decisions():
+    """Every open stored question (decisions.list_open: leaves out stale ones and questions about
+    items the caller can't see; resolves nothing), shaped per kind."""
     result = []
     for item in decisions.list_open():
         if cards.is_card_decision_slug(item["post_slug"]):
@@ -2571,78 +2732,51 @@ def constructicon_list_pending_decisions() -> list[dict]:
     return result
 
 
-@mcp.tool()
-def constructicon_mark_superseded(old: str, new: str, dry_run: bool = False, batch_id: str | None = None) -> dict:
-    """Revision tracking (#477): file `new` supersedes file `old` ("rev C replaces rev B"), so `old`
-    shows "Superseded, see <current>" and drops out of browse listings (it stays findable by search
-    and one click away). Both are item slugs. A chain is linear: A -> B -> C, and the CURRENT revision
-    is the one with nothing newer. This is the explicit tool; the upload-time "does this replace ...?"
-    question is only ever answered by the owner (constructicon_resolve_pending_decision, kind
-    item_supersedes, choice = one option key: the older file's slug (this file replaces it),
-    "reverse:<slug>" (that file replaces this one), "same:<slug>" (identical bytes: this upload goes to
-    the trash, undoable for 7 days) or "none").
+@mcp.tool(selector="action")
+def constructicon_revision(slug: str, action: typing.Literal["supersede", "remove"], new: str | None = None,
+                           dry_run: bool = False, batch_id: str | None = None) -> dict:
+    """Revision chains of files (linear: A -> B -> C; the CURRENT one has nothing newer). An older
+    revision shows "Superseded" and leaves browse listings (search still finds it).
+    "supersede" (slug = the older file, new = the file that replaces it): -> {ok, dry_run,
+      batch_id, old, new, chain}. Errors: bad_revision (self-link, redacted), revision_cycle,
+      revision_conflict (old already has a newer one, or new already replaces another).
+    "remove": take `slug` out and close the gap (A -> B -> C minus B is A -> C). A no-op
+      (removed: false) for a file in no chain. -> {ok, dry_run, batch_id, slug, removed, chain}.
+    Read a chain with constructicon_get(slug, include=["revisions"]). Upload-time "does this
+    replace ...?" questions are the owner's (constructicon_resolve_pending_decision).
+    """
+    if action == "supersede":
+        if not new:
+            raise InvalidInput('action="supersede" needs new (the item that replaces slug).')
+        return revisions.mark_superseded(slug, new, batch_id=batch_id, dry_run=dry_run)
+    if action == "remove":
+        _only_for('action="remove"', new=(new, None))
+        return revisions.remove_from_chain(slug, batch_id=batch_id, dry_run=dry_run)
+    raise InvalidInput(f"Unknown action {action!r}: use supersede or remove.")
 
-    Errors ({"ok": false, "error": {code, message}}): not_found; bad_revision (self-link, or a
-    redacted item); revision_cycle (new is already at or before old in the chain);
-    revision_conflict (old already has a newer revision, or new already replaces another item).
-    dry_run=true validates only. One change-log entry: constructicon_undo(batch_id) reverses it.
-    Returns {ok, dry_run, batch_id, old, new, chain: [slugs, oldest first]}."""
+
+@mcp.tool(alias_of=("constructicon_revision", "supersede"))
+def constructicon_mark_superseded(old: str, new: str, dry_run: bool = False, batch_id: str | None = None) -> dict:
     return revisions.mark_superseded(old, new, batch_id=batch_id, dry_run=dry_run)
 
 
-@mcp.tool()
+@mcp.tool(alias_of=("constructicon_revision", "remove"))
 def constructicon_remove_from_revisions(slug: str, dry_run: bool = False, batch_id: str | None = None) -> dict:
-    """Take a file out of its revision chain (#477) and close the gap: A -> B -> C minus B is
-    A -> C; minus the oldest, B -> C stands alone; minus the current one, the previous revision
-    becomes current. A no-op ({"removed": false}) for a file in no chain. Undoable with
-    constructicon_undo(batch_id). Returns {ok, dry_run, batch_id, slug, removed, chain}."""
     return revisions.remove_from_chain(slug, batch_id=batch_id, dry_run=dry_run)
-
-
-@mcp.tool()
-def constructicon_list_revisions(slug: str) -> dict:
-    """The revision chain a file belongs to (#477), oldest first: [{slug, title, filename, rev,
-    is_current, is_this, redacted}], plus `current` (the newest revision), `superseded` (is this
-    file an older one) and this file's `rev` of `of`. {"in_chain": false} for a file with no revisions."""
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
-    policy.require_view(row, message=f"No item {slug!r}.")  # #557
-    return {"ok": True, **revisions.revision_view(slug)}
 
 
 @mcp.tool()
 def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", project_ids: list[int] | None = None,
                                            choices: list[str] | None = None) -> dict:
-    """#240/#446/#448: Resolve a pending decision with the owner's choice.
-
-    For project_match decisions:
-        project_ids: list of project IDs to attach to (may be empty for "none of these")
-        choice: unused
-
-    For retype decisions:
-        choice: the media_type key to retype to (or empty to skip)
-        project_ids: unused
-
-    For V2 card decisions (kind card_status / card_built_for / card_kind, slug
-    "card:<project slug>"):
-        choice: one option key from constructicon_list_pending_decisions (e.g. "in_use")
-        choices: several option keys for multi-answer questions (card_built_for,
-        card_family_members). A family answer turns the card into a family, adds the
-        picked cards as members and takes any picked nested child out of the nesting
-        (all in one logged batch); "none" leaves everything as it is.
-        The option's change runs through the same validators as a manual edit; if it
-        is invalid today the decision stays open and {"ok": false, "error": {code,
-        message}} comes back. card_built_for answers that create a link (a candidate
-        card) aren't available until typed links land (piece 4); "is_event" and
-        "none" work now.
-
-    Returns:
-        {"ok": true, "applied": [...], "remaining": count}
-        where "applied" is the list of actions taken (project ids or the choice)
-
-    On error, the shared shape {"ok": false, "error": {code, message}}: not_found (no such
-    decision), already_resolved, unknown_decision_kind, invalid_choice, or a card rule's code.
+    """Answer one stored question (see constructicon_needs(view="pending")), applied in one batch.
+    project_match: project_ids = the cards to attach the file to ([] = none of these).
+    retype: choice = the type to keep it as (the item's current type keeps it as is).
+    item_supersedes: choice = the older file's slug (this one replaces it), "reverse:<slug>",
+      "same:<slug>" (identical: this upload goes to the trash) or "none".
+    card questions: choice = an option key, or choices = several for card_built_for /
+      card_family_members (a family answer makes the card a family with the picked members).
+    An answer that breaks a rule leaves the question open and returns that rule's error.
+    -> {ok, applied, remaining}. Errors: already_resolved, unknown_decision_kind, invalid_choice.
     """
     if project_ids is None:
         project_ids = []
@@ -2652,19 +2786,18 @@ def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", p
 
 @mcp.tool()
 def constructicon_run_type_action(slug: str, action: str) -> dict:
-    """#448: Run a per-type action on an object. Actions are declared per type
-    (ObjectTypeSpec.actions). See constructicon_get for the available actions
-    on a specific object.
-
-    slug: object slug
-    action: action key (e.g. "fetch_youtube_metadata")
-
-    Returns {ok: true, action: key, item: {...}} with the updated object.
-    Errors (shared shape): not_found, redacted, unknown_action, action_failed.
+    """Run an action on an item. action: one of the item's `actions` (from constructicon_get, e.g.
+    "fetch_youtube_metadata"), or the built-in "retry_ocr": run text extraction / OCR again on any
+    OCR-capable item (in the background; ocr_status goes "pending").
+    -> {ok, action, item, ...what the action adds}. Errors: redacted, unknown_action,
+    action_failed; retry_ocr: bad_request (redacted, or a type without OCR).
     """
+    if action == RESERVED_ACTION:
+        return {"ok": True, "action": action, "item": _retry_ocr(slug)}
     row = db.get_by_slug(slug)
     if row is None:
         raise NotFound(f"No item {slug!r}.")
+    policy.require_view(row, message=f"No item {slug!r}.")  # #746: was missing (the old net never reached it)
 
     if row.get("redacted"):
         raise InvalidInput("object is redacted", code="redacted")
@@ -2704,11 +2837,40 @@ def _check_every_tool_wrapped():
         raise RuntimeError(f"MCP tools registered without the actor/error wrapper: {unwrapped}")
 
 
+def _check_action_roles():
+    """#746: refuse to start unless every visible tool (and each value of its selector) has exactly
+    the ACTION_ROLES rows it needs, every alias stands for a listed (tool, action), and no object
+    type declares the built-in run_type_action key."""
+    problems = []
+    expected = set()
+    for name in _TOOL_FUNCS:
+        if name in _ALIAS_OF:
+            continue
+        sel = _SELECTORS.get(name)
+        expected |= {(name, v) for v in sel[1]} if sel else {(name, None)}
+    problems += [f"no ACTION_ROLES row for {k}" for k in sorted(expected - set(ACTION_ROLES), key=str)]
+    problems += [f"stale ACTION_ROLES row {k}" for k in sorted(set(ACTION_ROLES) - expected, key=str)]
+    problems += [f"alias {a} stands for {t}, which has no ACTION_ROLES row"
+                 for a, t in _ALIAS_OF.items() if t not in ACTION_ROLES]
+    for spec in object_types.OBJECT_TYPES.values():
+        if any(a.key == RESERVED_ACTION for a in spec.actions):
+            problems.append(f"type {spec.label!r} declares the reserved action {RESERVED_ACTION!r}")
+    if problems:
+        raise RuntimeError("MCP tool roles (#746): " + "; ".join(problems))
+
+
 _check_every_tool_wrapped()
+_check_action_roles()
 
 
 if __name__ == "__main__":
-    import logging
+    # #746: every call through a retired tool name is one line in the container log ("MCP alias
+    # call: old -> new"), so it shows when work Claude and scripts have moved to the new names.
+    if not _alias_log.handlers:
+        _alias_handler = logging.StreamHandler(sys.stdout)
+        _alias_handler.setFormatter(logging.Formatter("constructicon-mcp: %(message)s"))
+        _alias_log.addHandler(_alias_handler)
+        _alias_log.propagate = False
     # #549: web owns background work (migrations, OCR self-heal, captions). This process only
     # runs the idempotent schema DDL; a stuck OCR row is healed by web's startup pass and its
     # periodic watchdog (same shared DB), and captions are enqueued, never run, here.

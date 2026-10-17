@@ -249,24 +249,24 @@ R = card("Mcp Build")
 RT = db.get_tag(R["tag_id"])
 before = state(R["id"], [C, D])
 with actor.acting_as(actor.ACTOR_MCP):
-    server.constructicon_add_to_project(C, R["id"])
+    server.constructicon_card_files(R["id"], [C])
 s = state(R["id"], [C, D])
-check("MCP add_to_project now = web flags (linked tag + free-text name + cover)",
+check("MCP card_files(add) = web flags (linked tag + free-text name + cover)",
       s["members"] == [C] and RT["id"] in s["post_tags"][C] and RT["name"] in s["free"][C] and s["cover"] == (C, None), s)
 b = last_batch("add_files")
 check("MCP add recorded as mcp", changes_of(b)[0]["actor"] == "mcp")
 cards.undo(b)
 check("undo MCP add", state(R["id"], [C, D]) == before)
 with actor.acting_as(actor.ACTOR_MCP):
-    out = server.constructicon_add_items_to_project(R["id"], [D, "ghost", C])
+    out = server.constructicon_card_files(R["id"], [D, "ghost", C], missing_ok=True)
 s = state(R["id"], [C, D])
-check("MCP add_items_to_project: same flags, skips unknown, returns the added objects",
-      [o["slug"] for o in out] == [D, C] and s["members"] == [D, C] and s["cover"] == (D, None)
+check("MCP card_files(add, missing_ok): same flags, skips unknown, returns the added objects",
+      [o["slug"] for o in out["items"]] == [D, C] and s["members"] == [D, C] and s["cover"] == (D, None)
       and RT["name"] in s["free"][C] and RT["id"] in s["post_tags"][D])
 b = last_batch("add_files")
 check("MCP bulk add is one mcp row", [(x["op"], x["actor"]) for x in changes_of(b)] == [("add_files", "mcp")])
 with actor.acting_as(actor.ACTOR_MCP):
-    server.constructicon_remove_from_project(D, R["id"])
+    server.constructicon_card_files(R["id"], [D], action="remove")
 check("MCP remove: membership only", [x["post_slug"] for x in db.list_project_item_rows(R["id"])] == [C]
       and RT["id"] in [t["id"] for t in db.list_tags_for_post(D)])
 cards.undo(last_batch("remove_files"))
@@ -276,8 +276,8 @@ W = mk("w1")
 db._update_content_metadata(W, type_metadata={"body": ""})
 db._set_media_type(W, "document")
 with actor.acting_as(actor.ACTOR_MCP):
-    server.constructicon_set_project_writeup(R["id"], W)
-check("MCP set_project_writeup: membership only (no tag, no cover)",
+    server.constructicon_update_project(card=R["id"], fields={"writeup_slug": W})
+check("MCP update_project(fields.writeup_slug): membership only (no tag, no cover)",
       W in [x["post_slug"] for x in db.list_project_item_rows(R["id"])] and db.list_post_tag_rows(W) == []
       and db.get_project(R["id"])["cover_slug"] is None)
 
@@ -343,22 +343,22 @@ check("undo bulk attach-tags: rows gone and the created tag removed",
 # MCP attach / detach / create, lookups never create
 base_c = tag_names(C)
 with actor.acting_as(actor.ACTOR_MCP):
-    server.constructicon_attach_tags(C, ["mcp-made", "alpha"])
+    server.constructicon_item_tags(C, ["mcp-made", "alpha"])
 b = last_batch("tag_attach")
-check("MCP attach_tags: post_tags only (free text untouched), creates missing, actor mcp",
+check("MCP item_tags(attach): post_tags only (free text untouched), creates missing, actor mcp",
       tag_names(C) == sorted(base_c + ["alpha", "mcp-made"]) and "mcp-made" not in db.get_by_slug(C)["tags"]
       and changes_of(b)[0]["actor"] == "mcp", (tag_names(C), db.get_by_slug(C)["tags"], changes_of(b)))
 with actor.acting_as(actor.ACTOR_MCP):
-    server.constructicon_attach_tags(D, ["mcp-made"])
+    server.constructicon_item_tags(D, ["mcp-made"])
 check("undo refused while a later op uses the created tag",
       code_of(cards.undo, b) == "undo_conflict" and tags_svc.find("mcp-made") is not None)
 cards.undo(last_batch("tag_attach"))
 cards.undo(b)
 check("undo MCP attach removes rows and the created tag", tag_names(C) == base_c and tags_svc.find("mcp-made") is None)
 with actor.acting_as(actor.ACTOR_MCP):
-    server.constructicon_attach_tags(C, ["alpha"])
-    server.constructicon_detach_tag(C, "alpha")
-check("MCP detach_tag", tag_names(C) == base_c)
+    server.constructicon_item_tags(C, ["alpha"])
+    server.constructicon_item_tags(C, ["alpha"], action="detach")
+check("MCP item_tags(detach)", tag_names(C) == base_c)
 cards.undo(last_batch("tag_detach"))
 check("undo detach", tag_names(C) == sorted(base_c + ["alpha"]))
 with actor.acting_as(actor.ACTOR_MCP):
@@ -373,8 +373,8 @@ cards.undo(b)
 check("undo create_tag removes both", tags_svc.find("Child Tag") is None and tags_svc.find("Parent Tag") is None)
 n_tags = q("SELECT COUNT(*) AS n FROM blog_tags")[0]["n"]
 with actor.acting_as(actor.ACTOR_MCP):
-    out1 = server.constructicon_get_posts_for_tag("nothing-here")
-    out2 = server.constructicon_detach_tag(C, "nothing-here")
+    out1 = server.constructicon_list_items(which="tag", tag="nothing-here")
+    out2 = server.constructicon_item_tags(C, ["nothing-here"], action="detach")
 check("lookups never create a tag", out1.get("ok") is False and out2.get("ok") is False
       and q("SELECT COUNT(*) AS n FROM blog_tags")[0]["n"] == n_tags)
 with actor.acting_as(actor.ACTOR_MCP):
@@ -405,8 +405,8 @@ check("undo add related: link AND the shared tags/cards reverted",
       (tag_names(X), tag_names(Y), [p["id"] for p in db.list_projects_for_post(X)],
        [p["id"] for p in db.list_projects_for_post(Y)]) == snap and db.list_related(X) == [])
 with actor.acting_as(actor.ACTOR_MCP):
-    server.constructicon_add_related(X, Y)
-    server.constructicon_remove_related(X, Y)
+    server.constructicon_related(X, Y)
+    server.constructicon_related(X, Y, action="remove")
 check("MCP remove related: link gone, shared tags stay (as before)", db.list_related(X) == [] and tag_names(Y) == ["xtag"])
 cards.undo(last_batch("item_unrelate"))
 check("undo remove related", [o["slug"] for o in db.list_related(X)] == [Y] and [o["slug"] for o in db.list_related(Y)] == [X])
@@ -439,12 +439,12 @@ check("web delete-all wrong phrase -> 400 confirm_required, nothing cleared",
       r.status_code == 400 and r.json()["error"]["code"] == "confirm_required"
       and q("SELECT COUNT(*) AS n FROM capture_events")[0]["n"] > 0, r.text[:200])
 with actor.acting_as(actor.ACTOR_MCP):
-    out = server.constructicon_delete_all()
-check("MCP delete-all without the phrase refuses", out.get("ok") is False and out["error"]["code"] == "confirm_required")
+    out = server.constructicon_delete(everything=True)
+check("MCP delete(everything) without the phrase refuses", out.get("ok") is False and out["error"]["code"] == "confirm_required")
 n_items = q("SELECT COUNT(*) AS n FROM capture_events")[0]["n"]
 kept_before = {t: q(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] for t in reset.KEPT_TABLES}
 with actor.acting_as(actor.ACTOR_MCP):
-    out = server.constructicon_delete_all(confirm="DELETE EVERYTHING")
+    out = server.constructicon_delete(everything=True, confirm="DELETE EVERYTHING")
 left = {t: q(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] for t in reset.CLEARED_TABLES}
 check("delete-all clears every cleared table", all(v == 0 for v in left.values()), left)
 check("delete-all reports the item count", out.get("deleted") == n_items, out)

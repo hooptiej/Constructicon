@@ -730,7 +730,7 @@ def replace_file(slug, content, filename=None, run_background=None, *, dry_run=F
       unsupported_type / content_mismatch   400, the same checks an upload gets
       replace_type_mismatch 422, the bytes are another TYPE than the item (a .md replaced with a
                             .pdf): the type drives the item's metadata, icon and processing, so a
-                            type change is an upload + constructicon_mark_superseded, not a replace
+                            type change is an upload + constructicon_revision(action="supersede"), not a replace
       replace_needs_decision / replace_rejected   422, the type's pre-store hook would not just accept
       file_unchanged        409, the bytes are identical to the current file
     `filename` is the new file's name: it decides the type check; the item keeps its own name unless
@@ -746,7 +746,7 @@ def replace_file(slug, content, filename=None, run_background=None, *, dry_run=F
         raise NotFound(f"No item {slug!r}.")
     if row.get("redacted"):
         raise _refuse("replace_redacted", f"{slug} is redacted: its file was removed on purpose, so it can't be "
-                      "replaced. Recover the held file first (constructicon_recover_redacted).", 409, slug=slug)
+                      "replaced. Recover the held file first (constructicon_redact(slug, action='recover')).", 409, slug=slug)
     if not row.get("stored_filename"):
         raise _refuse("no_file", f"{slug} has no uploaded file to replace (it is a {row.get('media_type')} link or "
                       "content-only item).", 400, slug=slug, media_type=row.get("media_type"))
@@ -777,7 +777,7 @@ def replace_file(slug, content, filename=None, run_background=None, *, dry_run=F
             raise _refuse("replace_type_mismatch",
                           f"That file is a {sniffed!r}, but {slug} is a {row.get('media_type')!r}. Replacing keeps the "
                           "item's type; to swap in a different kind of file, upload it as a new item and use "
-                          "constructicon_mark_superseded. Nothing was changed.", 422,
+                          "constructicon_revision(old, action=\"supersede\", new=...). Nothing was changed.", 422,
                           slug=slug, current_type=row.get("media_type"), new_type=sniffed, filename=name_for_type)
         spec = object_types.get_object_type(sniffed)
         decision = ingest._apply_pre_store(spec, object_types.IngestCandidate(

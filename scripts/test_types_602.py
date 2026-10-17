@@ -172,8 +172,10 @@ from mcp_server import server as mcp  # noqa: E402  (after the DB env is set)
 with actor.acting_as(actor.ACTOR_MCP):
     haystacks["MCP constructicon_get"] = json.dumps(mcp.constructicon_get(SLUG), default=str)
     haystacks["MCP constructicon_search"] = json.dumps(mcp.constructicon_search("Acme"), default=str)
-    haystacks["MCP constructicon_list_restricted"] = json.dumps(mcp.constructicon_list_restricted(), default=str)
-    haystacks["MCP constructicon_explain/get_related"] = json.dumps(mcp.constructicon_get_related(SLUG), default=str)
+    haystacks["MCP constructicon_list_items(restricted)"] = json.dumps(mcp.constructicon_list_items(which="restricted"),
+                                                                      default=str)
+    haystacks["MCP constructicon_get(include=related)"] = json.dumps(mcp.constructicon_get(SLUG, include=["related"]),
+                                                                    default=str)
 for where, text in haystacks.items():
     check(f"token value absent from: {where}", SECRET not in text and SECRET2 not in text, f"found in {where}")
     # the base64 of the whole file is equally forbidden outside the stored file

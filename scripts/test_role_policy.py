@@ -126,7 +126,7 @@ def mcp_lists():
     with actor.acting_as(actor.ACTOR_MCP):
         return {
             "get_project": has(CERT, mcp.constructicon_get_project(CARD["slug"]).get("items", [])),
-            "get_related(plain)": has(CERT, mcp.constructicon_get_related(PLAIN)),
+            "get(include=related)(plain)": has(CERT, mcp.constructicon_get(PLAIN, include=["related"]).get("related", [])),
             "get_blog_entry": has(CERT, mcp.constructicon_get_blog_entry(ENTRY["slug"]).get("items", [])),
             "search": has(CERT, mcp.constructicon_search("role-policy")),
         }
@@ -137,6 +137,8 @@ def mcp_direct(slug):
         return {
             "get": mcp.constructicon_get(slug),
             "download": mcp.constructicon_download(slug),
+            "get(include=related, revisions)": mcp.constructicon_get(slug, include=["related", "revisions"]),
+            # #746: the retired names are doors too (hidden aliases)
             "get_related": mcp.constructicon_get_related(slug),
             "list_revisions": mcp.constructicon_list_revisions(slug),
         }
@@ -169,10 +171,12 @@ check("today: static export excludes it", CERT not in media and "role-policy-pus
 d = mcp_direct(CERT)
 check("today: MCP get / download / get_related / list_revisions serve it",
       d["get"].get("slug") == CERT and bool(d["download"].get("content_base64"))
-      and isinstance(d["get_related"], list) and d["list_revisions"].get("ok") is True, d)
+      and isinstance(d["get_related"], list) and d["list_revisions"].get("ok") is True
+      and isinstance(d["get(include=related, revisions)"].get("related"), list)
+      and "in_chain" in d["get(include=related, revisions)"].get("revisions", {}), d)
 lists = mcp_lists()
 check("today: MCP get_project, get_related(neighbour), get_blog_entry list it; search hides it",
-      lists == {"get_project": True, "get_related(plain)": True, "get_blog_entry": True, "search": False}, lists)
+      lists == {"get_project": True, "get(include=related)(plain)": True, "get_blog_entry": True, "search": False}, lists)
 
 # #603: the flagged item, as an admin: served, and (unlike a restricted TYPE) found by search
 for path in DIRECT_WEB[:4]:  # (a .txt has no thumbnail, so /f/{s}/thumb is 404 for anyone)

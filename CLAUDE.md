@@ -897,8 +897,8 @@ string) + `sensitive_at`. Written only by `items.set_sensitive(slugs, on)`: ONE 
   /api/image/{slug}/sensitive`, `sensitive=true|false`); every file grid's bulk bar
   (#553: home, Unfiled, the uploader gallery, a hobby's loose objects; "Mark sensitive", `POST /api/bulk/sensitive`, one batch); the upload drawer's checkbox (`sensitive`
   form field on `/api/upload` and `/api/content`, set IN the INSERT so the item is never visible
-  unlocked; a duplicate upload marks the existing item instead); MCP `constructicon_set_sensitive(slug,
-  sensitive, dry_run)`, and `sensitive` on `constructicon_upload` / `import` / `add_content`.
+  unlocked; a duplicate upload marks the existing item instead); MCP `constructicon_update(slug,
+  fields={"sensitive": bool}, dry_run)`, and `sensitive` on `constructicon_upload` / `import` / `add_content`.
 - **Policy:** `policy.is_restricted(item)` = a restricted TYPE (`is_type_restricted`) OR flagged
   (`is_flagged`); "sensitive" means either. `can_view`: an ordinary item -> yes; a sensitive one -> an
   admin, or **its uploader** (a signed-in, enabled user whose id = `uploaded_by_user_id`). The uploader
@@ -997,7 +997,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   thing; loose objects go onto the card; home overrides naming the hobby now name the card; the
   hobby is unmarked. One batch, `dry_run` previews. Web: the hobby page's More > "Convert to card"
   (`POST /api/hobby/{id}/convert-to-card`), `POST /api/hobby/{id}/unmark`; MCP
-  `constructicon_convert_hobby_to_card`, `constructicon_unmark_hobby`.
+  `constructicon_convert(direction="hobby_to_card")`, `constructicon_unmark_hobby`.
 - **Blog (phase D): `core/blog.py`.** `create`, `update` (None = leave; `...` = leave for
   cover_slug / content_date, None clears), `delete`, `set_projects(entry, [(card, note)])`,
   `set_items(entry, [(slug, note)])`, all imaged (`blog_entries` is in `IMAGE_TABLE_KEYS`). Unknown
@@ -1035,8 +1035,8 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   with no `cover_slug` takes the first file (also clears `cover_project_id`, bumps `updated_at`).
   `membership.UI_EFFECTS` (all three) is what upload / `ingest.attach_to_project`, the item page,
   bulk add-to-project, from-selection / from-related, a resolved project-match question, AND (since
-  phase C) MCP `constructicon_add_to_project` / `add_items_to_project` pass. `NO_EFFECTS`: MCP
-  `set_project_writeup`. Removing never untags and never touches the cover, on any path. The card
+  phase C) MCP `constructicon_card_files(action="add")` passes. `NO_EFFECTS`: MCP
+  `constructicon_update_project(fields={"writeup_slug": ...})`. Removing never untags and never touches the cover, on any path. The card
   reshaping ops (copy / move / split / merge / delete) call `membership.write(...)` / `write_items(log,
   ...)`: rows only, logged under their own op (`db.write_card_items` is gone). Don't call
   `db.add_item_to_project` / `remove_item_from_project` from a route or tool.
@@ -1058,8 +1058,8 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   tags through `tags.ensure` too (phase D); the only raw tag writer left is the upload-time
   automatch tagging (pipeline, allowlisted; the OCR client tagging went with #704).
 - **Delete-all (phase C): `core/reset.py` `delete_everything(confirm)`**, called by `POST
-  /api/delete-all` and MCP `constructicon_delete_all(confirm)`; both need the phrase `DELETE
-  EVERYTHING`. Permanent by design (no trash, no undo); one change-log row (op `delete_all`, actor
+  /api/delete-all` and MCP `constructicon_delete(everything=true, confirm=...)` (#746: BOTH keys, either alone
+  is refused); both need the phrase `DELETE EVERYTHING`. Permanent by design (no trash, no undo); one change-log row (op `delete_all`, actor
   from context) with per-table counts in `form_body`. Clears `reset.CLEARED_TABLES` (items and
   everything pointing at them, cards, tags and hobbies, blog entries, questions and their snoozes,
   caption queue, trash) plus every item file and thumbnail and `<storage>/.trash`; keeps
@@ -1071,16 +1071,16 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   row. **Deletes are held 7 days, then purged** (`expires_at` = now + 7 days). **Redacts are held
   until the owner clicks** (owner decision 2026-10-04): the row is `reason='redact'`, `expires_at`
   NULL, and neither the hourly purge nor "Empty trash now" (`POST /api/trash/empty`,
-  `constructicon_empty_trash`) ever touches it. A redacted item's `/object/<slug>` page and the
+  `constructicon_trash(action="empty")`) ever touches it. A redacted item's `/object/<slug>` page and the
   /admin "Redacted items" list show "The redacted file is still stored on the NAS. Recover it, or
   delete it permanently." with two actions: **Recover** (`items.recover_redacted`,
-  `POST /api/image/{slug}/recover-redacted`, MCP `constructicon_recover_redacted`; file,
+  `POST /api/image/{slug}/recover-redacted`, MCP `constructicon_redact(action="recover")`; file,
   `stored_filename` and visibility exactly as before the redact) and **Delete file permanently**
   (`items.delete_redacted_file(slug, confirm)`, `POST /api/image/{slug}/delete-redacted-file`, MCP
-  `constructicon_delete_redacted_file`; confirm dialog, logged as `item_redact_erase`, not
+  `constructicon_redact(action="delete_file", confirm=true)`; confirm dialog, logged as `item_redact_erase`, not
   undoable; the item stays redacted, metadata only, and recover then refuses with
   `no_redact_hold`). `unredact` is only for file-less redactions and refuses with
-  `redact_hold_exists` while a hold exists. `constructicon_list_trash` lists holds separately
+  `redact_hold_exists` while a hold exists. `constructicon_trash(action="list")` lists holds separately
   under `held`. A delete images the `capture_events` row and everything
   pointing at it: `capture_event_relations` (both directions), `item_revisions` (incl. the
   A -> C re-link when B leaves a chain), `project_items`, `post_tags`, `blog_entry_items`,
@@ -1089,8 +1089,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   file was purged it refuses with `trash_expired` (410) and writes nothing. The web worker
   (`web/app.py`, `_trash_purge_loop`) purges expired entries hourly (rows kept, `purged_at` set);
   `/admin` "Trash" shows count/size/oldest with a typed-phrase "Empty trash now" (`POST
-  /api/trash/empty`, confirm `EMPTY TRASH`); MCP `constructicon_list_trash` /
-  `constructicon_empty_trash`. Delete and bulk delete answer with `batch_id`; the pages offer
+  /api/trash/empty`, confirm `EMPTY TRASH`); MCP `constructicon_trash(action="list" | "empty")`. Delete and bulk delete answer with `batch_id`; the pages offer
   Undo (`web/static/js/undo-bar.js`). Check with `scripts/test_items_service.py` (throwaway DB).
 - Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),
   `test_hobbies_blog.py` (phase D: hobbies, both conversions, card create/Save, blog, the sweep;
@@ -1130,7 +1129,7 @@ matching the V2 mockup's Card template:
   `web.shapes._hobby_cover_usable` (policy + the thumb route's rules). Write: `hobbies.set_cover(hobby,
   slug_or_None)` (op `hobby_cover`, imaged, undoable; `bad_cover` 422 for a redacted or picture-less item,
   `not_found`): web `POST /api/hobby/{id}/cover` (editor, blank = automatic; the hobby page's COVER group),
-  MCP `constructicon_set_hobby_cover(hobby, cover_slug, clear, dry_run)`. Reads carry `cover_url`,
+  MCP `constructicon_update_hobby(hobby, cover_slug | clear_cover=true, dry_run)`. Reads carry `cover_url`,
   `cover_slug`, `cover_picked`, `cover_source` (picked | highlighted_project | recent_project):
   `GET /api/hobbies`, `GET /api/hobby/{id}`, MCP `constructicon_list_hobbies`. The **/hobbies page and the
   Hobbies drawer** render the shared card (`_hobby_cards.html` -> `card(face, "small")`, faces from
@@ -1152,14 +1151,15 @@ matching the V2 mockup's Card template:
   text lives in `hobby_settings.synopsis / flavor`): `...` leaves a field, None / "" clears it,
   `card_rules.validate_card_text` (`bad_card_text`, 422). One imaged row each (`set_card_text`,
   `hobby_text`), undoable. Web (editor): `POST /api/projects/{id}/text`, `POST /api/hobby/{id}/text`
-  (omit a form field to leave it, send it blank to clear). MCP: `constructicon_set_card_text(card=|hobby=,
-  synopsis, flavor, clear_synopsis, clear_flavor, dry_run)`. Reads: `cards.text_fields(card)` (in
+  (omit a form field to leave it, send it blank to clear). MCP: `constructicon_update_project(card,
+  fields={"synopsis", "flavor"})` and `constructicon_update_hobby(hobby, synopsis, flavor)` ("" clears). Reads: `cards.text_fields(card)` (in
   `explain_card`, MCP `constructicon_get_project`: synopsis, flavor, writeup_lead, face_text,
   face_text_source). UI: the ABOUT group of the details panel on the project and hobby pages
   (`templates/_card_text.html`).
 - **Every write-up gets a synopsis** (owner, 2026-10-06). An agent that writes or rewrites a card's
-  write-up (`constructicon_set_project_writeup`, or an `update` of its body) also sets that card's
-  synopsis with `constructicon_set_card_text`: a few plain sentences saying what the card is.
+  write-up (`constructicon_update_project(fields={"writeup_slug": ...})`, or an `update` of its body) also
+  sets that card's synopsis (`fields={"synopsis": ...}`, in the same call): a few plain sentences saying
+  what the card is.
 - Item grids embed `stacked` (the title of the card a file is on, `db.first_card_titles()`, one query per
   grid) in the slim payload (`core/card_payload.py`); `provenance` left it. Check with
   `scripts/test_card_faces.py` (throwaway DB), `check_item_cards.py`, `test_home_payload.py`.
@@ -1337,7 +1337,7 @@ this order, and never straight to final prose:
    labelled section. Confirm an interpretation before stating it. The data has the "when" and the "what";
    only the owner has the "why" (intent, what was tried and dropped, what a part is for).
 
-Only then save it (`constructicon_set_project_writeup`). If the owner isn't available, a write-up built from the
+Only then save it (`constructicon_update_project(card, fields={"writeup_slug": ..., "owner_words": true})`). If the owner isn't available, a write-up built from the
 evidence pass alone must say so at the top ("Reconstructed by Claude from the project's own files ...").
 Voice: narrative, in chronological order, with real dates and tools named, not a dry spec sheet.
 
@@ -1517,8 +1517,8 @@ One generated file of every registered type and extension, to drop-test a new in
     `list_posts_for_tag`, and `list_uploaders`'
     totals) and reachable only by its direct `/object/<slug>` link, the
     admin page's (`/admin`) "Redacted items" list (`GET /api/redacted` /
-    `db.list_redacted()`) or the MCP `constructicon_list_redacted` tool.
-    `POST /api/image/{slug}/unredact` / `constructicon_unredact` flips it
+    `db.list_redacted()`) or the MCP `constructicon_list_items(which="redacted")`.
+    `POST /api/image/{slug}/unredact` / `constructicon_redact(action="unredact")` flips it
     back — visibility only, for redactions whose file is already gone (refused while a
     file is still held: recover it or delete it permanently first).
     `db.search(include_redacted=True)` is the escape hatch for a caller that
@@ -1690,10 +1690,9 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
 Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
-`mcp_server/server.py`, exposing tools like `constructicon_list_projects`,
-`constructicon_create_project`, `constructicon_attach_tags`,
-`constructicon_get_posts_for_tag`, `constructicon_search`,
-`constructicon_update_project`, `constructicon_add_to_project`, etc.
+`mcp_server/server.py`, exposing 55 tools like `constructicon_search`, `constructicon_get`,
+`constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
+`constructicon_card_files`, `constructicon_needs`, etc.
 (`mcp__constructicon-mcp__*` in a session with it configured). #68 tracked
 standing this up and was closed 2026-09-02 — **don't assume it's still
 missing**; if a session's tools list doesn't show it, that's a
@@ -1704,9 +1703,55 @@ configuration gap for that session, not evidence the server itself is gone.
   `db.search()`'s row-limit-before-filter bug (fixed in #543: the filter is SQL), whether there's a tool for
   setting a project's cover/write-up) — check it before assuming a
   capability needs building from scratch.
+- **The tool surface (#746, "108 tools in a trench coat"; owner decisions 2026-10-17).** 108 tools
+  were folded into **55** with no capability lost (the full old -> new table is on #746 and in
+  `scripts/test_mcp_consolidation_746.py`'s scenarios). The pattern:
+  - **Selector tools.** Related operations share one tool with a selector: `action=` (`redact`,
+    `trash`, `item_tags`, `related`, `revision`, `card_files`, `card_hobby`, `family`, `nest`, `link`,
+    `queue_item`), `view=` (`needs`: queue | nudges | caption | card_decisions | pending), `which=`
+    (`list_items`: tag | brand_assets | redacted | restricted), `direction=` (`convert`); `delete` picks
+    its target by which of `slug` / `slugs` / `card` / `blog_entry` / `everything` is given. The selector
+    is a `Literal[...]`; a parameter that doesn't apply to the chosen action is refused (`_only_for`),
+    never ignored. Each action's answer is documented in the tool's description.
+  - **Multi-field setters.** `constructicon_update(slug, ..., fields={...}, dry_run)` (provenance,
+    content_date, highlight, is_brand_asset, brand_role, sensitive) and
+    `constructicon_update_project(card | project_id, ..., fields={...}, dry_run)` (activity, force_kind,
+    whereabouts(_note), provenance(_credit), highlight, home, synopsis, flavor, writeup_slug,
+    owner_words) and `constructicon_update_hobby` / `constructicon_update_blog_entry(projects=, items=)`:
+    key present = set it (null / "" clears), absent = leave it; unknown key = `unknown_field`. The whole
+    call is ONE `db.transaction()` and ONE change-log batch (one undo). **`dry_run` is the real thing
+    rolled back** (`db.transaction(dry_run=True)`), so a step sees what the earlier ones did (kind and
+    stage together validate against the new kind). Agent notes are written ONLY by
+    `constructicon_set_agent_notes` (`agent_notes` is refused as a `fields` key); read them with
+    `constructicon_get(slug, include=["agent_notes"])` (`include` also takes "related", "revisions").
+  - **The whole-archive wipe** is `constructicon_delete(everything=true, confirm="DELETE EVERYTHING")`:
+    both keys or nothing (either alone, or with another target, is refused); `delete`, `redact` and
+    `trash` carry `destructiveHint`.
+  - **`run_type_action(slug, "retry_ocr")`** is built in; no object type may declare an action keyed
+    `retry_ocr` (the MCP refuses to start).
+  - **Retired names are hidden, logged aliases for 2 releases** (removal is a later issue): every old
+    name still answers `tools/call` with its old signature, defaults (e.g. `set_highlight()` with no
+    `on` unmarks) and return shape, but `tools/list` leaves it out (`@mcp.tool(alias_of=(tool,
+    action))` -> `_HIDDEN_ALIASES`, the #700 mechanism). Each call logs `MCP alias call: <old> -> <new>
+    [action] (deprecated name, #746)` in the MCP container's log, so it shows who still uses old names.
+    `scripts/data/mcp_aliases_golden_746.json` holds what each old name returned before #746 (on the
+    test's fixture); `scripts/test_mcp_consolidation_746.py` checks every alias against it, and that
+    the new call leaves the database exactly as the alias did.
+  - **Conventions live in the server's startup instructions** (`SERVER_INSTRUCTIONS`: error shape,
+    undo / batch ids, dry runs, visibility, text previews, dates, selectors), not in every description;
+    descriptions say usage and one short example, no issue numbers or history. **No tool publishes an
+    `outputSchema`** (`structured_output=False`): results are the JSON text (an empty list is `[]`).
+  - **Who may run what: `ACTION_ROLES`** in `server.py`, one row per `(tool, action)` (viewer for reads,
+    editor for curation, admin for anything permanent or install-wide). The wrapper checks it on every
+    call (an alias uses the row of the call it stands for). The MCP is one admin identity today, so
+    nothing is refused yet; it is the gate per-user MCP tokens (#604 step 5) will rely on. Startup
+    refuses a visible tool or selector value with no row.
+  - **Adding or changing a tool:** add its `ACTION_ROLES` row(s), classify it in
+    `scripts/check_policy_doors.py` `MCP_TOOLS` (rule 4 covers EVERY MCP tool and alias: opens | items |
+    admin | new | none, each verified), and update `scripts/data/mcp_tool_names_700.json`.
 - **Captioning through MCP (#588, #585, #587 item 5).** On an install with no Ollama
   (`CAPTION_DISABLED=1`) an agent that can see images does the captioning:
-  1. `constructicon_list_needs_caption(limit=50, include_failed=True)`: caption-capable items with no
+  1. `constructicon_needs(view="caption", limit=50, include_failed=True)`: caption-capable items with no
      accepted description and a caption status that is absent (or failed/skipped), with project and
      hobby context and `total`. Redacted and restricted items never appear.
   2. `constructicon_view(slug, size="preview")`: the picture as MCP **image content** (PNG/JPEG,
@@ -1729,12 +1774,11 @@ configuration gap for that session, not evidence the server itself is gone.
   `captions_disabled`. Check with `scripts/test_captions_mcp.py` (throwaway DB).
 - **Extracted text is a preview in multi-item results (#697).** One search used to return every
   match's whole `extracted_text` (224,000 characters for 5 matches on the work install). Now every tool
-  that returns many items (`search`, `get_posts_for_tag`, `get_project` items and cover, `get_related`,
-  `add_related` / `remove_related`, `add_items_to_project`, `list_redacted`, `list_restricted`,
-  `list_brand_assets`, a blog entry's items) sends `_to_public_listed(row)`: `extracted_text` is a
+  that returns many items (`search`, `list_items`, `get_project` items and cover, `get(include=["related"])`,
+  `related`, `card_files`, a blog entry's items) sends `_to_public_listed(row)`: `extracted_text` is a
   window of `TEXT_PREVIEW_CHARS` (300) characters around the first query word found in it (word start,
   case and accents folded, like the search; else the start), with "…" at each cut end, plus
-  `extracted_text_chars` (full length) and `extracted_text_truncated`. `search`, `get_posts_for_tag` and
+  `extracted_text_chars` (full length) and `extracted_text_truncated`. `search`, `list_items` and
   `get_project` take `text_chars` (0 = no text, capped at `TEXT_PREVIEW_MAX_CHARS` = 5,000). Single-item
   tools (`constructicon_get`, the setters) still send the WHOLE text, uncapped (one item by design; a
   window-by-offset read for very long single items is not built). `get_project`'s write-up object is

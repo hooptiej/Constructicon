@@ -343,7 +343,7 @@ def legacy_to_status(word):
     tgt = migration_target(word)
     warnings = [f"Legacy status {word!r} translated to stage {tgt['stage']!r}"
                 + (f" ({tgt['stop_reason']})" if tgt["stop_reason"] else "")
-                + "; prefer constructicon_set_status with a stage."]
+                + "; prefer constructicon_update_project with a stage."]
     if word in ("complete", "archived", "means-to-an-end"):
         warnings.append("Legacy 'complete' is ambiguous: done (finished) or in_use (finished and still used)? "
                         "Applied 'done'; pass stage='in_use' if it is still in use.")

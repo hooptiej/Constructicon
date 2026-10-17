@@ -19,6 +19,9 @@ imagerepo.db-journal
 # Site exports — generated builds, not source code
 exports/
 
+# #698: scripts/deploy.sh's db/ copies on a host without ZFS (<instance>/predeploy-backups/)
+predeploy-backups/
+
 # The type sampler's output (#720, scripts/make_type_samples.py): generated, and it holds the
 # executable-class samples (PE, installers) that must never be committed (Windows Defender rule)
 samples-out/

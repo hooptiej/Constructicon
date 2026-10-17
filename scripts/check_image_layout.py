@@ -236,6 +236,7 @@ MUST_EXCLUDE = [
     ".git/config", ".git/HEAD", ".claude/worktrees/agent-x/core/db.py",
     "storage/abc.jpg", "storage-test/abc.jpg", "db/imagerepo.db", "db-test/imagerepo.db-wal",
     "data/imagerepo.db", "backups/backup.zip", "exports/current/index.html", "import/x.jpg",
+    "predeploy-backups/predeploy-x/imagerepo.db",
     "imagerepo.db", "imagerepo.db-journal",
     "docker-compose.yml", "docker-compose.yml.bak-pre-688", "docker-compose.override.yml",
     "web.bak-295/app.py", "web.backup.1788571094/app.py", "core.bak/db.py", "web/app.py.bak",

@@ -80,8 +80,10 @@ def get_embedded_metadata(path):
 def extract_text_for_row(row):
     """text_extract_fn: every slide's text, then speaker notes, capped."""
     path = _path(row)
-    if not path or path.suffix.lower() not in MODERN:
+    if not path:
         return ""
+    if path.suffix.lower() not in MODERN:
+        return None  # #724: no reader for the legacy binary format yet: "not compatible", not "no text"
     try:
         with zipfile.ZipFile(path) as z:
             parts = ["\n".join(s) for s in _slides(z)]
@@ -90,7 +92,7 @@ def extract_text_for_row(row):
             return "\n\n".join(p for p in parts + notes if p)[:storage.MAX_EXTRACTED_TEXT_CHARS]
     except Exception as e:
         print(f"PowerPoint text extraction failed for {path}: {e!r}")
-        return ""
+        raise  # #724: a real read error; core/ocr.py records it (failed), never "no text"
 
 
 def has_thumbnail(row):
@@ -155,4 +157,5 @@ register(ObjectTypeSpec(
     preview_assets=("prose",),
     badge_icon="\U0001F4FD",  # film projector
     badge_text="PPT",
+    ocr_unsupported_note={".ppt": "legacy .ppt: no readable text yet"},  # #724
 ))

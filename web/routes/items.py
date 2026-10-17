@@ -224,7 +224,12 @@ def _derive_processing_status(row):
     stages = []
     if spec and spec.ocr_capable:
         s = row.get("ocr_status")
-        stages.append({"stage": "OCR", "state": "done" if s == "done" else "failed" if s == "failed" else "pending"})
+        if s == db.OCR_UNSUPPORTED:
+            # #724: nothing OCR can read (a web link, a legacy .doc): settled, like captions "off"
+            # (#585), never a failure and never pending. The reason rides along for the tooltip.
+            stages.append({"stage": "OCR", "state": "off", "note": tm.get("ocr_note") or "not compatible with OCR"})
+        else:
+            stages.append({"stage": "OCR", "state": "done" if s == "done" else "failed" if s == "failed" else "pending"})
     if spec and spec.caption_capable:
         cs = tm.get("auto_caption_status")
         if cs == "done":
@@ -306,7 +311,8 @@ def api_get_item_text(request: Request, slug: str, limit: int = TEXT_DEFAULT_LIM
     text = row.get("extracted_text") or ""
     return JSONResponse({"slug": slug, "text": text[:limit], "chars": len(text),
                          "limit": limit, "truncated": len(text) > limit,
-                         "ocr_status": row.get("ocr_status")})  # the page polls this for OCR progress
+                         "ocr_status": row.get("ocr_status"),  # the page polls this for OCR progress
+                         "ocr_note": (row.get("type_metadata") or {}).get("ocr_note")})  # #724: why 'unsupported'
 
 
 # The CSP is shared with /f/ (#610): web/content_security.py. A saved page must not be able to phone

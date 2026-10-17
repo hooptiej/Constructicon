@@ -198,6 +198,8 @@ def extract_text_for_row(row):
                 wb.close()
     except Exception as e:
         print(f"Spreadsheet text extraction failed for {path}: {e!r}")
+        if not out:
+            raise  # #724: nothing read is a real read error (core/ocr.py: failed), not "no text"
     return "\n".join(out)[:cap]
 
 

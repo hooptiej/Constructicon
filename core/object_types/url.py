@@ -82,4 +82,5 @@ register(ObjectTypeSpec(
     properties_fn=get_properties,
     badge_icon="\U0001F517",
     badge_text="WEB",
+    ocr_unsupported_note="web link: no readable text yet",  # #724: no page capture or text fetch yet
 ))

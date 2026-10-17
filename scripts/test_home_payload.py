@@ -86,7 +86,8 @@ record = {
     "uploaded_at": 5, "tags": ["t"], "codes": ["3DP"], "ocr_status": "done", "extracted_text": LONG,
     "caption_capable": True,
     "type_metadata": {"rotation": 90, "auto_caption_status": "done", "auto_caption": LONG,
-                      "auto_caption_model": "moondream", "stl_stats": {"tris": 1}, "body": LONG},
+                      "auto_caption_model": "moondream", "stl_stats": {"tris": 1}, "body": LONG,
+                      "ocr_note": "web link: no readable text yet"},  # #724: the grey lamp's reason
     **{k: v for k, v in HEAVY.items() if k != "type_badge"},
 }
 before = copy.deepcopy(record)
@@ -99,7 +100,7 @@ for gone in ("description", "source", "artifact_link", "url", "content_date", "f
              "client"):  # #546: the dead client field, unread since the badge went (#563)
     check(gone not in slim, "heavy/unused field dropped: %s" % gone)
 tm = slim["type_metadata"]
-check(set(tm) == {"rotation", "auto_caption_status", "auto_caption"}, "type_metadata trimmed to the card's keys: %s" % sorted(tm))
+check(set(tm) == {"rotation", "auto_caption_status", "auto_caption", "ocr_note"}, "type_metadata trimmed to the card's keys: %s" % sorted(tm))
 check(tm["rotation"] == 90 and tm["auto_caption_status"] == "done", "rotation + caption status survive")
 limit = webapp.CARD_TOOLTIP_CHARS
 check(len(slim["extracted_text"]) <= limit + 1 and slim["extracted_text"].endswith("…"), "long OCR text clipped for the tooltip")

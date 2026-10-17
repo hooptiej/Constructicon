@@ -1178,7 +1178,15 @@ matching the V2 mockup's Card template:
   404), and its answer also carries `counts` / `labels` (the type filter after a refresh). A cursor is
   bound to its source (`cursor_view_mismatch`); home's cursors are unchanged. Each source reads its rows
   as its page did, then `policy.filter_visible` + `_split_revisions` (`files_feed.load`, the door in
-  `check_policy_doors.py`). User-visible grid words live in `item_grid.LABELS`. Check with
+  `check_policy_doors.py`). User-visible grid words live in `item_grid.LABELS`. **Grid / List
+  (#714), on every grid:** List is one compact row per file (`ItemCards.row` in `cards.js`: lazy thumb,
+  `display_name`, type label, `card_date`, the card it's on or the unfiled lamp, the revision badge, the
+  select checkbox outside the link), the grid element gets `role="list"` + `cx-item-list`; Select, the
+  bar, Undo, paging, sort and filters work the same in both. Remembered per grid in localStorage
+  (`constructicon.grid.<id>.layout`, try/catch, default Grid). The card face is unchanged. **The bulk
+  bar wraps (#715):** groups in order (count + Clear | add to card + turn into card | tag | provenance |
+  sensitive | delete, last and set apart), flex-wrap with no nowrap or fixed widths; sticky above 600 px,
+  static on a phone (wrapped it is ~5 lines). Check with
   `scripts/test_item_grid_553.py` (throwaway DB: the four pages, viewers, every bulk action from a
   non-/unfiled grid with change log + undo, 1,050 gallery rows) and `node scripts/test_item_grid_553.js`.
 - **Grid sort: the date on the card, or the upload time (#622).** Every item grid (home Files, /unfiled,

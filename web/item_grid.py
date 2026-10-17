@@ -38,6 +38,12 @@ LABELS = {
     "delete": "Delete selected",
     "clear": "Clear",
     "all_types": "All types",
+    # #714: the Grid / List toggle (every grid)
+    "layout": "Layout",
+    "grid": "Grid",
+    "list": "List",
+    "grid_title": "Grid view: the cards",
+    "list_title": "List view: one row per file",
 }
 
 
@@ -47,7 +53,7 @@ def can_edit():
 
 
 def build(grid_id, source, show_all_revs, *, loaded=None, filters=FILTERS, bulk=BULK_ACTIONS,
-          select_default=False, href_from=None, layouts=False, grid_class="cx-item-grid",
+          select_default=False, href_from=None, layouts=True, grid_class="cx-item-grid",
           empty_text="No files here yet.", count_noun=("upload", "uploads"), count_suffix="",
           filed_key=None, unfiled_lamp=True):
     """-> (grid config for _item_grid.html, how many older revisions are hidden/shown).
@@ -55,7 +61,8 @@ def build(grid_id, source, show_all_revs, *, loaded=None, filters=FILTERS, bulk=
     `source` is a files_feed source tuple (files_feed.HOME, ("unfiled", None), ("user", label),
     ("hobby", slug)). `loaded` = an already computed files_feed.load() result, for a page that
     needs the rows itself (the hobby page's cover choices). `filed_key` is the localStorage key that
-    remembers the toggle (home keeps its old one)."""
+    remembers the toggle (home keeps its old one). `layouts`: the Grid / List toggle, on every grid
+    since #714 (item-grid.js remembers the choice per grid id)."""
     by_type, n_sup, unfiled = loaded if loaded is not None else files_feed.load(show_all_revs, source)
     seed, meta = files_feed.initial(by_type, unfiled, show_all_revs, source)
     editable = can_edit()

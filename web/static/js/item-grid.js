@@ -16,6 +16,10 @@
        card, turn into a new card, tag, provenance, mark sensitive, delete. Each is one POST to the
        existing endpoint, one change-log batch, then the Undo bar (static/js/undo-bar.js) and a
        refresh of the grid from the server (the counts come back with the page).
+     * Grid / List (#714, every grid): Grid draws the item cards, List one compact row per file
+       (ItemCards.row: thumb, name, type, card date, the card it's on or the unfiled lamp, the
+       revision badge, the select checkbox). Everything above works the same in both; the choice is
+       remembered per grid id (localStorage "constructicon.grid.<id>.layout", default Grid).
    Grid elements are found by id: <id>-grid, -sort, -type, -filed, -empty, -select, -bar, -selcount,
    -clear, -card, -new-card, -tag, -tag-suggestions, -provenance, -provenance-apply, -sensitive,
    -delete, -layout; and <id>-count, a count line the page may place anywhere. A missing element
@@ -102,18 +106,18 @@
       return feed;
     }
 
-    // ---- cards ------------------------------------------------------------------------------
+    // ---- cards (Grid) or rows (List, #714) ----------------------------------------------------
     function cardHtml(item) {
       var opts = { selected: selected };
       if (cfg.href_from) opts.href = '/object/' + item.slug + '?from=' + encodeURIComponent(cfg.href_from);
       if (cfg.unfiled_lamp) opts.unfiledSlugs = unfiledSlugs;
       if (bulk.length) opts.selectable = 'row';
-      if (layout === 'list') opts.width = 150;
-      return IC.html(item, opts);
+      return layout === 'list' ? IC.row(item, opts) : IC.html(item, opts);
     }
     var current = null;
     var pager = IC.pager(gridEl, cardHtml, {
       batch: batch,
+      moreRole: function () { return layout === 'list' ? 'listitem' : ''; },
       loadMore: function () {
         var feed = current;
         return feed.next().then(function (fresh) { return { items: fresh, total: feed.total, done: feed.done }; });
@@ -122,7 +126,8 @@
     var sortName = root.ItemSort ? root.ItemSort.wire(sortEl, function () { render(); }) : function () { return 'date_newest'; };
 
     function showStatus(html) {
-      gridEl.innerHTML = '<div class="cx-status" style="grid-column:1/-1;text-align:center;padding:8px 0">' + html + '</div>';
+      gridEl.innerHTML = '<div class="cx-status"' + (layout === 'list' ? ' role="listitem"' : '') +
+        ' style="grid-column:1/-1;text-align:center;padding:8px 0">' + html + '</div>';
     }
 
     // ---- the controls ---------------------------------------------------------------------------
@@ -198,21 +203,43 @@
       render();
     });
 
+    // Grid / List (#714). List is a real list: one row per file (ItemCards.row), the grid element
+    // becomes role="list" with the cx-item-list class instead of the card grid's classes (anything
+    // else in grid_class, e.g. home's files-scroll, stays). The choice is remembered per grid id;
+    // storage can be missing or throw (private mode, blocked site data): default Grid.
     var layoutEl = cfg.layouts ? $('layout') : null;
     var LAYOUT_KEY = 'constructicon.grid.' + cfg.id + '.layout';
-    function applyLayout(next) {
+    function readLayout() {
+      try { return (storage && storage.getItem(LAYOUT_KEY)) === 'list' ? 'list' : 'grid'; } catch (e) { return 'grid'; }
+    }
+    function listClass() {
+      var rest = String(cfg.grid_class || '').split(/\s+/).filter(function (c) { return c && c !== 'cx-item-grid' && c !== 'cx-item-grid-roomy'; });
+      return ['cx-item-list'].concat(rest).join(' ');
+    }
+    function applyLayout(next, save) {
       layout = next === 'list' ? 'list' : 'grid';
-      gridEl.className = layout === 'list' ? String(cfg.grid_class || '').replace(/\s*cx-item-grid-roomy\b/, '') : cfg.grid_class;
-      layoutEl.querySelectorAll('.layout-toggle-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.layout === layout); });
-      try { if (storage) storage.setItem(LAYOUT_KEY, layout); } catch (e) { /* layout just won't persist */ }
+      gridEl.className = layout === 'list' ? listClass() : (cfg.grid_class || 'cx-item-grid');
+      if (layout === 'list') gridEl.setAttribute('role', 'list');
+      else if (gridEl.removeAttribute) gridEl.removeAttribute('role');
+      if (box) box.classList.toggle('is-list', layout === 'list');
+      if (layoutEl) layoutEl.querySelectorAll('.layout-toggle-btn').forEach(function (b) {
+        var on = b.dataset.layout === layout;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      if (save) { try { if (storage) storage.setItem(LAYOUT_KEY, layout); } catch (e) { /* layout just won't persist */ } }
     }
     if (layoutEl) {
-      var savedLayout = 'grid';
-      try { savedLayout = (storage && storage.getItem(LAYOUT_KEY)) || 'grid'; } catch (e) { /* private mode */ }
-      applyLayout(savedLayout);
+      applyLayout(readLayout(), false);
       layoutEl.addEventListener('click', function (e) {
         var b = e.target.closest('.layout-toggle-btn');
-        if (b) { applyLayout(b.dataset.layout); render(); }
+        if (b && b.dataset.layout !== layout) {
+          applyLayout(b.dataset.layout, true);
+          // Redraw the same view in the other layout, keeping as many files as were showing
+          // (the feed holds every page fetched so far; keep=true redraws max(batch, shown)).
+          if (current && (current.items.length || current.done)) pager.set(current.items.slice(), true, current.total);
+          else render();
+        }
       });
     }
 
@@ -386,6 +413,7 @@
     var grid = {
       id: cfg.id, box: box, render: render, refresh: refresh, toggle: toggle, selected: selected,
       get tab() { return tab; }, get filed() { return filed; }, get counts() { return counts; },
+      get layout() { return layout; },
     };
     instances.push(grid);
     updateBar();

@@ -192,7 +192,6 @@ def ingest_file(
     run_background,
     description="",
     tags=None,
-    client=None,
     source_modified_at=None,
     project_id=None,
     folder_name="",
@@ -212,7 +211,6 @@ def ingest_file(
         run_background: Callable to schedule background work
         description: Metadata description
         tags: List of tag names (or None)
-        client: Optional client identifier
         source_modified_at: Source file's mtime (unix seconds) for duplicate detection
         project_id: Optional project to attach to
         folder_name: Optional folder name (for folder-drop uploads)
@@ -298,7 +296,6 @@ def ingest_file(
             slug, filename, None, source,
             description=description,
             tags=tags or [],
-            client=client or None,
             file_size=size,
             source_modified_at=source_modified_at,
             media_type=media_type,
@@ -326,7 +323,6 @@ def ingest_file(
             slug, filename, stored_filename, source,
             description=description,
             tags=tags or [],
-            client=client or None,
             file_size=size,
             source_modified_at=source_modified_at,
             media_type=provisional,
@@ -357,7 +353,6 @@ def ingest_file(
     insert_kwargs = {
         "description": description,
         "tags": tags or [],
-        "client": client or None,
         "file_size": size,
         "source_modified_at": source_modified_at,
         "media_type": media_type,
@@ -415,7 +410,6 @@ def ingest_content(
     content_date=None,
     description="",
     tags=None,
-    client=None,
     type_metadata=None,
     project_id=None,
     sensitive=False,
@@ -434,7 +428,6 @@ def ingest_content(
         content_date: Content's real-world date (unix seconds)
         description: Metadata description
         tags: List of tag names (or None)
-        client: Optional client identifier
         type_metadata: Optional freeform per-type properties (dict)
         project_id: Optional project to attach to
 
@@ -493,7 +486,6 @@ def ingest_content(
     insert_kwargs = {
         "description": description,
         "tags": tags or [],
-        "client": client or None,
         "type_metadata": type_metadata,
         "sensitive": sensitive,
     }

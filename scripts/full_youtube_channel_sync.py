@@ -324,7 +324,7 @@ def _http_call(method, url, payload):
 
 def get_current_row(base_url, slug):
     """GET /api/image/{slug} — used before a correction so
-    description/tags/client (fields api_update_image always
+    description/tags (fields api_update_image always
     applies, even when unrelated to this script's change — see that
     endpoint's signature) can be resubmitted unchanged instead of being
     blanked out."""
@@ -346,9 +346,9 @@ def create_content_row(base_url, **fields):
 
 def correct_content_row(base_url, slug, current, content_description, type_metadata, content_date=None):
     """POST /api/image/{slug} — resubmits the row's CURRENT
-    description/tags/client verbatim (see get_current_row) so
+    description/tags verbatim (see get_current_row) so
     this only actually changes content_description + type_metadata, per
-    api_update_image's "always applies description/tags/client"
+    api_update_image's "always applies description/tags"
     contract.
 
     content_date (#265 follow-up): the real publishedAt date was already
@@ -361,7 +361,6 @@ def correct_content_row(base_url, slug, current, content_description, type_metad
     payload = {
         "description": current.get("description") or "",
         "tags": json.dumps(current.get("tags") or []),
-        "client": current.get("client") or "",
         "content_description": content_description,
         "type_metadata": json.dumps(type_metadata),
     }

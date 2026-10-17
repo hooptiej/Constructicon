@@ -26,14 +26,10 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS capture_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     slug TEXT UNIQUE NOT NULL,
-    source TEXT NOT NULL DEFAULT 'screenshot',
-    client TEXT,
-    ticket_id TEXT,
     timestamp REAL NOT NULL,
     tech TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     extracted_text TEXT NOT NULL DEFAULT '',
-    artifact_link TEXT,
     embedding BLOB,
     tags TEXT NOT NULL DEFAULT '[]',
     redacted INTEGER NOT NULL DEFAULT 0,
@@ -50,26 +46,15 @@ CREATE TABLE IF NOT EXISTS capture_events (
     content_date REAL,
     type_metadata TEXT NOT NULL DEFAULT '{}',
     display_name TEXT,
-    icon TEXT,
     agent_notes TEXT,
     provenance TEXT,
     highlight INTEGER NOT NULL DEFAULT 0,
     is_brand_asset INTEGER NOT NULL DEFAULT 0,
     brand_role TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_capture_events_source ON capture_events(source);
-CREATE INDEX IF NOT EXISTS idx_capture_events_client ON capture_events(client);
-CREATE INDEX IF NOT EXISTS idx_capture_events_ticket ON capture_events(ticket_id);
-CREATE TABLE IF NOT EXISTS clients (
-    name TEXT PRIMARY KEY,
-    category TEXT NOT NULL,
-    nickname TEXT
-);
-CREATE TABLE IF NOT EXISTS client_domains (
-    client_name TEXT NOT NULL,
-    domain TEXT NOT NULL,
-    PRIMARY KEY (client_name, domain)
-);
+-- #704: the imagerepo-era columns source, client, ticket_id, artifact_link and icon, and the
+-- clients / client_domains tables, are gone. An existing DB loses them in
+-- _drop_dead_columns_704 (web boot), which refuses to drop one that still holds real data.
 CREATE TABLE IF NOT EXISTS capture_event_relations (
     slug_a TEXT NOT NULL,
     slug_b TEXT NOT NULL,
@@ -264,8 +249,6 @@ CREATE TABLE IF NOT EXISTS item_access_log (
 CREATE INDEX IF NOT EXISTS idx_item_access_log_slug ON item_access_log(slug, at);
 """
 
-SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
-
 # Provenance (capture_events.provenance, #341): the options live in the provenance_options
 # table since #529 (core/provenance_options.py seeds and owns them).
 
@@ -346,94 +329,6 @@ def source_group(tech):
         if tech == group or tech.startswith(group + " —") or tech.startswith(group + " -"):
             return group
     return tech
-
-
-def ensure_special_clients():
-    conn = get_conn()
-    try:
-        for name in SPECIAL_CLIENTS:
-            conn.execute("INSERT OR IGNORE INTO clients (name, category) VALUES (?, 'special')", (name,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def sync_hudu_clients(companies):
-    """Replace the Hudu-sourced client list wholesale — called periodically
-    so renamed/archived companies don't linger. Special categories (Unknown,
-    Not Business, Internal Infrastructure) are untouched.
-
-    Each item is either a plain name string (no nickname/domains — older
-    sync data) or a {"name": ..., "nickname": ..., "domains": [...]} dict,
-    so this stays compatible with whatever the upstream Hudu export
-    currently produces. "domains" is any domain worth matching in OCR text —
-    typically the company's website plus any Cloudflare-managed zones.
-    """
-    conn = get_conn()
-    try:
-        conn.execute("DELETE FROM client_domains WHERE client_name IN (SELECT name FROM clients WHERE category = 'hudu')")
-        conn.execute("DELETE FROM clients WHERE category = 'hudu'")
-        rows, domain_rows = [], []
-        for c in companies:
-            if isinstance(c, str):
-                rows.append((c, None))
-                continue
-            name = c["name"]
-            rows.append((name, c.get("nickname") or None))
-            for domain in c.get("domains") or []:
-                if domain:
-                    domain_rows.append((name, domain.strip().lower()))
-        conn.executemany(
-            "INSERT OR IGNORE INTO clients (name, category, nickname) VALUES (?, 'hudu', ?)",
-            rows,
-        )
-        if domain_rows:
-            conn.executemany(
-                "INSERT OR IGNORE INTO client_domains (client_name, domain) VALUES (?, ?)",
-                domain_rows,
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def list_client_domains():
-    """(client_name, domain) pairs — a client can have more than one, so this
-    is flat rows rather than one-per-client like list_client_aliases."""
-    conn = get_conn()
-    try:
-        rows = conn.execute("SELECT client_name, domain FROM client_domains").fetchall()
-        return [(r["client_name"], r["domain"]) for r in rows]
-    finally:
-        conn.close()
-
-
-def list_client_aliases():
-    """(name, nickname) pairs for real Hudu-synced clients plus any fake
-    test clients — used to auto-tag OCR'd text by client, not the UI
-    dropdown (list_clients handles that, and keeps test clients visually
-    separate)."""
-    conn = get_conn()
-    try:
-        rows = conn.execute("SELECT name, nickname FROM clients WHERE category IN ('hudu', 'test')").fetchall()
-        return [(r["name"], r["nickname"]) for r in rows]
-    finally:
-        conn.close()
-
-
-def list_clients():
-    conn = get_conn()
-    try:
-        specials = conn.execute("SELECT name FROM clients WHERE category = 'special' ORDER BY name").fetchall()
-        hudu = conn.execute("SELECT name FROM clients WHERE category = 'hudu' ORDER BY name").fetchall()
-        test = conn.execute("SELECT name FROM clients WHERE category = 'test' ORDER BY name").fetchall()
-        return {
-            "special": [r["name"] for r in specials],
-            "clients": [r["name"] for r in hudu],
-            "test": [r["name"] for r in test],
-        }
-    finally:
-        conn.close()
 
 
 def get_conn():
@@ -900,9 +795,6 @@ def init_db(migrate=True):
         # so registering a new object type never requires a schema migration.
         if "type_metadata" not in existing_columns:
             _add_column(conn, "capture_events", "type_metadata", "TEXT NOT NULL DEFAULT '{}'")
-        existing_client_columns = {row["name"] for row in conn.execute("PRAGMA table_info(clients)")}
-        if "nickname" not in existing_client_columns:
-            _add_column(conn, "clients", "nickname", "TEXT")
         # tag_id: links a project to a blog_tags row (cards.create links the root
         # tag of the same name at creation; the link is the id, so the names can
         # drift apart afterwards) so tagging an object with a project
@@ -915,14 +807,9 @@ def init_db(migrate=True):
         existing_project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
         if "tag_id" not in existing_project_columns:
             _add_column(conn, "projects", "tag_id", "INTEGER REFERENCES blog_tags(id)")
-        # display_name/icon (#11): an optional per-object override so an object
-        # can be given a human-friendly label and a custom emoji independent of
-        # its filename and its media_type's generic badge_icon (see
-        # core/object_types.py). NULL for every existing row — _to_public/
-        # _to_object_detail in web/app.py fall back to the pre-existing
-        # filename/content_description/slug and spec.badge_icon behavior when
-        # unset, so this is purely additive.
-        for column, ddl_type in (("display_name", "TEXT"), ("icon", "TEXT")):
+        # display_name (#11): an optional per-object title override (core/item_title.py). Its twin,
+        # the per-object `icon` override, was never used and is dropped by #704.
+        for column, ddl_type in (("display_name", "TEXT"),):
             if column not in existing_columns:
                 _add_column(conn, "capture_events", column, ddl_type)
         # parent_id (#133): support for nested projects — projects can now have a
@@ -1081,6 +968,7 @@ def init_db(migrate=True):
     # leaving the block commits the whole schema step (an exception rolls all of it back)
     if migrate:
         run_pending_migrations()
+        _run_drop_dead_columns_704()  # #704: web only, every boot; never refuses to start
     else:
         pending = pending_migrations()
         if pending:
@@ -1486,6 +1374,156 @@ def run_pending_migrations():
     return ran
 
 
+# --- #704: drop the dead imagerepo-era columns and tables, with a safeguard ---------------------
+# capture_events.source / client / ticket_id / artifact_link / icon and the clients / client_domains
+# tables rode along from the imagerepo fork; nothing reads them any more (link vs file comes from
+# the type's is_file, a hotlink is always /f/<slug>). Owner decision 2026-10-17: drop them. But an
+# install could hold real data in one of them, so this never drops blind: each column / table is
+# counted first and KEPT, with a loud warning, when it holds anything real. Runs at every web boot
+# (init_db, migrate=True; never the MCP): a kept column is re-checked and dropped once its data is
+# cleared, and the warning repeats until then. Idempotent: once everything is gone it only reads the
+# schema. The first run is recorded in schema_migrations (MIGRATION_704); a run that drops or keeps
+# anything writes one change-log row (op `migration_drop_dead_columns_704`) with the counts.
+# The pre-deploy ZFS snapshot (scripts/deploy.sh) is the backup. SQLite >= 3.35 has DROP COLUMN;
+# the app already refuses to start below 3.43 (the FTS5 search index, #543), so no rebuild fallback.
+MIGRATION_704 = "drop_dead_columns_704"
+DEAD_COLUMNS_704 = ("source", "client", "ticket_id", "artifact_link", "icon")
+DEAD_TABLES_704 = ("clients", "client_domains")
+# `source` held how a row was captured ('screenshot' by the dead uploader app / a file, 'external' for
+# a link); those two values carry nothing `is_file` doesn't. Anything else counts as real data.
+DEAD_SOURCE_VALUES_704 = ("screenshot", "external")
+# The rows the old ensure_special_clients() seeded (category 'special', no nickname): not real data.
+PLACEHOLDER_CLIENTS_704 = ("Unknown", "Not Business", "Internal Infrastructure")
+_ABSOLUTE_F_LINK_704 = re.compile(r"^https?://[^/\s]+(/f/[^/?#\s]+)$")
+
+# How to find a column's real values, for the warning (and the admin who reads it).
+_DEAD_DATA_QUERY_704 = {
+    "source": "SELECT slug, source FROM capture_events WHERE source IS NOT NULL AND source NOT IN ('', %s)"
+              % ", ".join(f"'{v}'" for v in DEAD_SOURCE_VALUES_704),
+    "client": "SELECT slug, client FROM capture_events WHERE client IS NOT NULL AND client != ''",
+    "ticket_id": "SELECT slug, ticket_id FROM capture_events WHERE ticket_id IS NOT NULL AND ticket_id != ''",
+    "icon": "SELECT slug, icon FROM capture_events WHERE icon IS NOT NULL AND icon != ''",
+    "artifact_link": "SELECT slug, artifact_link FROM capture_events WHERE artifact_link IS NOT NULL "
+                     "AND artifact_link != '' AND artifact_link != '/f/' || slug",
+    "clients": "SELECT * FROM clients WHERE NOT (category = 'special' AND name IN (%s) AND COALESCE(nickname, '') = '')"
+               % ", ".join(f"'{v}'" for v in PLACEHOLDER_CLIENTS_704),
+    "client_domains": "SELECT * FROM client_domains",
+}
+
+
+def _artifact_link_is_derived(slug, link):
+    """True when `link` is exactly the row's own hotlink, /f/<slug>, relative or absolute."""
+    if link == f"/f/{slug}":
+        return True
+    m = _ABSOLUTE_F_LINK_704.match(link or "")
+    return bool(m) and m.group(1) == f"/f/{slug}"
+
+
+def dead_data_report_704(conn=None):
+    """Read-only: {name: {"kind": "column"|"table", "present": bool, "real": n, "rows": n}} for each
+    #704 column (capture_events) and table. `real` = rows holding real data by the rules above
+    (0 for an absent one); `rows` = rows with any value at all (columns) / all rows (tables)."""
+    own = conn is None
+    conn = conn or get_conn()
+    try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(capture_events)")}
+        tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        out = {}
+        for col in DEAD_COLUMNS_704:
+            info = {"kind": "column", "present": col in cols, "real": 0, "rows": 0}
+            if info["present"]:
+                info["rows"] = conn.execute(
+                    f"SELECT COUNT(*) FROM capture_events WHERE {col} IS NOT NULL AND {col} != ''").fetchone()[0]
+                if col == "artifact_link":
+                    info["real"] = sum(1 for r in conn.execute(_DEAD_DATA_QUERY_704[col])
+                                       if not _artifact_link_is_derived(r["slug"], r["artifact_link"]))
+                else:
+                    info["real"] = conn.execute(f"SELECT COUNT(*) FROM ({_DEAD_DATA_QUERY_704[col]})").fetchone()[0]
+            out[col] = info
+        for table in DEAD_TABLES_704:
+            info = {"kind": "table", "present": table in tables, "real": 0, "rows": 0}
+            if info["present"]:
+                info["rows"] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                query = _DEAD_DATA_QUERY_704[table]
+                if table == "clients" and "nickname" not in {r["name"] for r in conn.execute("PRAGMA table_info(clients)")}:
+                    query = query.replace("COALESCE(nickname, '')", "''")  # a clients table from before nickname
+                info["real"] = conn.execute(f"SELECT COUNT(*) FROM ({query})").fetchone()[0]
+            out[table] = info
+        return out
+    finally:
+        if own:
+            conn.close()
+
+
+def _drop_capture_columns(conn, columns):
+    """ALTER TABLE capture_events DROP COLUMN for each of `columns`, on the caller's transaction.
+    DROP COLUMN refuses an indexed column, and re-checks every view and trigger in the schema, so the
+    indexes on these columns go first and the search index's view + triggers (#543) are dropped and
+    re-created around it (they don't read these columns; this keeps them valid whatever SQLite checks).
+    The FTS table itself is untouched, so the index needs no rebuild."""
+    for idx in [r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'capture_events' AND sql IS NOT NULL")]:
+        idx_cols = {r["name"] for r in conn.execute(f"PRAGMA index_info({idx})")}
+        if idx_cols & set(columns):
+            conn.execute(f"DROP INDEX IF EXISTS {idx}")
+    for name in _search_sync_triggers():
+        conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+    conn.execute("DROP VIEW IF EXISTS item_search_src")
+    for col in columns:
+        conn.execute(f"ALTER TABLE capture_events DROP COLUMN {col}")
+    _ensure_search_schema(conn)
+
+
+def _drop_dead_columns_704():
+    """The #704 step (see the comment above MIGRATION_704). Returns {"dropped": [...], "kept":
+    {name: real_rows}, "report": dead_data_report_704 before the drop, "first_run": bool}."""
+    from . import changes
+    with transaction() as tx:
+        conn = tx.conn
+        report = dead_data_report_704(conn)
+        first_run = conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (MIGRATION_704,)).fetchone() is None
+        drop_cols = [c for c in DEAD_COLUMNS_704 if report[c]["present"] and not report[c]["real"]]
+        drop_tables = [t for t in DEAD_TABLES_704 if report[t]["present"] and not report[t]["real"]]
+        kept = {n: i["real"] for n, i in report.items() if i["present"] and i["real"]}
+        if drop_cols:
+            _drop_capture_columns(conn, drop_cols)
+        for table in drop_tables:
+            conn.execute(f"DROP TABLE {table}")
+        dropped = drop_cols + drop_tables
+        if dropped or (kept and first_run):
+            insert_change_log(conn, "migration_drop_dead_columns_704", changes.ACTOR_MIGRATION, [],
+                              batch_id=changes.new_batch_id(),
+                              details={"dropped": dropped, "kept": kept,
+                                       "counts": {n: {"rows": i["rows"], "real": i["real"]}
+                                                  for n, i in report.items() if i["present"]}})
+        if first_run:
+            conn.execute("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)", (MIGRATION_704, time.time()))
+    if dropped:
+        counts = ", ".join("%s=%d" % (n, report[n]["rows"]) for n in dropped)
+        print(f"schema_migrations: {MIGRATION_704} dropped {', '.join(dropped)} (rows with a value: {counts})",
+              flush=True)
+    for name, n in kept.items():
+        where = "capture_events." + name if report[name]["kind"] == "column" else "the table " + name
+        print(f"WARNING {MIGRATION_704}: KEPT {where}: {n} row(s) hold real data, so it was NOT dropped. "
+              f"Nothing in the app reads or writes it any more. Look at them with: {_DEAD_DATA_QUERY_704[name]}; "
+              "save what matters elsewhere, clear them, and restart the web app: this check runs at every boot "
+              "and drops it once it is empty.", flush=True)
+    return {"dropped": dropped, "kept": kept, "report": report, "first_run": first_run}
+
+
+def _run_drop_dead_columns_704():
+    """init_db's call: the app must start even if the #704 step fails. A failure rolls the whole step
+    back (one transaction: nothing is dropped) and is logged loudly with its traceback."""
+    try:
+        return _drop_dead_columns_704()
+    except Exception as e:
+        import traceback
+        print(f"ERROR {MIGRATION_704}: the step failed and was rolled back (nothing dropped): {e!r}. "
+              "The app carries on with the old columns in place; they are no longer read.", flush=True)
+        traceback.print_exc()
+        return None
+
+
 def _rebuild_project_relations_typed(conn):
     """V2 cards 3.8: project_relations gets a `type` (and `note`) and its PK becomes
     (slug_a, slug_b, type). SQLite can't change a PK in place, so the table is
@@ -1542,8 +1580,8 @@ def _row_to_dict(row):
     return d
 
 
-def insert_upload(slug, filename, stored_filename, uploaded_by, description="", tags=None, client=None,
-                   source="screenshot", file_size=None, source_modified_at=None, ocr_status=None,
+def insert_upload(slug, filename, stored_filename, uploaded_by, description="", tags=None,
+                   file_size=None, source_modified_at=None, ocr_status=None,
                    media_type="image", external_url=None, content_description=None, content_date=None,
                    type_metadata=None, sensitive=False):
     """Creates a capture_events row. filename/stored_filename are for uploaded files and can be
@@ -1551,7 +1589,7 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
     there's no requirement that a row correspond to an actual file on disk.
 
     media_type/external_url/content_description/content_date describe the content itself,
-    separate from source/description which are about how/why the row was captured. See the
+    separate from description, which is about how/why the row was captured. See the
     capture_events column comments in SCHEMA for the distinction. type_metadata is a freeform
     dict for whatever per-type properties don't fit those generic columns — see
     core/object_types.py's MetadataField and set_type_metadata below.
@@ -1571,13 +1609,13 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
     try:
         now = time.time()
         conn.execute(
-            "INSERT INTO capture_events (slug, source, client, timestamp, tech, description, "
-            "extracted_text, artifact_link, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
+            "INSERT INTO capture_events (slug, timestamp, tech, description, "
+            "extracted_text, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
             "media_type, external_url, content_description, content_date, type_metadata, uploaded_by_user_id, "
             "sensitive, sensitive_by, sensitive_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (slug, source, client, now, uploaded_by, description,
-             f"/f/{slug}", json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
+            "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (slug, now, uploaded_by, description,
+             json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
              now if ocr_status == "pending" else None,
              media_type, external_url, content_description, content_date, json.dumps(type_metadata or {}), owner_id,
              1 if sensitive else 0, who if sensitive else None, now if sensitive else None),
@@ -1593,7 +1631,7 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
 
 
 def insert_content(slug, uploaded_by, media_type, external_url=None, content_description=None, content_date=None,
-                    description="", tags=None, client=None, source="external", type_metadata=None, sensitive=False):
+                    description="", tags=None, type_metadata=None, sensitive=False):
     """Thin wrapper around insert_upload for rows with no uploaded file — e.g. a YouTube video,
     where the content lives at external_url rather than in local storage. filename/stored_filename
     are left None. ocr_status starts "pending" whenever the type is OCR-capable (see
@@ -1605,8 +1643,8 @@ def insert_content(slug, uploaded_by, media_type, external_url=None, content_des
     # stdlib + sqlite3) obvious at a glance.
     spec = object_types.get_object_type(media_type)
     insert_upload(
-        slug, None, None, uploaded_by, description=description, tags=tags, client=client,
-        source=source, media_type=media_type, external_url=external_url,
+        slug, None, None, uploaded_by, description=description, tags=tags,
+        media_type=media_type, external_url=external_url,
         content_description=content_description, content_date=content_date,
         ocr_status="pending" if spec.ocr_capable else None,
         type_metadata=type_metadata, sensitive=sensitive,
@@ -1626,8 +1664,8 @@ def _set_type_metadata(slug, metadata):
 
 def _update_content_metadata(slug, content_description=None, type_metadata=None):
     """Partial update for the two content-description-shaped fields that
-    neither update_tags (description/tags/client — see
-    api_update_image in web/app.py) nor rename_object (display_name/icon,
+    neither update_tags (description/tags — see
+    api_update_image in web/app.py) nor rename_object (display_name,
     #11) cover: content_description itself, and type_metadata.
 
     Added for #54's full YouTube channel sync: correcting a row's
@@ -1842,41 +1880,6 @@ def find_duplicate(filename, file_size, source_modified_at):
         conn.close()
 
 
-def _update_tags(slug, description=None, tags=None, client=None):
-    # #227: wrap read-modify-write in a transaction to prevent lost updates when
-    # concurrent writers (OCR thread, user saves, MCP) race on the same row.
-    conn = get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT description, tags, client FROM capture_events WHERE slug = ?", (slug,)).fetchone()
-        if row is None:
-            conn.commit()
-            return None
-        existing = dict(row)
-        # Convert tags from JSON string to list for the comparison logic below
-        existing["tags"] = json.loads(existing.get("tags") or "[]")
-
-        conn.execute(
-            "UPDATE capture_events SET description = ?, tags = ?, client = ? WHERE slug = ?",
-            (
-                description if description is not None else existing["description"],
-                json.dumps(tags) if tags is not None else json.dumps(existing["tags"]),
-                client if client is not None else existing["client"],
-                slug,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    if tags is not None:
-        # #213 fix: pass the previous free-text tags so we can diff only against those,
-        # not against the entire tag tree (which includes tags from projects/MCP/etc.).
-        previous_tags = existing["tags"] if existing.get("tags") else []
-        _sync_real_tags_for_post(slug, tags, previous_tags=previous_tags)
-    return get_by_slug(slug)
-
-
 def _sync_real_tags_for_post(post_slug, tag_names, previous_tags=None):
     """#165: the free-text `tags` column above is invisible to /api/tags
     (autocomplete) and the home page's tag-tree browsing/pills, which only
@@ -1934,27 +1937,16 @@ def _sync_real_tags_for_post(post_slug, tag_names, previous_tags=None):
         _detach_tag(post_slug, tag_id)
 
 
-def _rename_object(slug, display_name=None, icon=None):
-    """Sets an object's display_name and/or icon override (#11). Partial
-    update, same pattern as update_tags/update_project — pass only the
-    field(s) you want to change. Passing an empty string clears the field
-    back to the default fallback (filename/content_description/slug for
-    display_name, the media_type's spec.badge_icon for icon) rather than
-    leaving the previous override in place, since "" is never a meaningful
-    display name or icon glyph on its own."""
+def _rename_object(slug, display_name):
+    """Sets an object's display_name override (#11). Passing an empty string clears it back to
+    the default title (core/item_title.py) rather than leaving the previous override in place,
+    since "" is never a meaningful display name. (#704: the `icon` override is gone.)"""
     existing = get_by_slug(slug)
     if existing is None:
         return None
     conn = get_conn()
     try:
-        conn.execute(
-            "UPDATE capture_events SET display_name = ?, icon = ? WHERE slug = ?",
-            (
-                (display_name or None) if display_name is not None else existing.get("display_name"),
-                (icon or None) if icon is not None else existing.get("icon"),
-                slug,
-            ),
-        )
+        conn.execute("UPDATE capture_events SET display_name = ? WHERE slug = ?", (display_name or None, slug))
         conn.commit()
         return get_by_slug(slug)
     finally:
@@ -2143,21 +2135,7 @@ def _add_tags(slug, new_tags):
         conn.close()
 
 
-def set_client_if_empty(slug, client):
-    """Only sets client if it's currently unset — auto-detection should
-    never override a client a person already picked by hand."""
-    conn = get_conn()
-    try:
-        conn.execute(
-            "UPDATE capture_events SET client = ? WHERE slug = ? AND (client IS NULL OR client = '')",
-            (client, slug),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def list_uploaders(query=None, client=None):
+def list_uploaders(query=None):
     """Distinct Source *groups* (see source_group()) matching the given
     filters, each with their total count and most recent capture time — used
     to group the gallery fairly so one prolific uploader can't crowd others
@@ -2183,9 +2161,6 @@ def list_uploaders(query=None, client=None):
             clauses.append("ce.id IN (SELECT rowid FROM item_search WHERE item_search MATCH ?)" if match else "0")
             if match:
                 params.append(match)
-        if client:
-            clauses.append("ce.client = ?")
-            params.append(client)
         where = f"WHERE {' AND '.join(clauses)}"
         rows = conn.execute(f"SELECT ce.tech AS tech, ce.timestamp AS timestamp FROM capture_events ce {where}",
                             params).fetchall()
@@ -2280,7 +2255,7 @@ def _search_match(query):
     return " ".join(f'"{w}"*' for w in words) or None
 
 
-def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False,
+def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False,
            include_superseded=True):
     """Keyword/filter search over capture_events. With a `query`, best match first (#543: relevance,
     a hit in a name or tag outranks one inside OCR text; ties newest first). Without one, most recent
@@ -2335,9 +2310,6 @@ def search(query=None, tags=None, client=None, uploaded_by=None, limit=50, inclu
             # #477: browse views pass False so only the current revision of a chain lists;
             # search itself keeps finding old revisions (callers mark them superseded).
             clauses.append(_not_superseded("ce.").replace(" AND ", "", 1))
-        if client:
-            clauses.append("ce.client = ?")
-            params.append(client)
         if uploaded_by:
             # Matches either the exact Source string or rows whose Source starts
             # with `uploaded_by` as its group prefix (see source_group()) — lets
@@ -3907,6 +3879,14 @@ def invert_image(conn, mutation, force=False):
     if table not in IMAGE_TABLE_KEYS:
         raise UndoConflict(f"Can't undo a change to {table!r}.", {"table": table})
     expected, target = mutation.get("after"), mutation.get("before")
+    # #704: a row image logged before a column was dropped still names it (capture_events.source,
+    # client, ...). Compare and restore only the columns the table has now; the dropped ones held
+    # nothing anything reads, and writing them back would fail.
+    live = set(_image_columns(conn, table)) | {"rowid"}
+    if expected is not None:
+        expected = {k: v for k, v in expected.items() if k in live}
+    if target is not None:
+        target = {k: v for k, v in target.items() if k in live}
     current = image_get(conn, table, key)
     if not force:
         if expected is None and current is not None:

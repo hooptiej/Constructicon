@@ -93,11 +93,10 @@ def _to_public(row):
         # File-kind badge (issue #12) — driven entirely by the type's
         # ObjectTypeSpec (core/object_types.py) so gallery cards never need
         # an if/else on media_type; a new type registered there picks up a
-        # badge automatically. row["icon"] (#11) is a per-object override
-        # that takes priority over the type's generic badge_icon.
+        # badge automatically. (#704: the per-object `icon` override is gone.)
         "media_type": media_type,
         "type_label": spec.label,
-        "type_icon": row.get("icon") or spec.badge_icon,
+        "type_icon": spec.badge_icon,
         "type_badge": spec.badge_text,
         # Whether the gallery/home cards should render the actual thumbnail
         # image (thumb_url above) or a generic file icon — driven by the
@@ -109,7 +108,6 @@ def _to_public(row):
         "has_thumbnail": has_thumb,
         "description": row["description"],
         "tags": row["tags"],
-        "client": row["client"],
         "uploaded_at": row["timestamp"],
         # content_date (#265): the content's own real-world date (EXIF
         # capture time, a video's creation_time, a YouTube publishedAt),
@@ -125,7 +123,6 @@ def _to_public(row):
         "uploaded_by": row["tech"],
         "uploaded_by_display": db.source_group(row["tech"]),
         "redacted": bool(row["redacted"]),
-        "source": row["source"],
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
         # #248: lets the gallery/list cards' caption lamp tell "captionable
@@ -135,7 +132,6 @@ def _to_public(row):
         # their status in type_metadata, where absent is ambiguous without
         # this. Same gate the detail page's caption panel uses.
         "caption_capable": captions.should_caption(spec),
-        "artifact_link": row["artifact_link"],
         "type_metadata": row.get("type_metadata", {}),
         # Curator (#341): object provenance classification + highlight flag, so
         # every object response (gallery/detail/update) carries them for the UI
@@ -320,12 +316,11 @@ def _to_object_detail(row):
         # missing" contract as row["tags"].
         "type_metadata": row.get("type_metadata") or {},
         # See _to_public's matching comment: "display_name" is the canonical title (#542);
-        # row["icon"] (#11) is a per-object override that wins over the generic badge.
+        # "icon" is the type's badge (#704: the per-object override column is gone).
         "display_name": item_title.title_of(row),
-        "icon": row.get("icon") or spec.badge_icon,
+        "icon": spec.badge_icon,
         "description": row["description"],
         "tags": row["tags"],
-        "client": row["client"],
         # #47: current project membership — a project selector needs to
         # show what's already attached, not just a blank picker, and (per
         # #51's backfill) an object can now belong to a project it was

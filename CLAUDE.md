@@ -8,9 +8,9 @@ built by forking and repurposing
 [ComputerCats-Jason/imagerepo](https://github.com/ComputerCats-Jason/imagerepo)
 (a multi-tech IT screenshot repo) into a single-owner personal content site.
 That fork is kept as a local-only reference elsewhere — it is not part of
-this repo, and its old vocabulary (`tech`, `client`, `ticket_id`) still
-echoes through the schema and code as repurposed/vestigial fields (see
-below).
+this repo. Its old vocabulary mostly echoes no more: `tech` survives, repurposed as the
+Source label, and the dead IT-ticketing columns and client tables were dropped in #704 (see
+"Data model").
 
 It started as a single-owner tool on a LAN-only server with no port forward, where the network
 perimeter was the security boundary. Auth is on (#467; owner decisions 2026-10-07): **step 1**
@@ -45,7 +45,7 @@ the date and commit forward when you re-verify.
     see "Roles and policy" below) per area, **no prefix** (each
     route writes its full path): `pages.py` (HTML pages + legacy redirects),
     `items.py` (`/api/upload`, `/api/content`, `/api/image/*` incl. `replace-file`, per-item
-    captions, `/api/gallery`, `/api/home/files`, `/api/clients`, bulk, tags, search, multi-delete), `cards.py`
+    captions, `/api/gallery`, `/api/home/files`, bulk, tags, search, multi-delete), `cards.py`
     (`/api/projects*`, `/api/project/*`, `/api/cards/*`, `/api/links*`,
     `/api/families/*`, `/api/changes/*`), `hobbies.py`, `curator.py`
     (`/api/curator/*`, `/api/pending-decisions*`), `blog_export.py`
@@ -255,8 +255,6 @@ the date and commit forward when you re-verify.
     exits, and checks `run_checks.py` never collects `archive/`). A new one-shot goes in `scripts/`
     while it is live and moves to `archive/` once it has run, with the guard as its first line.
   - `scripts/data/`: input files for scripts (the V2 curation suggestions JSON).
-  - Outside `scripts/`: `sync_clients.py` at the repo root seeds the vestigial `clients` tables (see
-    "Data model"); it stays until the owner decides whether those tables go.
 - **`core/manage/`** (#634) — the operational command-line tools that ship with the app, because
   `core/` is mounted in every install and `scripts/` is not: `reset_password` (see "Users and
   sessions") and `mcp_token` (see "Auth enforcement"). Run from the repo root or `/app`:
@@ -953,8 +951,7 @@ fixture next to the certificate.
 - a module outside the service modules calls (or imports) a private `db._*` function. The raw-write
   allowlist, each with its reason in the script: `core/captions.py` (caption status/results),
   `core/embedded_metadata.py` and `core/object_types/youtube.py` (upload-time file metadata, a
-  YouTube publish date), `core/automatch.py` (upload-time automatch tagging), `core/ocr.py` (OCR
-  client tags), `core/card_migration.py` (migrations), the one-off scripts
+  YouTube publish date), `core/automatch.py` (upload-time automatch tagging), `core/card_migration.py` (migrations), the one-off scripts
   `scripts/archive/{apply_project_groupings,seed_example_projects,backfill_from_hooptiej_site,link_lil_dragon_brand}.py`
   (retired, kept readable),
   and `scripts/test_*.py` (throwaway-DB fixtures);
@@ -1018,7 +1015,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   resolution in the same batch as what the answer applied (membership / retype), so one undo
   re-opens the question.
 - **Items (phase B): item writes go through `core/items.py`; deletes are held 7 days, then
-  purged; redacts are held until the owner clicks.** `items.update(slug, **fields)` covers display name/icon, description, client,
+  purged; redacts are held until the owner clicks.** `items.update(slug, **fields)` covers display name, description,
   content_description, type_metadata (merged, physical-piece keys cleaned), file provenance,
   highlight, brand asset/role, display-date override and content_date as ONE batch per call (one
   Save = one undo). `redact` / `recover_redacted` / `delete_redacted_file` / `unredact`, `retype` (the media_type change is imaged; the caller's
@@ -1058,15 +1055,15 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   tag the op created; `db.invert_image` refuses that (undo_conflict) while anything made later uses
   the tag. Lookups (`tags.find`, `find_root`, `find_any`) never create. The two tag stores (free-text column vs
   `post_tags`) stay as they were; unifying them is #555. Card creation and hobby creation mint their
-  tags through `tags.ensure` too (phase D); the only raw tag writers left are the upload-time
-  automatch tagging and OCR client tags (pipeline, allowlisted).
+  tags through `tags.ensure` too (phase D); the only raw tag writer left is the upload-time
+  automatch tagging (pipeline, allowlisted; the OCR client tagging went with #704).
 - **Delete-all (phase C): `core/reset.py` `delete_everything(confirm)`**, called by `POST
   /api/delete-all` and MCP `constructicon_delete_all(confirm)`; both need the phrase `DELETE
   EVERYTHING`. Permanent by design (no trash, no undo); one change-log row (op `delete_all`, actor
   from context) with per-table counts in `form_body`. Clears `reset.CLEARED_TABLES` (items and
   everything pointing at them, cards, tags and hobbies, blog entries, questions and their snoozes,
   caption queue, trash) plus every item file and thumbnail and `<storage>/.trash`; keeps
-  `reset.KEPT_TABLES` (settings, clients, provenance options, migrations, the audit/change log). A
+  `reset.KEPT_TABLES` (settings, users, provenance options, migrations, the audit/change log). A
   new table must be added to one of the two lists (`scripts/test_membership_tags.py` fails otherwise).
   Check phase C with `scripts/test_membership_tags.py` (throwaway DB).
 - **Trash.** `items.delete` / `items.redact` move the file and its thumbnail to
@@ -1446,8 +1443,6 @@ One generated file of every registered type and extension, to drop-test a new in
     'document' | 'any'`, ...). **Deliberately no CHECK constraint** — not a
     rigid enum, a new value just needs a registry entry in
     the `core/object_types/` registry.
-  - `source` — upload-pipeline metadata (e.g. `'screenshot'`,
-    `'external'`), distinct from `tech`.
   - `tech` — repurposed. Originally "which technician uploaded this" in
     imagerepo's multi-user days; now a free-text **Source** label ("who or
     what added this row, and how"). See `source_manual_upload()` /
@@ -1455,9 +1450,20 @@ One generated file of every registered type and extension, to drop-test a new in
     `source_migrated_from()`/`source_group()` for the fixed vocabulary
     (manual web upload, the legacy automated-upload label, migrated by
     Claude from a named source, or authored by Claude directly).
-  - `client`, `ticket_id` — also vestigial imagerepo IT-ticketing fields;
-    still present in the schema/API but not meaningful to Constructicon's
-    actual use as a personal gallery.
+  - **Gone (#704, owner decision 2026-10-17):** `source` (how the dead uploader app captured a
+    row; link vs file comes from the type's `is_file`), `client`, `ticket_id` (imagerepo
+    IT-ticketing), `artifact_link` (always `/f/<slug>`; the payloads carry `url`) and the `icon`
+    override (never set). `db._drop_dead_columns_704` drops them at web boot (`init_db`, every
+    boot, never the MCP), together with the `clients` / `client_domains` tables, after counting:
+    a column or table holding REAL data is KEPT (client/ticket_id/icon non-empty; artifact_link not
+    the row's own `/f/<slug>`, relative or absolute; source outside NULL/''/'screenshot'/'external';
+    any client row but the three 'special' placeholders; any client_domains row), with a
+    `WARNING drop_dead_columns_704: KEPT ...` line at every boot saying how many rows and how to see
+    them; it drops once they are cleared. The first run is recorded in `schema_migrations`; a run
+    that drops or keeps anything writes one change-log row (op `migration_drop_dead_columns_704`,
+    counts in `details`). Nothing reads or writes a kept column. Row images logged before the drop
+    still name the old columns: `db.invert_image` restores only the columns the table has now, so
+    those undos keep working. Check with `scripts/test_drop_columns_704.py`.
   - `filename`/`stored_filename` — for uploaded files; `NULL` for content
     with no local file (e.g. `media_type='youtube'`, which uses
     `external_url` instead). `db.insert_upload()` handles the file path;
@@ -1467,8 +1473,8 @@ One generated file of every registered type and extension, to drop-test a new in
     title). Similarly `timestamp` (capture/upload time) vs. `content_date`
     (the content's own real-world date). These pairs are easy to confuse —
     check which one a given piece of code actually means.
-  - `display_name`, `icon` — optional per-object override of the item's title
-    and the media type's default badge icon. **An item's title (#542) is
+  - `display_name` — optional per-object override of the item's title (the badge icon is always
+    the type's `badge_icon`; the per-object `icon` override went in #704). **An item's title (#542) is
     `core/item_title.py` `title_of(row)` and nothing else:** `display_name` →
     `content_description` → `filename` → `slug`. `description` (the uploader's note)
     is never a title. Python calls `title_of`; Jinja uses the `item_title` filter (the
@@ -1522,13 +1528,9 @@ One generated file of every registered type and extension, to drop-test a new in
 - **`project_items`** — many-to-many join, `(project_id, post_slug,
   sort_order)`, with a manual `sort_order` for deliberate (non-chronological)
   ordering within a project.
-- **`clients`, `client_domains`** — vestigial imagerepo IT-client list
-  (Hudu-synced company names). Not part of Constructicon's actual personal-gallery use case; present
-  because it rode along with the fork. **Both tables are empty on prod (per #552)**, so nothing is
-  auto-tagged in practice, although the code path is still there (`core/ocr.py` reads
-  `db.list_client_domains()` to tag OCR text by client domain). They are in `reset.KEPT_TABLES`.
-  The three 'special' rows are no longer seeded at boot (#562). #628 deliberately left the tables and
-  the repo-root `sync_clients.py` in place pending an owner decision on whether they go.
+- **`clients`, `client_domains`** — gone (#704): the imagerepo IT-client list, its OCR client
+  matcher, `/api/clients` and the repo-root `sync_clients.py` were removed; see "Gone (#704)" above
+  for the safeguard that keeps either table if it holds anything but the old placeholder rows.
 - **`app_settings`** — generic key/value store for app-level secrets (e.g.
   the YouTube Data API key), so new integrations don't need a
   docker-compose env var wired in from outside. `GET /api/settings` only
@@ -1639,7 +1641,7 @@ view `item_search_src` in `core/db.py`: `display_name`, `content_description` an
 name the item has had, so a rename never makes the old filename unfindable; `core/item_title.py`
 picks only one of them to SHOW), the free-text `tags` column plus tag-tree tag names (`post_tags`),
 the titles of the cards it is on (`project_items`), the uploader's note (`description`) and
-`extracted_text`. Not indexed: `agent_notes`, `type_metadata`, `provenance`, `client`, the slug.
+`extracted_text`. Not indexed: `agent_notes`, `type_metadata`, `provenance`, the slug.
 
 - **Matching:** each run of letters/digits you type is a word-START match, all required ("tun
   gig" finds "Tuning the Gigabyte"); accents fold; case is ignored. Quotes, `*`, `-`, `:`, brackets
@@ -1797,9 +1799,6 @@ JSON body). No secrets there: the publish token stays a write-only API key (`app
 - **Owner-archive migrations** live in `scripts/archive/` (`v2c_owner_questions.py`: the
   AlienWhoop family and AW canopy questions, formerly `v2c_3` / `v2c_4` in `db.MIGRATIONS`), not in
   `init_db`. A data migration about specific archive content goes there, never into `MIGRATIONS`.
-- **IT-client seed:** the "Unknown" / "Not Business" / "Internal Infrastructure" rows are no
-  longer inserted on every boot (nothing reads them; only `/api/clients` lists them, and no page
-  calls it). `sync_clients.py` still seeds them.
 - Check with `scripts/test_install_config.py` (throwaway DBs: a fresh install and a legacy one).
 
 ### The hobby label (#700, "A hobby by any other name")
@@ -1956,6 +1955,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
   `with_writeup=False`. A new red line is a real failure: fix it or file it.
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
+    `test_drop_columns_704` (the dead-column drop and its safeguard),
     `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
@@ -2462,12 +2462,9 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
   section to auto-derive from tags — that was the original design and was
   explicitly rejected in favor of manual curation via the `projects` /
   `project_items` tables.
-- **`clients`/`client_domains`/`ticket_id` are imagerepo-era vestiges.**
-  The code paths still exist (OCR auto-tagging by client domain, the `client` field, `/api/clients`)
-  but the client tables are empty on prod and none of it is part
-  of Constructicon's actual personal-use case — don't build new features
-  assuming they're a live, meaningful concept for this app the way they
-  were for imagerepo.
+- **The imagerepo ticketing vestiges are gone (#704).** `client`, `ticket_id`, `source`,
+  `artifact_link`, the `icon` override and the client tables were dropped; don't bring them back.
+  `tech` stays (it is the Source label).
 - **`mcp_server/server.py` IS live** (`constructicon-mcp` / `constructicon-test-mcp`
   containers — see the MCP section above). If a session can't see
   `mcp__constructicon-mcp__*` tools, that's a session configuration gap,

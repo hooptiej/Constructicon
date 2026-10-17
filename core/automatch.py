@@ -2,17 +2,14 @@
 
 Matches an upload's original filename (and, for a folder-drop upload, the
 dropped folder's name) against the names of *existing* tags
-(`blog_tags`) and the titles of *existing* projects. Deliberately the same
-permissive spirit as core/ocr.py's `_match_client_tags` — case-insensitive,
-word-boundary-ish — just pointed at the tag tree / project list instead of
-the imagerepo-era client alias list. No model involved; that's #239's
-separate mechanism.
+(`blog_tags`) and the titles of *existing* projects. Deliberately permissive
+(case-insensitive, word-boundary-ish; the spirit of the old OCR client matcher,
+removed in #704). No model involved; that's #239's separate mechanism.
 
 What happens with a match:
 
 - **Tag matches** apply immediately, no confirmation — false positives are
-  cheap to remove via the existing tag UI (the same reasoning OCR's client
-  auto-tagging already relies on).
+  cheap to remove via the existing tag UI.
 - **Exactly one project match** auto-adds the upload to that project
   (web/app.py's `_attach_to_project`, same as picking it in the drawer).
 - **More than one project match** is NOT guessed at. It's queued as a
@@ -39,7 +36,7 @@ import re
 
 from . import db
 
-MIN_NAME_LEN = 3  # same threshold ocr.py uses for client nicknames — shorter names are noise
+MIN_NAME_LEN = 3  # shorter names are noise
 KIND_PROJECT_MATCH = "project_match"
 
 

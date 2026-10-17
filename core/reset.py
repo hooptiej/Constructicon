@@ -15,8 +15,10 @@ their hobby_settings, #562), blog
 entries, card/item questions and their snoozes, the caption queue and the trash. On disk: each
 item's file and thumbnail, and the whole <storage>/.trash directory (held redacted files too).
 
-What it keeps (KEPT_TABLES): settings, the install config (#562), user accounts and sessions (#467), the client list, the editable provenance lists, the
-migration record and the audit/change log (the reset's own record lives there). A table in
+What it keeps (KEPT_TABLES): settings, the install config (#562), user accounts and sessions (#467), the editable provenance lists, the
+migration record and the audit/change log (the reset's own record lives there). (#704: the
+imagerepo client tables are gone; on an install where #704 kept them for their data, delete-all
+leaves them alone.) A table in
 neither list fails scripts/test_membership_tags.py, so a new table has to be classified.
 """
 
@@ -36,7 +38,7 @@ CLEARED_TABLES = (
     "curator_dismissals", "pending_decisions", "trash", "hobby_settings",
     "capture_events", "projects", "blog_tags",
 )
-KEPT_TABLES = ("app_settings", "audit_log", "clients", "client_domains", "install_config", "provenance_options",
+KEPT_TABLES = ("app_settings", "audit_log", "install_config", "provenance_options",
                "schema_migrations", "users", "sessions",
                "item_access_log")  # #604 follow-up 7: a log, like audit_log (who opened sensitive items)
 

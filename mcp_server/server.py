@@ -278,17 +278,16 @@ def _to_public(row):
         "slug": row["slug"],
         "url": f"{BASE_URL}/f/{row['slug']}",
         "filename": row["filename"],
-        # display_name/icon (#11) — per-object overrides. display_name here is the item's one
-        # canonical title (core/item_title.py, #542): rename, then caption, then filename, then slug.
+        # display_name (#11) here is the item's one canonical title (core/item_title.py, #542):
+        # rename, then caption, then filename, then slug. "icon" is the type's badge (#704: the
+        # per-object icon override column is gone).
         "display_name": item_title.title_of(row),
-        "icon": row.get("icon") or spec.badge_icon,
+        "icon": spec.badge_icon,
         "media_type": row.get("media_type") or "image",
         "description": row["description"],
         "content_description": row.get("content_description"),  # #588: the item's own title/caption
         "tags": row["tags"],
-        "client": row["client"],
         "redacted": bool(row["redacted"]),
-        "source": row["source"],
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
         # #261: per-type metadata bag (auto_caption/auto_caption_status,
@@ -298,7 +297,6 @@ def _to_public(row):
         # core/db.py's _row_to_dict already parses the JSON column, so
         # this is only a guard against a stored JSON null.
         "type_metadata": row.get("type_metadata") or {},
-        "artifact_link": f"{BASE_URL}{row['artifact_link']}" if row["artifact_link"] else None,
         "timestamp": row["timestamp"],
         "content_date": row.get("content_date"),
         "display_date_override": row.get("display_date_override"),
@@ -548,7 +546,7 @@ def constructicon_search(query: str | None = None, tags: list[str] | None = None
     # #477: old revisions are still found, marked with `superseded_by` (the current revision's slug) and `rev`.
     # #557: db.search applies the policy's browse clause; the per-item policy is checked here too.
     return revisions.decorate([_to_public_listed(r, query, chars)
-                               for r in policy.filter_visible(db.search(query=query, tags=tags, client=None))])
+                               for r in policy.filter_visible(db.search(query=query, tags=tags))])
 
 
 @mcp.tool()
@@ -691,10 +689,10 @@ def constructicon_list_import() -> dict:
 
 @mcp.tool()
 def constructicon_update(slug: str, description: str | None = None, tags: list[str] | None = None,
-                   display_name: str | None = None, icon: str | None = None,
+                   display_name: str | None = None,
                    type_metadata: dict | None = None, display_date: float | None = None,
                    reset_display_date: bool = False, content_description: str | None = None) -> dict | None:
-    """Update an object's metadata: description, tags, display name, icon, type-specific fields,
+    """Update an object's metadata: description, tags, display name, type-specific fields,
     its content description, and/or its timeline display date.
 
     Pass None for any field you don't want to change. type_metadata is MERGED by top-level key
@@ -719,8 +717,6 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
         fields["description"] = description
     if display_name is not None:
         fields["display_name"] = display_name
-    if icon is not None:
-        fields["icon"] = icon
     if content_description is not None:
         fields["content_description"] = content_description
     if type_metadata is not None:
@@ -981,7 +977,7 @@ def constructicon_delete_all(confirm: str = "") -> dict:
 
     Pass confirm="DELETE EVERYTHING" (the same typed phrase /admin asks for); anything else
     returns confirm_required and changes nothing. Call constructicon_backup first if you want to
-    keep the current content. Settings, the client list, provenance lists and the change log are
+    keep the current content. Settings, users, provenance lists and the change log are
     kept. Returns {deleted, counts: {table: rows}, files_removed, trash_removed, batch_id}; one
     change-log row (op delete_all) records the counts.
     """

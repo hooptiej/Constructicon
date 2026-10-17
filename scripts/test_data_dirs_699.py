@@ -151,6 +151,7 @@ for needle, why in [
     ("zfs snapshot", "keeps the ZFS snapshot route"),
     ("source.backup(target)", "the no-ZFS fallback uses the SQLite backup API"),
     ("--backup-plan", "has the dry run"),
+    ('if [ "$WEB_ENV" = dev ]; then', "skips the backup on the dev/test instance (owner, 2026-10-17)"),
 ]:
     check(f"deploy.sh {why}", needle in text)
 check("deploy.sh runs no bare `sudo docker compose`", "sudo docker compose " not in

@@ -2154,8 +2154,11 @@ snapshot name includes the version being replaced. Check with
 (instant, atomic across DB/WAL/files, only stores later changes) and keeps the
 newest 10. A failed snapshot aborts the deploy; `--no-snapshot` opts out.
 constructicon-test's data sits inside the shared `Storage Pool/Media` dataset,
-so its deploys don't snapshot (by design, don't snapshot 2.75 TB for a test); since #698 they take
-the db/ copy below instead.
+so its deploys don't snapshot (by design, don't snapshot 2.75 TB for a test). **They take no
+pre-deploy backup at all (owner decision 2026-10-17):** deploy.sh skips the backup for any instance
+whose web service has `CONSTRUCTICON_ENV=dev` (the dev/test marker, #310; not the code mounts, which
+test can drop for a baked check), printing "Pre-deploy backup: skipped (dev/test instance: ...)".
+Every other install, ZFS or not (e.g. the work install), still takes one.
 - **No ZFS (#698):** on a host without ZFS, a data folder that isn't its own dataset, or no way to run
   `zfs` as root, deploy.sh copies the DB folder instead: a one-off `--network none` container of the
   app image (root only to make the folder, then the data folder's owner uid) copies every SQLite file

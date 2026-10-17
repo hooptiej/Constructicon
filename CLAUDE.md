@@ -1421,8 +1421,9 @@ One generated file of every registered type and extension, to drop-test a new in
   type, thumbnail, text, object page, `/f/` disposition, raw view, content date, and a temporary VIEWER
   account's view: restricted items must 404), then deletes exactly its own slugs and empties the trash only
   when it held nothing else. `--keep` leaves the items. Verdict line `ALL PASS: ...` / `FAILED: ...`.
-- **Known findings it shows:** legacy `.doc/.xls/.ppt` and web links end OCR "failed" (#724, expected
-  there). (WAV downloading instead of playing, #723, is fixed: its row passes.)
+- **Known findings it shows:** legacy `.doc/.ppt` and web links end OCR "not compatible" (grey,
+  `ocr_status='unsupported'`, #724 part a; the text readers are parts b-d); the hand-built `.xls` stub
+  ends "failed" (xlrd can't parse it: a real read error). (WAV downloading instead of playing, #723, is fixed: its row passes.)
 - **Windows / Defender (owner rule):** the executable-class samples (PE `.exe`, every installer package,
   the zipped `.app`, ELF firmware, the `.dmg`) are written only when `sys.platform` is Linux, and never
   committed: the default output `samples-out/` is gitignored and `.dockerignore` keeps `scripts/` and it out
@@ -1490,7 +1491,18 @@ One generated file of every registered type and extension, to drop-test a new in
     shared column so a new object type never needs a schema migration; see
     `core/object_types/__init__.py`'s `MetadataField` for the documented shape per type.
   - `extracted_text`, `perceptual_hash`, `embedding`, `ocr_status` —
-    OCR/similarity pipeline state.
+    OCR/similarity pipeline state. `ocr_status` is `pending | done | failed | unsupported` (NULL =
+    not an OCR type). **#724: `failed` is only a real error** (tesseract or the pipeline raised, a
+    text reader raised, the stored file is missing, a picture that should exist couldn't be made).
+    `unsupported` = nothing OCR can read (no text source and no picture expected:
+    `object_types.nothing_to_read` / `picture_expected`; a web link, a legacy .doc/.ppt whose reader
+    returns None), with the plain reason in `type_metadata.ocr_note` (the type's
+    `ocr_unsupported_note`, str or `{ext: note}`); `db.set_ocr_status(slug, 'unsupported', note=...)`
+    writes both, any other status clears the note. Shown grey ("Not compatible with OCR: <note>")
+    in both lamps, `off` in the processing drawer; Retry still runs it. A text reader that read the
+    file and found no text (`""`) settles `done` with empty text. The `ocr_unsupported_724` migration
+    re-settled old `failed` rows that pass `nothing_to_read` (only those). Check with
+    `scripts/test_ocr_unsupported_724.py`.
   - `redacted` — "file removed, metadata kept" (the detail page's "Remove
     file, keep info" button / `constructicon_redact`; since #541 `items.redact`
     holds the file in the trash with no expiry until the owner recovers it or

@@ -220,5 +220,6 @@ register(ObjectTypeSpec(
     preview_fn=preview,
     properties_fn=get_properties,
     external_link_label="Watch on YouTube ↗",
+    ocr_unsupported_note="video: no thumbnail or captions to read",  # #724
     actions=(TypeAction("fetch-real-date", "Fetch real date", _fetch_real_date),),
 ))

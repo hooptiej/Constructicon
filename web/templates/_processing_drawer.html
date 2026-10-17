@@ -53,7 +53,9 @@
 
   function stageHtml(st) {
     const label = st.state === 'failed' ? esc(st.stage) + ' failed' : st.state === 'off' ? esc(st.stage) + ' off' : esc(st.stage);
-    return `<span class="proc-stage ${esc(st.state)}"><span class="proc-stage-dot"></span>${label}</span>`;
+    // #724: an OCR stage that is "off" because the item is not compatible says why on hover.
+    const title = st.note ? ` title="${esc('Not compatible with OCR: ' + st.note)}"` : '';
+    return `<span class="proc-stage ${esc(st.state)}"${title}><span class="proc-stage-dot"></span>${label}</span>`;
   }
 
   function render(data) {

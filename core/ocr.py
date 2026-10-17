@@ -3,6 +3,11 @@ tagged, filling in extracted_text so search picks it up. Best-effort: a
 failure here never fails the upload itself, it just leaves extracted_text
 empty and ocr_status set to "failed" for that row.
 
+#724: "failed" means a real error. An item with nothing OCR can read (no text source and no
+picture, e.g. a web link or a legacy .doc) settles as "unsupported", with the plain reason in
+type_metadata.ocr_note (shown grey, "Not compatible with OCR: <reason>"); a text source that read
+the file and found no text settles as "done" with empty text. See _settle_without_picture.
+
 ocr_status lets the frontend poll a single row and know when OCR is actually
 done, rather than assuming it finished the moment the upload response came
 back — OCR runs after that response, not before it.
@@ -220,6 +225,32 @@ def is_blank_file(row):
         return False
 
 
+def _settle_without_picture(slug, row, spec, extracted, extract_error):
+    """#724: there is no picture to OCR, and no text came back. Settle honestly:
+    - a real error (the text source raised, the stored file is missing, or a picture should have
+      been made and wasn't) -> 'failed' (never fail silently);
+    - the text source read the file and found no text ("") -> 'done' with empty text;
+    - nothing to read at all (no text source, or it said None: no reader for this format) ->
+      'unsupported', with the plain reason in type_metadata.ocr_note (not a failure, so not red)."""
+    if extract_error:
+        db.set_ocr_status(slug, "failed")
+        return
+    stored = row.get("stored_filename")
+    if stored and not storage.path_for(stored).exists():
+        print(f"OCR failed for {slug}: its stored file {stored} is missing")
+        db.set_ocr_status(slug, "failed")
+        return
+    if object_types.picture_expected(row, spec):
+        print(f"OCR failed for {slug}: no picture could be made to read")
+        db.set_ocr_status(slug, "failed")
+        return
+    if extracted is not None:  # "" (or another falsy result): the source was read and is empty
+        db.set_extracted_text(slug, "")
+        db.set_ocr_status(slug, "done")
+        return
+    db.set_ocr_status(slug, db.OCR_UNSUPPORTED, note=object_types.ocr_unsupported_note(row, spec))
+
+
 def _run_ocr_pipeline(slug, row, spec):
     if is_blank_file(row):
         db.set_extracted_text(slug, "")
@@ -234,13 +265,17 @@ def _run_ocr_pipeline(slug, row, spec):
     # below, same as a type with no text_extract_fn registered at all (a
     # plain uploaded screenshot always goes straight to OCR).
     text = None
+    extracted = None  # what text_extract_fn returned, before "" and None are folded together
+    extract_error = False
     if spec.text_extract_fn is not None:
         try:
             # #644: in a parser child, background budget; a limit hit is remembered for the page.
-            text = parse_limits.call(spec.text_extract_fn, row, kind=parse_limits.BACKGROUND,
-                                     what="text extraction", key=thumbnails.limit_key(row)) or None
+            extracted = parse_limits.call(spec.text_extract_fn, row, kind=parse_limits.BACKGROUND,
+                                          what="text extraction", key=thumbnails.limit_key(row))
+            text = extracted or None
         except Exception as e:
             print(f"text-layer extraction failed for {slug}: {e!r}")
+            extract_error = True
 
     # Thumbnail is needed either way — as the OCR fallback's source image,
     # and independently for perceptual hashing / just being a thing the
@@ -249,7 +284,7 @@ def _run_ocr_pipeline(slug, row, spec):
 
     if text is None:
         if image_path is None:
-            db.set_ocr_status(slug, "failed")
+            _settle_without_picture(slug, row, spec, extracted, extract_error)
             return
         with OCR_SEMAPHORE:
             try:

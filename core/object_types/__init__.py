@@ -201,6 +201,11 @@ class ObjectTypeSpec:
     # meaningful when ocr_capable=True; leave None for types that have no
     # text layer to try (an uploaded screenshot goes straight to OCR, same
     # as always).
+    # #724: when the row has no picture to OCR either, the return value decides how OCR settles:
+    # "" = the source was read and holds no text (done, empty); None = no readable source for this
+    # row, e.g. a legacy format with no reader (ocr_status 'unsupported', with ocr_unsupported_note);
+    # raising = a real read error (failed). A falsy return still falls back to OCR when there IS a
+    # picture (a scanned PDF).
     text_extract_fn: object = None
     # Issue #135: (row: dict) -> dict[str, str] of type-specific properties
     # suitable for display on the object detail page. Returns an ordered dict
@@ -307,6 +312,12 @@ class ObjectTypeSpec:
     # A str for the whole type, or a dict {extension: noun} for a type spanning several formats.
     # Unset: "<label> file" is used.
     content_noun: object = ""
+    # #724: the plain reason shown when OCR can't read an item of this type at all (no text source
+    # and no picture to OCR): core/ocr.py settles it ocr_status='unsupported' with this note in
+    # type_metadata.ocr_note, shown grey as "Not compatible with OCR: <note>". A str for the whole
+    # type, or a dict {extension: note} for a type spanning several formats (a key "" is the
+    # type-wide fallback). Unset: "<label>: no readable text".
+    ocr_unsupported_note: object = ""
 
 
 OBJECT_TYPES = {}
@@ -630,6 +641,52 @@ def mismatch_reason(filename):
     noun = noun or f"{spec.label.lower()} file"
     return (f"This {ext} file isn't a valid {noun}: its contents don't match what a {ext} file should "
             f"contain (is it corrupt, or renamed from another format?).")
+
+
+def ocr_unsupported_note(row, spec=None):
+    """#724: the plain reason OCR can't read `row` (its type's ocr_unsupported_note, per extension
+    when the type gives a dict), e.g. "web link: no readable text yet"."""
+    spec = spec or get_object_type(row.get("media_type"))
+    note = spec.ocr_unsupported_note
+    if isinstance(note, dict):
+        note = note.get(file_extension(row.get("filename") or row.get("stored_filename") or "")) or note.get("")
+    return note or f"{spec.label.lower()}: no readable text"
+
+
+def picture_expected(row, spec):
+    """#724: should this row have a picture for OCR to read? False when the type has no thumbnail
+    strategy that can produce one (a web link: CAPTURE with no capture_fn yet), the URL gives no
+    thumbnail URL, or the type says this row carries none (a .doc with no embedded preview,
+    has_thumbnail_fn). True means a missing picture is a real failure (a fetch or render that went
+    wrong), not "nothing to read". Reads only the row, never the file."""
+    src = spec.thumbnail_source
+    if src == ThumbnailSource.NONE:
+        return False
+    if src == ThumbnailSource.CAPTURE and spec.capture_fn is None:
+        return False
+    if src == ThumbnailSource.FETCH_URL:
+        if spec.thumbnail_url_fn is None:
+            return False
+        try:
+            if not spec.thumbnail_url_fn(row.get("external_url")):
+                return False
+        except Exception as e:  # can't tell: count it as expected, so a missing picture stays a failure
+            print(f"thumbnail_url_fn failed for {row.get('slug')}: {e!r}")
+            return True
+    if spec.has_thumbnail_fn is not None:
+        try:
+            return bool(spec.has_thumbnail_fn(row))
+        except Exception as e:  # can't tell: count it as expected, so a missing picture stays a failure
+            print(f"has_thumbnail_fn failed for {row.get('slug')}: {e!r}")
+            return True
+    return True
+
+
+def nothing_to_read(row, spec):
+    """#724: True when OCR has nothing at all to read for this row: no text source (the type has no
+    text_extract_fn) and no picture expected. The one test the re-settle migration
+    (core/db.py _mig_ocr_unsupported_724) uses, so old rows are judged exactly as new ones are."""
+    return spec.text_extract_fn is None and not picture_expected(row, spec)
 
 
 def accepted_extensions():

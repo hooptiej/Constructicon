@@ -1147,6 +1147,38 @@ def _mig_empty_file_ocr_done_587():
                          (r["slug"],))
 
 
+def _mig_ocr_unsupported_724():
+    # #724: an item with nothing OCR can read (no text source and no picture: a web link today)
+    # used to settle as 'failed', a red lamp for something that never went wrong. core/ocr.py now
+    # settles those as 'unsupported' with a reason; re-settle the old failed rows the same way.
+    # A row qualifies only by object_types.nothing_to_read(row, spec), the exact test new OCR runs use: its
+    # type has no text_extract_fn AND no picture is expected for it. So an image (its own file is
+    # the picture), a YouTube video (a fetched thumbnail), a PDF or any type with a text source
+    # is never touched: their 'failed' is a real error and stays. Redacted rows are left alone.
+    # Idempotent: a second run finds no failed row that qualifies.
+    from . import object_types
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug, media_type, filename, stored_filename, external_url, type_metadata FROM capture_events "
+        "WHERE ocr_status = 'failed' AND COALESCE(redacted, 0) = 0").fetchall()
+    moved = {}
+    for r in rows:
+        row = dict(r)
+        try:
+            row["type_metadata"] = json.loads(row["type_metadata"] or "{}")
+        except ValueError:  # silent-ok: unreadable JSON: not provably "nothing to read", leave the row failed
+            continue
+        spec = object_types.get_object_type(row.get("media_type"))
+        if spec is None or not spec.ocr_capable or not object_types.nothing_to_read(row, spec):
+            continue
+        note_sql, note_args = _ocr_note_sql(object_types.ocr_unsupported_note(row, spec))
+        conn.execute(f"UPDATE capture_events SET ocr_status = ?, {note_sql} WHERE slug = ? AND ocr_status = 'failed'",
+                     (OCR_UNSUPPORTED, *note_args, row["slug"]))
+        moved[row["media_type"]] = moved.get(row["media_type"], 0) + 1
+    print(f"schema_migrations: ocr_unsupported_724 checked {len(rows)} failed row(s), re-settled "
+          f"{sum(moved.values())} as unsupported {moved or ''}".rstrip(), flush=True)
+
+
 def _mig_writeup_lead_596():
     # #596: fill the projects.writeup_lead cache (the card face's write-up excerpt) once for every
     # card that has a write-up. From then on the cards service keeps it in step with every write-up
@@ -1340,6 +1372,7 @@ MIGRATIONS = [
     ("ownership_backfill_604", _mig_ownership_backfill_604),
     ("audit_scrub_secret_routes_559", _mig_audit_scrub_secret_routes_559),
     ("search_index_543", _mig_search_index_543),
+    ("ocr_unsupported_724", _mig_ocr_unsupported_724),
 ]
 
 
@@ -1777,16 +1810,38 @@ def list_pending_ocr():
         conn.close()
 
 
-def set_ocr_status(slug, status):
+OCR_UNSUPPORTED = "unsupported"  # #724: nothing OCR can read (no text source, no picture); not a failure
+
+
+def _ocr_note_sql(note):
+    """#724: SQL (and its parameter) that sets or clears type_metadata.ocr_note in place, in the
+    same UPDATE as the status (json_set / json_remove, so a concurrent caption write to another
+    key isn't lost). A row whose type_metadata isn't valid JSON is left as it is."""
+    if note:
+        return ("type_metadata = CASE WHEN json_valid(type_metadata) "
+                "THEN json_set(type_metadata, '$.ocr_note', ?) ELSE type_metadata END"), (note,)
+    return ("type_metadata = CASE WHEN json_valid(type_metadata) "
+            "THEN json_remove(type_metadata, '$.ocr_note') ELSE type_metadata END"), ()
+
+
+def set_ocr_status(slug, status, note=None):
     """Setting status to "pending" also stamps ocr_started_at — lets the
     watchdog measure how long the *current* attempt has been running,
-    independent of how old the upload itself is."""
+    independent of how old the upload itself is.
+
+    #724: `note` is the plain reason for status 'unsupported' (stored as type_metadata.ocr_note,
+    shown as "Not compatible with OCR: <note>"); any other status clears a stale note."""
+    if status == OCR_UNSUPPORTED and not note:
+        raise ValueError("ocr_status 'unsupported' needs a note saying why")
+    note_sql, note_args = _ocr_note_sql(note if status == OCR_UNSUPPORTED else None)
     conn = get_conn()
     try:
         if status == "pending":
-            conn.execute("UPDATE capture_events SET ocr_status = ?, ocr_started_at = ? WHERE slug = ?", (status, time.time(), slug))
+            conn.execute(f"UPDATE capture_events SET ocr_status = ?, ocr_started_at = ?, {note_sql} WHERE slug = ?",
+                         (status, time.time(), *note_args, slug))
         else:
-            conn.execute("UPDATE capture_events SET ocr_status = ? WHERE slug = ?", (status, slug))
+            conn.execute(f"UPDATE capture_events SET ocr_status = ?, {note_sql} WHERE slug = ?",
+                         (status, *note_args, slug))
         conn.commit()
     finally:
         conn.close()

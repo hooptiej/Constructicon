@@ -635,7 +635,9 @@ only; `object_types.BROWSER_TYPE_ALIASES` folds the other names Python (by versi
 gives the same formats (`audio/vnd.wave` / `audio/x-wav` / `audio/wave` -> `audio/wav`, `audio/x-m4a` ->
 `audio/mp4`, `audio/x-flac` -> `audio/flac`, ...) through `object_types.browser_media_type`, which both the
 inline decision and `serve_file`'s `Content-Type` use (so `.wav` is served `audio/wav`); add an alias there,
-never a second name to the allowlist. `video/quicktime` is deliberately not aliased (.mov stays a download). Those inline types are sniffed too, so markup
+never a second name to the allowlist. **#729:** `.opus` (Python 3.14: `audio/opus`; also `audio/x-opus`,
+`audio/x-opus+ogg`) folds to `audio/ogg` (Ogg Opus's registered type, RFC 7845) and `.m4v` (`video/x-m4v`,
+`video/m4v`) to `video/mp4`, so both play inline. `video/quicktime` is deliberately not aliased (.mov stays a download). Those inline types are sniffed too, so markup
 renamed `.pdf` is still HTML (attachment + CSP). The object page's link follows the same set
 (`object_types.original_link(item)`, used by `_preview.thumb_with_original_link` and `object_detail.html`):
 "View original <Type>" in a new tab, or "Download original <Type>" in place. Check with

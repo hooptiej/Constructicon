@@ -810,7 +810,8 @@ function renderOcrPanel() {
   const meta = OCR_LAMP_META[ocrStatus || 'none'] || OCR_LAMP_META.none;
   ocrLamp.style.background = meta.color;
   // A short label, never the text itself (a megabyte tooltip is a freeze, #607).
-  const label = (ocrStatus === 'unsupported' && ocrNote) ? meta.label + ': ' + ocrNote : meta.label;
+  // #724: 'unsupported' says why it can't be read; 'failed' says why when the reader knew (a corrupt file)
+  const label = ((ocrStatus === 'unsupported' || ocrStatus === 'failed') && ocrNote) ? meta.label + ': ' + ocrNote : meta.label;
   ocrLamp.title = (ocrStatus === 'done' && ocrChars) ? meta.label + ' - ' + ocrSizeLabel(ocrChars) + ' of text' : label;
   ocrLabel.textContent = label;
   ocrRetryBtn.disabled = ocrStatus === 'pending';

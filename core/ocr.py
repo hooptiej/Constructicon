@@ -232,8 +232,14 @@ def _settle_without_picture(slug, row, spec, extracted, extract_error):
     - the text source read the file and found no text ("") -> 'done' with empty text;
     - nothing to read at all (no text source, or it said None: no reader for this format) ->
       'unsupported', with the plain reason in type_metadata.ocr_note (not a failure, so not red)."""
-    if extract_error:
-        db.set_ocr_status(slug, "failed")
+    if isinstance(extract_error, object_types.NotCompatibleFile):
+        # #724: the reader says why this file can't be read (encrypted, an older format): grey, with that reason
+        db.set_ocr_status(slug, db.OCR_UNSUPPORTED, note=str(extract_error))
+        return
+    if extract_error is not None:
+        # #724: a corrupt or unreadable file says so (UnreadableFile's message is the reason)
+        note = str(extract_error) if isinstance(extract_error, object_types.UnreadableFile) else None
+        db.set_ocr_status(slug, "failed", note=note)
         return
     stored = row.get("stored_filename")
     if stored and not storage.path_for(stored).exists():
@@ -266,7 +272,7 @@ def _run_ocr_pipeline(slug, row, spec):
     # plain uploaded screenshot always goes straight to OCR).
     text = None
     extracted = None  # what text_extract_fn returned, before "" and None are folded together
-    extract_error = False
+    extract_error = None  # the exception text_extract_fn raised, if it did
     if spec.text_extract_fn is not None:
         try:
             # #644: in a parser child, background budget; a limit hit is remembered for the page.
@@ -275,7 +281,7 @@ def _run_ocr_pipeline(slug, row, spec):
             text = extracted or None
         except Exception as e:
             print(f"text-layer extraction failed for {slug}: {e!r}")
-            extract_error = True
+            extract_error = e
 
     # Thumbnail is needed either way — as the OCR fallback's source image,
     # and independently for perceptual hashing / just being a thing the
@@ -304,5 +310,7 @@ def _run_ocr_pipeline(slug, row, spec):
             _compute_similarity_signals(slug, image_path, text)
 
     text = text.strip()
-    db.set_extracted_text(slug, text)
+    # #724: text the type's own reader returned records where it came from (type_metadata.text_source);
+    # text OCR'd from a picture records none, and clears a stale one.
+    db.set_extracted_text(slug, text, source=(spec.text_source or None) if extracted else None)
     db.set_ocr_status(slug, "done")

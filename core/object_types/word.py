@@ -6,20 +6,31 @@ body text come straight from the document's XML (core/object_types/_office
 (docProps/thumbnail.*) is the thumbnail when present. The object page shows
 that thumbnail, or otherwise the opening paragraphs as text.
 
-Old .doc: summary properties via olefile. Its text needs a dedicated Word
-binary parser, so .doc is searchable by its properties only.
+Old .doc: summary properties via olefile, and (#724) the text of a Word
+97-2003 file read from its piece table (doc_text below, olefile only, no
+antiword/LibreOffice): every text story (body, headers, footnotes, text
+boxes) in stream order, field codes dropped and their results kept. Word
+6/95 and older and unrecognised files raise NotCompatibleFile (OCR settles
+"not compatible", grey, with the reason); a broken file raises UnreadableFile
+("corrupt or unreadable .doc: ...", failed, red). Not handled: tracked-change
+deletions still in the file are read as text.
 
-Password-protected files are recognised (an OLE "EncryptedPackage") and
-reported as protected instead of refused.
+Password-protected files are recognised (an OLE "EncryptedPackage", or a
+.doc's fEncrypted flag) and reported as protected instead of refused; their
+text settles "not compatible" with "encrypted: can't read without the
+password" (#724), never decrypted.
 """
 
+import re
+import struct
 import zipfile
 from pathlib import Path
 
 from markupsafe import Markup, escape
 
 from .. import storage
-from . import _office, _preview, register, ObjectTypeSpec, ThumbnailSource
+from . import (_office, _preview, register, ENCRYPTED_NOTE, NotCompatibleFile, ObjectTypeSpec,
+               ThumbnailSource)
 
 STATS_KEY = "word_stats"
 PREVIEW_PARAGRAPHS = 12
@@ -75,19 +86,140 @@ def get_embedded_metadata(path):
     return out
 
 
+# ---------------------------------------------------------------- legacy .doc text (#724)
+
+FIB_WORD97 = 0xA5EC   # FIB.wIdent of a Word document (Word 6 also used it; nFib tells them apart)
+FIB_WORD6 = 0xA5DC    # wIdent of some Word 6/95 files
+NFIB_WORD97 = 0x00C1  # the lowest nFib of the Word 97-2003 binary format
+_FCLX = 0x01A2        # fibRgFcLcb97.fcClx: the piece table's place in the table stream
+_MAX_PIECES = 1_000_000
+OLD_WORD_NOTE = "legacy .doc: Word 6/95 or older format, no readable text"
+UNRECOGNISED_NOTE = "legacy .doc: not a Word 97-2003 document we recognise, no readable text"
+# Characters that stand for something other than text: paragraph, line, page and cell marks
+# become breaks; picture/footnote/annotation anchors, separators and optional hyphens go.
+_DOC_CONTROL = str.maketrans({"\r": "\n", "\x0b": "\n", "\x0c": "\n", "\x07": "\t", "\x1e": "-",
+                              **{chr(c): None for c in (0, 1, 2, 3, 4, 5, 6, 8, 0x1f)},
+                              **{chr(c): " " for c in range(0x0e, 0x1e) if c not in (0x13, 0x14, 0x15)}})
+
+
+def _drop_field_codes(text):
+    """Word fields are \\x13 code \\x14 result \\x15 (nestable, the result optional): keep the
+    results (a hyperlink's words, a page number), drop the codes (HYPERLINK "http://...")."""
+    out, stack = [], []
+    for ch in text:
+        if ch == "\x13":
+            stack.append(True)        # in a code
+        elif ch == "\x14":
+            if stack:
+                stack[-1] = False     # in the result
+        elif ch == "\x15":
+            if stack:
+                stack.pop()
+        elif not any(stack):
+            out.append(ch)
+    return "".join(out)
+
+
+def _tidy(text):
+    text = _drop_field_codes(text).translate(_DOC_CONTROL)
+    text = re.sub(r"\t{2,}", "\n", text)      # a cell mark then the row's end mark: the row ends
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def doc_text(path, cap=None):
+    """#724: the text of a Word 97-2003 .doc, from its piece table (MS-DOC 2.4.1).
+
+    Returns the text (capped at `cap` characters; "" for a document with no text). Raises
+    NotCompatibleFile (with the reason) when this isn't a format we read: Word 6/95 or older,
+    password-protected, or a WordDocument stream that isn't a Word file at all. Raises anything
+    else (ValueError, _office.TooLarge, olefile's own error) when the file is broken: truncated, a
+    piece table pointing outside the file."""
+    import olefile
+    cap = cap or storage.MAX_EXTRACTED_TEXT_CHARS
+    with olefile.OleFileIO(str(path)) as ole:
+        if not ole.exists("WordDocument"):
+            raise NotCompatibleFile(UNRECOGNISED_NOTE)
+        wd = _office.read_ole_stream(ole, "WordDocument")
+        if len(wd) < 0x20:
+            raise ValueError("WordDocument stream too short for a FIB")
+        ident, nfib = struct.unpack_from("<HH", wd, 0)
+        if ident not in (FIB_WORD97, FIB_WORD6):
+            raise NotCompatibleFile(UNRECOGNISED_NOTE)   # not a Word FIB
+        flags = struct.unpack_from("<H", wd, 0x0A)[0]
+        if flags & 0x0100:
+            raise NotCompatibleFile(ENCRYPTED_NOTE)      # fEncrypted: never decrypted
+        if nfib < NFIB_WORD97:
+            raise NotCompatibleFile(OLD_WORD_NOTE)       # Word 6/95 or older: another layout
+        table_name = "1Table" if flags & 0x0200 else "0Table"
+        if not ole.exists(table_name):
+            raise ValueError(f"{table_name} stream missing")
+        table = _office.read_ole_stream(ole, table_name)
+    if len(wd) < _FCLX + 8:
+        raise ValueError("FIB truncated before fcClx")
+    fc_clx, lcb_clx = struct.unpack_from("<II", wd, _FCLX)
+    if not lcb_clx or fc_clx + lcb_clx > len(table):
+        raise ValueError("piece table outside the table stream")
+    clx = table[fc_clx:fc_clx + lcb_clx]
+    i = 0
+    while i < len(clx) and clx[i] == 0x01:    # Prc (property modifiers): skip
+        if i + 3 > len(clx):
+            raise ValueError("Prc truncated")
+        i += 3 + struct.unpack_from("<H", clx, i + 1)[0]
+    if i + 5 > len(clx) or clx[i] != 0x02:
+        raise ValueError("no Pcdt in the piece table")
+    lcb = struct.unpack_from("<I", clx, i + 1)[0]
+    plc = clx[i + 5:i + 5 + lcb]
+    if len(plc) < lcb or lcb < 16 or (lcb - 4) % 12:
+        raise ValueError("piece table has a bad size")
+    n = (lcb - 4) // 12
+    if n > _MAX_PIECES:
+        raise ValueError(f"piece table too large ({n:,} pieces)")
+    cps = struct.unpack_from(f"<{n + 1}I", plc, 0)
+    out, size = [], 0
+    for k in range(n):
+        count = cps[k + 1] - cps[k]
+        if count < 0:
+            raise ValueError("piece table out of order")
+        fc = struct.unpack_from("<I", plc, 4 * (n + 1) + 8 * k + 2)[0]
+        if fc & 0x40000000:                   # compressed: one byte per character, cp1252
+            off = (fc & ~0x40000000) // 2
+            raw = wd[off:off + count]
+            if len(raw) < count:
+                raise ValueError("a text piece runs past the end of the document")
+            piece = raw.decode("cp1252", "replace")
+        else:                                 # UTF-16LE
+            raw = wd[fc:fc + 2 * count]
+            if len(raw) < 2 * count:
+                raise ValueError("a text piece runs past the end of the document")
+            piece = raw.decode("utf-16-le", "replace")
+        out.append(piece)
+        size += len(piece)
+        if size > cap * 2:                    # room for the codes and marks _tidy drops
+            break
+    return _tidy("".join(out))[:cap]
+
+
 def extract_text_for_row(row):
-    """text_extract_fn: the body text, capped, for search (.doc: none)."""
+    """text_extract_fn: the body text, capped, for search. A legacy .doc reads through doc_text.
+    #724: NotCompatibleFile (encrypted, Word 6/95, unrecognised) settles "not compatible" in
+    core/ocr.py with its reason; any other read error is re-raised as UnreadableFile ("corrupt or
+    unreadable .docx: ...", failed)."""
     path = _path(row)
     if not path:
         return ""
-    if path.suffix.lower() not in MODERN:
-        return None  # #724: no reader for the legacy binary format yet: "not compatible", not "no text"
     try:
+        if path.suffix.lower() not in MODERN:
+            return doc_text(path, storage.MAX_EXTRACTED_TEXT_CHARS)
+        if _office.is_encrypted_ooxml(path):
+            raise NotCompatibleFile(ENCRYPTED_NOTE)
         with zipfile.ZipFile(path) as z:
             return "\n".join(_body(z))[:storage.MAX_EXTRACTED_TEXT_CHARS]
+    except (NotCompatibleFile, MemoryError):
+        raise
     except Exception as e:
         print(f"Word text extraction failed for {path}: {e!r}")
-        raise  # #724: a real read error; core/ocr.py records it (failed), never "no text"
+        raise _office.unreadable(path, e) from e  # #724: failed, saying it's corrupt; never "no text"
 
 
 def has_thumbnail(row):
@@ -151,5 +283,7 @@ register(ObjectTypeSpec(
     preview_assets=("prose",),
     badge_icon="\U0001F4C4",
     badge_text="DOC",
-    ocr_unsupported_note={".doc": "legacy .doc: no readable text yet"},  # #724
+    # #724: the fallback reason; doc_text raises NotCompatibleFile with the exact one
+    ocr_unsupported_note={".doc": "legacy .doc: older Word format, no readable text"},
+    text_source="office",  # #724: text_extract_fn's text is read from the document itself
 ))

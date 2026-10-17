@@ -1179,6 +1179,31 @@ def _mig_ocr_unsupported_724():
           f"{sum(moved.values())} as unsupported {moved or ''}".rstrip(), flush=True)
 
 
+def _mig_reread_legacy_office_724b():
+    # #724 part b (owner decision 2026-10-17): legacy .doc / .ppt have text readers now, so the rows
+    # that settled before them are re-read once: 'failed' (part a and earlier had no reader, or
+    # one that couldn't open them) and 'unsupported' (part a's "no readable text yet"). They go back
+    # to 'pending' (fresh ocr_started_at, stale ocr_note removed); web's startup self-heal, which runs
+    # right after init_db, re-runs OCR on every pending row, and the readers decide afresh (text,
+    # "not compatible" with a reason, or "corrupt" with a reason). Matched by the stored file's
+    # extension, which is what the readers dispatch on. Redacted rows are left alone. Idempotent:
+    # recorded once in schema_migrations, and a second run would only re-queue rows that a re-read
+    # settled the same way again.
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug FROM capture_events WHERE ocr_status IN ('failed', ?) AND COALESCE(redacted, 0) = 0 "
+        "AND media_type IN ('word', 'powerpoint') "
+        "AND (lower(stored_filename) LIKE '%.doc' OR lower(stored_filename) LIKE '%.ppt')",
+        (OCR_UNSUPPORTED,)).fetchall()
+    note_sql, _ = _ocr_note_sql(None)
+    now = time.time()
+    for r in rows:
+        conn.execute(f"UPDATE capture_events SET ocr_status = 'pending', ocr_started_at = ?, {note_sql} WHERE slug = ?",
+                     (now, r["slug"]))
+    print(f"schema_migrations: reread_legacy_office_724b re-queued {len(rows)} legacy .doc/.ppt row(s) for OCR",
+          flush=True)
+
+
 def _mig_writeup_lead_596():
     # #596: fill the projects.writeup_lead cache (the card face's write-up excerpt) once for every
     # card that has a write-up. From then on the cards service keeps it in step with every write-up
@@ -1373,6 +1398,7 @@ MIGRATIONS = [
     ("audit_scrub_secret_routes_559", _mig_audit_scrub_secret_routes_559),
     ("search_index_543", _mig_search_index_543),
     ("ocr_unsupported_724", _mig_ocr_unsupported_724),
+    ("reread_legacy_office_724b", _mig_reread_legacy_office_724b),
 ]
 
 
@@ -1830,10 +1856,11 @@ def set_ocr_status(slug, status, note=None):
     independent of how old the upload itself is.
 
     #724: `note` is the plain reason for status 'unsupported' (stored as type_metadata.ocr_note,
-    shown as "Not compatible with OCR: <note>"); any other status clears a stale note."""
+    shown as "Not compatible with OCR: <note>"); 'failed' may carry one too (a corrupt file says
+    so: "corrupt or unreadable .doc: ..."); any other status, or no note, clears a stale note."""
     if status == OCR_UNSUPPORTED and not note:
         raise ValueError("ocr_status 'unsupported' needs a note saying why")
-    note_sql, note_args = _ocr_note_sql(note if status == OCR_UNSUPPORTED else None)
+    note_sql, note_args = _ocr_note_sql(note if status in (OCR_UNSUPPORTED, "failed") else None)
     conn = get_conn()
     try:
         if status == "pending":
@@ -2399,10 +2426,23 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
         conn.close()
 
 
-def set_extracted_text(slug, text):
+def set_extracted_text(slug, text, source=None):
+    """#724: `source` is where the text came from (the type's text_source, e.g. 'office'), stored
+    as type_metadata.text_source in the same UPDATE; None clears a stale one (text OCR'd from a
+    picture, or emptied). A row whose type_metadata isn't valid JSON keeps it as it is."""
+    if source:
+        meta_sql = ("type_metadata = CASE WHEN type_metadata IS NULL OR type_metadata = '' "
+                    "THEN json_object('text_source', ?) WHEN json_valid(type_metadata) "
+                    "THEN json_set(type_metadata, '$.text_source', ?) ELSE type_metadata END")
+        meta_args = (source, source)
+    else:
+        meta_sql = ("type_metadata = CASE WHEN json_valid(type_metadata) "
+                    "THEN json_remove(type_metadata, '$.text_source') ELSE type_metadata END")
+        meta_args = ()
     conn = get_conn()
     try:
-        conn.execute("UPDATE capture_events SET extracted_text = ? WHERE slug = ?", (text, slug))
+        conn.execute(f"UPDATE capture_events SET extracted_text = ?, {meta_sql} WHERE slug = ?",
+                     (text, *meta_args, slug))
         conn.commit()
     finally:
         conn.close()

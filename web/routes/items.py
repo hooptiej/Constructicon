@@ -228,6 +228,9 @@ def _derive_processing_status(row):
             # #724: nothing OCR can read (a web link, a legacy .doc): settled, like captions "off"
             # (#585), never a failure and never pending. The reason rides along for the tooltip.
             stages.append({"stage": "OCR", "state": "off", "note": tm.get("ocr_note") or "not compatible with OCR"})
+        elif s == "failed" and tm.get("ocr_note"):
+            # #724: a corrupt file says so ("corrupt or unreadable .doc: ...")
+            stages.append({"stage": "OCR", "state": "failed", "note": tm["ocr_note"]})
         else:
             stages.append({"stage": "OCR", "state": "done" if s == "done" else "failed" if s == "failed" else "pending"})
     if spec and spec.caption_capable:

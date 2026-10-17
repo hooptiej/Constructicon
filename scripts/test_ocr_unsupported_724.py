@@ -28,6 +28,7 @@ import json
 import os
 import re
 import sqlite3
+import struct
 import sys
 import time
 import types
@@ -128,14 +129,22 @@ def docx_bytes(text_xml="<w:body/>"):
     return buf.getvalue()
 
 
-OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 504  # an OLE header; no reader looks inside yet
+OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 504  # an OLE header and nothing else: a broken file
+# #724 part b: .doc and .ppt have readers now, so "nothing we can read" is an older format: a Word 6
+# FIB (wIdent 0xA5DC, nFib 0x65) and a deck with no Current User stream (scripts/test_legacy_office_724b.py
+# has the readers' own tests).
+import make_type_samples  # noqa: E402  (scripts/: its hand-built OLE writer)
+WORD6 = make_type_samples.ole_file({"WordDocument": struct.pack("<HH", 0xA5DC, 0x0065) + b"\x00" * 0x200})
+PPT95 = make_type_samples.ole_file({"PowerPoint Document": b"\x00" * 64})
+DOC_NOTE = "legacy .doc: Word 6/95 or older format, no readable text"
+PPT_NOTE = "legacy .ppt: PowerPoint 95 or older format, no readable text"
 
 # ============================================================================================
 # 1. status transitions
 # ============================================================================================
 LINK = mklink("weblink", "https://cults3d.com/en/3d-model/some-thing")
-DOC = mkfile("legacydoc", OLE_MAGIC, ".doc", "word")
-PPT = mkfile("legacyppt", OLE_MAGIC, ".ppt", "powerpoint")
+DOC = mkfile("legacydoc", WORD6, ".doc", "word")
+PPT = mkfile("legacyppt", PPT95, ".ppt", "powerpoint")
 EMPTY_DOCX = mkfile("emptydocx", docx_bytes(), ".docx", "word")
 TEXT_DOCX = mkfile("textdocx", docx_bytes("<w:body><w:p><w:r><w:t>Hello rover</w:t></w:r></w:p></w:body>"), ".docx", "word")
 BAD_DOCX = mkfile("baddocx", b"this is not a zip file at all", ".docx", "word")
@@ -157,9 +166,9 @@ finally:
 check("a web link settles 'unsupported' (not failed)", state(LINK)[0] == "unsupported", state(LINK))
 check("a web link's reason is plain", state(LINK)[1] == "web link: no readable text yet", state(LINK))
 check("a legacy .doc settles 'unsupported' with its reason",
-      state(DOC)[:2] == ("unsupported", "legacy .doc: no readable text yet"), state(DOC))
+      state(DOC)[:2] == ("unsupported", DOC_NOTE), state(DOC))
 check("a legacy .ppt settles 'unsupported' with its reason",
-      state(PPT)[:2] == ("unsupported", "legacy .ppt: no readable text yet"), state(PPT))
+      state(PPT)[:2] == ("unsupported", PPT_NOTE), state(PPT))
 check("a text source that read the file and found no text settles done, empty text",
       state(EMPTY_DOCX) == ("done", None, ""), state(EMPTY_DOCX))
 check("a text source with text still settles done with it",
@@ -168,7 +177,10 @@ check("a .docx that isn't a zip (the reader raised) stays 'failed'", state(BAD_D
 check("a missing stored file stays 'failed' (not 'unsupported')", state(GONE_DOC)[0] == "failed", state(GONE_DOC))
 check("a corrupt image stays 'failed'", state(BAD_IMG)[0] == "failed", state(BAD_IMG))
 check("a YouTube video whose thumbnail couldn't be fetched stays 'failed'", state(YT)[0] == "failed", state(YT))
-check("no note is left on a failed row", all(state(s)[1] is None for s in (BAD_DOCX, GONE_DOC, BAD_IMG, YT)))
+check("no note is left on a failed row whose reader gave no reason",
+      all(state(s)[1] is None for s in (GONE_DOC, BAD_IMG, YT)))
+check("a corrupt .docx's failure says so (#724 owner decision 2026-10-17)",
+      (state(BAD_DOCX)[1] or "").startswith("corrupt or unreadable .docx: "), state(BAD_DOCX))
 
 # set_ocr_status rules
 try:
@@ -323,7 +335,7 @@ for _ in range(100):
     if db.get_by_slug(DOC)["ocr_status"] != "pending":
         break
     time.sleep(0.1)
-check("retry (MCP): the re-run settles 'unsupported' again", state(DOC)[:2] == ("unsupported", "legacy .doc: no readable text yet"),
+check("retry (MCP): the re-run settles 'unsupported' again", state(DOC)[:2] == ("unsupported", DOC_NOTE),
       state(DOC))
 
 print()

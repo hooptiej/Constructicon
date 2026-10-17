@@ -13,7 +13,8 @@ CARD_ITEM_FIELDS = (
     "card_date", "card_date_epoch",  # #622: the date the card shows, as epoch seconds (the Date sort's key)
     "thumb_url", "has_thumbnail", "redacted", "highlight",
     "stacked",  # #596: title of the card the file is on (the face's "Stacked · <card>"); provenance left the face
-    "client", "uploaded_by_display", "uploaded_at", "tags", "codes",
+    # #546: no "client": the card stopped reading it with the badge (#563), and it is empty on every item
+    "uploaded_by_display", "uploaded_at", "tags", "codes",
     "ocr_status", "extracted_text", "caption_capable", "type_metadata",
     "superseded_by", "rev",  # #477: revision chain (slug of the current revision | None, 1-based position | None)
 )

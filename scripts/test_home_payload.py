@@ -76,7 +76,7 @@ for rel, names in JS_SOURCES.items():
 # Spot checks the regex can't see: fields the card visibly depends on.
 for must in ("slug", "display_name", "type_label", "card_date", "card_date_epoch", "thumb_url", "has_thumbnail", "redacted",
              "codes", "highlight", "stacked", "ocr_status", "extracted_text", "caption_capable",
-             "type_metadata", "type_icon", "client", "uploaded_by_display", "tags", "uploaded_at",
+             "type_metadata", "type_icon", "uploaded_by_display", "tags", "uploaded_at",
              "media_type"):
     check(must in whitelist, "whitelist has %s" % must)
 
@@ -100,7 +100,8 @@ check(record == before, "projection does not mutate its input")
 check(set(slim) == whitelist, "projected record has exactly the whitelisted keys")
 check(slim["card_date_epoch"] == 1614884400, "#622: card_date_epoch (the Date sort's key) is carried as is")
 for gone in ("description", "source", "artifact_link", "url", "content_date", "filename", "uploaded_by",
-             "provenance"):  # #596: provenance left the file face
+             "provenance",  # #596: provenance left the file face
+             "client"):  # #546: the dead client field, unread since the badge went (#563)
     check(gone not in slim, "heavy/unused field dropped: %s" % gone)
 tm = slim["type_metadata"]
 check(set(tm) == {"rotation", "auto_caption_status", "auto_caption"}, "type_metadata trimmed to the card's keys: %s" % sorted(tm))

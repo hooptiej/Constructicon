@@ -232,7 +232,7 @@
          reports presence, never the real value — so each input is always
          left blank on load/save, same as a normal password field never
          redisplaying what you last typed. Add another labeled row here (and
-         to web/app.py's KNOWN_SETTINGS, and the JS API_KEY_SETTINGS array
+         to web/routes/admin.py's KNOWN_SETTINGS, and the JS API_KEY_SETTINGS array
          below) for each additional integration that needs a key. -->
     <section class="admin-panel">
       <div class="admin-panel-header">
@@ -884,7 +884,7 @@
   })();
 
   // API Keys (#55) — presence-only status, and a save that never echoes the
-  // real value back. KNOWN_SETTINGS is web/app.py's allowlist; this array is
+  // real value back. KNOWN_SETTINGS is web/routes/admin.py's allowlist; this array is
   // just this page's UI-side list of which of those keys get a labeled row —
   // add an entry here (plus the matching markup above) for a future key.
   const API_KEY_SETTINGS = ['youtube_data_api_key', 'pages_publish_token'];

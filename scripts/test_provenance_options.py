@@ -60,8 +60,6 @@ check("card seed = old list + purchased, in order", keys("card") == OLD_CARD + [
 check("file seed = old list + purchased, in order", keys("file") == OLD_FILE + ["purchased"], keys("file"))
 check("card seed labels equal the old labels",
       all(po.label("card", k) == card_rules.CARD_PROVENANCE_LABELS[k] for k in OLD_CARD))
-check("file list covers db.PROVENANCE_TYPES exactly (+purchased)",
-      sorted(keys("file")) == sorted(db.PROVENANCE_TYPES + ["purchased"]))
 check("Purchased label in both scopes", po.label("card", "purchased") == "Purchased" == po.label("file", "purchased"))
 db.init_db()
 check("init_db twice leaves the table identical (idempotent seed)", dump() == first)

@@ -266,10 +266,8 @@ CREATE INDEX IF NOT EXISTS idx_item_access_log_slug ON item_access_log(slug, at)
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
 
-# --- Provenance (capture_events.provenance) — #341 ---
-# Controlled vocab for object provenance (how an object came to be captured).
-# Loose (no DB CHECK), extensible — trim in use as patterns emerge.
-PROVENANCE_TYPES = ["found", "created", "documented", "result", "reference", "design"]
+# Provenance (capture_events.provenance, #341): the options live in the provenance_options
+# table since #529 (core/provenance_options.py seeds and owns them).
 
 # --- Brand asset roles (capture_events.brand_role) — #350 ---
 # Suggested vocab for reusable branding objects (logo, logotype, icon, etc.).

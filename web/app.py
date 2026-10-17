@@ -27,7 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
-from web import auth as web_auth, body_limit, content_security, proxy_trust, request_guard
+from web import auth as web_auth, body_limit, content_security, hobby_paths, proxy_trust, request_guard
 from web.common import _STATIC_DIR
 from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
 from web.security_headers import SecurityHeadersMiddleware
@@ -137,6 +137,10 @@ app.add_middleware(ActorMiddleware)
 # (the audit logger, form parsing, routes) is capped: a declared Content-Length over the limit is
 # refused before a byte is read, and a chunked or lying body is cut off once it passes the limit.
 app.add_middleware(body_limit.BodyLimitMiddleware)
+# #700: the hobby pages' addresses follow the install's label (/departments, /department/<slug>):
+# rewritten to the internal /hobbies, /hobby/<slug> here, before the access gate, the audit log and
+# the router; the old addresses (and any earlier label's) 308-redirect to the label's.
+app.add_middleware(hobby_paths.HobbyPathMiddleware)
 # #558: outermost, so a forged cross-origin request is refused before anything runs.
 app.add_middleware(request_guard.OriginGuardMiddleware)
 # #645: browser security headers (CSP, frame-ancestors / X-Frame-Options, Referrer-Policy, nosniff,

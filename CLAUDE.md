@@ -1728,6 +1728,53 @@ JSON body). No secrets there: the publish token stays a write-only API key (`app
   calls it). `sync_clients.py` still seeds them.
 - Check with `scripts/test_install_config.py` (throwaway DBs: a fresh install and a legacy one).
 
+### The hobby label (#700, "A hobby by any other name")
+
+An install can call a hobby something else: Admin > Install, keys `hobby_label` (singular) and
+`hobby_label_plural`, both or neither (default "Hobby / Hobbies" = not set). Owner decision
+2026-10-16: rename EVERYTHING the user sees, keep the plumbing.
+- **Rules** (`core/hobby_label.py`, pure): 2-32 characters, letters (any alphabet), spaces and
+  `- ' & .`, starting with a letter; each word's slug (`slugify`: accents dropped, lower case, `-`)
+  must not be in `RESERVED_SLUGS` (every first URL segment of the app and a few likely ones;
+  `test_hobby_label_700.py` checks the route table is covered); singular and plural slugs differ;
+  "hobbies" only as the plural, "hobby" only as the singular. Refusals: 400 `bad_hobby_label`. A save
+  is the usual imaged `install_config_update` row, undoable.
+- **One place to read it:** `install_config.hobby_label()` -> `Label` (`.one` "Hobby", `.many`
+  "Hobbies", `.one_lc` / `.many_lc` for inside a sentence, `.one_slug` / `.many_slug`, `.index_url`,
+  `.url(slug)`). Templates: the `hobby_label` Jinja global (`{{ hobby_label.many }}`,
+  `{{ hobby_label.url(h.slug) }}`, `web/common.py`). JS: `HobbyLabel.*` (`static/js/hobby-label.js`,
+  loaded first by `base.html`, which puts the label on `<html data-hobby-label="...">`; no inline
+  script). Python: `install_config.hobby_label()`; `card_rules.HOBBY_LABEL` still works (a module
+  `__getattr__` that returns the singular). Guides are relabelled at render (`relabel_text`).
+- **URLs:** the routes stay at their internal paths `/hobbies` and `/hobby/{slug}`; `web/hobby_paths.py`
+  (pure ASGI, inside the security headers and origin guard, outside the access gate) rewrites the
+  label's `/<plural>` and `/<singular>/<slug>` to them, and **308-redirects** `/hobbies`, `/hobby/<slug>`
+  and every earlier label's paths (query kept) to the label's. Earlier labels are remembered in the
+  non-imaged `hobby_label_known` row (written by `install_config.update`, never dropped, not even by an
+  undo), so no link ever breaks. Links are built with the label (`hobby_label.url`, never a literal).
+- **Immediate vs relaunch:** the web side follows at once (install config is cached ~2 s per process
+  and cleared on save; no restart). The **MCP reads the label when its process starts**: tool names
+  (`constructicon_create_hobby` -> `constructicon_create_department`, `list_hobbies` -> `list_departments`)
+  and descriptions follow it (`server.tool_registrations` / `tool_name_for` / `tool_description_for`).
+  The old names (the default ones and each earlier label's) stay registered as **hidden aliases**:
+  `tools/call` answers them, `tools/list` leaves them out (`mcp.list_tools` is filtered by
+  `_HIDDEN_ALIASES`). At startup the MCP records the label it used (`app_settings`
+  `mcp_started_hobby_label`); Admin shows a persistent "Restart the MCP server" notice while it
+  differs from the current label (`install_config.hobby_label_status()`), and a one-time notice after a
+  save when no MCP has recorded one. The warning text (`install_config.HOBBY_LABEL_WARNING`) is on the
+  Install panel, and the Save asks to confirm a label change with it.
+- **Stays "hobby", on purpose:** DB tables/columns, API routes (`/api/hobby/...`, `/api/hobbies...`),
+  JSON field names, MCP parameter names, `core/` identifiers and route function names, and the core
+  error texts the API returns.
+- **Guard:** `scripts/check_hobby_label.py` (text/AST, in the suite) fails on a hard-coded
+  hobby/hobbies word a user can read in `web/templates`, `web/static/js` or `web/**/*.py` (visible text,
+  title/aria-label/placeholder/alt/label, string literals that read like text, a page link written as
+  `/hobby...`), and skips comments, identifiers, paths and one-token lower-case keys. Exceptions go in
+  its `ALLOW` with a reason. A word that arrives as DATA (e.g. a home source "hobby") is not seen by
+  it: render it through the label. Check the behaviour with `scripts/test_hobby_label_700.py`
+  (throwaway DB; the MCP tool names are compared with `scripts/data/mcp_tool_names_700.json`, which a PR
+  that adds or renames a tool updates).
+
 ## Web owns background work; MCP enqueues (#549)
 
 `constructicon-web` and `constructicon-mcp` are two processes on one SQLite DB, so
@@ -1835,7 +1882,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
-    `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`, `check_layering`;
+    `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
+    `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,

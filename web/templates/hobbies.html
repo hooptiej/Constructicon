@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Hobbies — {{ app_name() }}{% endblock %}
+{% block title %}{{ hobby_label.many }} — {{ app_name() }}{% endblock %}
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
@@ -13,10 +13,10 @@
 
   <div class="home-col-header">
     <div>
-      <h1 class="page-title">Hobbies</h1>
-      <p class="page-subtitle">Collections organized by hobby interest.</p>
+      <h1 class="page-title">{{ hobby_label.many }}</h1>
+      <p class="page-subtitle">Collections organized by {{ hobby_label.one_lc }} interest.</p>
     </div>
-    <button type="button" class="btn-secondary" id="new-hobby-btn" title="Create a new hobby">+ New hobby</button>
+    <button type="button" class="btn-secondary" id="new-hobby-btn" title="Create a new {{ hobby_label.one_lc }}">+ New {{ hobby_label.one_lc }}</button>
   </div>
 
   {#- #686: the shared card component (was an inline JS template with a placeholder for every cover). -#}

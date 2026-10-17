@@ -41,7 +41,7 @@ import binascii
 import json
 import unicodedata
 
-from core import item_title, object_types, policy, timeline
+from core import install_config, item_title, object_types, policy, timeline
 from core import db
 from core.errors import AppError, NotFound
 from web.shapes import _card_items, _split_revisions
@@ -145,7 +145,7 @@ def _source_rows(source):
     if kind == "hobby":
         hobby = db.get_hobby(arg)
         if hobby is None:
-            raise NotFound(f"No hobby {arg!r}.")
+            raise NotFound(f"No {install_config.hobby_label().one_lc} {arg!r}.")
         return db.list_loose_hobby_objects(hobby["id"], include_superseded=True)
     raise _bad("bad_source", f"unknown source kind {kind!r}")
 

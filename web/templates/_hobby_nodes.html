@@ -35,7 +35,7 @@
   {% else %}
   <p class="hp-nofiles">No files yet.</p>
   {% endif %}
-  <button type="button" class="dp-btn hp-remove" data-project-id="{{ n.id }}" data-project-title="{{ n.title }}" aria-label="Remove {{ n.title }} from this hobby">Remove from hobby</button>
+  <button type="button" class="dp-btn hp-remove" data-project-id="{{ n.id }}" data-project-title="{{ n.title }}" aria-label="Remove {{ n.title }} from this {{ hobby_label.one_lc }}">Remove from {{ hobby_label.one_lc }}</button>
   {% if n.children %}
   <div class="hp-children" role="group" aria-label="Nested in {{ n.title }}">
     <div class="hp-children-label">Nested in {{ n.title }}</div>

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from core import card_rules, cards, curation_queue, curator, db, install_config, item_title, markdown_render, object_types, revisions, timeline
 from core import hobbies, physical_piece, provenance_options
+from core import hobby_label as hobby_label_rules
 from core.db import BRAND_ROLES
 from web import files_feed, item_grid
 from web.common import _build_breadcrumbs, _rev_note, templates
@@ -287,7 +288,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
     for h in reversed(cards.home_chain(project["id"])):
         if h.get("title"):
             home_crumbs.append({"title": h["title"],
-                                "href": f"/hobby/{h['slug']}" if h["type"] == "hobby" else f"/project/{h['slug']}"})
+                                "href": install_config.hobby_label().url(h['slug']) if h["type"] == "hobby" else f"/project/{h['slug']}"})
 
     return templates.TemplateResponse(
         request, "project_detail.html",
@@ -376,7 +377,11 @@ def unfiled_page(request: Request, rev: str = ""):
 @router.get("/hobbies", response_class=HTMLResponse)
 def hobbies_page(request: Request):
     """Hobbies listing page (#360) showing all hobby interests. #686: server-rendered with the
-    shared card component (_hobby_cards.html), each with its resolved cover."""
+    shared card component (_hobby_cards.html), each with its resolved cover.
+    #700: `/hobbies` (and `/hobby/{slug}` below) is the INTERNAL path. The page's address is the
+    label's (`/<plural slug>`, e.g. /departments): web/hobby_paths.py rewrites that to this route,
+    and 308-redirects /hobbies itself (and any earlier label's paths) there when the label isn't
+    the default."""
     return templates.TemplateResponse(request, "hobbies.html",
                                       {"hobby_faces": [_to_hobby_face(h) for h in db.list_hobbies()]})
 
@@ -389,7 +394,7 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     objects (tagged with the hobby, in none of its member projects)."""
     hobby = db.get_hobby(slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=f"{install_config.hobby_label().one_lc} not found")
 
     fields = cards.hobby_fields(hobby)
     projects = db.list_projects_for_hobby(hobby["id"])
@@ -563,7 +568,7 @@ def object_detail_page(request: Request, slug: str):
         for h in reversed(cards.home_chain(home["id"])):
             if h.get("title"):
                 trail.append({"label": h["title"],
-                              "href": f"/hobby/{h['slug']}" if h["type"] == "hobby" else f"/project/{h['slug']}"})
+                              "href": install_config.hobby_label().url(h['slug']) if h["type"] == "hobby" else f"/project/{h['slug']}"})
         trail.append({"label": home["title"], "href": f"/project/{home['slug']}"})
         trail.append({"label": item["display_name"], "href": None})
         breadcrumbs = trail
@@ -615,7 +620,9 @@ def admin_page(request: Request, embed: int = 0):
     # #467 step 1: "Create the admin account" banner while the install has no user at all.
     return templates.TemplateResponse(request, "admin.html", {"embed": bool(embed),
                                                               "install_setup_needed": install_config.setup_needed(),
-                                                              "users_setup_needed": users.setup_needed()})
+                                                              "users_setup_needed": users.setup_needed(),
+                                                              # #700: the label's warning text + the MCP restart notice
+                                                              "hobby_label_status": install_config.hobby_label_status()})
 
 
 # #562: in-app guides (served from the app, not the owner's GitHub). slug -> (file, title).
@@ -634,6 +641,8 @@ def guide_page(request: Request, guide: str):
     if entry is None:
         raise HTTPException(status_code=404, detail="guide not found")
     text = (GUIDES_DIR / entry[0]).read_text(encoding="utf-8")
+    # #700: the guide's "hobby" / "hobbies" in the install's word (paths and code spans stay)
+    text = hobby_label_rules.relabel_text(text, install_config.hobby_label())
     return templates.TemplateResponse(request, "guide.html", {
         "title": entry[1], "body": markdown_render.render(text, breaks=False)})
 

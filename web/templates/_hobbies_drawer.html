@@ -7,14 +7,14 @@
      server-rendered fragment (GET /api/hobbies/html); behaviour in static/js/hobbies.js. -->
 <button type="button" id="hobbies-drawer-trigger" style="display:none" aria-hidden="true" tabindex="-1"></button>
 <div class="drawer-backdrop" id="hobbies-drawer-backdrop"></div>
-<div class="wide-drawer hobbies-drawer" id="hobbies-drawer" role="dialog" aria-label="Hobbies">
+<div class="wide-drawer hobbies-drawer" id="hobbies-drawer" role="dialog" aria-label="{{ hobby_label.many }}">
   <div class="wide-drawer-header">
-    <h2>Hobbies</h2>
+    <h2>{{ hobby_label.many }}</h2>
     <button type="button" class="modal-close" id="hobbies-drawer-close" aria-label="Close">&times;</button>
   </div>
-  <p class="page-subtitle">Collections organized by hobby interest.</p>
+  <p class="page-subtitle">Collections organized by {{ hobby_label.one_lc }} interest.</p>
   <div style="margin-bottom:16px">
-    <button type="button" class="btn-secondary" id="hobbies-drawer-new" title="Create a new hobby">+ New hobby</button>
+    <button type="button" class="btn-secondary" id="hobbies-drawer-new" title="Create a new {{ hobby_label.one_lc }}">+ New {{ hobby_label.one_lc }}</button>
   </div>
   <p class="empty-state" id="hobbies-drawer-status" role="status" hidden></p>
   <div id="hobbies-drawer-grid"></div>

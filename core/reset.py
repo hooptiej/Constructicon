@@ -1,5 +1,5 @@
 """Delete-all (#541 phase C): the ONE full reset, called by POST /api/delete-all and MCP
-constructicon_delete_all. Before this, each front end had its own line-for-line copy (raw SQL),
+constructicon_delete(everything=true). Before this, each front end had its own line-for-line copy (raw SQL),
 and both forgot blog entries, card questions, curator snoozes, the trash and more.
 
 PERMANENT BY DESIGN: it is a reset, not a delete. Nothing goes to the trash and nothing can be

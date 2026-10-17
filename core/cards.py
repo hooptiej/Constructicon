@@ -194,7 +194,7 @@ def set_whereabouts(card, whereabouts=None, note=..., *, dry_run=False, actor=No
 def set_provenance(card, provenance=None, credit=..., *, dry_run=False, actor=None, batch_id=None):
     """Sets (or clears, with None) the CARD's provenance and optionally its credit
     (who designed it / where it came from; credit=... leaves it alone). Distinct from
-    the per-file provenance (db._set_provenance / constructicon_set_provenance), which
+    the per-file provenance (db._set_provenance / constructicon_update fields.provenance), which
     is untouched. One value per card: mixed origins are separate cards (3.5)."""
     row = get_card(card)
     value = card_rules.validate_provenance(provenance, current=row.get("provenance"))

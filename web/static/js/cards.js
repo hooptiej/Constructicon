@@ -10,7 +10,6 @@
            card_date, thumb_url/has_thumbnail, redacted, codes, stacked, highlight, ...)
      opts  href       link target (default /object/<slug>)
            size       "mini" (default) | "small"
-           width      optional --cx-w override in px (the Unfiled grid/list toggle)
            unfiledSlugs  Set of slugs not filed into a project (amber lamp)
            selectable "row" shows the select checkbox row (Unfiled, user gallery)
            selected   Set of selected slugs (re-checks boxes on re-render)
@@ -125,8 +124,52 @@
   function html(item, opts) {
     opts = opts || {};
     var cls = 'cx-item' + (opts.size === 'small' ? ' cx-item-small' : '') + (item.redacted ? ' cx-item-redacted' : '');
-    var w = opts.width ? ' style="--cx-w:' + esc(parseInt(opts.width, 10)) + 'px"' : '';
-    return '<div class="' + cls + '" data-slug="' + esc(item.slug) + '"' + w + '>' + face(item, opts) + tools(item, opts) + '</div>';
+    return '<div class="' + cls + '" data-slug="' + esc(item.slug) + '">' + face(item, opts) + tools(item, opts) + '</div>';
+  }
+
+  /* The list layout (#714): one compact row per file, the same facts the card face shows, from the
+     same payload fields (never a second title chain: display_name is already resolved, #542).
+       [select] [thumb] name . type . date . card (or the unfiled lamp) [Superseded | rev N | Redacted]
+     The row is a listitem (the grid carries role="list" in this layout). The link covers thumb..card;
+     the checkbox and the revision badge sit outside it (no controls inside a link), like the card's
+     tools strip. Takes the same opts as html() (href, unfiledSlugs, selectable, selected). */
+  function row(item, opts) {
+    opts = opts || {};
+    var href = opts.href || ('/object/' + item.slug);
+    var title = item.display_name;
+    var typeLine = item.type_label || item.media_type || 'File';
+    var stacked = item.stacked || '';
+    var thumb;
+    if (item.has_thumbnail && item.thumb_url && !item.redacted) {
+      var deg = item.type_metadata && item.type_metadata.rotation;
+      var rot = deg ? ' style="transform:rotate(' + esc(parseInt(deg, 10) || 0) + 'deg)"' : '';
+      thumb = '<img src="' + esc(item.thumb_url) + '" loading="lazy" alt=""' + rot + '>';
+    } else {
+      thumb = ICON;
+    }
+    var where;
+    if (stacked) where = '<span class="cx-row-card" title="' + esc('Stacked · ' + stacked) + '">' + esc(stacked) + '</span>';
+    else if (opts.unfiledSlugs && opts.unfiledSlugs.has(item.slug)) where = '<span class="cx-row-card cx-row-unfiled">' + lamp('#BA7517', 'Not filed into a project yet') + '<span>Unfiled</span></span>';
+    else where = '<span class="cx-row-card"></span>';
+    var badges = '';
+    if (item.redacted) badges += '<span class="cx-item-badge cx-item-redacted-badge" title="The file was removed; the info is kept">Redacted</span>';
+    if (item.superseded_by) badges += '<a class="cx-item-badge cx-rev-badge cx-rev-old" href="/object/' + esc(item.superseded_by) + '" title="A newer revision replaces this file. Open the current revision.">Superseded</a>';
+    else if (item.rev) badges += '<a class="cx-item-badge cx-rev-badge" href="/object/' + esc(item.slug) + '#revisions" title="Revision ' + esc(item.rev) + ' (the current one). Older revisions are on its page.">rev ' + esc(item.rev) + '</a>';
+    var select = '';
+    if (opts.selectable === 'row') {
+      select = '<label class="card-select-row cx-row-select"><input type="checkbox" class="card-select" data-slug="' + esc(item.slug) +
+        '" aria-label="' + esc('Select ' + title) + '" title="Select for bulk actions"' +
+        (opts.selected && opts.selected.has(item.slug) ? ' checked' : '') + '></label>';
+    }
+    return '<div class="cx-row' + (item.redacted ? ' cx-row-redacted' : '') + '" role="listitem" data-slug="' + esc(item.slug) + '">' + select +
+      '<a class="cx-row-link" href="' + esc(href) + '" data-card-slug="' + esc(item.slug) + '">' +
+        '<span class="cx-row-thumb">' + thumb + '</span>' +
+        '<span class="cx-row-name" title="' + esc(title) + '">' + esc(title) + '</span>' +
+        '<span class="cx-row-type">' + esc(typeLine) + '</span>' +
+        '<span class="cx-row-date">' + esc(item.card_date || '') + '</span>' +
+        where +
+      '</a>' + (badges ? '<span class="cx-row-badges">' + badges + '</span>' : '') +
+    '</div>';
   }
 
   /* Incremental rendering (#517). A grid of ~1,700 cards is thousands of DOM nodes and
@@ -155,7 +198,9 @@
 
     function moreRow() {
       var left = total - shown;
-      return '<div class="cx-more" style="grid-column:1/-1;text-align:center;padding:8px 0">' +
+      // #714: in a list layout the row is one of the list's items (opts.moreRole() -> 'listitem').
+      var role = opts && opts.moreRole ? opts.moreRole() : '';
+      return '<div class="cx-more"' + (role ? ' role="' + esc(role) + '"' : '') + ' style="grid-column:1/-1;text-align:center;padding:8px 0">' +
         '<button type="button" class="btn-secondary cx-more-btn">Show ' + Math.min(batch, left) +
         ' more (' + left + ' left)</button></div>';
     }
@@ -289,5 +334,5 @@
     });
   }
 
-  window.ItemCards = { html: html, face: face, esc: esc, pager: pager, getJson: getJson, feed: feed };
+  window.ItemCards = { html: html, row: row, face: face, esc: esc, pager: pager, getJson: getJson, feed: feed };
 })();

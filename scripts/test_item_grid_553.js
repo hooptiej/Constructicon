@@ -47,6 +47,8 @@ class GridEl extends El {
   get innerHTML() { return this.html; }
   insertAdjacentHTML(p, h) { this.html += h; this._take(h); }
   get cards() { return [...this.html.matchAll(/<div class="cx-item[^"]*" data-slug="([^"]+)"/g)].map((m) => m[1]); }
+  get rows() { return [...this.html.matchAll(/<div class="cx-row[^"]*" role="listitem" data-slug="([^"]+)"/g)].map((m) => m[1]); }
+  rowHtml(slug) { const m = this.html.match(new RegExp('<div class="cx-row[^"]*" role="listitem" data-slug="' + slug + '">([\\s\\S]*?)</div>')); return m ? m[1] : ''; }
   querySelector(sel) { return sel === '.cx-more' ? this.row : null; }
 }
 
@@ -64,6 +66,11 @@ function makeDom(id, opts) {
   });
   const filed = add('filed'); filed.querySelectorAll = () => filedBtns;
   add('empty'); add('count');
+  let layoutBtns = [];
+  if (opts.layouts) {  // #714: the Grid / List toggle
+    layoutBtns = ['grid', 'list'].map((mode) => { const b = new El('l-' + mode); b.dataset.layout = mode; b.closest = () => b; return b; });
+    const lay = add('layout'); lay.querySelectorAll = () => layoutBtns;
+  }
   if (opts.bulk) {
     ['select', 'bar', 'selcount', 'clear', 'card', 'new-card', 'tag', 'tag-suggestions', 'provenance', 'provenance-apply', 'sensitive', 'delete'].forEach((p) => add(p));
   }
@@ -74,7 +81,7 @@ function makeDom(id, opts) {
     dispatch: (t, detail) => (listeners[t] || []).forEach((f) => f({ detail })),
     querySelectorAll: (sel) => (sel === '[data-item-grid]' ? [box] : []),
   };
-  return { els, box, grid, type, filedBtns, doc, get: (p) => els[id + '-' + p] };
+  return { els, box, grid, type, filedBtns, layoutBtns, doc, get: (p) => els[id + '-' + p] };
 }
 
 // ---- a fake server ------------------------------------------------------------------------------------------
@@ -129,16 +136,19 @@ const mkItem = (slug, type, at) => ({ slug, media_type: type, display_name: slug
   function setup(opts) {
     opts = opts || {};
     const server = makeServer(archive, unfiled);
-    const dom = makeDom('g', { bulk: opts.bulk !== false });
+    const id = opts.id || 'g';
+    const dom = makeDom(id, { bulk: opts.bulk !== false, layouts: opts.layouts });
     const ctx = newCtx();
-    const undo = []; const alerts = []; const store = {};
+    const undo = []; const alerts = []; const store = opts.store || {};
     let confirmAnswer = true; let promptAnswer = 'New card';
-    const cfg = { id: 'g', endpoint: '/api/items/grid', seed: archive.slice(), meta: baseMeta(server.counts()), filters: opts.filters || ['type', 'filed'],
+    const cfg = { id, endpoint: '/api/items/grid', seed: archive.slice(), meta: baseMeta(server.counts()), filters: opts.filters || ['type', 'filed'],
+      layouts: !!opts.layouts, grid_class: 'cx-item-grid cx-item-grid-roomy',
       bulk: opts.bulk === false ? [] : BULK, can_edit: opts.bulk !== false, href_from: 'user:bulk', unfiled_lamp: true,
       filed_key: 'k.filed', labels: { all_types: 'All types', new_card_prompt: 'New card name:' }, count: { one: 'upload', other: 'uploads', suffix: '' } };
     Object.assign(cfg, opts.cfg || {});
     const g = ctx.window.ItemGrid.mount(cfg, {
-      doc: dom.doc, fetch: server.fetch, storage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } },
+      doc: dom.doc, fetch: server.fetch,
+      storage: opts.storage !== undefined ? opts.storage : { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } },
       showUndoBar: (m, b, done) => undo.push({ m, b, done }), confirm: () => confirmAnswer, prompt: () => promptAnswer, alert: (m) => alerts.push(m),
     });
     return { g, dom, server, ctx, undo, alerts, store, cfg, setConfirm: (v) => { confirmAnswer = v; }, setPrompt: (v) => { promptAnswer = v; } };
@@ -254,6 +264,80 @@ const mkItem = (slug, type, at) => ({ slug, media_type: type, display_name: slug
     const m = gridReqs(s).length;
     s.dom.doc.dispatch('constructicon:upload-complete', { failures: [] }); await settle();
     check('an upload refreshes the grid', gridReqs(s).length === m + 1);
+  }
+
+  // ---- #714: Grid / List ------------------------------------------------------------------------------------
+  {
+    const by = (slug) => archive.find((x) => x.slug === slug);
+    Object.assign(by('img1'), { stacked: 'Desk build', card_date: '12 Mar 2014', type_label: 'Image' });
+    Object.assign(by('aud2'), { superseded_by: 'aud0' });
+    Object.assign(by('img3'), { has_thumbnail: true, thumb_url: '/f/img3/thumb' });
+    const store = {};
+    const s = setup({ layouts: true, store }); await settle();
+    const [gBtn, lBtn] = s.dom.layoutBtns;
+    const clickLayout = (b) => s.dom.get('layout').fire('click', { target: b });
+    check('list: a fresh grid starts as Grid (cards, Grid pressed)',
+      s.g.layout === 'grid' && s.dom.grid.cards.length === 9 && s.dom.grid.rows.length === 0 && gBtn.attrs['aria-pressed'] === 'true' && lBtn.attrs['aria-pressed'] === 'false');
+    clickLayout(lBtn); await settle();
+    check('list: switching to List draws rows, not cards', s.dom.grid.rows.join() === archive.map((x) => x.slug).join() && s.dom.grid.cards.length === 0, s.dom.grid.rows);
+    check('list: the grid element is a list (role + class; the card-grid classes dropped)',
+      s.dom.grid.attrs.role === 'list' && /\bcx-item-list\b/.test(s.dom.grid.className) && !/cx-item-grid/.test(s.dom.grid.className), [s.dom.grid.className, s.dom.grid.attrs]);
+    check('list: the toggle says List is pressed', lBtn.attrs['aria-pressed'] === 'true' && gBtn.attrs['aria-pressed'] === 'false' && lBtn.classes.has('active'));
+    const r1 = s.dom.grid.rowHtml('img1');
+    check('list: a row carries the name, the type label, the card date and the card it is on',
+      /class="cx-row-name"[^>]*>img1</.test(r1) && /class="cx-row-type">Image</.test(r1) && /class="cx-row-date">12 Mar 2014</.test(r1) && /class="cx-row-card"[^>]*>Desk build</.test(r1), r1);
+    check('list: the row links to the object page like the card (with ?from=)', /<a class="cx-row-link" href="\/object\/img1\?from=user%3Abulk"/.test(r1), r1);
+    check('list: an unfiled file shows the unfiled lamp in its row', /Not filed into a project yet/.test(s.dom.grid.rowHtml('img0')) && /Unfiled/.test(s.dom.grid.rowHtml('img0')));
+    check('list: a filed file with no card title shows no unfiled lamp', !/Not filed/.test(s.dom.grid.rowHtml('img4')));
+    check('list: a thumbnail is the existing thumb URL, lazy', /<img src="\/f\/img3\/thumb" loading="lazy"/.test(s.dom.grid.rowHtml('img3')));
+    check('list: a superseded file (?rev=all) carries the Superseded badge in its row', /cx-rev-old" href="\/object\/aud0"[^>]*>Superseded</.test(s.dom.grid.rowHtml('aud2')), s.dom.grid.rowHtml('aud2'));
+    check('list: the choice is saved per grid id', store['constructicon.grid.g.layout'] === 'list', store);
+
+    // select + bulk in List
+    s.dom.get('select').fire('click');
+    check('list: each row has the select checkbox (outside the link, labelled)',
+      /<label class="card-select-row cx-row-select"><input type="checkbox" class="card-select" data-slug="img2" aria-label="Select img2"/.test(s.dom.grid.html));
+    pick(s, ['img2', 'aud1']);
+    check('list: picking rows counts them', s.dom.get('selcount').textContent === '2 selected' && !s.dom.get('delete').disabled);
+    s.dom.get('delete').fire('click'); await settle();
+    const p = posts(s).pop();
+    check('list: the bulk bar acts on the picked rows (delete posts both slugs, Undo bar)',
+      p && p.path === '/api/delete' && JSON.stringify(p.form) === JSON.stringify([['slugs', 'img2'], ['slugs', 'aud1']]) && s.undo.pop().b === 'b-del', p && p.form);
+    check('list: after the refresh the grid is still a list of rows', s.dom.grid.rows.length === 9 && s.dom.grid.cards.length === 0);
+    // filters keep the layout
+    s.dom.type.value = 'audio'; s.dom.type.fire('change'); await settle();
+    check('list: the type filter keeps List', s.dom.grid.rows.join() === 'aud0,aud1,aud2' && s.dom.grid.cards.length === 0, s.dom.grid.rows);
+    s.dom.type.value = 'all'; s.dom.type.fire('change'); await settle();
+
+    clickLayout(gBtn); await settle();
+    check('list: switching back to Grid draws cards again (role dropped, classes restored)',
+      s.dom.grid.cards.length === 9 && s.dom.grid.rows.length === 0 && s.dom.grid.className === 'cx-item-grid cx-item-grid-roomy' && store['constructicon.grid.g.layout'] === 'grid');
+    clickLayout(lBtn); await settle();
+
+    // the choice persists for this grid id, not for another
+    const again = setup({ layouts: true, store }); await settle();
+    check('list: a grid mounted again with the saved choice starts in List', again.g.layout === 'list' && again.dom.grid.rows.length === 9);
+    const other = setup({ layouts: true, store, id: 'h' }); await settle();
+    check('list: another grid id keeps its own choice (Grid)', other.g.layout === 'grid' && other.dom.grid.cards.length === 9);
+
+    // a throwing localStorage
+    const boom = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+    let threw = null; let t;
+    try { t = setup({ layouts: true, storage: boom }); await settle(); t.dom.get('layout').fire('click', { target: t.dom.layoutBtns[1] }); await settle(); } catch (e) { threw = e; }
+    check('list: a throwing localStorage defaults to Grid and the toggle still works', !threw && t && t.dom.grid.rows.length === 9, threw && threw.message);
+
+    // "Show more" in List: a local batch, then a page from the server
+    const sm = setup({ layouts: true, store: { 'constructicon.grid.g.layout': 'list' },
+      cfg: { seed: archive.slice(0, 6), meta: Object.assign(baseMeta(makeServer(archive, unfiled).counts()), { batch: 4, cursor: 'c1' }) } });
+    await settle();
+    check('list paging: the first batch is rows with a Show more row', sm.dom.grid.rows.length === 4 && sm.dom.grid.row && /Show 4 more \(5 left\)/.test(sm.dom.grid.row.btn.textContent), sm.dom.grid.row && sm.dom.grid.row.btn.textContent);
+    check('list paging: the Show more row is a list item', /<div class="cx-more" role="listitem"/.test(sm.dom.grid.html));
+    sm.dom.grid.row.btn.fire('click'); await settle();
+    check('list paging: Show more appends rows (the rest of the embedded batch)', sm.dom.grid.rows.length === 6 && sm.dom.grid.cards.length === 0, sm.dom.grid.rows);
+    sm.dom.grid.row.btn.fire('click'); await settle();
+    const more = gridReqs(sm).pop();
+    check('list paging: then the next page comes from the server and is appended as rows',
+      more && more.q.cursor === 'c1' && sm.dom.grid.rows.length === 9 && sm.dom.grid.cards.length === 0, [more, sm.dom.grid.rows]);
   }
 
   // ---- a viewer -------------------------------------------------------------------------------------------

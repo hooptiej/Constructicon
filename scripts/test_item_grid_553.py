@@ -18,7 +18,10 @@ four pages that list files. Throwaway DB, the real app through TestClient with r
   5. GET /api/items/grid: bad source 400 bad_source, unknown hobby 404, a cursor never continues another
      grid's list (cursor_view_mismatch), the type filter and the filed toggle per source;
   6. the project page's per-file x (POST /api/projects/{id}/remove-item) works and is undoable (#553
-     re-checks the 500 the review saw; fixed in df498fa, #563).
+     re-checks the 500 the review saw; fixed in df498fa, #563);
+  0. (#714 / #715, static) the bulk bar's CSS wraps (flex-wrap, nothing nowrap or fixed-width, not
+     sticky on a phone), list rows ellipsize the name, the old width-only "list" hack is gone; and in
+     section 1, every page draws the Grid/List toggle (aria-pressed) and the grouped bar, Delete last.
 Prints PASS / FAIL per check and ends with ALL PASS or FAILED: <names>.
 """
 
@@ -82,6 +85,59 @@ def controls(html, gid):
     return found
 
 
+def bar_html(html, gid):
+    """The bulk bar's markup (#715): from its opening tag to the grid element."""
+    m = re.search(r'<div class="selection-bar item-grid-bar" id="%s-bar"(.*?)<div class="[^"]*" id="%s-grid"' % (gid, gid), html, re.S)
+    return m.group(1) if m else ""
+
+
+def css_rules(text):
+    """{selector: body} for every plain rule in a stylesheet (media queries flattened; comments dropped)."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    out = []
+    for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", text):
+        out.append((" ".join(sel.split()), body))
+    return out
+
+
+def static_checks():
+    """#714 / #715 checks on the static files themselves (no server)."""
+    print("--- 0. static: the bar wraps, the list layout, the old width hack gone ---")
+    style = open(os.path.join(ROOT, "web", "static", "style.css"), encoding="utf-8").read()
+    cards_css = open(os.path.join(ROOT, "web", "static", "css", "cards.css"), encoding="utf-8").read()
+    rules = css_rules(style)
+
+    def body_of(selector):
+        return " ".join(b for s, b in rules if selector in [x.strip() for x in s.split(",")])
+    check("style.css: .item-grid-bar has flex-wrap: wrap", re.search(r"flex-wrap:\s*wrap", body_of(".item-grid-bar")) is not None, body_of(".item-grid-bar"))
+    check("style.css: .item-grid-bar-group has flex-wrap: wrap", re.search(r"flex-wrap:\s*wrap", body_of(".item-grid-bar-group")) is not None)
+    bar_rules = [(s, b) for s, b in rules if "item-grid-bar" in s or "item-grid-tag-box" in s]
+    nowrap = [s for s, b in bar_rules if re.search(r"white-space:\s*nowrap", b)]
+    fixed = [s for s, b in bar_rules if re.search(r"(?<![-\w])width:\s*\d+(\.\d+)?(px|em|rem)", b)]
+    flex_nowrap = [s for s, b in bar_rules if re.search(r"flex-wrap:\s*nowrap|flex-flow:[^;]*nowrap", b)]
+    check("style.css: nothing in the bar is nowrap, a fixed width or flex-wrap: nowrap (it would defeat the wrap)",
+          not nowrap and not fixed and not flex_nowrap, (nowrap, fixed, flex_nowrap))
+    check("style.css: the bar's Delete group is pushed to the end and set apart",
+          re.search(r"margin-left:\s*auto", body_of(".item-grid-bar-danger")) and "border-left" in body_of(".item-grid-bar-danger"))
+    check("style.css: the bar is not sticky at phone width",
+          re.search(r"@media \(max-width: 600px\) \{[^@]*?\.item-grid-bar \{[^}]*position:\s*static", style, re.S) is not None)
+    crules = css_rules(cards_css)
+    name_body = " ".join(b for s, b in crules if ".cx-row-name" in s)
+    check("cards.css: list rows ellipsize the name on one line",
+          "text-overflow: ellipsis" in name_body and "white-space: nowrap" in name_body and "min-width" in name_body, name_body)
+    row_fixed = [s for s, b in crules if ".cx-row" in s and re.search(r"(?<![-\w])width:\s*(\d{3,}|[4-9]\d)px", b)]
+    check("cards.css: no row part has a wide fixed width (no horizontal scroll at 375 px)", not row_fixed, row_fixed)
+    js = open(os.path.join(ROOT, "web", "static", "js", "item-grid.js"), encoding="utf-8").read()
+    cjs = open(os.path.join(ROOT, "web", "static", "js", "cards.js"), encoding="utf-8").read()
+    check("the old width-only 'list' hack is gone (#714)", "opts.width" not in js and "opts.width" not in cjs)
+    check("item-grid.js: one row renderer (ItemCards.row), the layout key per grid id, storage in try/catch",
+          "IC.row(item, opts)" in js and "'constructicon.grid.' + cfg.id + '.layout'" in js
+          and re.search(r"try \{ return \(storage && storage\.getItem\(LAYOUT_KEY\)\)", js) is not None
+          and re.search(r"try \{ if \(storage\) storage\.setItem\(LAYOUT_KEY", js) is not None)
+    check("cards.js: rows are list items, the toggle sets aria-pressed",
+          'role="listitem"' in cjs and "aria-pressed" in js and "setAttribute('role', 'list')" in js)
+
+
 def code(r):
     try:
         return r.json().get("error", {}).get("code")
@@ -103,6 +159,7 @@ def walk(c, **params):
 
 
 def main():
+    static_checks()
     db.init_db()
     users.limiter.reset()
 
@@ -180,6 +237,28 @@ def main():
         r2 = E.get(url + "?rev=all")
         cfg2 = config(r2.text, gid) or {}
         check(f"{name}: ?rev=all reaches the grid (its pages ask for rev=all)", (cfg2.get("meta") or {}).get("rev") == "all")
+        # #714: the Grid / List toggle on every grid, and what item-grid.js needs to drive it
+        check(f"{name}: the Grid/List toggle, both buttons, Grid pressed by default (#714)",
+              re.search(r'<div class="layout-toggle" id="%s-layout" role="group" aria-label="Layout">\s*'
+                        r'<button type="button" class="layout-toggle-btn active" data-layout="grid" aria-pressed="true"[^>]*>Grid</button>\s*'
+                        r'<button type="button" class="layout-toggle-btn" data-layout="list" aria-pressed="false"[^>]*>List</button>' % gid, html)
+              is not None)
+        check(f"{name}: the config turns the toggle on and carries the grid's id, class and endpoint (#714)",
+              cfg.get("layouts") is True and cfg.get("id") == gid and "cx-item-grid" in (cfg.get("grid_class") or "")
+              and cfg.get("endpoint") == "/api/items/grid" and f'id="{gid}-grid"' in html, {k: cfg.get(k) for k in ("layouts", "id", "grid_class")})
+        # #715: the bar's markup: one wrapping bar of groups in a fixed order, Delete last and set apart
+        bar = bar_html(html, gid)
+        groups = re.findall(r'class="item-grid-bar-group ([a-z-]+)"', bar)
+        check(f"{name}: the bulk bar is groups in order (count, cards, tag, provenance, sensitive, delete) (#715)",
+              groups == ["item-grid-bar-count", "item-grid-bar-cards", "item-grid-bar-tag", "item-grid-bar-provenance",
+                         "item-grid-bar-sensitive", "item-grid-bar-danger"], groups)
+        controls_in_bar = re.findall(r'id="%s-([a-z-]+)"' % gid, bar)
+        check(f"{name}: Delete is the bar's last control, alone in the danger group (#715)",
+              controls_in_bar and controls_in_bar[-1] == "delete"
+              and re.search(r'<div class="item-grid-bar-group item-grid-bar-danger">\s*<button type="button" class="btn-danger" id="%s-delete">' % gid, bar)
+              is not None, controls_in_bar)
+        check(f"{name}: no inline style on the bar or its groups (the CSS decides the wrapping)",
+              not re.search(r'class="(selection-bar item-grid-bar|item-grid-bar-group[^"]*)"[^>]*style=', bar))
     check("the three non-/unfiled grids have exactly the same controls",
           seen["home"] == seen["user gallery"] == seen["hobby"], {k: sorted(v) for k, v in seen.items()})
     for tpl in ("home.html", "unfiled.html", "user_gallery.html", "hobby.html"):
@@ -193,8 +272,8 @@ def main():
         r = V.get(url)
         cfg = config(r.text, gid) or {}
         ctl = controls(r.text, gid)
-        check(f"viewer {name}: 200, the grid with sort/type, no Select, no bar, empty bulk list",
-              r.status_code == 200 and {"sort", "type", "grid"} <= ctl and not ({"select", "bar", "delete", "tag"} & ctl)
+        check(f"viewer {name}: 200, the grid with sort/type and the Grid/List toggle, no Select, no bar, empty bulk list",
+              r.status_code == 200 and {"sort", "type", "grid", "layout"} <= ctl and not ({"select", "bar", "delete", "tag"} & ctl)
               and cfg.get("bulk") == [] and cfg.get("can_edit") is False and "selecting" not in ctl, (r.status_code, sorted(ctl)))
     for path, data in (("/api/bulk/attach-tags", {"slugs": ["loose0"], "tag_names": "x"}),
                        ("/api/bulk/provenance", {"slugs": ["loose0"], "provenance": "found"}),

@@ -332,10 +332,28 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .item-grid { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .item-grid-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .item-grid-controls .filter-select { min-width: 0; padding: 6px 10px; font-size: 12px; }
-.item-grid-bar { position: sticky; top: 0; z-index: 10; flex-wrap: wrap; }
+/* #715: the bar WRAPS. Its controls sit in groups (count + Clear | add to card + turn into card |
+   tag | provenance | sensitive | delete); the bar and each group are flex-wrap, nothing has a fixed
+   width or nowrap, and every control may shrink to the bar's width, so at any width (375 px phone,
+   the narrow home Files column, wide desktop) every control is on screen, never clipped or behind a
+   horizontal scroll. Delete is last, pushed to the end of its line and set apart by a rule.
+   Sticky on wider screens (one or two lines); at phone width it is NOT sticky: wrapped there it is
+   five or six lines (~230 px, a third of a 667 px-tall phone), too much to pin over the list. */
+.item-grid-bar { position: sticky; top: 0; z-index: 10; flex-wrap: wrap; gap: 8px 14px; padding: 8px 12px; max-width: 100%; box-sizing: border-box; }
 .item-grid.is-selecting .item-grid-bar { display: flex; }
+.item-grid-bar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.item-grid-bar .selection-count { flex: 0 0 auto; }
+.item-grid-bar .filter-select { min-width: 0; max-width: 100%; padding: 6px 10px; font-size: 12px; }
+.item-grid-bar .btn-secondary { padding: 7px 12px; font-size: 12px; flex-shrink: 1; min-width: 0; max-width: 100%; }
+.item-grid-bar-tag { flex: 1 1 180px; max-width: 280px; }
+.item-grid-tag-box { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 10px; }
+.item-grid-bar-danger { margin-left: auto; padding-left: 14px; border-left: 1px solid var(--border); }
+.item-grid-bar .btn-danger { padding: 7px 12px; font-size: 12px; }
+@media (max-width: 600px) {
+  .item-grid-bar { position: static; padding: 8px 10px; gap: 8px 10px; }
+  .item-grid-bar-tag { max-width: none; }
+}
 .item-grid-select-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
-.item-grid-tag-box { width: 220px; }
 /* home's Files panel: the grid fills the widget's matched height and scrolls inside it (#256) */
 .home-widget[data-widget="files"] .item-grid { flex: 1; min-height: 0; }
 .type-badge {
@@ -813,11 +831,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   flex-shrink: 0;
 }
 
-/* #117: Unfiled page's grid/list layout toggle. Both views reuse the exact
-   same .gallery-card markup — .gallery-grid gives the untouched base
-   .gallery-card styling (taller vertical tile, the "grid" default);
-   .home-gallery-grid's own rules above are what compress it into the
-   compact row/list look, same as the small home-page widget always used. */
+/* #117/#714: the file grids' Grid / List toggle (every grid since #714). Grid draws the
+   item cards, List one row per file (.cx-item-list / .cx-row in css/cards.css). */
 .layout-toggle { display: flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; align-self: flex-start; }
 .layout-toggle-btn {
   padding: 7px 13px; background: var(--surface); border: none; border-right: 1px solid var(--border-strong);

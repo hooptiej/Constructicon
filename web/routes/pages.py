@@ -11,7 +11,7 @@ from core import hobbies, physical_piece, provenance_options
 from core.db import BRAND_ROLES
 from web import files_feed
 from web.common import _build_breadcrumbs, _rev_note, templates
-from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_object_detail, _to_public, _to_timeline_project
+from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _hobby_cover, _hobby_cover_usable, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_hobby_face, _to_object_detail, _to_public, _to_timeline_project
 from core import access_log, actor as actor_ctx, policy, roles, users
 from web.shapes import actor_label
 from web.roles import RoleRouter, requires
@@ -373,8 +373,10 @@ def unfiled_page(request: Request, rev: str = ""):
 
 @router.get("/hobbies", response_class=HTMLResponse)
 def hobbies_page(request: Request):
-    """Hobbies listing page (#360) showing all hobby interests."""
-    return templates.TemplateResponse(request, "hobbies.html", {})
+    """Hobbies listing page (#360) showing all hobby interests. #686: server-rendered with the
+    shared card component (_hobby_cards.html), each with its resolved cover."""
+    return templates.TemplateResponse(request, "hobbies.html",
+                                      {"hobby_faces": [_to_hobby_face(h) for h in db.list_hobbies()]})
 
 
 @router.get("/hobby/{slug}", response_class=HTMLResponse)
@@ -427,12 +429,15 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     active_roots = [n for n in roots if n["face"]["activity"] == "active"]
     inactive_roots = [n for n in roots if n["face"]["activity"] != "active"]
 
-    hobby_face = cards.hobby_card_face(hobby, projects, items_by_project, needs_input=bool(queue["items"]))
-    hobby_face["cover_url"] = _project_cover_url(hobby_face["cover_slug"]) if hobby_face["cover_slug"] else None
+    # #686: chosen cover, else automatic (highlighted project's, else the most recent project's).
+    cover, cover_fields = _hobby_cover(hobby, projects)
+    hobby_face = cards.hobby_card_face(hobby, projects, items_by_project, needs_input=bool(queue["items"]), cover=cover)
+    hobby_face["cover_url"] = cover_fields["cover_url"]
 
     loose_rows, n_sup = _split_revisions(policy.filter_visible(db.list_loose_hobby_objects(hobby["id"], include_superseded=True)),
                                      rev == "all")  # #477, #557
     loose = _card_items(loose_rows)
+    cover_choices = _hobby_cover_choices(cover, projects, loose_rows)
     start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
     return templates.TemplateResponse(
@@ -454,8 +459,38 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
             # #596: the hobby card's own synopsis / flavor (the ABOUT group).
             "hobby_text": hobbies.text_fields(hobby),
             "card_text_limits": card_rules.CARD_TEXT_LIMITS,
+            # #686: the COVER group (chosen / automatic, and what can be chosen here).
+            "hobby_cover": cover_fields,
+            "cover_choices": cover_choices,
+            "cover_choices_max": HOBBY_COVER_CHOICES_MAX,
         },
     )
+
+
+HOBBY_COVER_CHOICES_MAX = 120  # #686: the picker lists at most this many; MCP can set any item
+
+
+def _hobby_cover_choices(cover, projects, loose_rows):
+    """#686: what the hobby page's COVER group offers: each member project's resolved cover (the
+    automatic candidates, most recent first), then its loose objects that have a picture, then the
+    current choice if it is neither. Only covers this actor can see and the thumb route serves
+    (web.shapes._hobby_cover_usable). [{slug, url, label}], capped at HOBBY_COVER_CHOICES_MAX."""
+    out, seen = [], set()
+
+    def add(slug, label):
+        if not slug or slug in seen or len(out) >= HOBBY_COVER_CHOICES_MAX or not _hobby_cover_usable(slug):
+            return
+        seen.add(slug)
+        out.append({"slug": slug, "url": _project_cover_url(slug), "label": label})
+
+    if cover.get("picked_slug"):
+        row = db.get_by_slug(cover["picked_slug"])
+        add(cover["picked_slug"], f"Current choice: {item_title.title_of(row)}" if row else "Current choice")
+    for p in cards.recent_first(projects):
+        add(db.resolve_project_cover_slug(p), f"{p['title']} (its cover)")
+    for r in loose_rows:
+        add(r["slug"], item_title.title_of(r))
+    return out
 
 
 @router.get("/brand", response_class=HTMLResponse)

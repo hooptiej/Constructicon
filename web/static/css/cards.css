@@ -140,6 +140,8 @@
 }
 .cx-note { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; flex-shrink: 0; }
 .cx-flavor { margin-top: auto; padding-top: .31em; border-top: 1px solid rgba(30, 27, 22, .25); font-style: italic; color: #3B352B; flex-shrink: 0; }
+/* #686: a computed mismatch flag (hobby cards): a nudge, in the card's own ink, never hidden */
+.cx-flag { flex-shrink: 0; font-weight: 600; color: #7A4B00; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Status + counts */
 .cx-boxes { display: flex; gap: .375em; font-family: var(--card-font-mono); font-size: .656em; }
@@ -189,6 +191,16 @@
 .cx-active-grid { display: flex; flex-wrap: wrap; gap: 16px; flex: 1 1 240px; min-width: 0; align-items: flex-start; }
 .cx-mini-row { display: flex; flex-wrap: wrap; gap: 12px; overflow-y: auto; max-height: 460px; padding: 2px 4px 6px 2px; }
 .cx-slot { display: block; max-width: 100%; }
+/* #686: the hobbies index and drawer: small hobby cards in a wrapping row */
+.cx-hobby-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+/* #686: the hobby page's COVER group: one radio per picture (plus "Automatic"), in a scrolling grid.
+   Kept here rather than details.css, which carries a stray NUL byte (`file` calls it data). */
+.dp-cover-choices { border: 0; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; max-height: 320px; overflow-y: auto; }
+.dp-cover-choice { display: flex; flex-direction: column; gap: 4px; font-size: 11px; line-height: 1.3; cursor: pointer; min-width: 0; }
+.dp-cover-choice img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: #15161A; }
+.dp-cover-choice span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-cover-choice:has(input:checked) img { outline: 2px solid var(--card-pip-on); outline-offset: 1px; }
+.dp-cover-auto { justify-content: center; }
 
 /* #514 featured card: sized to its column instead of a fixed 320px. The row is a size
    container, so cqw is the row's own width: 46% of it, never under the old 320px and never

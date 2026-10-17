@@ -1185,6 +1185,11 @@ def constructicon_list_hobbies() -> list[dict]:
     {code, label, detail}: inactive_with_active_work (an inactive hobby that has an active
     project) and active_untouched (an active hobby nothing in has been touched for ~2 years).
     A flag only points at a mismatch; the owner flips the switch by hand.
+    #686: each also carries its resolved cover: cover_slug (null = none), cover_picked (chosen by
+    hand with constructicon_set_hobby_cover), cover_source (picked | highlighted_project |
+    recent_project | null), cover_project (the project an automatic cover came from),
+    picked_cover_slug and picked_cover_unavailable (a chosen cover that was deleted, redacted or
+    hidden: the automatic one shows instead).
     Ordered by name."""
     out = []
     for h in db.list_hobbies():
@@ -1197,6 +1202,7 @@ def constructicon_list_hobbies() -> list[dict]:
             "group_code": f["group_code"],
             "project_count": h.get("project_count", 0),
             "flags": f["flags"],
+            **cards.hobby_cover_fields(cards.resolve_hobby_cover(h)),
         })
     return out
 
@@ -1356,6 +1362,29 @@ def constructicon_set_hobby_code(hobby_slug: str, group_code: str) -> dict | Non
     updated = db.get_hobby(hobby["id"])
     return {"id": updated["id"], "name": updated["name"], "slug": updated["slug"],
             "group_code": updated["group_code"], "changes": result.changes, "batch_id": result.batch_id}
+
+
+@mcp.tool()
+def constructicon_set_hobby_cover(hobby: str | int, cover_slug: str | None = None, clear: bool = False,
+                                  dry_run: bool = False) -> dict:
+    """Choose a HOBBY's cover picture (#686), or go back to its automatic cover.
+
+    The hobby-level twin of a card's cover (constructicon_update_project(cover_slug=...)), named
+    like the other hobby setters (constructicon_set_hobby_status / _code). hobby: id or slug.
+    cover_slug: any item (file slug) with a picture, e.g. one of its projects' photos or a loose
+    object. clear=true (or no cover_slug) removes the choice, and the hobby shows its automatic
+    cover again: its highlighted project's cover, else its most recently updated project that has
+    a cover, else none. A chosen cover whose item is later deleted, trashed or redacted is not
+    shown (the automatic one is) until it comes back.
+    Refused: {"ok": false, "error": {"code": "not_found" | "bad_cover", ...}} (no such item, or a
+    redacted / picture-less one). dry_run=true previews. Returns {ok, dry_run, changes, warnings,
+    batch_id, hobby, picked_cover_slug, cover: {cover_slug, cover_picked, cover_source,
+    cover_source_label, cover_project, picked_cover_slug, picked_cover_unavailable}}; undo with
+    constructicon_undo(batch_id).
+    """
+    if clear and cover_slug:
+        raise InvalidInput("Pass either cover_slug or clear=true, not both.")
+    return hobbies.set_cover(hobby, None if clear else cover_slug, dry_run=dry_run).to_dict()
 
 
 @mcp.tool()

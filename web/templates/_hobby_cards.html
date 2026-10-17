@@ -1,0 +1,13 @@
+{#- #686: hobbies as cards, the shared card component (_card.html, static/css/cards.css), small
+    size: name, dates, cover (chosen, else automatic), type line + group code, the project list,
+    the mismatch flags, status box (activity), "N projects". Used by the /hobbies page (rendered
+    in place) and the Hobbies drawer (GET /api/hobbies/html). `hobby_faces`: web.shapes
+    _to_hobby_face dicts. -#}
+{% from "_card.html" import card %}
+{% if hobby_faces %}
+<div class="cx-hobby-grid">
+  {% for h in hobby_faces %}<div class="cx-slot" data-hobby-slug="{{ h.slug }}">{{ card(h, "small") }}</div>{% endfor %}
+</div>
+{% else %}
+<p class="empty-state">No hobbies yet.</p>
+{% endif %}

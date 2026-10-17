@@ -321,8 +321,10 @@ for p in sorted((Path(ROOT) / "web" / "templates").rglob("*.html")):
         count += 1
         if 'nonce="{{ csp_nonce() }}"' not in attrs:
             missing.append(f"{p.relative_to(ROOT).as_posix()}:{text.count(chr(10), 0, m.start()) + 1}")
+# The floor only proves the scan still finds the templates' scripts. #686 moved two inline blocks
+# (hobbies.html, _hobbies_drawer.html) out to static/js/hobbies.js, so it is 33 now.
 check(f"every inline <script> in web/templates has nonce=\"{{{{ csp_nonce() }}}}\" ({count} blocks)",
-      count >= 35 and not missing, ", ".join(missing[:10]) or f"only {count} found")
+      count >= 33 and not missing, ", ".join(missing[:10]) or f"only {count} found")
 check("the template scan itself works", bool(inline_scripts('<p><script>x()</script>')) and not inline_scripts('<script src="/a.js"></script>'))
 EXPORT = Path(ROOT) / "web" / "export_templates"
 exp_hits = [p.name for p in EXPORT.rglob("*.html") if "csp_nonce" in p.read_text(encoding="utf-8")]

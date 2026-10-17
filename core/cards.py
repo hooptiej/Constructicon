@@ -2162,15 +2162,88 @@ def _project_list_line(titles):
     return "Projects: " + ", ".join(shown) + (f", +{more} more." if more else ".")
 
 
-def hobby_card_face(hobby_row, projects, items_by_project, needs_input=False):
+def hobby_cover_usable(slug):
+    """#686: may `slug` be shown as a hobby's cover right now? The item exists, isn't redacted,
+    the current actor may see it (core/policy.py) and its type has a picture (a thumbnail
+    strategy). The web layer passes a stricter check (its thumb-route rules) to the resolver."""
+    from . import object_types, policy  # lazy: keep cards' import graph as it was
+    row = db.get_by_slug(slug) if slug else None
+    if row is None or row.get("redacted") or not policy.can_view(row):
+        return False
+    return object_types.get_object_type(row.get("media_type")).thumbnail_source != object_types.ThumbnailSource.NONE
+
+
+def recent_first(projects):
+    """#686: "most recent" member project = the latest `projects.updated_at` (bumped by every Save,
+    file added, cover or status change of the card), then the latest `created_at`, then the highest
+    id, so the order is total and stable."""
+    return sorted(projects, key=lambda p: (p.get("updated_at") or 0, p.get("created_at") or 0, p.get("id") or 0),
+                  reverse=True)
+
+
+def resolve_hobby_cover(hobby_row, projects=None, usable=None):
+    """#686: the cover a hobby shows, and where it came from. In order:
+      1. its chosen cover (hobby_settings.cover_slug, hobbies.set_cover), when `usable`;
+      2. automatic: the cover of its highlighted member project (projects.highlight; several
+         highlighted = the most recent first);
+      3. automatic: the cover of its most recent member project that has one (_recent_first);
+      4. none (the card shows its placeholder).
+    A project's cover is its resolved one (db.resolve_project_cover_slug: its own, or the child
+    card's it borrows). A chosen cover that was deleted, trashed, redacted or hidden from this
+    actor is not shown (no broken image): the automatic one is, and `picked_unavailable` says so;
+    the choice itself is kept, so undoing the delete brings it back. Read-only.
+    `usable(slug) -> bool` defaults to hobby_cover_usable. Returns {slug, source (card_rules.
+    HOBBY_COVER_* or None), picked (bool), picked_slug, picked_unavailable, project (slug or None),
+    project_title}."""
+    usable = usable or hobby_cover_usable
+    picked = db.get_hobby_settings(hobby_row["id"]).get("cover_slug") or None
+    out = {"slug": None, "source": None, "picked": False, "picked_slug": picked, "picked_unavailable": False,
+           "project": None, "project_title": None}
+    if picked:
+        if usable(picked):
+            out.update(slug=picked, source=card_rules.HOBBY_COVER_PICKED, picked=True)
+            return out
+        out["picked_unavailable"] = True
+    if projects is None:
+        projects = db.list_projects_for_hobby(hobby_row["id"])
+    ranked = recent_first(projects)
+    highlighted = [p for p in ranked if p.get("highlight")]
+    rest = [p for p in ranked if not p.get("highlight")]
+    for source, group in ((card_rules.HOBBY_COVER_HIGHLIGHT, highlighted), (card_rules.HOBBY_COVER_RECENT, rest)):
+        for p in group:
+            slug = db.resolve_project_cover_slug(p)
+            if slug and usable(slug):
+                out.update(slug=slug, source=source, project=p["slug"], project_title=p["title"])
+                return out
+    return out
+
+
+def hobby_cover_fields(cover):
+    """#686: a resolve_hobby_cover result in the flat shape APIs and tools return (the caller adds
+    `cover_url`): cover_slug, cover_picked, cover_source, cover_source_label, cover_project,
+    picked_cover_slug, picked_cover_unavailable."""
+    return {
+        "cover_slug": cover["slug"],
+        "cover_picked": cover["picked"],
+        "cover_source": cover["source"],
+        "cover_source_label": card_rules.HOBBY_COVER_SOURCE_LABELS.get(cover["source"]),
+        "cover_project": cover["project"],
+        "picked_cover_slug": cover["picked_slug"],
+        "picked_cover_unavailable": cover["picked_unavailable"],
+    }
+
+
+def hobby_card_face(hobby_row, projects, items_by_project, needs_input=False, cover=None):
     """The card face for a hobby (#525, #596), in the same dict shape `card_face` returns so
     web/templates/_card.html draws it (kind 'hobby': the green frame, the mountain icon). The
     text box is the hobby's own synopsis (hobby_settings, hobbies.set_text), then its member
     projects by name ("+N more") and "Every card in this hobby carries its group code, CODE.";
     status box "Hobby · active|inactive", stat "N projects", footer "<CODE> · group card". The
-    date line is the computed span of the member projects' real dates; the cover is the first
-    member project's resolved cover (the caller turns `cover_slug` into a URL).
-    `items_by_project` maps project id -> db.list_project_items rows."""
+    date line is the computed span of the member projects' real dates; the cover is
+    resolve_hobby_cover's (#686: chosen, else highlighted project's, else the most recent
+    project's; pass `cover` when the caller already resolved it, e.g. with the web layer's
+    thumbnail check). The caller turns `cover_slug` into a URL. `items_by_project` maps project
+    id -> db.list_project_items rows."""
     status = hobby_row.get("hobby_status") or "active"
     status_label = card_rules.HOBBY_ACTIVITY_LABELS.get(status, status)
     spans = [timeline.resolve_project_span(p, items_by_project.get(p["id"], [])) for p in projects]
@@ -2180,16 +2253,14 @@ def hobby_card_face(hobby_row, projects, items_by_project, needs_input=False):
     end = max(ends) if ends else None
     code = hobby_row.get("group_code") or ""
     settings = db.get_hobby_settings(hobby_row["id"])
-    cover_slug = None
-    for p in sorted(projects, key=lambda p: (p.get("activity") != "active", -(p.get("updated_at") or 0))):
-        cover_slug = db.resolve_project_cover_slug(p)
-        if cover_slug:
-            break
+    if cover is None:
+        cover = resolve_hobby_cover(hobby_row, projects)
+    label = card_rules.HOBBY_LABEL
     notes = [_project_list_line([p["title"] for p in projects])] if projects else []
     if code:
-        notes.append(f"Every card in this hobby carries its group code, {code}.")
+        notes.append(f"Every card in this {label.lower()} carries its group code, {code}.")
     return {
-        "slug": hobby_row["slug"], "kind": "hobby", "kind_label": "Hobby",
+        "slug": hobby_row["slug"], "kind": "hobby", "kind_label": label,
         "href": "#stacks",
         "title": hobby_row["name"], "description": "",
         "activity": status, "stage": None, "stage_label": status_label, "stop_reason_label": None,
@@ -2198,14 +2269,15 @@ def hobby_card_face(hobby_row, projects, items_by_project, needs_input=False):
         "effective_start": start, "effective_end": end, "created_at": hobby_row.get("created_at") or 0,
         "dates": date_range_label(start, end, active=status == "active"),
         "level": 0, "show_level": False,
-        "cover_slug": cover_slug,
-        "type_line": f"Hobby{_DOT}{status_label}",
+        "cover_slug": cover["slug"],
+        "cover": cover,
+        "type_line": f"{label}{_DOT}{status_label}",
         "codes": [code] if code else [],
         "rel_lines": [], "rel_more": 0,
         "text": markdown_render.clamp(settings.get("synopsis") or "", FACE_TEXT_MAX),
         "text_source": "synopsis" if settings.get("synopsis") else None,
         "notes": notes, "flavor": settings.get("flavor") or "",
-        "zone": f"Hobby{_DOT}{status_label.lower()}",
+        "zone": f"{label}{_DOT}{status_label.lower()}",
         "stat": _count(len(projects), "project"),
         "foot": _DOT.join(x for x in (code, "group card") if x),
         "order": None,

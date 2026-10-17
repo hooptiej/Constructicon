@@ -98,6 +98,20 @@ FILE_PROVENANCE_TO_CARD = {
     "purchased": "purchased",
 }
 
+# The user-visible word for a hobby (#686: one place, so #700 can make it renameable).
+HOBBY_LABEL = "Hobby"
+
+# #686: where a hobby's cover came from (cards.resolve_hobby_cover). `picked` = chosen by hand
+# (hobby_settings.cover_slug); the other two are the automatic fallback, in this order.
+HOBBY_COVER_PICKED = "picked"
+HOBBY_COVER_HIGHLIGHT = "highlighted_project"
+HOBBY_COVER_RECENT = "recent_project"
+HOBBY_COVER_SOURCE_LABELS = {
+    HOBBY_COVER_PICKED: "Chosen by hand",
+    HOBBY_COVER_HIGHLIGHT: "Automatic: its highlighted project's cover",
+    HOBBY_COVER_RECENT: "Automatic: its most recently updated project with a cover",
+}
+
 # --- Hobby activity (3.3) ------------------------------------------------------
 # A hobby's two-value manual switch (blog_tags.hobby_status). Never computed; the
 # mismatch flags in core/db.hobby_flags only SURFACE disagreement with the cards.

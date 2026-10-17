@@ -1093,6 +1093,23 @@ matching the V2 mockup's Card template:
   details panel (ORIGIN / STATUS) only. Mini cards carry no text box, stat or footer at all.
 - Hobby face text box: its synopsis, then "Projects: A, B, C, +N more." and "Every card in this hobby
   carries its group code, CODE.".
+- **Hobby covers (#686, owner decision: chosen, with an automatic fallback).** `hobby_settings.cover_slug`
+  (added by `init_db`'s ALTER loop, NULL = automatic; no data migration). `cards.resolve_hobby_cover(hobby,
+  projects, usable)` decides, read-only: the chosen cover; else the resolved cover of its **highlighted**
+  member project (`projects.highlight`); else of its **most recent** member project that has one
+  (`cards.recent_first`: latest `updated_at`, then `created_at`, then id); else none. A chosen cover whose
+  item is deleted / trashed / redacted / hidden from the actor is skipped (`picked_unavailable`), never a
+  broken image; the choice is kept, so undoing the delete brings it back. Web passes
+  `web.shapes._hobby_cover_usable` (policy + the thumb route's rules). Write: `hobbies.set_cover(hobby,
+  slug_or_None)` (op `hobby_cover`, imaged, undoable; `bad_cover` 422 for a redacted or picture-less item,
+  `not_found`): web `POST /api/hobby/{id}/cover` (editor, blank = automatic; the hobby page's COVER group),
+  MCP `constructicon_set_hobby_cover(hobby, cover_slug, clear, dry_run)`. Reads carry `cover_url`,
+  `cover_slug`, `cover_picked`, `cover_source` (picked | highlighted_project | recent_project):
+  `GET /api/hobbies`, `GET /api/hobby/{id}`, MCP `constructicon_list_hobbies`. The **/hobbies page and the
+  Hobbies drawer** render the shared card (`_hobby_cards.html` -> `card(face, "small")`, faces from
+  `web.shapes._to_hobby_face`, with the computed flags as `cx-flag` lines); the drawer fetches the same
+  fragment from `GET /api/hobbies/html`; their JS is `static/js/hobbies.js`. The user-visible word is
+  `card_rules.HOBBY_LABEL` (#700 will make it renameable). Check: `scripts/test_hobby_covers_686.py`.
 
 **The text, in this order** (`cards.face_text(card)` -> `(text, source)`; never whereabouts or provenance):
 1. `projects.synopsis`: a few hand-written sentences (max 600; one paragraph per line);
@@ -1788,7 +1805,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
-    `test_replace_file_617`, `test_card_faces`, `test_install_config`, `check_layering`;
+    `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`, `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,

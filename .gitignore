@@ -19,6 +19,10 @@ imagerepo.db-journal
 # Site exports — generated builds, not source code
 exports/
 
+# The type sampler's output (#720, scripts/make_type_samples.py): generated, and it holds the
+# executable-class samples (PE, installers) that must never be committed (Windows Defender rule)
+samples-out/
+
 # Logs
 *.log
 

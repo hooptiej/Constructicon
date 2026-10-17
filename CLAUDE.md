@@ -236,7 +236,8 @@ the date and commit forward when you re-verify.
     see "Build / test / run".
   - *Live tools* (not retired): `run_checks.py`, `deploy.sh`, `release.py`, `run_tool.sh`,
     `golden_master.py`, `seed_test_from_production.py`, `full_youtube_channel_sync.py`,
-    `backfill_content_dates.py`, `regenerate_thumbnails.py`, and the helpers `_http.py` and `_testenv.py`.
+    `backfill_content_dates.py`, `regenerate_thumbnails.py`, `make_type_samples.py` + `drop_test.py` (#720),
+    and the helpers `_http.py` and `_testenv.py`.
     **None of `scripts/` is mounted into the app containers (#634)**: where each kind runs is
     "Scripts: what runs where" below. `reset_password.py` and `mcp_token.py` moved into the app as
     `core/manage/` (`python3 -m core.manage.<tool>`); the files left at the old paths are stubs that
@@ -1381,6 +1382,38 @@ To add a new object type (issue #448 contract v2):
   migration re-extracts rows whose file reads as UTF-16/32 and whose text is NUL-ridden or short.
 - Check with `scripts/test_previews_606_607.py` (throwaway DB; the xlsx part needs openpyxl, in the app image).
 
+### Type sampler and drop test (#720)
+
+One generated file of every registered type and extension, to drop-test a new install (owner, 2026-10-17).
+- **Generate** (in the app image, so the executables get made on Linux):
+  `docker run --rm --network none -u 1000:1000 -v "$PWD":/app:ro -v "$PWD/samples-out":/out -w /app <image> python scripts/make_type_samples.py /out`.
+  It writes one sample per entry in its `SAMPLES` list (108 files: every extension any type claims, incl.
+  both `.zip` types and both `.exe` types), `content.json` + `urls.txt` (the no-file types: YouTube, web
+  page, written post), `manifest.json` (per file: the type it must land as and what a correct install shows,
+  derived from the registry at run time) and a `README.md` table. Nothing comes from the archive; credentials
+  are obviously fake (TEST / NOT REAL, a key from a public fixed seed, VPP token "TEST-NOT-A-REAL-TOKEN").
+  Formats with no writer in the image (legacy Office/MSI, ISO, VHD, xar, rpm, PE, ELF, SketchUp, ...) are
+  hand-built minimal files. Byte-identical every run except `VARYING` (the PKCS#12 pair, the .7z).
+  `--list` prints the manifest; `--no-executables` skips the executable class.
+- **Drop-test an install** (writes to it; never prod: it refuses `/api/version` env `prod` without
+  `--i-know-this-is-prod`): `./scripts/run_tool.sh <web container> scripts/drop_test.py --base-url
+  http://localhost:<port> --samples <dir>` (the samples dir must be visible to that container), or from any
+  container in the install's network namespace with `CONSTRUCTICON_TOKEN_FILE`. It uploads through
+  `/api/upload` / `/api/content`, waits on `/api/processing`, prints one row per file (expected vs detected
+  type, thumbnail, text, object page, `/f/` disposition, raw view, content date, and a temporary VIEWER
+  account's view: restricted items must 404), then deletes exactly its own slugs and empties the trash only
+  when it held nothing else. `--keep` leaves the items. Verdict line `ALL PASS: ...` / `FAILED: ...`.
+- **Known findings it shows:** WAV downloads instead of playing (#723, Python 3.14's `audio/vnd.wave`; the
+  WAV row FAILs until fixed); legacy `.doc/.xls/.ppt` and web links end OCR "failed" (#724, expected there).
+- **Windows / Defender (owner rule):** the executable-class samples (PE `.exe`, every installer package,
+  the zipped `.app`, ELF firmware, the `.dmg`) are written only when `sys.platform` is Linux, and never
+  committed: the default output `samples-out/` is gitignored and `.dockerignore` keeps `scripts/` and it out
+  of the image. Never generate them on, or copy them to, the Windows machine.
+- **Checks:** `scripts/check_type_samples.py` (static) fails when a registered type or extension has no
+  sample; `scripts/test_type_samples_720.py` generates the set twice into a temp dir and checks every file is
+  written, sniffs as its type (`detect_media_type`) and is stable (skips the executables off Linux). A new
+  type or extension needs a `Sample(...)` line in `make_type_samples.py`.
+
 ## Data model (verify against `core/db.py`'s `SCHEMA` before trusting this — it evolves)
 
 - **`capture_events`** — the core item table. Despite the name (a holdover
@@ -1913,7 +1946,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
     `test_restart_sidecar_643`, `check_compose_ollama` (the compose example's Ollama sidecar, #687);
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
-    `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live);
+    `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live),
+    `check_type_samples` and `test_type_samples_720` (the type sampler covers every type and sniffs right, #720);
   - pages, search, dates, UI: `test_search_543`, `test_mcp_search_cap_697` (MCP text previews), `test_item_title_542`, `test_mountain_time_544` (`.py` and
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and

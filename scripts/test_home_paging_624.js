@@ -3,7 +3,7 @@
 //   node scripts/test_home_paging_624.js --compare DIR     (DIR from test_home_paging_624.py --dump DIR)
 // Covers ItemCards.pager (fetch more when the drawn cards run out), ItemCards.feed, ItemCards.getJson,
 // and the page's own script (web/templates/home.html, run against a fake DOM and a fake server):
-// the first paint uses the embedded batch with no request, sort / type tab / filed toggle ask the
+// the first paint uses the embedded batch with no request, sort / type filter / filed toggle ask the
 // server for the right view, the scroll sentinel fetches the next page, errors say why and retry.
 // --compare feeds the OLD client's own sorters + filter (copied from before #624) the full old payload
 // and checks the new server's page orders match, with the real String.localeCompare for A-Z.
@@ -168,14 +168,11 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
     check('getJson: a network failure says which request', /network error for \/api\/home\/files: Failed to fetch/.test(m), m);
   }
 
-  // ---- the page's own script, against a fake server -------------------------------------------------------------------
+  // ---- the panel's script, against a fake server -------------------------------------------------------------------
+  // #553: the panel is the shared file grid; its script is static/js/item-grid.js (ItemGrid.mount(config)),
+  // not an inline block in home.html, and the type tabs became the grid's type <select> (#files-type).
   {
-    const html = fs.readFileSync(path.join(ROOT, 'web/templates/home.html'), 'utf8');
-    // The opening tag carries the CSP nonce (#660): match it as a whole tag.
-    const TAG = '<script nonce="{{ csp_nonce() }}">';
-    const start = html.indexOf(TAG + '\n    (function () {\n      function escapeHtml');
-    const end = html.indexOf('    })();\n    </script>', start) + '    })();'.length;
-    let src = html.slice(start + TAG.length, end);
+    const src = fs.readFileSync(path.join(ROOT, 'web/static/js/item-grid.js'), 'utf8');
     // the server's archive: image 300 (some unfiled), pdf 150, audio 10. Newest = highest uploaded_at.
     const archive = [];
     const mkType = (type, n, base) => { for (let i = 0; i < n; i++) archive.push({ slug: type + i, media_type: type, display_name: type + ' ' + (n - i), uploaded_at: base - i }); };
@@ -194,10 +191,15 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
     const cursorFor = (tab, filed, sort, rows, end) => (end < rows.length ? 'cur|' + [tab, filed, sort].join('|') + '|' + end : null);
     const seed = view('all', 'all', 'newest').slice(0, B);
     const meta = { batch: B, seed: { filed: 'all', sort: 'newest' }, rev: '', counts, unfiled_total: unfiled.size,
-      cursor: cursorFor('all', 'all', 'newest', view('all', 'all', 'newest'), B),
+      cursor: cursorFor('all', 'all', 'newest', view('all', 'all', 'newest'), B), source: 'home',
+      labels: { audio: 'Audio', image: 'Image', pdf: 'PDF' },
       unfiled_slugs: seed.map((x) => x.slug).filter((s) => unfiled.has(s)) };
-    src = src.replace('{{ files_meta | tojson }}', JSON.stringify(meta)).replace('{{ files_seed | tojson }}', JSON.stringify(seed));
-    check('home.html script: no Jinja left in the Files panel script', !/\{\{|\{%/.test(src), src.match(/\{\{.*?\}\}|\{%.*?%\}/g));
+    // what web/item_grid.py build() gives home (a viewer: no bulk actions)
+    const config = { id: 'files', endpoint: '/api/items/grid', seed, meta, filters: ['type', 'filed'], bulk: [],
+      filed_key: 'constructicon.filesFiled', unfiled_lamp: true, labels: { all_types: 'All types' } };
+    const homeTpl = fs.readFileSync(path.join(ROOT, 'web/templates/home.html'), 'utf8');
+    check('home.html: the Files panel is the shared grid, no panel script of its own',
+      homeTpl.includes('{% include "_item_grid.html" %}') && !homeTpl.includes('ItemCards.feed(') && !homeTpl.includes('files-tabs'));
 
     const requests = []; let failNext = null;
     const fetchFn = (url) => {
@@ -214,23 +216,25 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
     const mkClient = (preset) => {
       observers.length = 0;
       const grid = new Grid(); const sortEl = { value: 'newest', listeners: {}, addEventListener(t, f) { this.listeners[t] = f; } };
-      const tabsEl = { _html: '', set innerHTML(v) { this._html = v; }, querySelectorAll() { return [...this._html.matchAll(/data-tab="(\w+)"/g)].map((m) => ({ dataset: { tab: m[1] }, addEventListener: (t, f) => { (tabsEl.clicks = tabsEl.clicks || {})[m[1]] = f; } })); } };
+      // the type <select>: its options are written as HTML; a change sets value and fires 'change'
+      const typeEl = { value: 'all', html: '', listeners: {}, set innerHTML(v) { this.html = v; }, get innerHTML() { return this.html; },
+        addEventListener(t, f) { this.listeners[t] = f; }, pick(v) { this.value = v; this.listeners.change(); } };
       const filedBtns = ['all', 'unfiled', 'filed'].map((mode) => { const cnt = { textContent: '' }; return { dataset: { filed: mode }, cnt, classList: { toggle() {} }, setAttribute() {}, querySelector: () => cnt }; });
       const filedEl = { listeners: {}, addEventListener(t, f) { this.listeners[t] = f; }, querySelectorAll: () => filedBtns };
-      const els = { 'files-grid': grid, 'files-sort': sortEl, 'files-tabs': tabsEl, 'files-filed': filedEl };
+      const emptyEl = { style: {} };
+      const els = { 'files-grid': grid, 'files-sort': sortEl, 'files-type': typeEl, 'files-filed': filedEl, 'files-empty': emptyEl };
       const store = Object.assign({}, preset || {});
-      const ctx = makeCtx({ document: { getElementById: (id) => els[id] || null, addEventListener() {}, querySelector: () => null },
-        localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } }, fetch: fetchFn, location: { reload() {} }, URL });
-      ctx.window.matchMedia = () => ({ matches: false }); ctx.window.addEventListener = () => {};
+      const doc = { getElementById: (id) => els[id] || null, addEventListener() {}, querySelector: () => null };
+      const ctx = makeCtx({ document: doc, fetch: fetchFn, URL });
       const IC = loadCards(ctx);
-      ctx.ItemCards = IC;
       // cards drawn by the real renderer would need full items; draw a marker instead (the render path is unchanged)
       IC.html = cardFn;
-      // #622: the page's Sort control is the shared static/js/item-sort.js (a <script src> before it).
+      // #622: the Sort control is the shared static/js/item-sort.js (the include loads it before item-grid.js).
       vm.runInContext(fs.readFileSync(path.join(ROOT, 'web/static/js/item-sort.js'), 'utf8'), ctx);
-      ctx.ItemSort = ctx.window.ItemSort;
       vm.runInContext(src, ctx);
-      return { grid, sortEl, tabsEl, filedEl, filedBtns, store };
+      const storage = { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } };
+      ctx.window.ItemGrid.mount(JSON.parse(JSON.stringify(config)), { doc, fetch: fetchFn, ItemCards: IC, storage });
+      return { grid, sortEl, typeEl, filedEl, filedBtns, store, emptyEl };
     };
     const lastIO = () => observers.filter((o) => o.live).pop();
     const keysOf = (rows) => rows.map((x) => x.slug).join();
@@ -239,21 +243,25 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
     check('first paint: the first 120 of All/Newest from the embedded items, no request', requests.length === 0 && keysOf(view('all', 'all', 'newest').slice(0, B)) === c.grid.cards.join(), [requests.length, c.grid.cards.length]);
     check('first paint: the row counts the whole archive (460 files, 340 left)', /\(340 left\)/.test(c.grid.row.btn.textContent), c.grid.row && c.grid.row.btn.textContent);
     check('first paint: the counts come from the page, not the embedded batch', c.filedBtns.map((b) => b.cnt.textContent).join() === '(460),(154),(306)', c.filedBtns.map((b) => b.cnt.textContent));
+    check('first paint (#553): the type filter lists every type with its label and count, All selected',
+      /<option value="all">All types \(460\)<\/option>/.test(c.typeEl.html) && /<option value="audio">Audio \(10\)/.test(c.typeEl.html)
+      && /<option value="image">Image \(300\)/.test(c.typeEl.html) && /<option value="pdf">PDF \(150\)/.test(c.typeEl.html) && c.typeEl.value === 'all', c.typeEl.html);
     lastIO().cb([{ isIntersecting: true }]); await settle();
+    check('scroll (#553): the shared endpoint, source=home', /^\/api\/items\/grid\?source=home&/.test(requests[0]), requests[0]);
     check('scroll: the batch is used up, the next page is fetched with the view and cursor', requests.length === 1 && /type=all/.test(requests[0]) && /filed=all/.test(requests[0]) && /sort=newest/.test(requests[0]) && /limit=120/.test(requests[0]) && /cursor=cur/.test(requests[0]), requests);
     check('scroll: cards 121-240 drawn next, nothing repeated', keysOf(view('all', 'all', 'newest').slice(0, 2 * B)) === c.grid.cards.join());
     lastIO().cb([{ isIntersecting: true }]); await settle(); lastIO().cb([{ isIntersecting: true }]); await settle();
     check('scroll to the end: every file once, in server order, then no row', keysOf(view('all', 'all', 'newest')) === c.grid.cards.join() && c.grid.row === null && requests.length === 3, [c.grid.cards.length, requests.length]);
 
     requests.length = 0; c = mkClient();
-    c.tabsEl.clicks.image(); await settle();
-    check('type tab, first click: one request for that type, first page, no cursor', requests.length === 1 && /type=image/.test(requests[0]) && /filed=all/.test(requests[0]) && /sort=newest/.test(requests[0]) && !/cursor=/.test(requests[0]), requests);
-    check('type tab: shows that type\'s first 120', keysOf(view('image', 'all', 'newest').slice(0, B)) === c.grid.cards.join());
-    check('type tab: counts follow the tab', c.filedBtns.map((b) => b.cnt.textContent).join() === '(300),(100),(200)', c.filedBtns.map((b) => b.cnt.textContent));
-    c.tabsEl.clicks.all(); await settle();
-    c.tabsEl.clicks.image(); await settle();
-    check('a type tab already opened is cached: no second request', requests.length === 1, requests);
-    c.tabsEl.clicks.audio(); await settle();
+    c.typeEl.pick('image'); await settle();
+    check('type filter, first pick: one request for that type, first page, no cursor', requests.length === 1 && /type=image/.test(requests[0]) && /filed=all/.test(requests[0]) && /sort=newest/.test(requests[0]) && !/cursor=/.test(requests[0]), requests);
+    check('type filter: shows that type\'s first 120', keysOf(view('image', 'all', 'newest').slice(0, B)) === c.grid.cards.join());
+    check('type filter: the filed counts follow the type', c.filedBtns.map((b) => b.cnt.textContent).join() === '(300),(100),(200)', c.filedBtns.map((b) => b.cnt.textContent));
+    c.typeEl.pick('all'); await settle();
+    c.typeEl.pick('image'); await settle();
+    check('a type already opened is cached: no second request', requests.length === 1, requests);
+    c.typeEl.pick('audio'); await settle();
     check('a small type fits in its first page: all 10, no row', c.grid.cards.length === 10 && c.grid.row === null && requests.length === 2);
 
     c = mkClient(); requests.length = 0;
@@ -272,8 +280,8 @@ const mk = (from, to) => Array.from({ length: to - from }, (_, i) => ({ slug: 's
     check('Unfiled toggle: asks for filed=unfiled, shows the server\'s first page', requests.length === 1 && /filed=unfiled/.test(requests[0]) && keysOf(view('all', 'unfiled', 'newest').slice(0, B)) === c.grid.cards.join(), requests);
     check('Unfiled toggle: remembered per viewer', c.store['constructicon.filesFiled'] === 'unfiled');
     check('Unfiled toggle: the amber marker set learns the page\'s unfiled slugs', true);
-    c.tabsEl.clicks.pdf(); await settle();
-    check('Unfiled + PDF tab: its own request', requests.length === 2 && /type=pdf/.test(requests[1]) && /filed=unfiled/.test(requests[1]), requests);
+    c.typeEl.pick('pdf'); await settle();
+    check('Unfiled + PDF: its own request', requests.length === 2 && /type=pdf/.test(requests[1]) && /filed=unfiled/.test(requests[1]), requests);
     requests.length = 0; c = mkClient({ 'constructicon.filesFiled': 'filed' }); await settle();
     check('a remembered "Filed" choice fetches that view on load (the embed is only the default view)', requests.length === 1 && /filed=filed/.test(requests[0]), requests);
 

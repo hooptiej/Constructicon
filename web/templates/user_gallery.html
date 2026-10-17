@@ -6,151 +6,19 @@
 {% include "_blog_builder.html" %}
 {% include "_export_builder.html" %}
 <div class="app-main">
-  <a class="back-link" href="/gallery">
+  {# #553: was "Back to gallery" -> /gallery, which only redirects home; say where it goes. #}
+  <a class="back-link" href="/">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="#A8A48F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    Back to gallery
+    Back home
   </a>
   <div class="user-gallery-title-row">
     <div>
       <h1 class="page-title">{{ uploader_display }}</h1>
-      <p class="page-subtitle">{{ items | length }} upload{{ 's' if items|length != 1 else '' }}</p>
-      {% include "_revisions_note.html" %}
-    </div>
-    <div class="user-gallery-controls">
-      <!-- Delete mode (#24) — was a toggle in the admin pop-out, which was
-           included on every page; since #295 the admin surface is its own
-           page (/admin), and this is a page-scoped mode (a body class that
-           only these tiles' .card-select checkboxes read), so it lives on
-           the page it acts on. Same switch markup (.admin-toggle), same
-           body class, same event as before — just relocated. -->
-      <label class="delete-mode-control" title="Show selection checkboxes on the tiles">
-        <span class="sort-label">Delete mode</span>
-        <span class="admin-toggle">
-          <input type="checkbox" id="delete-mode-toggle">
-          <span class="admin-toggle-track"><span class="admin-toggle-thumb"></span></span>
-        </span>
-      </label>
-      <div class="sort-control">
-        <label for="gallery-sort" class="sort-label">Sort</label>
-        <select class="filter-select" id="gallery-sort">
-          {% include "_item_sort_options.html" %}
-        </select>
-      </div>
+      <p class="page-subtitle" id="uploads-count">{{ grid.count.total }} upload{{ 's' if grid.count.total != 1 else '' }}</p>
     </div>
   </div>
-  <div class="selection-bar" id="selection-bar">
-    <span class="selection-count" id="selection-count"></span>
-    <button type="button" class="ocr-retry-btn" id="clear-selection-btn">Clear</button>
-    <button type="button" class="btn-secondary" id="sensitive-selected-btn" title="Only each item's uploader and admins will see it">Mark sensitive</button>
-    <button type="button" class="btn-danger" id="delete-selected-btn">Delete selected</button>
-  </div>
-  <div class="cx-item-grid" id="user-gallery-grid"></div>
-  <p class="empty-state" id="empty-state" {% if items %}style="display:none"{% endif %}>No uploads yet.</p>
+  {# #553: the shared file grid, server-paged (source user:<uploader>), so the count above and the
+     list are both every upload. The old "Delete mode" switch is the grid's Select button. #}
+  {% include "_item_grid.html" %}
 </div>
-<script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
-<script src="/static/js/item-sort.js?v={{ static_version('js/item-sort.js') }}"></script>
-<script nonce="{{ csp_nonce() }}">
-const uploaderName = {{ uploader | tojson }};
-const selectedSlugs = new Set();
-function toggleCardSelect(cb) {
-  if (cb.checked) selectedSlugs.add(cb.dataset.slug);
-  else selectedSlugs.delete(cb.dataset.slug);
-  updateSelectionBar();
-}
-function updateSelectionBar() {
-  const bar = document.getElementById('selection-bar');
-  const deleteModeOn = document.body.classList.contains('delete-mode-on');
-  const count = selectedSlugs.size;
-  bar.style.display = (deleteModeOn && count) ? 'flex' : 'none';
-  document.getElementById('selection-count').textContent = `${count} selected`;
-}
-
-// #514: shared asset card (static/js/cards.js); the select checkbox (delete mode) sits under it.
-function cardHtml(item) {
-  const fromParam = `user:${encodeURIComponent(uploaderName)}`;
-  return ItemCards.html(item, {
-    href: `/object/${item.slug}?from=${fromParam}`,
-    selectable: 'row',
-    selected: selectedSlugs,
-  });
-}
-
-const items = {{ items | tojson }};
-const userGalleryGrid = document.getElementById('user-gallery-grid');
-const gallerySort = document.getElementById('gallery-sort');
-// #517: first batch of cards only, more on scroll.
-const galleryPager = ItemCards.pager(userGalleryGrid, cardHtml);
-// #622: the shared Sort (static/js/item-sort.js): card date by default, or upload time, or A-Z.
-const gallerySortName = ItemSort.wire(gallerySort, () => renderGallery());
-function renderGallery() {
-  galleryPager.set(ItemSort.sorted(items, gallerySortName()));
-}
-renderGallery();
-
-document.addEventListener('constructicon:upload-complete', (e) => {
-  if (!e.detail.failures.length) location.reload();
-});
-
-document.getElementById('clear-selection-btn').addEventListener('click', () => {
-  selectedSlugs.clear();
-  document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);
-  updateSelectionBar();
-});
-
-// "Delete mode" (#24) — the toggle in the title row above replaces the
-// always-on checkboxes from #19: it sets a body class the CSS gates
-// .card-select on (see style.css) and announces the change so the selection
-// bar can react. When it's switched off, drop any in-flight selection so it
-// can't linger invisibly and reappear stale next time delete mode is on.
-const deleteModeToggle = document.getElementById('delete-mode-toggle');
-deleteModeToggle.addEventListener('change', () => {
-  const enabled = deleteModeToggle.checked;
-  document.body.classList.toggle('delete-mode-on', enabled);
-  document.dispatchEvent(new CustomEvent('constructicon:delete-mode-change', { detail: { enabled } }));
-});
-document.addEventListener('constructicon:delete-mode-change', (e) => {
-  if (!e.detail.enabled) {
-    selectedSlugs.clear();
-    document.querySelectorAll('.card-select').forEach(cb => cb.checked = false);
-  }
-  updateSelectionBar();
-});
-
-document.getElementById('delete-selected-btn').addEventListener('click', async () => {
-  const slugs = [...selectedSlugs];
-  if (!slugs.length) return;
-  if (!confirm(`Delete ${slugs.length} selected item${slugs.length === 1 ? '' : 's'}? They move to trash for 7 days, and you can undo until then.`)) return;
-  const fd = new FormData();
-  slugs.forEach(s => fd.append('slugs', s));
-  const res = await fetch('/api/delete', { method: 'POST', body: fd });
-  if (res.ok) {
-    const body = await res.json().catch(() => ({}));
-    document.querySelectorAll('.card-select:checked').forEach(cb => {
-      const card = cb.closest('.card, .gallery-card, article, li');
-      if (card) card.style.opacity = '0.3';
-    });
-    window.showUndoBar(`Deleted ${body.deleted} item${body.deleted === 1 ? '' : 's'}. In the trash for 7 days.`,
-      body.batch_id, () => window.location.reload());
-  } else {
-    alert('Delete failed.');
-  }
-});
-
-// #603: bulk "Mark sensitive" (one undoable batch; only an admin can clear it later).
-document.getElementById('sensitive-selected-btn').addEventListener('click', async () => {
-  const slugs = [...selectedSlugs];
-  if (!slugs.length) return;
-  if (!confirm(`Mark ${slugs.length} selected item${slugs.length === 1 ? '' : 's'} sensitive? Only each item's uploader and admins will see them. Only an admin can clear it.`)) return;
-  const fd = new FormData();
-  slugs.forEach(s => fd.append('slugs', s));
-  fd.append('sensitive', 'true');
-  const res = await fetch('/api/bulk/sensitive', { method: 'POST', body: fd });
-  const body = await res.json().catch(() => ({}));
-  if (res.ok) {
-    window.showUndoBar(`Marked ${body.count} item${body.count === 1 ? '' : 's'} sensitive.`, body.batch_id, () => window.location.reload());
-  } else {
-    alert((body.error && body.error.message) || body.detail || 'Mark sensitive failed.');
-  }
-});
-</script>
 {% endblock %}

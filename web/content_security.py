@@ -187,7 +187,11 @@ def serve_file(path, filename=None, type_name=None, download=False):
     name = filename or type_name
     kind = active_kind(path, name)
     headers = _headers_for(kind, path, name)
-    resp = FileResponse(path, filename=filename, headers=headers)
+    # #723: the same guess Starlette would make (from `filename or path`), with an alias of a
+    # browser-viewable type folded into the name browsers know (Python 3.14 says audio/vnd.wave for
+    # .wav; we send audio/wav). No guess = None = Starlette's own fallback, as before.
+    served_type = object_types.browser_media_type(mimetypes.guess_type(filename or str(path))[0]) or None
+    resp = FileResponse(path, filename=filename, headers=headers, media_type=served_type)
     if filename is not None:
         disposition = "attachment" if download else disposition_for(kind, filename)
         resp.headers["content-disposition"] = content_disposition(disposition, filename)

@@ -1063,9 +1063,10 @@ SAMPLES = [
       shows="player; title/artist/album from the tags"),
     S("audio-tone.m4a", "audio", audio_file(".m4a", ["-c:a", "aac", "-b:a", "64k"]), shows="player; tags"),
     S("audio-tone.ogg", "audio", audio_file(".ogg", ["-c:a", "libvorbis", "-q:a", "2"]), shows="player; tags"),
-    # #701 means WAV to play inline; Python 3.14 guesses audio/vnd.wave, which the allowlist lacks (#723)
+    # #701 means WAV to play inline; pinned here because Python 3.14 guesses audio/vnd.wave, which the
+    # registry only accepts through its alias map since #723
     S("audio-tone.wav", "audio", audio_file(".wav", ["-c:a", "pcm_s16le"]), disposition="inline",
-      shows="player; RIFF INFO tags; /f/ inline (fails until #723 is fixed)"),
+      shows="player; RIFF INFO tags; /f/ inline as audio/wav (#723)"),
     # credentials: RESTRICTED, all fake
     S("certkey-cert.crt", "certkey", cert_pem, date=True, shows="RESTRICTED: certificate facts (TEST cert, valid to 2099)"),
     S("certkey-cert.cer", "certkey", cert_der, date=True, shows="RESTRICTED: certificate facts (DER)"),

@@ -3,8 +3,8 @@
 // Covers the comparators (card date, upload time, A-Z; ties; items with no card date), sorted() and
 // wire(), that the module loads both as a browser <script> (window.ItemSort) and from node (require),
 // that the server's sort registry (web/files_feed.py SORTS), this module and the shared <option> list
-// (templates/_item_sort_options.html) name the same sorts in the same order, and that each of the four
-// grid templates loads the module before the inline script that uses it and keeps no sorter of its own.
+// (templates/_item_sort_options.html) name the same sorts in the same order, and that the shared file grid
+// (#553: templates/_item_grid.html + static/js/item-grid.js) loads and wires it on all four grid pages.
 const fs = require('fs'), vm = require('vm'), path = require('path');
 const ROOT = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -93,17 +93,24 @@ check('a non-number card_date_epoch (null) falls back to the upload time',
 }
 
 // ---- the four grids use it ------------------------------------------------------------------------------------
+// #553: the four pages draw ONE shared grid (templates/_item_grid.html + static/js/item-grid.js). Its include
+// loads item-sort.js before item-grid.js and holds the Sort menu; every grid is sorted by the server
+// (GET /api/items/grid), so ItemSort.sorted has no page caller any more (it stays for the tests above).
+{
+  const inc = read('web/templates/_item_grid.html');
+  const js = read('web/static/js/item-grid.js');
+  const tag = inc.indexOf('<script src="/static/js/item-sort.js?v={{ static_version(\'js/item-sort.js\') }}"></script>');
+  const grid = inc.indexOf('<script src="/static/js/item-grid.js?v={{ static_version(\'js/item-grid.js\') }}"></script>');
+  check('_item_grid.html: loads item-sort.js (cache-busted) before item-grid.js, which wires it', tag >= 0 && grid > tag && js.includes('ItemSort.wire('), { tag, grid });
+  check('_item_grid.html: the Sort menu is the shared include', inc.includes('{% include "_item_sort_options.html" %}'));
+  check('item-grid.js: no sorter of its own (the sort name goes to the server)',
+    !/uploaded_at\s*-\s*\w+\.uploaded_at/.test(js) && !/localeCompare/.test(js) && /sort: sort/.test(js));
+}
 for (const tpl of ['home.html', 'unfiled.html', 'user_gallery.html', 'hobby.html']) {
   const src = read('web/templates/' + tpl);
-  const tag = src.indexOf('<script src="/static/js/item-sort.js?v={{ static_version(\'js/item-sort.js\') }}"></script>');
-  const use = src.indexOf('ItemSort.wire(');
-  check(tpl + ': loads item-sort.js (cache-busted) before the inline script that uses it', tag >= 0 && use > tag, { tag, use });
-  check(tpl + ': the Sort menu is the shared include', src.includes('{% include "_item_sort_options.html" %}'));
-  check(tpl + ': no sorter of its own (no uploaded_at comparator, no FILES_/GALLERY_/LOOSE_ sorter table)',
-    !/uploaded_at\s*-\s*\w+\.uploaded_at/.test(src) && !/(FILES_SORTERS|GALLERY_SORTERS|LOOSE_SORT)\b/.test(src));
-}
-for (const tpl of ['unfiled.html', 'user_gallery.html', 'hobby.html']) {
-  check(tpl + ': sorts its whole list with ItemSort.sorted', read('web/templates/' + tpl).includes('ItemSort.sorted('));
+  check(tpl + ': includes the shared grid; no Sort menu, sorter or ItemSort use of its own',
+    src.includes('{% include "_item_grid.html" %}') && !src.includes('_item_sort_options.html') && !src.includes('ItemSort')
+    && !/uploaded_at\s*-\s*\w+\.uploaded_at/.test(src) && !/(FILES_SORTERS|GALLERY_SORTERS|LOOSE_SORT)\b/.test(src));
 }
 
 console.log('\n' + fails + ' failure(s)');

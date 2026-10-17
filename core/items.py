@@ -25,6 +25,7 @@ constructicon_undo(batch_id); it calls back into this module for the file side o
                            card memberships both ways (#16), all imaged.
   update(..., tags=[...])  (phase C) the free-text tags ride in the same batch (core/tags.py).
   set_sensitive(slugs, on) (#603) the "This is sensitive" flag: mark = editor+, clear = admin only.
+  set_provenance(slugs, key) (#553) the file grids' bulk provenance, one batch.
   purge_expired() / empty_trash(confirm) / trash_summary()
 
 Trash (owner decision on #541, 2026-10-04): a deleted file stays in the trash for TRASH_DAYS,
@@ -67,6 +68,7 @@ OP_RECOVER = "item_recover_redacted"
 OP_ERASE = "item_redact_erase"
 OP_SENSITIVE = "item_sensitive"  # #603
 OP_REPLACE_FILE = "item_replace_file"  # #617
+OP_BULK_PROVENANCE = "item_bulk_provenance"  # #553
 REASON_REDACT = "redact"
 REASON_REPLACE = "replace"  # #617: the bytes a replace_file displaced
 
@@ -337,6 +339,38 @@ def set_sensitive(slugs, sensitive, *, dry_run=False, actor=None, batch_id=None)
         item = db.get_by_slug(wanted[0]) if len(wanted) == 1 else None
     return _result(OP_SENSITIVE, muts, batch_id, dry_run, item, slugs=wanted,
                    changed=[m["key"]["slug"] for m in muts], sensitive=want)
+
+
+def set_provenance(slugs, provenance, *, dry_run=False, actor=None, batch_id=None):
+    """(#553) Sets the file provenance of several items as ONE imaged change-log row (op
+    item_bulk_provenance), undoable with the generic undo: the file grids' bulk "Set provenance".
+    `provenance` is validated per item exactly as update() validates it (an active key, or the
+    item's own current retired key; "" / None clears). Every slug must exist and be visible to the
+    actor (else 404 not_found, nothing written). An item already holding that value is left alone.
+    data: {slugs, changed, provenance}."""
+    from . import actor as actor_ctx, policy  # lazy: policy is imported by db at call time
+    wanted = [slugs] if isinstance(slugs, str) else list(slugs or [])
+    wanted = list(dict.fromkeys(s for s in wanted if s))
+    if not wanted:
+        raise InvalidInput("Give at least one item.", code="no_items")
+    who = actor_ctx.resolve(actor)
+    plan = []
+    for slug in wanted:
+        row = db.get_by_slug(slug)
+        if row is None or not policy.can_view(row, who):
+            raise NotFound(f"No item {slug!r}.")
+        value = provenance_options.validate("file", provenance or None, current=row.get("provenance"))
+        if value != row.get("provenance"):
+            plan.append((slug, value))
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_BULK_PROVENANCE, actor, batch_id, wanted) as log:
+            for slug, value in plan:
+                log.update("capture_events", {"slug": slug}, {"provenance": value})
+            muts = list(log.muts)
+        item = db.get_by_slug(wanted[0]) if len(wanted) == 1 else None
+    return _result(OP_BULK_PROVENANCE, muts, batch_id, dry_run, item, slugs=wanted,
+                   changed=[m["key"]["slug"] for m in muts], provenance=provenance or None)
 
 
 def check_undo_allowed(rows, actor=None):

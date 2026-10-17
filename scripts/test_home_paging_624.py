@@ -141,10 +141,11 @@ def seed(n_cards=60):
 
 
 def embedded(html):
-    """(seed items, FILES meta) as the page embeds them."""
-    by_type = re.search(r"const filesSeed = (.*);\n", html)
-    meta = re.search(r"const FILES = (.*);\n", html)
-    return (json.loads(by_type.group(1)) if by_type else None), (json.loads(meta.group(1)) if meta else None)
+    """(seed items, meta) as the page embeds them. #553: the panel is the shared file grid, whose config
+    (seed + meta, as before) is one JSON block, <script type="application/json" id="files-config">."""
+    m = re.search(r'<script type="application/json" id="files-config"[^>]*>(.*?)</script>', html, re.S)
+    cfg = json.loads(m.group(1)) if m else {}
+    return cfg.get("seed"), cfg.get("meta")
 
 
 def bench(client, n):

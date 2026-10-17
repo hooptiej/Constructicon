@@ -45,7 +45,7 @@
     <div class="dp-side">
       <div>
         <h1 class="dp-title">{{ hobby.name }}</h1>
-        <p class="dp-subtitle">{{ project_count }} project{{ '' if project_count == 1 else 's' }}{% if loose_items %} &middot; {{ loose_items | length }} loose object{{ '' if loose_items | length == 1 else 's' }}{% endif %}</p>
+        <p class="dp-subtitle">{{ project_count }} project{{ '' if project_count == 1 else 's' }}{% if loose_count %} &middot; {{ loose_count }} loose object{{ '' if loose_count == 1 else 's' }}{% endif %}</p>
       </div>
 
       {% set card_queue = hobby_queue %}
@@ -192,22 +192,10 @@
   <section class="hp-section" id="loose-objects" aria-labelledby="hp-loose-heading">
     <div class="home-col-header">
       <h2 id="hp-loose-heading">Loose objects</h2>
-      {% if loose_items | length > 1 %}
-      <div class="sort-control">
-        <label for="hobby-loose-sort" class="sort-label">Sort</label>
-        <select class="filter-select" id="hobby-loose-sort">
-          {% include "_item_sort_options.html" %}
-        </select>
-      </div>
-      {% endif %}
     </div>
-    <p class="dp-subtitle">Tagged with this hobby, but not in any of its projects.</p>
-    {% include "_revisions_note.html" %}
-    {% if loose_items %}
-    <div class="cx-item-grid cx-item-grid-roomy" id="hobby-loose-grid"></div>
-    {% else %}
-    <p class="empty-state" id="hobby-loose-empty">No loose objects.</p>
-    {% endif %}
+    <p class="dp-subtitle">Tagged with this hobby, but not in any of its projects. <span id="loose-count"></span></p>
+    {# #553: the shared file grid (sort, type filter, All/Unfiled/Filed, select + bulk actions) #}
+    {% include "_item_grid.html" %}
   </section>
 </div>
 
@@ -247,9 +235,8 @@
   </div>
 </div>
 
-<script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
+{# undo-bar.js, item-sort.js: loaded by the file grid's include above (#553) #}
 <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
-<script src="/static/js/item-sort.js?v={{ static_version('js/item-sort.js') }}"></script>
 <script nonce="{{ csp_nonce() }}">
 (function () {
   const DP = window.DetailsPanel;
@@ -357,19 +344,7 @@
     });
   }
 
-  // Loose objects: the shared item card renderer (static/js/cards.js), same as home's Files panel.
-  const loose = {{ loose_items | tojson }};
-  const grid = document.getElementById('hobby-loose-grid');
-  const looseSort = document.getElementById('hobby-loose-sort');
-  const loosePager = grid ? ItemCards.pager(grid, it => ItemCards.html(it, {})) : null;
-  // #622: the shared Sort (static/js/item-sort.js); with one item there is no select and the
-  // default (card date, newest first) applies.
-  const looseSortName = ItemSort.wire(looseSort, () => renderLoose());
-  function renderLoose() {
-    if (!grid) return;
-    loosePager.set(ItemSort.sorted(loose, looseSortName()));
-  }
-  renderLoose();
+  // Loose objects: the shared file grid (templates/_item_grid.html, static/js/item-grid.js, #553).
 
   // Convert to card (#541 phase D): POST /api/hobby/{id}/convert-to-card; Preview sends dry_run.
   const cv = {

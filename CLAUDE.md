@@ -65,8 +65,8 @@ the date and commit forward when you re-verify.
     `requires`, `NON_ROUTE_ROLES`), `request_guard.py` (same-origin guard and the audit-log redaction
     rules), `body_limit.py` (per-route request-body caps, #649), `proxy_trust.py` (the real scheme and client
     address behind a trusted reverse proxy, #646), `security_headers.py` (CSP, framing and the other
-    browser security headers on every app response, #645), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged home
-    Files feed, #624), `guides/` (in-app markdown guides), `export_templates/` (the static site's
+    browser security headers on every app response, #645), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged
+    file-grid feed, #624/#553), `item_grid.py` (the shared file grid's config, #553), `guides/` (in-app markdown guides), `export_templates/` (the static site's
     Jinja templates), `templates/` and `static/` (css, js; `static/js/mountain-time.js` is the JS twin
     of `core/datefmt.py`).
   - **Adding a route:** put it in the router for its area, decorated
@@ -866,8 +866,8 @@ string) + `sensitive_at`. Written only by `items.set_sensitive(slugs, on)`: ONE 
   An undo that would clear a flag is an unmark, so the same rule applies
   (`items.check_undo_allowed`, called by `cards.undo`); undoing an unmark (re-locking) is open.
 - **Where:** the item page's ORIGIN group ("This is sensitive" / "Clear sensitive", `POST
-  /api/image/{slug}/sensitive`, `sensitive=true|false`); the Unfiled and uploader-gallery selection bars
-  ("Mark sensitive", `POST /api/bulk/sensitive`, one batch); the upload drawer's checkbox (`sensitive`
+  /api/image/{slug}/sensitive`, `sensitive=true|false`); every file grid's bulk bar
+  (#553: home, Unfiled, the uploader gallery, a hobby's loose objects; "Mark sensitive", `POST /api/bulk/sensitive`, one batch); the upload drawer's checkbox (`sensitive`
   form field on `/api/upload` and `/api/content`, set IN the INSERT so the item is never visible
   unlocked; a duplicate upload marks the existing item instead); MCP `constructicon_set_sensitive(slug,
   sensitive, dry_run)`, and `sensitive` on `constructicon_upload` / `import` / `add_content`.
@@ -1149,9 +1149,30 @@ matching the V2 mockup's Card template:
   shared shape with a specific code: `bad_type`, `bad_filed`, `bad_sort`, `bad_limit`, `bad_cursor`,
   `cursor_view_mismatch`. Client: `ItemCards.pager` takes `loadMore` and a total, `ItemCards.feed` keeps
   one view's items and cursor, `ItemCards.getJson` reports failures with code, message and status.
-  `/unfiled`, the user gallery and the hobby page still embed their whole list and can reuse this
-  endpoint the same way. Check with `scripts/test_home_paging_624.py` (and `--bench`) and
-  `node scripts/test_home_paging_624.js [--compare DIR]`.
+  Since #553 every file grid is paged this way (next item). Check with `scripts/test_home_paging_624.py`
+  (and `--bench`) and `node scripts/test_home_paging_624.js [--compare DIR]`.
+- **One file grid (#553).** Home's Files panel, /unfiled, the user gallery (`/gallery/user/<label>`) and a
+  hobby's loose objects are one component: the page route calls `web/item_grid.py` `build(grid_id, source,
+  show_all_revs, ...)` and passes the result as `grid`; the template includes `templates/_item_grid.html`
+  (controls + a JSON config block, `<script type="application/json" id="<grid>-config" nonce=...>`, no
+  inline code); `static/js/item-grid.js` mounts every such block. Every grid gets the same controls: the
+  shared Sort, a type `<select>` with counts (it replaced home's type tabs), All / Unfiled / Filed (not on
+  /unfiled), Select + the bulk bar (always on for /unfiled) with **add to card, turn into card, tag,
+  provenance, mark sensitive, delete**, the `?rev=all` note. Bulk actions call the existing endpoints
+  (`/api/bulk/add-to-project`, `/api/projects/from-selection` (now answers `batch_id`),
+  `/api/bulk/attach-tags`, `/api/bulk/sensitive`, `/api/delete`) plus `POST /api/bulk/provenance`
+  (`items.set_provenance`, one imaged row `item_bulk_provenance`; it was one `/api/image/{slug}` POST per
+  file); each answer's `batch_id` feeds the Undo bar, then the grid re-reads its view from the server.
+  **Viewers get no Select button, no bar and an empty `bulk` list** (`item_grid.can_edit()`, editor+, the
+  bulk routes' own role). Every grid is server-paged: the page embeds the first batch of its default view
+  plus per-type counts; `GET /api/items/grid` (viewer) = `/api/home/files` with `source` = `home` |
+  `unfiled` | `user:<label>` | `hobby:<slug>` (`files_feed.parse_source`; 400 `bad_source`, unknown hobby
+  404), and its answer also carries `counts` / `labels` (the type filter after a refresh). A cursor is
+  bound to its source (`cursor_view_mismatch`); home's cursors are unchanged. Each source reads its rows
+  as its page did, then `policy.filter_visible` + `_split_revisions` (`files_feed.load`, the door in
+  `check_policy_doors.py`). User-visible grid words live in `item_grid.LABELS`. Check with
+  `scripts/test_item_grid_553.py` (throwaway DB: the four pages, viewers, every bulk action from a
+  non-/unfiled grid with change log + undo, 1,050 gallery rows) and `node scripts/test_item_grid_553.js`.
 - **Grid sort: the date on the card, or the upload time (#622).** Every item grid (home Files, /unfiled,
   the user gallery, hobby loose objects) has the same Sort menu, `templates/_item_sort_options.html`:
   **Date: newest** (`date_newest`, the default) / **Date: oldest** (`date_oldest`), **Uploaded: newest** /
@@ -1162,9 +1183,9 @@ matching the V2 mockup's Card template:
   falls back to the file's own modified time, then the upload time, and the card shows that date, so the
   item sorts where its card's date says. Ties on the card date go by upload time (same direction), then
   keep the list's order (stable). One sorter, `static/js/item-sort.js` (`ItemSort.sorted(items, name)`,
-  `ItemSort.wire(select, onChange)`; loaded by each grid page with `?v=static_version`): /unfiled, the
-  gallery and the hobby page sort in the browser with it; home passes the name to the endpoint, where
-  `files_feed.SORTS` uses the same keys. **To add a sort:** one entry in `files_feed.SORTS`, the same in
+  `ItemSort.wire(select, onChange)`; loaded by `_item_grid.html` with `?v=static_version`): since #553
+  every grid passes the name to `GET /api/items/grid`, where `files_feed.SORTS` uses the same keys
+  (`ItemSort.sorted` has no page caller left; the tests keep the two in step). **To add a sort:** one entry in `files_feed.SORTS`, the same in
   `item-sort.js` `SORTS`, one `<option>` in the partial. Check with `scripts/test_card_date_sort_622.py`
   (throwaway DB: the field per dating rule, the four pages, the server face, the endpoint order) and
   `node scripts/test_item_sort_622.js` (the comparators, and that the three lists agree).
@@ -1816,7 +1837,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
     `test_email_type`, `test_traditional_media`, `test_office` (live);
   - pages, search, dates, UI: `test_search_543`, `test_item_title_542`, `test_mountain_time_544` (`.py` and
-    `.js`), `test_home_paging_624` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
+    `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
     `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
   - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `check_dead_code`

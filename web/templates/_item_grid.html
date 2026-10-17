@@ -1,0 +1,77 @@
+{#- #553: one file grid, the same controls on every page that lists files (home Files, /unfiled, the
+    user gallery, a hobby's loose objects). Needs `grid` (web/item_grid.py build()) and `rev_note`.
+    Behaviour: static/js/item-grid.js (reads the JSON config below; no inline code). Viewers get no
+    Select button and no selection bar (grid.bulk is empty for them; the endpoints refuse anyway). -#}
+{%- set g = grid.id -%}
+<div class="item-grid{% if grid.select_default %} is-selecting{% endif %}" id="{{ g }}" data-item-grid="{{ g }}">
+  <div class="item-grid-controls">
+    {% if 'filed' in grid.filters %}
+    <div class="filed-seg" id="{{ g }}-filed" role="group" aria-label="Filter files by card filing">
+      <button type="button" class="filed-seg-btn active" data-filed="all" aria-pressed="true">All <span class="filed-count" data-count="all"></span></button>
+      <button type="button" class="filed-seg-btn" data-filed="unfiled" aria-pressed="false">Unfiled <span class="filed-count" data-count="unfiled"></span></button>
+      <button type="button" class="filed-seg-btn" data-filed="filed" aria-pressed="false">Filed <span class="filed-count" data-count="filed"></span></button>
+    </div>
+    {% endif %}
+    {% if 'type' in grid.filters %}
+    <select class="filter-select" id="{{ g }}-type" title="Filter by file type" aria-label="Filter by file type">
+      <option value="all">{{ grid.labels.all_types }}</option>
+    </select>
+    {% endif %}
+    <div class="sort-control">
+      <label for="{{ g }}-sort" class="sort-label">Sort</label>
+      <select class="filter-select" id="{{ g }}-sort">
+        {% include "_item_sort_options.html" %}
+      </select>
+    </div>
+    {% if grid.layouts %}
+    <div class="layout-toggle" id="{{ g }}-layout" role="group" aria-label="Layout">
+      <button type="button" class="layout-toggle-btn" data-layout="grid" title="Grid view">Grid</button>
+      <button type="button" class="layout-toggle-btn" data-layout="list" title="List view">List</button>
+    </div>
+    {% endif %}
+    {% if grid.bulk and not grid.select_default %}
+    <button type="button" class="btn-secondary item-grid-select-btn" id="{{ g }}-select" aria-pressed="false"
+            title="Show selection checkboxes for bulk actions">{{ grid.labels.select }}</button>
+    {% endif %}
+  </div>
+  {% include "_revisions_note.html" %}
+  {% if grid.bulk %}
+  <div class="selection-bar item-grid-bar" id="{{ g }}-bar" role="toolbar" aria-label="Bulk actions">
+    <span class="selection-count" id="{{ g }}-selcount">0 selected</span>
+    <button type="button" class="ocr-retry-btn" id="{{ g }}-clear">{{ grid.labels.clear }}</button>
+    {% if 'add_to_card' in grid.bulk %}
+    <select class="filter-select" id="{{ g }}-card" title="Add the selection to a card">
+      <option value="">{{ grid.labels.add_to_card }}</option>
+    </select>
+    {% endif %}
+    {% if 'new_card' in grid.bulk %}
+    <button type="button" class="btn-secondary" id="{{ g }}-new-card">{{ grid.labels.new_card }}</button>
+    {% endif %}
+    {% if 'tag' in grid.bulk %}
+    <div class="tag-input-box item-grid-tag-box">
+      <input class="tag-add-input" id="{{ g }}-tag" placeholder="{{ grid.labels.tag }}" autocomplete="off">
+      <div class="tag-suggestions" id="{{ g }}-tag-suggestions" style="display:none"></div>
+    </div>
+    {% endif %}
+    {% if 'provenance' in grid.bulk %}
+    <select class="filter-select" id="{{ g }}-provenance" title="Set provenance for the selection">
+      <option value="">{{ grid.labels.provenance }}</option>
+      {% for o in grid.provenance_options %}<option value="{{ o.key }}">{{ o.label }}</option>{% endfor %}
+    </select>
+    <button type="button" class="ocr-retry-btn" id="{{ g }}-provenance-apply">{{ grid.labels.apply }}</button>
+    {% endif %}
+    {% if 'sensitive' in grid.bulk %}
+    <button type="button" class="btn-secondary" id="{{ g }}-sensitive" title="Only each item's uploader and admins will see it">{{ grid.labels.sensitive }}</button>
+    {% endif %}
+    {% if 'delete' in grid.bulk %}
+    <button type="button" class="btn-danger" id="{{ g }}-delete">{{ grid.labels.delete }}</button>
+    {% endif %}
+  </div>
+  {% endif %}
+  <div class="{{ grid.grid_class }}" id="{{ g }}-grid"></div>
+  <p class="empty-state" id="{{ g }}-empty"{% if grid.count.total %} style="display:none"{% endif %}>{{ grid.empty_text }}</p>
+  <script type="application/json" id="{{ g }}-config" nonce="{{ csp_nonce() }}">{{ grid | tojson }}</script>
+</div>
+<script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
+<script src="/static/js/item-sort.js?v={{ static_version('js/item-sort.js') }}"></script>
+<script src="/static/js/item-grid.js?v={{ static_version('js/item-grid.js') }}"></script>

@@ -102,14 +102,12 @@ def expected():
     return out
 
 
-def embedded(html, var):
-    """The JSON a page's script assigns to `var` (the first assignment that is JSON, not code)."""
-    for m in re.finditer(r"(?:const|let) %s = (.*?);\r?\n" % re.escape(var), html):
-        try:
-            return json.loads(m.group(1))
-        except ValueError:
-            continue  # silent-ok: an assignment of code, not the embedded JSON; keep looking
-    return None
+def embedded(html, grid_id, key="seed"):
+    """#553: what a page's file grid embeds: its config JSON block (<script type="application/json"
+    id="<grid>-config">, templates/_item_grid.html), `seed` (the first batch of the default view) or
+    `meta`. The pages used to assign their whole lists to page-script variables."""
+    m = re.search(r'<script type="application/json" id="%s-config"[^>]*>(.*?)</script>' % re.escape(grid_id), html, re.S)
+    return json.loads(m.group(1)).get(key) if m else None
 
 
 def main():
@@ -139,10 +137,10 @@ def main():
             tags.attach(slug, ["Sorting622"])
     hobby_slug = hobby["slug"] if isinstance(hobby, dict) else hobby
     client = _testenv.client(webapp.app)
-    pages = {
-        "home": ("/", "filesSeed"),
-        "unfiled": ("/unfiled", "items"),
-        "user gallery": (f"/gallery/user/{UPLOADER}", "items"),
+    pages = {  # #553: (url, the file grid's id); each grid embeds its first batch (all 6 fixture files here)
+        "home": ("/", "files"),
+        "unfiled": ("/unfiled", "unfiled"),
+        "user gallery": (f"/gallery/user/{UPLOADER}", "uploads"),
         "hobby": (f"/hobby/{hobby_slug}", "loose"),
     }
     for name, (url, var) in pages.items():
@@ -167,7 +165,7 @@ def main():
         inline = re.findall(r"<script(?![^>]*\bsrc=)([^>]*)>", html)
         check(f"{name}: every inline script carries this response's CSP nonce ({len(inline)} inline)",
               nonce_hdr is not None and all(f'nonce="{nonce_hdr.group(1)}"' in attrs for attrs in inline))
-    meta = embedded(client.get("/").text, "FILES")
+    meta = embedded(client.get("/").text, "files", "meta")
     check("home: the embedded seed view is Date: newest", meta and meta["seed"]["sort"] == "date_newest", meta and meta["seed"])
 
     # --- 3. the server-side face of the same files ------------------------------------------------------
@@ -225,10 +223,15 @@ def main():
           list(files_feed.SORTS) == js_names == opt_names, (list(files_feed.SORTS), js_names, opt_names))
     check("the default is the same everywhere (date_newest)",
           files_feed.DEFAULT_SORT == "date_newest" and "const DEFAULT = 'date_newest';" in js)
+    # #553: the four pages draw one shared grid; its include holds the Sort menu, item-grid.js wires it.
     for tpl in ("home.html", "unfiled.html", "user_gallery.html", "hobby.html"):
         src = read("web/templates/" + tpl)
-        check(f"{tpl}: no hand-rolled uploaded_at sorter left; uses ItemSort",
-              "uploaded_at - " not in src and "ItemSort.wire(" in src and '{% include "_item_sort_options.html" %}' in src)
+        check(f"{tpl}: no hand-rolled sorter or Sort menu of its own; includes the shared grid",
+              "uploaded_at - " not in src and "ItemSort" not in src and '{% include "_item_grid.html" %}' in src)
+    grid_tpl, grid_js = read("web/templates/_item_grid.html"), read("web/static/js/item-grid.js")
+    check("_item_grid.html carries the shared Sort menu; item-grid.js wires it with ItemSort and sorts nothing itself",
+          '{% include "_item_sort_options.html" %}' in grid_tpl and "ItemSort.wire(" in grid_js
+          and "uploaded_at - " not in grid_js and "localeCompare" not in grid_js)
 
     print()
     if FAILS:

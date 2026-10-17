@@ -1,4 +1,4 @@
-"""The home Files panel, a page at a time (#624).
+"""The file grids, a page at a time (#624; every grid since #553).
 
 The panel used to embed every item in the page and sort, filter and tab over the full list in the
 browser (~1.2 MB of inline JSON on a 1,800-item archive, growing with it). Now the server keeps the
@@ -21,6 +21,16 @@ static/js/item-sort.js (the grids that sort in the browser) and one <option> to
 templates/_item_sort_options.html (every grid's Sort menu); scripts/test_item_sort_622.js checks the
 three agree.
 
+#553: the same feed serves all four file grids (templates/_item_grid.html + static/js/item-grid.js).
+A grid names its SOURCE, the list it shows; everything after "which rows" (visibility, revisions, type
+filter, the filed toggle, sorts, cursors) is shared:
+  * "home"            every file (db.list_recent_items_by_type), the home Files panel;
+  * "unfiled"         files on no card (db.list_unfiled_items), /unfiled;
+  * "user:<label>"    one Source label's uploads (db.search(uploaded_by=...)), /gallery/user/<label>;
+  * "hobby:<slug>"    a hobby's loose objects (db.list_loose_hobby_objects), /hobby/<slug>.
+Each source reads the rows the way its page always did, then policy.filter_visible and
+_split_revisions, so no source shows an item the viewer may not see.
+
 A cursor is an opaque token: the view it belongs to, the offset reached and the last slug served.
 "Continue after that slug" survives an upload landing at the top between two pages; the offset is the
 fallback when that slug has since gone. A cursor from a different view is refused (cursor_view_mismatch).
@@ -31,9 +41,9 @@ import binascii
 import json
 import unicodedata
 
-from core import item_title, policy, timeline
+from core import item_title, object_types, policy, timeline
 from core import db
-from core.errors import AppError
+from core.errors import AppError, NotFound
 from web.shapes import _card_items, _split_revisions
 
 BATCH = 120          # what #517 draws first, and the page size of the endpoint
@@ -102,8 +112,61 @@ def _bad(code, message, **details):
     return AppError(code, message, status=400, details=details)
 
 
-def load(show_all_revs):
-    """The visible list: ({media_type: [rows, newest first]}, superseded rows hidden, unfiled slugs)."""
+# --- sources (#553) ---------------------------------------------------------------------
+
+HOME = ("home", None)
+
+
+def parse_source(raw):
+    """"home" | "unfiled" | "user:<label>" | "hobby:<slug>" -> (kind, arg). 400 bad_source otherwise."""
+    raw = (raw or "home").strip()
+    kind, sep, arg = raw.partition(":")
+    if kind in ("home", "unfiled") and not sep:
+        return (kind, None)
+    if kind in ("user", "hobby") and arg.strip():
+        return (kind, arg)
+    raise _bad("bad_source", f"source {raw[:80]!r} is not one of: home, unfiled, user:<uploader>, hobby:<slug>")
+
+
+def source_name(source):
+    """(kind, arg) -> the string parse_source reads back."""
+    kind, arg = source
+    return kind if arg is None else f"{kind}:{arg}"
+
+
+def _source_rows(source):
+    """The rows a non-home source lists, superseded revisions included (the caller splits them)."""
+    kind, arg = source
+    if kind == "unfiled":
+        return db.list_unfiled_items(limit=10_000_000, include_superseded=True)
+    if kind == "user":
+        # #563/#553: no row cap (limit=1000 once cut both the list and its count short)
+        return db.search(uploaded_by=arg, limit=10_000_000)
+    if kind == "hobby":
+        hobby = db.get_hobby(arg)
+        if hobby is None:
+            raise NotFound(f"No hobby {arg!r}.")
+        return db.list_loose_hobby_objects(hobby["id"], include_superseded=True)
+    raise _bad("bad_source", f"unknown source kind {kind!r}")
+
+
+def group_by_type(rows):
+    """[rows] -> {media_type: [rows]}, each type's rows in the order given."""
+    by_type = {}
+    for r in rows:
+        by_type.setdefault(r.get("media_type") or "image", []).append(r)
+    return by_type
+
+
+def unfiled_slugs():
+    return set(db.list_unfiled_slugs(include_superseded=True))
+
+
+def load(show_all_revs, source=HOME):
+    """A source's visible list: ({media_type: [rows]}, superseded rows hidden, unfiled slugs)."""
+    if source[0] != "home":
+        rows, n_sup = _split_revisions(policy.filter_visible(_source_rows(source)), show_all_revs)
+        return group_by_type(rows), n_sup, unfiled_slugs()
     by_type = {}
     n_sup = 0
     for mt, rows in db.list_recent_items_by_type(limit_per_type=10000, include_superseded=True).items():
@@ -111,7 +174,16 @@ def load(show_all_revs):
         n_sup += n
         if rows:
             by_type[mt] = rows
-    return by_type, n_sup, set(db.list_unfiled_slugs(include_superseded=True))
+    return by_type, n_sup, unfiled_slugs()
+
+
+def type_labels(by_type):
+    """{media_type: its registry label}, for the grid's type filter."""
+    out = {}
+    for mt in by_type:
+        spec = object_types.get_object_type(mt)
+        out[mt] = spec.label if spec else mt
+    return out
 
 
 def view_rows(by_type, tab, filed, sort, unfiled):
@@ -134,8 +206,11 @@ def counts(by_type, unfiled):
 
 # --- cursors ---------------------------------------------------------------------------
 
-def _view_key(tab, filed, sort, show_all_revs):
-    return f"{tab}|{filed}|{sort}|{'all' if show_all_revs else 'current'}"
+def _view_key(tab, filed, sort, show_all_revs, source=HOME):
+    # home keeps its pre-#553 key (a cursor issued before the change still continues); other sources
+    # are prefixed, so a cursor never continues another grid's list
+    key = f"{tab}|{filed}|{sort}|{'all' if show_all_revs else 'current'}"
+    return key if source[0] == "home" else f"{source_name(source)}|{key}"
 
 
 def make_cursor(view_key, offset, last_slug):
@@ -167,7 +242,7 @@ def _next_cursor(rows, end, view_key):
 
 # --- what the page embeds ----------------------------------------------------------------
 
-def initial(by_type, unfiled, show_all_revs):
+def initial(by_type, unfiled, show_all_revs, source=HOME):
     """-> (seed items, meta) for home.html. The seed is the first BATCH card items of the default
     view (All files, Date: newest): exactly what the panel draws first. Every other view, type tabs
     included, is fetched from page() on its first use. meta carries the per-type counts (tabs and
@@ -179,7 +254,9 @@ def initial(by_type, unfiled, show_all_revs):
         "seed": {"filed": DEFAULT_FILED, "sort": DEFAULT_SORT},
         "rev": "all" if show_all_revs else "",
         "counts": counts(by_type, unfiled),
-        "cursor": _next_cursor(rows, BATCH, _view_key("all", DEFAULT_FILED, DEFAULT_SORT, show_all_revs)),
+        "cursor": _next_cursor(rows, BATCH, _view_key("all", DEFAULT_FILED, DEFAULT_SORT, show_all_revs, source)),
+        "source": source_name(source),
+        "labels": type_labels(by_type),
         "unfiled_total": len(unfiled),
         "unfiled_slugs": [r["slug"] for r in seed_rows if r["slug"] in unfiled],  # the seed's lamps only
     }
@@ -200,9 +277,11 @@ def parse_limit(raw):
     return n
 
 
-def page(by_type, unfiled, show_all_revs, tab, filed, sort, cursor, limit):
-    """One page of a view: {"items", "unfiled_slugs", "total", "next_cursor"}. Raises AppError
-    (400, a specific code) for a parameter it can't use."""
+def page(by_type, unfiled, show_all_revs, tab, filed, sort, cursor, limit, source=HOME):
+    """One page of a view: {"items", "unfiled_slugs", "total", "next_cursor", "counts", "labels"}
+    (counts / labels: the source's per-type numbers as they are now, so a grid can refresh its
+    filter after a bulk action, #553). Raises AppError (400, a specific code) for a parameter it
+    can't use."""
     if sort not in SORTS:
         raise _bad("bad_sort", f"sort {sort!r} is not one of {', '.join(SORTS)}")
     if filed not in FILED_MODES:
@@ -211,7 +290,7 @@ def page(by_type, unfiled, show_all_revs, tab, filed, sort, cursor, limit):
         raise _bad("bad_type", f"type {tab!r} has no files you can see; the types here are: "
                                f"all, {', '.join(sorted(by_type)) or '(none)'}")
     limit = parse_limit(limit)
-    view_key = _view_key(tab, filed, sort, show_all_revs)
+    view_key = _view_key(tab, filed, sort, show_all_revs, source)
     rows = view_rows(by_type, tab, filed, sort, unfiled)
     start = 0
     if cursor:
@@ -225,4 +304,6 @@ def page(by_type, unfiled, show_all_revs, tab, filed, sort, cursor, limit):
         "unfiled_slugs": [r["slug"] for r in chunk if r["slug"] in unfiled],
         "total": len(rows),
         "next_cursor": _next_cursor(rows, end, view_key),
+        "counts": counts(by_type, unfiled),
+        "labels": type_labels(by_type),
     }

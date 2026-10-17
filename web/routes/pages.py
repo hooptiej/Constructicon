@@ -9,9 +9,9 @@ from pathlib import Path
 from core import card_rules, cards, curation_queue, curator, db, install_config, item_title, markdown_render, object_types, revisions, timeline
 from core import hobbies, physical_piece, provenance_options
 from core.db import BRAND_ROLES
-from web import files_feed
+from web import files_feed, item_grid
 from web.common import _build_breadcrumbs, _rev_note, templates
-from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _hobby_cover, _hobby_cover_usable, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_hobby_face, _to_object_detail, _to_public, _to_timeline_project
+from web.shapes import _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _hobby_cover, _hobby_cover_usable, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_hobby_face, _to_object_detail, _to_public, _to_timeline_project
 from core import access_log, actor as actor_ctx, policy, roles, users
 from web.shapes import actor_label
 from web.roles import RoleRouter, requires
@@ -105,8 +105,9 @@ def _home_context(request, hobby, ref, rev):
     # uploads gets a tab and "all files" really means all of them. The page embeds only the first
     # batch of the default view plus the counts and the cursor for more; the rest is served a page at a
     # time by GET /api/home/files (web/files_feed.py, which also keeps the visibility rules).
-    by_type, older_revs, unfiled = files_feed.load(show_all_revs)
-    files_seed, files_meta = files_feed.initial(by_type, unfiled, show_all_revs)
+    # #553: the panel is the shared file grid (web/item_grid.py, templates/_item_grid.html).
+    files_grid, older_revs = item_grid.build("files", files_feed.HOME, show_all_revs, grid_class="cx-item-grid files-scroll",
+                                             empty_text="No files yet.", filed_key="constructicon.filesFiled")
     # Timeline feature: the gallery rail shows every project (including
     # children, with an is_child flag) in date order -- deliberately built
     # from all_projects, not the top-level-only `projects` local above that
@@ -141,8 +142,7 @@ def _home_context(request, hobby, ref, rev):
         "reference_objects": reference_objects,  # #370 follow-up: loose reference objects
         "owner_name": _owner_label,
         "owner_initials": _owner_initials,
-        "files_seed": files_seed,
-        "files_meta": files_meta,
+        "grid": files_grid,
         "rev_note": _rev_note(request, older_revs, show_all_revs),
         "timeline_projects": timeline_projects,
     }
@@ -361,13 +361,15 @@ def unfiled_page(request: Request, rev: str = ""):
     with bulk selection/filing tools the widget has no room for. Reuses the
     exact same db.list_unfiled_items()/_to_public() data shape the widget
     already uses, so the gallery-card markup is identical everywhere."""
-    rows, n_sup = _split_revisions(policy.filter_visible(db.list_unfiled_items(include_superseded=True)),
-                                   rev == "all")  # #477, #557
-    unfiled_items = _card_items(rows)
+    # #553: the shared file grid, source "unfiled" (no All/Unfiled/Filed toggle: it would always
+    # say Unfiled; no unfiled lamp, every card would carry it). Selecting is always on here.
+    grid, n_sup = item_grid.build("unfiled", ("unfiled", None), rev == "all", filters=("type",), select_default=True,
+                                  href_from="unfiled", layouts=True, grid_class="cx-item-grid cx-item-grid-roomy",
+                                  empty_text="No unfiled items — everything's been filed.", unfiled_lamp=False,
+                                  count_suffix=" not yet added to a project.")
     return templates.TemplateResponse(
         request, "unfiled.html",
-        {"unfiled_items": unfiled_items, "file_provenance_options": provenance_options.picker_options("file"),
-         "rev_note": _rev_note(request, n_sup, rev == "all")},
+        {"grid": grid, "rev_note": _rev_note(request, n_sup, rev == "all")},
     )
 
 
@@ -436,7 +438,11 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
 
     loose_rows, n_sup = _split_revisions(policy.filter_visible(db.list_loose_hobby_objects(hobby["id"], include_superseded=True)),
                                      rev == "all")  # #477, #557
-    loose = _card_items(loose_rows)
+    # #553: the loose objects are the shared file grid (source hobby:<slug>), seeded from these rows.
+    loose_grid, _ = item_grid.build("loose", ("hobby", hobby["slug"]), rev == "all",
+                                    loaded=(files_feed.group_by_type(loose_rows), n_sup, files_feed.unfiled_slugs()),
+                                    grid_class="cx-item-grid cx-item-grid-roomy", empty_text="No loose objects.",
+                                    count_noun=("loose object", "loose objects"))
     cover_choices = _hobby_cover_choices(cover, projects, loose_rows)
     start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
@@ -449,7 +455,8 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
             "active_nodes": active_roots,
             "inactive_nodes": inactive_roots,
             "project_count": len(projects),
-            "loose_items": loose,
+            "loose_count": len(loose_rows),
+            "grid": loose_grid,
             "rev_note": _rev_note(request, n_sup, rev == "all"),
             "dates_label": hobby_face["dates"],
             "dates_start": _friendly_date(start) if start else None,
@@ -508,14 +515,14 @@ def wallpaper_page(request: Request):
 
 @router.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str, rev: str = ""):
-    # #563: no 1000-row cap (it made "1000 uploads" of 1,640). The page embeds the whole list and
-    # the ItemCards pager (batches of 120) draws it lazily, so the count is the true total.
-    rows, n_sup = _split_revisions(policy.filter_visible(db.search(uploaded_by=uploader, limit=10_000_000)),
-                                   rev == "all")  # #477, #557
-    items = _card_items(rows)
+    # #563: no 1000-row cap (it made "1000 uploads" of 1,640). #553: the shared file grid, server-paged
+    # (source user:<uploader>): the page embeds the first batch and the count of every row, and
+    # GET /api/items/grid serves the rest, so the count and the list are both complete.
+    grid, n_sup = item_grid.build("uploads", ("user", uploader), rev == "all", href_from=f"user:{uploader}",
+                                  empty_text="No uploads yet.")
     return templates.TemplateResponse(
         request, "user_gallery.html",
-        {"uploader": uploader, "uploader_display": uploader, "items": items,
+        {"uploader": uploader, "uploader_display": uploader, "grid": grid,
          "rev_note": _rev_note(request, n_sup, rev == "all")},
     )
 

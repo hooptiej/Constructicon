@@ -41,20 +41,15 @@ def read(rel):
 
 
 # --- 1. fields the JS reads ---------------------------------------------------------------
-# Item variable names per file: cards.js uses `item`; pages use item / it / a / b in sorters.
+# Item variable names per file: cards.js uses `item`. #553: the four pages' own grid scripts are gone;
+# the one consumer besides the renderer is the shared grid, static/js/item-grid.js.
 JS_SOURCES = {
     "web/static/js/cards.js": ("item",),
-    "web/templates/home.html": ("item", "a", "b"),
-    "web/templates/unfiled.html": ("item", "a", "b"),
-    "web/templates/user_gallery.html": ("item", "a", "b"),
-    "web/templates/hobby.html": ("it", "a", "b"),
+    "web/static/js/item-grid.js": ("item",),  # #553: every file grid's controls
     "web/static/js/item-sort.js": ("it",),  # #622: the one Sort every grid uses
 }
 # Properties of non-item objects that share a variable name in those files (a / b / item).
-NOT_ITEM_FIELDS = {
-    "web/templates/home.html": {"dataset", "title", "id", "name", "slug_"},
-    "web/templates/hobby.html": {"dataset", "title", "id", "name"},
-}
+NOT_ITEM_FIELDS = {}
 
 whitelist = set(webapp.CARD_ITEM_FIELDS)
 for rel, names in JS_SOURCES.items():

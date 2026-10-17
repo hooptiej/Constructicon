@@ -106,7 +106,8 @@ def api_create_project_from_selection(slugs: list[str] = Form(...), title: str =
     with db.transaction():
         project = cards.create(title, batch_id=batch_id).data["card"]
         membership.add_files(project["id"], slugs, missing_ok=True, batch_id=batch_id, **membership.UI_EFFECTS)
-    return JSONResponse(_to_project_option(project))
+    # #553: + batch_id, so the file grids' "Turn into card" offers Undo like their other bulk actions
+    return JSONResponse({**_to_project_option(project), "batch_id": batch_id})
 
 
 @router.post("/api/projects/from-related")

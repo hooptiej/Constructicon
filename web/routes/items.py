@@ -869,6 +869,22 @@ def api_home_files(media_type: str = Query("all", alias="type"), filed: str = "a
         return JSONResponse(files_feed.page(by_type, unfiled, rev == "all", media_type, filed, sort, cursor, limit))
 
 
+@router.get("/api/items/grid", dependencies=requires(roles.VIEWER))
+def api_item_grid(source: str = "home", media_type: str = Query("all", alias="type"), filed: str = "all",
+                  sort: str = files_feed.DEFAULT_SORT, cursor: str = "", limit: str = "", rev: str = ""):
+    """(#553) One page of any file grid (templates/_item_grid.html, static/js/item-grid.js): the
+    home Files panel, /unfiled, an uploader's gallery or a hobby's loose objects. `source` is home |
+    unfiled | user:<uploader> | hobby:<slug> (400 bad_source; an unknown hobby is 404); every other
+    parameter, the answer and the errors are /api/home/files' (which is this with source=home), plus
+    `counts` / `labels` (the source's per-type numbers now, for the grid's type filter). Each source
+    lists exactly what its page lists (web/files_feed.py; browse clause, policy.filter_visible,
+    revision split), so a restricted item never appears."""
+    src = files_feed.parse_source(source)
+    with db.read_session():
+        by_type, _, unfiled = files_feed.load(rev == "all", src)
+        return JSONResponse(files_feed.page(by_type, unfiled, rev == "all", media_type, filed, sort, cursor, limit, src))
+
+
 @router.get("/api/clients", dependencies=requires(roles.VIEWER))
 def api_clients(request: Request):
     return JSONResponse(db.list_clients())
@@ -899,6 +915,16 @@ def api_bulk_sensitive(slugs: list[str] = Form(...), sensitive: str = Form("true
     result = items.set_sensitive(slugs, _form_bool(sensitive))
     return JSONResponse({"count": len(result.data["changed"]), "batch_id": result.batch_id,
                          "sensitive": result.data["sensitive"]})
+
+
+@router.post("/api/bulk/provenance")
+def api_bulk_provenance(slugs: list[str] = Form(...), provenance: str = Form(...)):
+    """#553: the file grids' bulk "Set provenance" (was one POST /api/image/{slug} per file, so one
+    selection made N undo entries and the page showed none). One items.set_provenance batch for the
+    whole selection, undone by its batch_id. Same validation as the item Save (an active file
+    provenance key, else 400); every slug must be visible (404 otherwise, nothing written)."""
+    result = items.set_provenance(slugs, provenance)
+    return JSONResponse({"count": len(result.data["changed"]), "batch_id": result.batch_id})
 
 
 @router.post("/api/bulk/attach-tags")

@@ -6,7 +6,9 @@ variants) are zips of XML, so properties, text and the embedded preview
 image come straight out with the standard library (zipfile + ElementTree):
 no python-docx/python-pptx. Old binary files (.doc/.xls/.ppt) are OLE
 compound files; olefile (already a dependency, #444) reads their summary
-properties. A password-protected OOXML file is also an OLE container (an
+properties; word.py and powerpoint.py read the text of Word 97+ .doc and
+PowerPoint 97+ .ppt themselves with olefile (#724, read_ole_stream below).
+A password-protected OOXML file is also an OLE container (an
 "EncryptedPackage" stream), so it's recognised and reported rather than
 refused.
 
@@ -53,6 +55,20 @@ def ole_streams(path):
     import olefile
     with olefile.OleFileIO(str(path)) as ole:
         return {"/".join(e) for e in ole.listdir()}
+
+
+def read_ole_stream(ole, name, cap=None):
+    """#724: one stream of an open olefile.OleFileIO as bytes, refused (ValueError) when it's larger
+    than `cap` (default MAX_PART_BYTES), like read_part for an OOXML part. A missing stream raises
+    too (callers check first)."""
+    cap = cap or MAX_PART_BYTES
+    size = ole.get_size(name)
+    if size > cap:
+        raise ValueError(f"{name} stream too large ({size:,} bytes, cap {cap:,})")
+    data = ole.openstream(name).read()
+    if len(data) < size:
+        raise ValueError(f"{name} stream truncated ({len(data):,} of {size:,} bytes)")
+    return data
 
 
 def is_encrypted_ooxml(path):

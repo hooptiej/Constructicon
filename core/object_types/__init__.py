@@ -318,6 +318,11 @@ class ObjectTypeSpec:
     # type, or a dict {extension: note} for a type spanning several formats (a key "" is the
     # type-wide fallback). Unset: "<label>: no readable text".
     ocr_unsupported_note: object = ""
+    # #724: where text_extract_fn's text comes from, recorded as type_metadata.text_source when
+    # core/ocr.py stores text it returned (one of ocr | text_layer | office | transcript |
+    # description | page, the #724 convention). Unset: nothing is recorded. Text OCR'd from a
+    # picture never carries this type's source (and clears a stale one).
+    text_source: str = ""
 
 
 OBJECT_TYPES = {}

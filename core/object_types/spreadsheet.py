@@ -58,6 +58,14 @@ def _cell(value):
     return text if len(text) <= CELL_CHARS else text[:CELL_CHARS - 1] + "…"
 
 
+def _search_text(value):
+    """A cell value as search text (no length cap). #724: xlrd gives every .xls number as a float,
+    so a whole number reads 12, not 12.0."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 def _trim(grid):
     """Drop trailing empty rows/columns from a preview grid."""
     while grid and not any(grid[-1]):
@@ -168,7 +176,7 @@ def extract_text_for_row(row):
                     sh = book.sheet_by_index(i)
                     out.append(f"[{sh.name}]")
                     for r in range(sh.nrows):
-                        line = "\t".join(str(v) for v in sh.row_values(r) if v not in ("", None))
+                        line = "\t".join(_search_text(v) for v in sh.row_values(r) if v not in ("", None))
                         if line:
                             out.append(line)
                             size += len(line)
@@ -186,7 +194,7 @@ def extract_text_for_row(row):
                 for ws in wb.worksheets:
                     out.append(f"[{ws.title}]")
                     for r in ws.iter_rows(values_only=True):
-                        line = "\t".join(str(v) for v in r if v not in ("", None))
+                        line = "\t".join(_search_text(v) for v in r if v not in ("", None))
                         if line:
                             out.append(line)
                             size += len(line)

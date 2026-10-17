@@ -2399,10 +2399,23 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
         conn.close()
 
 
-def set_extracted_text(slug, text):
+def set_extracted_text(slug, text, source=None):
+    """#724: `source` is where the text came from (the type's text_source, e.g. 'office'), stored
+    as type_metadata.text_source in the same UPDATE; None clears a stale one (text OCR'd from a
+    picture, or emptied). A row whose type_metadata isn't valid JSON keeps it as it is."""
+    if source:
+        meta_sql = ("type_metadata = CASE WHEN type_metadata IS NULL OR type_metadata = '' "
+                    "THEN json_object('text_source', ?) WHEN json_valid(type_metadata) "
+                    "THEN json_set(type_metadata, '$.text_source', ?) ELSE type_metadata END")
+        meta_args = (source, source)
+    else:
+        meta_sql = ("type_metadata = CASE WHEN json_valid(type_metadata) "
+                    "THEN json_remove(type_metadata, '$.text_source') ELSE type_metadata END")
+        meta_args = ()
     conn = get_conn()
     try:
-        conn.execute("UPDATE capture_events SET extracted_text = ? WHERE slug = ?", (text, slug))
+        conn.execute(f"UPDATE capture_events SET extracted_text = ?, {meta_sql} WHERE slug = ?",
+                     (text, *meta_args, slug))
         conn.commit()
     finally:
         conn.close()

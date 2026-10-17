@@ -304,5 +304,7 @@ def _run_ocr_pipeline(slug, row, spec):
             _compute_similarity_signals(slug, image_path, text)
 
     text = text.strip()
-    db.set_extracted_text(slug, text)
+    # #724: text the type's own reader returned records where it came from (type_metadata.text_source);
+    # text OCR'd from a picture records none, and clears a stale one.
+    db.set_extracted_text(slug, text, source=(spec.text_source or None) if extracted else None)
     db.set_ocr_status(slug, "done")

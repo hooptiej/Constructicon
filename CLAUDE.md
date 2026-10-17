@@ -633,7 +633,14 @@ otherwise, both keeping the name (`filename*=` / `filename=`); those inline type
 renamed `.pdf` is still HTML (attachment + CSP). The object page's link follows the same set
 (`object_types.original_link(item)`, used by `_preview.thumb_with_original_link` and `object_detail.html`):
 "View original <Type>" in a new tab, or "Download original <Type>" in place. Check with
-`scripts/test_view_original_701.py`. **Any new route that streams a stored file must go through
+`scripts/test_view_original_701.py`. **#703, the raw view** (`/f/<slug>/raw`, viewer, the same
+`policy.require_file` door and view log as `/f/<slug>`): a type with `ObjectTypeSpec.raw_text_fn` (only
+`code`) shows its file as `text/plain; charset=utf-8`, `inline` under its original name, nosniff, and the
+sandbox CSP on every response (`content_security.serve_raw_text`). It is never served as its own type,
+so markup inside (HTML in a `.py`, a PHP template) shows as text and cannot run; UTF-16/32 is transcoded to
+UTF-8. When the type's function says no (binary, over `code.RAW_MAX_BYTES` = 32 MB), or the type has no
+raw view, the route answers exactly what `/f/<slug>` would (for code, the download). Check with
+`scripts/test_raw_view_703.py`. **Any new route that streams a stored file must go through
 `content_security.serve_file` (or add `file_headers`)**, never a bare `FileResponse` on a user file.
 Thumbnails are generated JPEGs (nosniff only). Check with `scripts/test_f_sandbox_610.py`. Longer term: a
 separate user-content origin.
@@ -1317,7 +1324,7 @@ To add a new object type (issue #448 contract v2):
 
 2. **Required fields**: Every type must declare `preview_fn` and `properties_fn` at registration (enforced, will raise `ObjectTypeContractError` otherwise).
 
-3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), and `sniff_priority` (for resolution when multiple sniffers claim the same extension).
+3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), `raw_text_fn` (#703: `(path) -> codec or None`, whether `/f/<slug>/raw` may show this file as plain text; `code` has one), and `sniff_priority` (for resolution when multiple sniffers claim the same extension).
 
 4. **Preview guidance**: previews must escape all data (no raw HTML from untrusted sources; build with `_preview.py` helpers or `markupsafe.escape`) and handle `ctx.mode`: `"live"` (object page) and `"export"` (static site; most types render export markup via the helpers, some deliberately return the download link or `None` to keep the export as it was). A preview that needs its own file reads `ctx.file_path`; never guess at item-dict keys. **Anything expensive goes in `embedded_metadata_fn` (computed once at upload, stored in `type_metadata`), never in `preview_fn`/`properties_fn`, which run on every page view.** Measured lesson: per-view STL mesh parsing took 7.9 s on a real 22 MB file.
 
@@ -1336,8 +1343,9 @@ To add a new object type (issue #448 contract v2):
 - **A preview never carries the whole file.** `code` reads only the head of the stored file
   (`_textstats.read_head_lines`: at most 2,000 lines, 200 K characters and 140 K of escaped markup, so the
   object page stays near 300 KB whatever the file size), says "Showing the first N of M lines" (the count reads
-  at most 64 MB: "at least" past that) with Download (and Open raw, except for `.html`: a raw HTML file served from
-  `/f/<slug>` runs as a page in the app's own origin), and leaves the block unhighlighted above 60 K characters
+  at most 64 MB: "at least" past that) with Download and Open raw (#703: `/f/<slug>/raw`, the source as plain
+  text in a new tab; offered only when `code.raw_text_codec` says the file is showable text, and not for `.html`,
+  which has its Rendered / Code toggle instead), and leaves the block unhighlighted above 60 K characters
   (`data-nohl`). **`extracted_text` is never embedded in the page**: the template gets only
   `item.extracted_text_chars`; the OCR/text panel fetches `GET /api/image/{slug}/text?limit=` on first open
   (viewer, item policy, default 100,000 characters, hard cap 1,000,000, also returns `ocr_status` for the OCR
@@ -1835,7 +1843,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
     `test_restart_sidecar_643`, `check_compose_ollama` (the compose example's Ollama sidecar, #687);
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
-    `test_email_type`, `test_traditional_media`, `test_office` (live);
+    `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live);
   - pages, search, dates, UI: `test_search_543`, `test_item_title_542`, `test_mountain_time_544` (`.py` and
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
@@ -1850,7 +1858,9 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_release` (the CalVer logic), `check_dependency_audit` (known advisories in the installed
     packages; needs network, see above), `check_image_layout` (#688: the Dockerfile bakes the code in
     after the pip layers, `.dockerignore` keeps secrets/data/.git/tests out, the example compose mounts
-    no code; text only, no Docker).
+    no code; text only, no Docker), `check_text_bytes` (#706: no NUL or other C0 control byte besides
+    tab/LF/CR in the `.css .js .html .py .md .json .txt` files under `web/`, `core/`, `mcp_server/` and
+    `scripts/`; `--all` scans the whole repo, report only; its own test is `test_text_bytes_706`).
 - Besides the runner, **the `constructicon-test` container** (below) is where a change is exercised
   against a copy of real data before prod.
 

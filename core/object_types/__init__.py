@@ -264,6 +264,11 @@ class ObjectTypeSpec:
     # (max 700 px, the side panel beside it); "table" gives a wide table the whole page width
     # (the side panel moves below it). The data and spreadsheet types say "table".
     preview_layout: str = "default"
+    # #703: (path: Path) -> the codec to show the stored file as plain text in the browser
+    # (`/f/<slug>/raw`: text/plain; charset=utf-8, inline, nosniff, sandbox CSP), or None when this
+    # file isn't showable text (binary, too big), in which case the raw view is the download.
+    # None here = the type has no raw view at all. Read only a little of the file; never raise.
+    raw_text_fn: object = None
     # Issue #448: content-based detection for file uploads.
     # (path: Path, filename: str) -> bool — True if this file's bytes match the type.
     # If None, extension-only matching; if present, called after extension match.
@@ -462,6 +467,23 @@ def original_link(item):
     if opens_in_browser(item.get("filename")):
         return {"label": f"View original {kind}", "new_tab": True}
     return {"label": f"Download original {kind}", "new_tab": False}
+
+
+def raw_url(slug):
+    """#703: the raw plain-text view of an item's stored file."""
+    return f"/f/{slug}/raw"
+
+
+def raw_text_codec(spec, path):
+    """#703: the codec `/f/<slug>/raw` reads the file at `path` with (from the type's `raw_text_fn`),
+    or None when the type has no raw view or this file isn't showable text. Never raises."""
+    if spec is None or spec.raw_text_fn is None or not path:
+        return None
+    try:
+        return spec.raw_text_fn(path) or None
+    except Exception as e:
+        print(f"raw_text_fn failed for {spec.key}: {e!r}")
+        return None
 
 
 def render_preview(spec, ctx):

@@ -19,13 +19,17 @@ video, audio, plain text: `object_types.BROWSER_VIEWABLE_TYPES`) is served `inli
 opens the browser's own viewer; anything else (STL, PSD, ZIP, EXE, fonts, ...) stays `attachment`. Both
 keep the original name (`filename*=` / `filename=`), so Save-as names the file right. The decision uses
 the detected kind first: a file that sniffs as HTML is a download whatever its name says.
+
+#703, the raw view (`/f/<slug>/raw`, `serve_raw_text`): a type with a `raw_text_fn` (source code) shows
+its file as `text/plain; charset=utf-8`, inline, nosniff, with the sandbox CSP on every response. It is
+never served as its own type, so markup in it (HTML in a .py, a PHP template) is shown as text, not run.
 """
 
 import mimetypes
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from core import object_types
 
@@ -146,6 +150,32 @@ def _headers_for(kind, path, name):
 def file_headers(path, name=None, media_type=None):
     """The security headers for serving the stored file at `path` (its original name `name`)."""
     return _headers_for(active_kind(path, name, media_type), path, name)
+
+
+RAW_TEXT_TYPE = "text/plain; charset=utf-8"
+
+
+def raw_text_headers(filename):
+    """#703: the headers of the raw plain-text view: inline under the original name, nosniff, and the
+    sandbox CSP on every one (belt and braces: text/plain + nosniff already can't render markup, so an
+    HTML/SVG/XML file shown here as text is no #610 hole, and the CSP holds even if a browser
+    disagreed)."""
+    headers = dict(NOSNIFF)
+    headers["Content-Security-Policy"] = RENDERED_HTML_CSP
+    headers["Content-Disposition"] = content_disposition("inline", filename)
+    return headers
+
+
+def serve_raw_text(path, filename, codec):
+    """#703 `/f/<slug>/raw`: the stored file as `text/plain; charset=utf-8`, never as its own type (so
+    never text/html, whatever it sniffs as). `codec` is what the type's raw_text_fn said (UTF-8 files
+    stream as they are; UTF-16/32 are transcoded to UTF-8). The type caps the size before this runs."""
+    headers = raw_text_headers(filename or Path(str(path)).name)
+    if codec.replace("-sig", "") == "utf-8":
+        return FileResponse(path, media_type=RAW_TEXT_TYPE, headers=headers)
+    with open(path, "rb") as fh:
+        body = fh.read().decode(codec, errors="replace").encode("utf-8")
+    return Response(body, media_type=RAW_TEXT_TYPE, headers=headers)
 
 
 def serve_file(path, filename=None, type_name=None):

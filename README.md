@@ -254,7 +254,8 @@ are kept). Database migrations only go forward, so a rollback across a migration
 database restored from the pre-deploy backup.
 
 **Backups.** Before every deploy and rollback, deploy.sh backs up the data
-(`./scripts/deploy.sh --backup-plan` says which kind, and changes nothing):
+(`./scripts/deploy.sh --backup-plan` says which kind, and changes nothing; a dev/test instance,
+one whose web service sets `CONSTRUCTICON_ENV=dev`, skips it):
 - **ZFS snapshot**, when the data folder's parent is a ZFS dataset of its own (the home server).
 - **Otherwise, a copy of the database folder**, made with SQLite's backup API (consistent even with
   the app running; never a raw copy of a live database), into `predeploy-backups/<name>/` next to

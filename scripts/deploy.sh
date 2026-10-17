@@ -54,6 +54,8 @@
 # app image (no network, as the data folder's owner uid), into <instance>/predeploy-backups/<name>/
 # (0700, files 0600), and keeps the newest $SNAPSHOT_KEEP. storage/ is NOT copied (too big; keep
 # your own file backups). Restore: stop the app, copy the files back into the db folder, start it.
+# The dev/test instance (web service CONSTRUCTICON_ENV=dev) takes NO pre-deploy backup at all
+# (owner decision 2026-10-17); every other install takes one of the two above.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -124,7 +126,8 @@ detect_docker() {
 
 # #688: one read of the effective compose config. Sets WEB_SVC (the app's web service: "web" on
 # the NAS, "constructicon-web" in the example), WEB_IMAGE (its image: tag), CODE_MOUNTED (1 when
-# /app/core is bind-mounted) and DATA_SRC (host path mounted at /app/data).
+# /app/core is bind-mounted), DATA_SRC (host path mounted at /app/data) and WEB_ENV (the web
+# service's CONSTRUCTICON_ENV, "dev" on the test/dev instance, #310).
 read_compose() {
   eval "$("${DOCKER[@]}" compose config --format json | python3 -c 'import json, shlex, sys
 c = json.load(sys.stdin).get("services", {})
@@ -133,11 +136,15 @@ if not name:
     name = next((n for n, s in c.items() if "web.app:app" in " ".join(s.get("command") or [])), "")
 s = c.get(name, {})
 vols = s.get("volumes", [])
+env = s.get("environment") or {}
+if isinstance(env, list):
+    env = dict(e.split("=", 1) if "=" in e else (e, "") for e in env)
 out = {
     "WEB_SVC": name,
     "WEB_IMAGE": s.get("image", ""),
     "CODE_MOUNTED": "1" if any(v.get("target") == "/app/core" for v in vols) else "",
     "DATA_SRC": next((v.get("source", "") for v in vols if v.get("target") == "/app/data"), ""),
+    "WEB_ENV": str(env.get("CONSTRUCTICON_ENV") or "").strip().lower(),
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(v)}")')"
@@ -147,11 +154,20 @@ for k, v in out.items():
   fi
 }
 
-# #698: which pre-deploy backup this host can take. Sets BACKUP_KIND (zfs | copy | none),
+# #698: which pre-deploy backup this host can take. Sets BACKUP_KIND (skip | zfs | copy | none),
 # BACKUP_WHY (why, in words) and, for zfs, ZFS_DS (the dataset).
 plan_backup() {
   local src="$DATA_SRC" inst fstype mnt
   BACKUP_KIND="" BACKUP_WHY="" ZFS_DS=""
+  # Owner decision 2026-10-17: the dev/test instance never takes a pre-deploy backup (as before
+  # #698); every other install does, ZFS or not. The signal is the web service's
+  # CONSTRUCTICON_ENV=dev, the app's own "this is the dev instance" marker (the DEV- tab title,
+  # the -dev version suffix). Not the code mounts: an override can be dropped on test for a baked
+  # check (still test), and nothing stops another install from using one (not test).
+  if [ "$WEB_ENV" = dev ]; then
+    BACKUP_KIND=skip BACKUP_WHY="dev/test instance: CONSTRUCTICON_ENV=dev; owner decision 2026-10-17"
+    return 0
+  fi
   if [ -z "$src" ]; then
     BACKUP_KIND=none BACKUP_WHY="the web service has no /app/data mount"
     return 0
@@ -188,6 +204,9 @@ snapshot_before_deploy() {
   local name
   plan_backup
   case "$BACKUP_KIND" in
+    skip)
+      echo "Pre-deploy backup: skipped ($BACKUP_WHY)."
+      return 0 ;;
     none)
       echo "Pre-deploy backup: none ($BACKUP_WHY); skipping."
       return 0 ;;

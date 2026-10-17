@@ -1655,6 +1655,18 @@ configuration gap for that session, not evidence the server itself is gone.
   `captions.queue_skipped()`) queues every caption-capable item that never got a caption (or whose
   caption failed or was skipped) and has no description; with captions off it answers 409
   `captions_disabled`. Check with `scripts/test_captions_mcp.py` (throwaway DB).
+- **Extracted text is a preview in multi-item results (#697).** One search used to return every
+  match's whole `extracted_text` (224,000 characters for 5 matches on the work install). Now every tool
+  that returns many items (`search`, `get_posts_for_tag`, `get_project` items and cover, `get_related`,
+  `add_related` / `remove_related`, `add_items_to_project`, `list_redacted`, `list_restricted`,
+  `list_brand_assets`, a blog entry's items) sends `_to_public_listed(row)`: `extracted_text` is a
+  window of `TEXT_PREVIEW_CHARS` (300) characters around the first query word found in it (word start,
+  case and accents folded, like the search; else the start), with "…" at each cut end, plus
+  `extracted_text_chars` (full length) and `extracted_text_truncated`. `search`, `get_posts_for_tag` and
+  `get_project` take `text_chars` (0 = no text, capped at `TEXT_PREVIEW_MAX_CHARS` = 5,000). Single-item
+  tools (`constructicon_get`, the setters) still send the WHOLE text, uncapped (one item by design; a
+  window-by-offset read for very long single items is not built). `get_project`'s write-up object is
+  sent whole. Check with `scripts/test_mcp_search_cap_697.py` (throwaway DB).
 - `mcp_server/server.py` still carries some stale-vocabulary rough edges
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.
@@ -1859,7 +1871,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
   (plus the Dockerfile's `torch==` pin) doesn't pin, or pins at another version, on a non-`==` line, on a
   stale pin, and on a torch that isn't the `+cpu` build. Fix by pinning what the image actually has.
   `pip` is allowed unpinned (its `ALLOWED` dict): it comes from the base image, which the Dockerfile pins
-  by digest (the comment above `FROM` says how to bump it). Outside the app image (Windows, a venv) it
+  by digest (the comment above `FROM` says how to bump it; `ops/ollama-restarter/Dockerfile` pins the
+  same digest, so bump both together, #696). Outside the app image (Windows, a venv) it
   prints SKIPPED. Until #668's full pin (PR #674) lands it reports the 9 unpinned py7zr/openpyxl helpers.
 - **Dependency audit (#650): run it with network before a PR that touches `requirements.txt` or the
   Dockerfile, and now and then on `main`** (new advisories appear for versions that were clean):
@@ -1901,7 +1914,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_restart_sidecar_643`, `check_compose_ollama` (the compose example's Ollama sidecar, #687);
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
     `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live);
-  - pages, search, dates, UI: `test_search_543`, `test_item_title_542`, `test_mountain_time_544` (`.py` and
+  - pages, search, dates, UI: `test_search_543`, `test_mcp_search_cap_697` (MCP text previews), `test_item_title_542`, `test_mountain_time_544` (`.py` and
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
     `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
@@ -1915,7 +1928,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_release` (the CalVer logic), `check_dependency_audit` (known advisories in the installed
     packages; needs network, see above), `check_image_layout` (#688: the Dockerfile bakes the code in
     after the pip layers, `.dockerignore` keeps secrets/data/.git/tests out, the example compose mounts
-    no code; text only, no Docker), `check_text_bytes` (#706: no NUL or other C0 control byte besides
+    no code; #696: every `FROM` in every Dockerfile in the repo is pinned by `@sha256:` digest and the
+    ollama-restarter uses the app's exact base image; text only, no Docker), `check_text_bytes` (#706: no NUL or other C0 control byte besides
     tab/LF/CR in the `.css .js .html .py .md .json .txt` files under `web/`, `core/`, `mcp_server/` and
     `scripts/`; `--all` scans the whole repo, report only; its own test is `test_text_bytes_706`).
 - Besides the runner, **the `constructicon-test` container** (below) is where a change is exercised

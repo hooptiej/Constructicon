@@ -10,6 +10,8 @@ Covers:
 - the disposition table per type through `content_security.serve_file`: PDF, JPEG, PNG, GIF, WebP, MP4,
   MP3, TXT inline; STL, ZIP, PSD, EXE, TTF attachment; HTML/XHTML attachment + sandbox CSP; SVG inline +
   CSP; XML CSP; an HTML file named .pdf / .jpg treated as HTML; nosniff on every one;
+- #723: WAV/M4A/FLAC/OGG/AAC inline, MOV a download; every media type alias (`BROWSER_TYPE_ALIASES`)
+  folds into the allowlist; `.wav` guessed as any of its names is served inline as `audio/wav`;
 - the original filename kept (plain, with spaces, with quotes, with unicode);
 - the link label and target per type (`object_types.original_link`, the shared preview helper);
 - real `/f/<slug>` responses and object pages for uploaded PDF, PNG, TXT, STL and ZIP files.
@@ -88,6 +90,13 @@ TABLE = [
     ("clip.mp4", b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom", "inline", False),
     ("song.mp3", b"ID3\x04\x00\x00\x00\x00\x00\x00\xff\xfb\x90\x00", "inline", False),
     ("notes.txt", b"just some notes\n", "inline", False),
+    # #723: WAV plays inline whatever name Python's mimetypes gives it (3.14: audio/vnd.wave)
+    ("tone.wav", b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 24, "inline", False),
+    ("tone.m4a", b"\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00M4A isom", "inline", False),
+    ("tone.flac", b"fLaC\x00\x00\x00\x22" + b"\x00" * 20, "inline", False),
+    ("tone.ogg", b"OggS\x00\x02" + b"\x00" * 20, "inline", False),
+    ("tone.aac", b"\xff\xf1\x50\x80\x00\x1f\xfc", "inline", False),
+    ("clip.mov", b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  ", "attachment", False),  # #701: a download
     ("part.stl", STL, "attachment", False),
     ("bundle.zip", ZIP, "attachment", False),
     ("art.psd", b"8BPS\x00\x01" + b"\x00" * 20, "attachment", False),
@@ -144,6 +153,60 @@ p.write_bytes(HTML)
 r = content_security.serve_file(p, type_name="orig.html")
 check("thumb fallback to an HTML original: attachment + CSP", r.headers.get("content-disposition", "").startswith("attachment")
       and r.headers.get("content-security-policy") == CSP, dict(r.headers))
+
+print("\n--- #723: media type aliases (every name Python or a host's mime.types may give) ---")
+import mimetypes  # noqa: E402
+ALIASES = {
+    "audio/wav": "audio/wav", "audio/x-wav": "audio/wav", "audio/wave": "audio/wav",
+    "audio/vnd.wave": "audio/wav", "audio/x-pn-wav": "audio/wav",
+    "audio/mp4": "audio/mp4", "audio/x-m4a": "audio/mp4", "audio/m4a": "audio/mp4",
+    "audio/flac": "audio/flac", "audio/x-flac": "audio/flac",
+    "audio/aac": "audio/aac", "audio/x-aac": "audio/aac",
+    "audio/mpeg": "audio/mpeg", "audio/mp3": "audio/mpeg", "audio/x-mp3": "audio/mpeg",
+}
+for alias, canon in ALIASES.items():
+    check(f"{alias}: folds to {canon}", object_types.browser_media_type(alias) == canon,
+          object_types.browser_media_type(alias))
+    check(f"{alias}: opens in browser", object_types.opens_in_browser(media_type=alias))
+    check(f"{alias}; with params, upper case: opens in browser",
+          object_types.opens_in_browser(media_type=alias.upper() + "; codecs=1"))
+    check(f"{alias}: disposition inline", content_security.disposition_for(None, media_type=alias) == "inline")
+check("allowlist holds canonical names only", not (set(object_types.BROWSER_TYPE_ALIASES) & object_types.BROWSER_VIEWABLE_TYPES),
+      set(object_types.BROWSER_TYPE_ALIASES) & object_types.BROWSER_VIEWABLE_TYPES)
+check("every alias folds into the allowlist", set(object_types.BROWSER_TYPE_ALIASES.values()) <= object_types.BROWSER_VIEWABLE_TYPES)
+for mt in ("video/quicktime", "image/tiff", "image/vnd.adobe.photoshop", "audio/x-ms-wma", ""):
+    check(f"{mt or '(none)'}: still not viewable", not object_types.opens_in_browser(media_type=mt))
+
+print("\n--- #723: serve_file with each name Python might guess for .wav ---")
+p = d / "storedwav.wav"
+p.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 24)
+print(f"(this Python guesses .wav as {mimetypes.guess_type('a.wav')[0]})")
+_real_guess = mimetypes.guess_type
+for alias in ("audio/vnd.wave", "audio/x-wav", "audio/wave", "audio/wav"):
+    def _fake(url, strict=True, _alias=alias):
+        return (_alias, None) if str(url).lower().endswith(".wav") else _real_guess(url, strict)
+    mimetypes.guess_type = _fake
+    try:
+        r = content_security.serve_file(p, filename="Tone 1.wav")
+        disp = r.headers.get("content-disposition", "")
+        check(f".wav guessed {alias}: inline", disp.startswith("inline;"), disp)
+        check(f".wav guessed {alias}: content-type audio/wav", r.headers.get("content-type") == "audio/wav",
+              r.headers.get("content-type"))
+        check(f".wav guessed {alias}: link says View", object_types.original_link({"filename": "a.wav", "type_label": "Audio"})
+              == {"label": "View original Audio", "new_tab": True})
+    finally:
+        mimetypes.guess_type = _real_guess
+for name, want_ct in (("x.m4a", "audio/mp4"), ("x.flac", "audio/flac"), ("x.mp3", "audio/mpeg"),
+                      ("x.mov", "video/quicktime"), ("x.pdf", "application/pdf")):
+    q = d / f"ct{name}"
+    q.write_bytes(PDF if name.endswith(".pdf") else b"\x00" * 32)
+    ct = content_security.serve_file(q, filename=name).headers.get("content-type", "")
+    guess = _real_guess(name)[0]
+    # an un-aliased guess goes through untouched (Starlette's own guess); an alias is folded
+    check(f"{name}: content-type {object_types.browser_media_type(guess) or want_ct}",
+          ct.split(";")[0] == (object_types.browser_media_type(guess) or want_ct), ct)
+check(".mov stays a download", content_security.serve_file(d / "ctx.mov", filename="x.mov")
+      .headers.get("content-disposition", "").startswith("attachment;"))
 
 print("\n--- the link: label and target per type ---")
 for fname, tl, want_label, want_tab in (("a.pdf", "PDF", "View original PDF", True),

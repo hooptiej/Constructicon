@@ -630,7 +630,12 @@ with the Rendered view: opaque origin, no script, no network); HTML/XHTML is als
 `<img>` keeps working. **#701:** with an original name, everything else is `inline` when the browser
 shows it itself (PDF, JPEG/PNG/GIF/WebP/AVIF/BMP, MP4/WebM/Ogg video, the common audio types, `text/plain`:
 `object_types.BROWSER_VIEWABLE_TYPES`, an exact allowlist, so PSD/TIFF stay downloads) and `attachment`
-otherwise, both keeping the name (`filename*=` / `filename=`); those inline types are sniffed too, so markup
+otherwise, both keeping the name (`filename*=` / `filename=`). **#723:** the allowlist holds canonical names
+only; `object_types.BROWSER_TYPE_ALIASES` folds the other names Python (by version) or a host's mime.types
+gives the same formats (`audio/vnd.wave` / `audio/x-wav` / `audio/wave` -> `audio/wav`, `audio/x-m4a` ->
+`audio/mp4`, `audio/x-flac` -> `audio/flac`, ...) through `object_types.browser_media_type`, which both the
+inline decision and `serve_file`'s `Content-Type` use (so `.wav` is served `audio/wav`); add an alias there,
+never a second name to the allowlist. `video/quicktime` is deliberately not aliased (.mov stays a download). Those inline types are sniffed too, so markup
 renamed `.pdf` is still HTML (attachment + CSP). The object page's link follows the same set
 (`object_types.original_link(item)`, used by `_preview.thumb_with_original_link` and `object_detail.html`):
 "View original <Type>" in a new tab, or "Download original <Type>" in place. Check with
@@ -1403,8 +1408,8 @@ One generated file of every registered type and extension, to drop-test a new in
   type, thumbnail, text, object page, `/f/` disposition, raw view, content date, and a temporary VIEWER
   account's view: restricted items must 404), then deletes exactly its own slugs and empties the trash only
   when it held nothing else. `--keep` leaves the items. Verdict line `ALL PASS: ...` / `FAILED: ...`.
-- **Known findings it shows:** WAV downloads instead of playing (#723, Python 3.14's `audio/vnd.wave`; the
-  WAV row FAILs until fixed); legacy `.doc/.xls/.ppt` and web links end OCR "failed" (#724, expected there).
+- **Known findings it shows:** legacy `.doc/.xls/.ppt` and web links end OCR "failed" (#724, expected
+  there). (WAV downloading instead of playing, #723, is fixed: its row passes.)
 - **Windows / Defender (owner rule):** the executable-class samples (PE `.exe`, every installer package,
   the zipped `.app`, ELF firmware, the `.dmg`) are written only when `sys.platform` is Linux, and never
   committed: the default output `samples-out/` is gitignored and `.dockerignore` keeps `scripts/` and it out

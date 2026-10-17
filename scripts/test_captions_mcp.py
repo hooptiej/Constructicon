@@ -253,7 +253,10 @@ storage.thumb_path_for(NOVIS).unlink()
 check("view: an item with no visual is not_viewable", server.constructicon_view(NOVIS)["error"]["code"] == "not_viewable")
 policy.can_view = lambda item, actor=None: False
 check("view: goes through the item policy (refused as not_found)", server.constructicon_view(BIG)["error"]["code"] == "not_found")
-check("set_caption tool: goes through the item policy", server.constructicon_set_caption(BIG, "x")["error"]["code"] == "not_found")
+# #709: a WRITE on an item the actor can't see is refused with 403 forbidden saying why (reads stay 404)
+_sc = server.constructicon_set_caption(BIG, "x")["error"]
+check("set_caption tool: goes through the item policy (refused as forbidden, #709)",
+      _sc["code"] == "forbidden" and _sc["details"]["refused"] == [BIG], _sc)
 policy.can_view = _can_view
 
 r1 = server.constructicon_set_caption(BIG, "a noisy grey texture")

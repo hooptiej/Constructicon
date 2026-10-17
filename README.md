@@ -178,6 +178,92 @@ changes before production; they bind-mount the checkout's code over the image
 through a compose override, so a test deploy is a file copy + restart. See [`CLAUDE.md`](CLAUDE.md) for the full deployment
 runbook, data-model notes, and gotchas.
 
+## Install on a new host
+
+Any Linux box with Docker works; the home server's ZFS and `sudo` are not needed (#698, #699).
+
+**Requirements**
+
+- An **x86-64** Linux host (the only architecture built and tested so far).
+- **Docker Engine with the Compose v2 plugin.** `docker compose version` must work: compose is
+  required, and `scripts/deploy.sh` stops with the install link if it's missing (the old standalone
+  `docker-compose` v1 isn't supported). Debian/Ubuntu: `apt install docker-compose-plugin`.
+- `bash`, `git` and `python3` on the host (deploy.sh and the token tool run there).
+- About 4 GB of disk for the image, plus your data.
+- Optional: `sudo`. deploy.sh uses it only when your user can't reach the Docker socket; a user in
+  the `docker` group (or root) deploys without it.
+- Optional: ZFS. With the data in a dataset of its own, each deploy takes a ZFS snapshot first;
+  without it, each deploy copies the database folder first (see "Backups" below).
+
+**1. Get the code and a compose file**
+
+```bash
+git clone https://github.com/hooptiej/Constructicon.git constructicon && cd constructicon
+cp docker-compose.yml.example docker-compose.yml
+```
+
+Edit `docker-compose.yml`: delete the `constructicon-test` service (a second test instance you
+don't need), set `IMAGEREPO_BASE_URL` to this host's address, and either run captions (`docker
+compose --profile captions ...`, or `COMPOSE_PROFILES=captions` in `.env`) or set
+`CAPTION_DISABLED=1` on the web service. Per-install settings live here and in `.env`; nothing about
+your host is baked into the image.
+
+**2. Secrets**
+
+```bash
+mkdir -p secrets && chmod 700 secrets
+python3 -m core.manage.mcp_token generate secrets/constructicon_token     # the install token
+python3 -m core.manage.mcp_token generate secrets/ollama_restart_token    # the compose file mounts it
+```
+
+The install token is what claims the install at first sign-in, and what scripts and MCP clients send
+as `Authorization: Bearer`. Never put it in git or chat.
+
+**3. Data folders, owned by uid 1000 (do this before the first start)**
+
+The app runs as **uid/gid 1000** inside its container, and every folder it writes must be owned by
+that uid on the host. If your user isn't uid 1000 (`id -u`), the app can't write them, and it
+refuses to start with a message naming the folder, its owner and this fix:
+
+```bash
+mkdir -p storage db backups exports import
+sudo chown -R 1000:1000 storage db backups exports secrets
+chmod 0750 storage db backups exports
+```
+
+No sudo? Once the image exists (`docker compose build constructicon-web`), the image can do it:
+`docker run --rm --user 0 --entrypoint chown -v "$PWD/db":/d constructicon:latest -R 1000:1000 /d`
+(once per folder). The example compose file mounts `storage` and `db`; create and chown `backups`
+and `exports` too if you mount them.
+
+**4. First deploy**
+
+```bash
+./scripts/deploy.sh
+```
+
+It fetches `origin/main`, takes the pre-deploy backup (nothing to back up yet on a new install),
+builds the image tagged with the release version (and `constructicon:latest`), and starts it with
+`docker compose up -d`. Then open `http://<host>:8000`: the first visit goes to `/setup`, which
+asks for the install token (`sudo cat secrets/constructicon_token` on the host) and creates the first
+admin. If a container keeps restarting, `docker compose logs constructicon-web` says why.
+
+**Upgrade:** `./scripts/deploy.sh` again. **Roll back** to an earlier version's image:
+`./scripts/deploy.sh --rollback <version>` (`docker image ls constructicon` lists them; the newest 5
+are kept). Database migrations only go forward, so a rollback across a migration also needs the
+database restored from the pre-deploy backup.
+
+**Backups.** Before every deploy and rollback, deploy.sh backs up the data
+(`./scripts/deploy.sh --backup-plan` says which kind, and changes nothing; a dev/test instance,
+one whose web service sets `CONSTRUCTICON_ENV=dev`, skips it):
+- **ZFS snapshot**, when the data folder's parent is a ZFS dataset of its own (the home server).
+- **Otherwise, a copy of the database folder**, made with SQLite's backup API (consistent even with
+  the app running; never a raw copy of a live database), into `predeploy-backups/<name>/` next to
+  `db/`, newest 10 kept. To restore: stop the app, copy the files back into `db/`, start it.
+  Uploaded files (`storage/`) are not in it: back them up your own way, or with Admin's "Back up now" (a zip of the database and storage).
+
+`--no-snapshot` deploys without a backup.
+
 ## Running locally
 
 ```bash

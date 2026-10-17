@@ -280,7 +280,7 @@ def snapshot_urls(v):
          "/healthz", "/api/version", "/api/settings", "/api/pending-decisions", "/api/audit-log?limit=25",
          "/api/redacted", "/api/restricted", "/api/admin/storage-stats", "/api/processing",
          "/api/captions/unreviewed", "/api/captions/defaults", "/api/gallery", "/api/gallery?query=kerbal",
-         "/api/clients", "/api/projects", "/api/provenance-options", "/api/provenance-options?scope=file&include_retired=1",
+         "/api/projects", "/api/provenance-options", "/api/provenance-options?scope=file&include_retired=1",
          "/api/curator/dashboard", "/api/curator/needs", "/api/curator/needs?limit=5", "/api/curator/queue",
          "/api/curator/queue?summary=1", "/api/curator/queue/html", "/api/hobbies", "/api/hobby/does-not-exist",
          "/api/brand-assets", "/api/wallpapers", "/api/blog-entries", "/api/blog-entries?status=draft",

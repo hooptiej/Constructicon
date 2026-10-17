@@ -287,7 +287,9 @@
       return Promise.resolve(doFetch(path, { method: 'POST', body: fd })).then(function (res) {
         return Promise.resolve(res.json ? res.json() : {}).catch(function () { return {}; }).then(function (body) {
           if (res.ok) return body || {};
-          throw new Error((body && body.error && body.error.message) || (body && body.detail) || ('HTTP ' + res.status));
+          var e = new Error((body && body.error && body.error.message) || (body && body.detail) || ('HTTP ' + res.status));
+          e.details = (body && body.error && body.error.details) || {};
+          throw e;
         });
       });
     }
@@ -300,7 +302,9 @@
         undoBar(message(body, slugs.length), body.batch_id || null, function (how) { if (how === 'undone') refresh(); });
         return refresh().then(function () { return body; });
       }, function (err) {
-        warn(failure + ': ' + err.message);
+        // #709: a refusal over items the user can't change already says what happened and why
+        // ("Nothing was changed: 1 of the 3 selected items is marked sensitive, ..."): show it as is.
+        warn(err.details && err.details.refused ? err.message : failure + ': ' + err.message);
         return null;
       });
     }

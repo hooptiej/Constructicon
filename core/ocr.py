@@ -29,16 +29,6 @@ generated thumbnail (video thumbnail, stream OSD frame, URL screenshot) for any 
 OCR-capable type — see core/object_types.py and core/thumbnails.py. A type not marked
 ocr_capable there is skipped entirely, same as a non-image upload always was.
 
-Also auto-tags by matching the extracted text against known client names,
-nicknames, and domains (all synced from Hudu — the company's website plus
-any Cloudflare-managed zones) — fully automatic, no manual tag-mapping
-maintenance. Matching is deliberately permissive (case-insensitive) — false
-positives are cheap to remove via the existing tag UI, so it's tuned to
-catch real matches over avoiding noise. On a single unambiguous match, also
-auto-selects the client field (only if it's currently empty — never
-overrides a manual choice); with more than one match, all are still
-tagged, but none is auto-selected since picking one would just be a guess.
-
 Perceptual hash and text embedding are computed here too, right alongside
 OCR, inside the same OCR_SEMAPHORE slot — both are real CPU work (hashing
 decodes and downsamples the image, embedding runs a small transformer
@@ -52,7 +42,6 @@ just leaves that row without a similarity signal.
 
 import io
 import os
-import re
 import threading
 from pathlib import Path
 
@@ -61,7 +50,6 @@ from PIL import Image, ImageOps, ImageStat
 
 from . import db, object_types, parse_limits, similarity, storage, thumbnails
 
-MIN_NICKNAME_LEN = 3
 OCR_TIMEOUT_SECONDS = 20  # a real screenshot should OCR in a few seconds; past 20s it's not worth the wait
 _OCR_CONCURRENCY = threading.BoundedSemaphore(int(os.environ.get("OCR_MAX_CONCURRENCY", "2")))  # leave headroom on a 4-core box so the app itself stays responsive
 OCR_SEMAPHORE = _OCR_CONCURRENCY  # alias for backward compat with existing code
@@ -86,22 +74,6 @@ os.environ.setdefault("OMP_THREAD_LIMIT", os.environ.get("OCR_OMP_THREAD_LIMIT",
 # fixed contrast multiplier, actively degraded already-clean images.
 MIN_OCR_DIMENSION = 700
 MAX_OCR_DIMENSION = 2000
-
-
-def _match_client_tags(text):
-    if not text:
-        return []
-    matched = []
-    for name, nickname in db.list_client_aliases():
-        if re.search(r"\b" + re.escape(name) + r"\b", text, re.IGNORECASE):
-            matched.append(name)
-            continue
-        if nickname and len(nickname) >= MIN_NICKNAME_LEN and re.search(r"\b" + re.escape(nickname) + r"\b", text, re.IGNORECASE):
-            matched.append(name)
-    for name, domain in db.list_client_domains():
-        if name not in matched and re.search(r"\b" + re.escape(domain) + r"\b", text, re.IGNORECASE):
-            matched.append(name)
-    return matched
 
 
 def _ocr_source_path(row, spec):
@@ -298,12 +270,4 @@ def _run_ocr_pipeline(slug, row, spec):
 
     text = text.strip()
     db.set_extracted_text(slug, text)
-    matched_clients = _match_client_tags(text)
-    if matched_clients:
-        db._add_tags(slug, matched_clients)
-        if len(matched_clients) == 1:
-            # Only auto-select the client field on an unambiguous match — with
-            # more than one, tagging both is useful, but picking one to assign
-            # would just be a guess. Never overrides a client set by hand.
-            db.set_client_if_empty(slug, matched_clients[0])
     db.set_ocr_status(slug, "done")

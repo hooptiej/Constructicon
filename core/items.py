@@ -6,7 +6,7 @@ row written through `db.ImageLog` (row images in the change log), and a `Result`
 actor context, core/actor.py). Undo is the generic `cards.undo` / POST /api/changes/{id}/undo /
 constructicon_undo(batch_id); it calls back into this module for the file side of the trash.
 
-  update(slug, **fields)   title/icon, description, client, content_description, type_metadata
+  update(slug, **fields)   title, description, content_description, type_metadata
                            (merged; physical-piece keys cleaned), file provenance, highlight, brand
                            asset/role, display-date override, content_date. One Save = one batch.
   redact(slug)             "remove file, keep info": the file goes to the trash as a HOLD (no expiry),
@@ -77,18 +77,21 @@ TRASH_DAYS = 7
 TRASH_TTL_SECONDS = TRASH_DAYS * 24 * 3600
 EMPTY_TRASH_PHRASE = "EMPTY TRASH"
 
-UPDATE_FIELDS = ("display_name", "icon", "description", "client", "content_description", "type_metadata",
+UPDATE_FIELDS = ("display_name", "description", "content_description", "type_metadata",
                  "provenance", "highlight", "is_brand_asset", "brand_role", "display_date_override",
                  "content_date", "agent_notes")
 
 
 # --- helpers ---------------------------------------------------------------------------
 
-def get_item(slug):
-    row = db.get_by_slug(slug) if slug else None
-    if row is None:
+def get_item(slug, actor=None):
+    """The item row; NotFound (404 `not_found`) when there is no such row, and the #709 refusal
+    (403 `forbidden`, saying why: policy.refusal) when `actor` (None = the context's) may not see
+    it. Every single-item op refuses a hidden item itself, whichever front end called it."""
+    from . import policy  # lazy: policy is imported by db at call time
+    if not slug:
         raise NotFound(f"No item {slug!r}.")
-    return row
+    return policy.viewable_rows([slug], actor=actor)[0][0]
 
 
 def _slim(table, img):
@@ -162,14 +165,11 @@ def _plan_update(row, fields):
         raise InvalidInput(f"Unknown item field(s): {', '.join(unknown)}", code="unknown_field",
                            details={"allowed": list(UPDATE_FIELDS)})
     cols = {}
-    for k in ("display_name", "icon"):
-        if k in fields:
-            v = fields[k]
-            cols[k] = str(v) if v not in (None, "") else None
+    if "display_name" in fields:
+        v = fields["display_name"]
+        cols["display_name"] = str(v) if v not in (None, "") else None
     if "description" in fields:
         cols["description"] = "" if fields["description"] is None else str(fields["description"])
-    if "client" in fields:
-        cols["client"] = fields["client"]
     if "content_description" in fields:
         cols["content_description"] = fields["content_description"]
     if "type_metadata" in fields:
@@ -213,7 +213,7 @@ def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **field
         raise InvalidInput("tags must be a list of names", code="bad_tags")
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
-        row = get_item(slug)
+        row = get_item(slug, actor)
         cols = _plan_update(row, fields)
         with db.ImageLog(OP_UPDATE, actor, batch_id, [slug]) as log:
             if cols:
@@ -266,7 +266,7 @@ def set_caption(slug, text, *, accept=False, dry_run=False, actor=None, batch_id
         raise InvalidInput("The caption text is empty.", code="bad_caption")
     if len(text) > CAPTION_MAX_CHARS:
         raise InvalidInput(f"The caption is {len(text)} characters; the limit is {CAPTION_MAX_CHARS}.", code="bad_caption")
-    row = get_item(slug)
+    row = get_item(slug, actor)
     if row.get("redacted"):
         raise InvalidInput("File was redacted: there's no image left to caption.", code="redacted")
     existing = row.get("type_metadata") or {}
@@ -399,8 +399,8 @@ def relate(slug, other, *, dry_run=False, actor=None, batch_id=None):
     shared. Relating an item to itself is a no-op."""
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
-        get_item(slug)
-        get_item(other)
+        get_item(slug, actor)
+        get_item(other, actor)
         with db.ImageLog(OP_RELATE, actor, batch_id, [slug, other]) as log:
             if slug != other:
                 now = time.time()
@@ -424,9 +424,12 @@ def relate(slug, other, *, dry_run=False, actor=None, batch_id=None):
 
 def unrelate(slug, other, *, dry_run=False, actor=None, batch_id=None):
     """Removes the related link (both directions). Like before, the tags and cards the link
-    shared stay (only undoing the relate takes those back)."""
+    shared stay (only undoing the relate takes those back). Unknown slugs stay a no-op; an item the
+    actor may not see refuses with #709's 403 forbidden."""
+    from . import policy  # lazy: policy is imported by db at call time
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
+        policy.viewable_rows([slug, other], missing_ok=True, actor=actor)
         with db.ImageLog(OP_UNRELATE, actor, batch_id, [slug, other]) as log:
             for a, b in ((slug, other), (other, slug)):
                 log.delete("capture_event_relations", {"slug_a": a, "slug_b": b})
@@ -511,7 +514,7 @@ def redact(slug, *, dry_run=False, actor=None, batch_id=None):
     moved = []
     try:
         with db.transaction(dry_run=dry_run):
-            row = get_item(slug)
+            row = get_item(slug, actor)
             if not row.get("stored_filename"):
                 raise InvalidInput("This row has no uploaded file to redact", code="no_file")
             with db.ImageLog(OP_REDACT, actor, batch_id, [slug]) as log:
@@ -535,7 +538,7 @@ def unredact(slug, *, dry_run=False, actor=None, batch_id=None):
     un-redacts) or delete it permanently first, so a held file is never orphaned."""
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
-        row = get_item(slug)
+        row = get_item(slug, actor)
         if not row["redacted"]:
             raise Conflict("This row isn't redacted", code="not_redacted")
         if db.get_redact_hold(slug):
@@ -555,7 +558,7 @@ def recover_redacted(slug, *, dry_run=False, actor=None, batch_id=None):
     moved, t = [], None
     try:
         with db.transaction(dry_run=dry_run):
-            row = get_item(slug)
+            row = get_item(slug, actor)
             t = db.get_redact_hold(slug)
             if t is None:
                 raise _no_hold(slug, row)
@@ -592,7 +595,7 @@ def delete_redacted_file(slug, confirm=False, *, dry_run=False, actor=None, batc
     (stored_filename NULL), exactly like the old behaviour. Not undoable. Requires confirm=True."""
     if confirm is not True and str(confirm).strip().lower() not in ("true", "1", "yes", "on"):
         raise InvalidInput("Pass confirm=true to permanently delete the redacted file", code="confirm_required")
-    row = get_item(slug)
+    row = get_item(slug, actor)
     t = db.get_redact_hold(slug)
     if t is None:
         raise _no_hold(slug, row)
@@ -648,7 +651,7 @@ def retype(slug, media_type, run_background=None, *, dry_run=False, actor=None, 
     if media_type not in object_types.OBJECT_TYPES:
         raise InvalidInput(f"Unknown media_type: {media_type}", code="unknown_media_type")
     with db.transaction(dry_run=dry_run):
-        get_item(slug)
+        get_item(slug, actor)
         with db.ImageLog(OP_RETYPE, actor, batch_id, [slug]) as log:
             log.update("capture_events", {"slug": slug}, {"media_type": media_type})
             muts = list(log.muts)
@@ -787,7 +790,7 @@ def replace_file(slug, content, filename=None, run_background=None, *, dry_run=F
                           media_type=sniffed)
         final_name = _final_filename(row, filename)
         with db.transaction(dry_run=dry_run):
-            fresh = get_item(slug)  # re-read under the write lock
+            fresh = get_item(slug, actor)  # re-read under the write lock
             if fresh.get("redacted") or fresh.get("stored_filename") != row["stored_filename"]:
                 raise _refuse("conflict_changed", f"{slug} changed while its file was being replaced (redacted, or "
                               "replaced by someone else). Nothing was changed; try again.", 409)
@@ -858,22 +861,15 @@ def delete(slugs, *, missing_ok=False, dry_run=False, actor=None, batch_id=None)
     """Deletes items: rows (with everything that references them) inside one transaction, files
     into the trash for TRASH_DAYS. One batch for the whole call, so one undo restores them all.
     Unknown slugs raise not_found before anything is written, unless `missing_ok` (bulk paths
-    skip them, as before). Returns data {deleted, slugs, trashed, expires_at}."""
-    if isinstance(slugs, str):
-        slugs = [slugs]
-    wanted = list(dict.fromkeys(s for s in (slugs or []) if s))
+    skip them, as before). #709: an item the actor may not see (policy.viewable_rows) refuses the
+    WHOLE call (403 forbidden, saying how many and why), so nothing is deleted. Returns data
+    {deleted, slugs, trashed, expires_at}."""
+    from . import policy  # lazy: policy is imported by db at call time
     batch_id = batch_id or changes.new_batch_id()
     moved, all_muts, done, trashed = [], [], [], 0
     try:
         with db.transaction(dry_run=dry_run):
-            rows = []
-            for s in wanted:
-                row = db.get_by_slug(s)
-                if row is None:
-                    if missing_ok:
-                        continue
-                    raise NotFound(f"No item {s!r}.")
-                rows.append(row)
+            rows, _ = policy.viewable_rows(slugs, missing_ok=missing_ok, actor=actor)
             entries = []
             for row in rows:
                 entry, muts = _delete_one(row, batch_id, actor)

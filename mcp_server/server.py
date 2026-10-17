@@ -15,6 +15,11 @@ Conventions shared by every tool (#560, #548; enforced by the `@mcp.tool()` wrap
     error too: a getter or setter whose target doesn't exist returns code "not_found"
     rather than None or False. Input validation is "bad_request" unless a more specific
     code applies (bad_status, invalid_choice, ...). Successful returns are unchanged.
+  * Extracted text (#697): a tool that returns MANY items (search, get_posts_for_tag, get_project,
+    get_related, list_redacted, list_restricted, list_brand_assets, a blog entry's items, ...)
+    sends a ~300-character preview of each item's extracted_text plus extracted_text_chars and
+    extracted_text_truncated (_to_public_listed). A single-item tool (constructicon_get, the
+    setters) sends the whole text (_to_public).
 """
 
 import base64
@@ -25,6 +30,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -52,6 +58,14 @@ from core import paths
 # #652: files this process writes (uploads, imports, thumbnails, backups) are not readable by other
 # users on the host. Set at import, before main() runs init_db.
 paths.restrict_new_files()
+
+# #699: run as the server (not imported by a test), refuse to start, with the folder, its owner and
+# the fix, when a data folder isn't writable. Here at import, before anything below reads the DB
+# (the hobby label is read at import), which would otherwise fail with "unable to open database file".
+if __name__ == "__main__":
+    _unwritable = paths.unwritable_data_dirs(db.DB_PATH)
+    if _unwritable:
+        sys.exit(paths.data_dirs_error("constructicon-mcp", _unwritable))
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
@@ -272,17 +286,16 @@ def _to_public(row):
         "slug": row["slug"],
         "url": f"{BASE_URL}/f/{row['slug']}",
         "filename": row["filename"],
-        # display_name/icon (#11) — per-object overrides. display_name here is the item's one
-        # canonical title (core/item_title.py, #542): rename, then caption, then filename, then slug.
+        # display_name (#11) here is the item's one canonical title (core/item_title.py, #542):
+        # rename, then caption, then filename, then slug. "icon" is the type's badge (#704: the
+        # per-object icon override column is gone).
         "display_name": item_title.title_of(row),
-        "icon": row.get("icon") or spec.badge_icon,
+        "icon": spec.badge_icon,
         "media_type": row.get("media_type") or "image",
         "description": row["description"],
         "content_description": row.get("content_description"),  # #588: the item's own title/caption
         "tags": row["tags"],
-        "client": row["client"],
         "redacted": bool(row["redacted"]),
-        "source": row["source"],
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
         # #261: per-type metadata bag (auto_caption/auto_caption_status,
@@ -292,7 +305,6 @@ def _to_public(row):
         # core/db.py's _row_to_dict already parses the JSON column, so
         # this is only a guard against a stored JSON null.
         "type_metadata": row.get("type_metadata") or {},
-        "artifact_link": f"{BASE_URL}{row['artifact_link']}" if row["artifact_link"] else None,
         "timestamp": row["timestamp"],
         "content_date": row.get("content_date"),
         "display_date_override": row.get("display_date_override"),
@@ -314,6 +326,66 @@ def _to_public(row):
         "sensitive": policy.restriction_reason(row) is not None,
         "sensitive_reason": policy.restriction_reason(row),
     }
+
+
+# #697: a tool that returns MANY items sends a short preview of each one's extracted_text (OCR,
+# document text, a transcript can each be hundreds of KB), never the whole text. One item's full
+# text comes from constructicon_get. The preview is a window around the first word of the query
+# found in the text (word-start, case and accents folded, like the search itself), else its start.
+TEXT_PREVIEW_CHARS = 300
+TEXT_PREVIEW_MAX_CHARS = 5000
+_ELLIPSIS = "…"
+
+
+def _fold(text):
+    """Lowercased, accent-folded, SAME LENGTH as `text` (so a match offset is an offset in `text`)."""
+    if text.isascii():
+        return text.lower()
+    return "".join((unicodedata.normalize("NFKD", c)[:1] or c).lower()[:1] or c for c in text)
+
+
+def _first_hit(text, query):
+    """Offset of the first word-start match of any query word in `text`, or None."""
+    words = db._SEARCH_WORD_RE.findall(query or "")[:db._SEARCH_MAX_WORDS]
+    if not words or not text:
+        return None
+    folded = _fold(text)
+    best = None
+    for w in {_fold(w) for w in words}:
+        m = re.search(r"(?<![^\W_])" + re.escape(w), folded)
+        if m and (best is None or m.start() < best):
+            best = m.start()
+    return best
+
+
+def text_chars_arg(text_chars):
+    """Validate a tool's `text_chars`: 0 (no text) up to TEXT_PREVIEW_MAX_CHARS; more is clamped."""
+    if text_chars is None:
+        return TEXT_PREVIEW_CHARS
+    if isinstance(text_chars, bool) or not isinstance(text_chars, int) or text_chars < 0:
+        raise InvalidInput(f"text_chars must be a whole number from 0 to {TEXT_PREVIEW_MAX_CHARS}.")
+    return min(text_chars, TEXT_PREVIEW_MAX_CHARS)
+
+
+def _text_preview(text, query=None, chars=TEXT_PREVIEW_CHARS):
+    """{extracted_text: the preview, extracted_text_chars: full length, extracted_text_truncated}.
+    The preview is at most `chars` characters of the text, plus "…" at each end that was cut."""
+    full = len(text or "")
+    if text is None or chars <= 0:
+        return {"extracted_text": None if text is None or full else text,
+                "extracted_text_chars": full, "extracted_text_truncated": full > 0}
+    if full <= chars:
+        return {"extracted_text": text, "extracted_text_chars": full, "extracted_text_truncated": False}
+    hit = _first_hit(text, query)
+    start = 0 if hit is None else min(max(0, hit - chars // 3), full - chars)
+    end = start + chars
+    preview = (_ELLIPSIS if start > 0 else "") + text[start:end] + (_ELLIPSIS if end < full else "")
+    return {"extracted_text": preview, "extracted_text_chars": full, "extracted_text_truncated": True}
+
+
+def _to_public_listed(row, query=None, text_chars=TEXT_PREVIEW_CHARS):
+    """_to_public for an item in a multi-item result: extracted_text is a preview (#697)."""
+    return {**_to_public(row), **_text_preview(row.get("extracted_text"), query, text_chars)}
 
 
 def _to_public_project(project):
@@ -359,7 +431,7 @@ def _to_public_blog_entry(entry):
         # Carry the per-attachment note + sort_order (the reshaping helpers
         # drop them, but they're the point of the attachment).
         "projects": [{**_to_public_project(p), "note": p.get("note", ""), "sort_order": p.get("sort_order")} for p in projects],
-        "items": [{**_to_public(i), "note": i.get("note", ""), "sort_order": i.get("sort_order")} for i in items],
+        "items": [{**_to_public_listed(i), "note": i.get("note", ""), "sort_order": i.get("sort_order")} for i in items],
     }
 
 
@@ -460,7 +532,8 @@ def constructicon_replace_file(slug: str, content_base64: str, filename: str | N
 
 
 @mcp.tool()
-def constructicon_search(query: str | None = None, tags: list[str] | None = None) -> list[dict]:
+def constructicon_search(query: str | None = None, tags: list[str] | None = None,
+                         text_chars: int = TEXT_PREVIEW_CHARS) -> list[dict]:
     """Search objects by name (display name, title, any filename it has had), tags, card titles,
     description or extracted text.
 
@@ -470,17 +543,26 @@ def constructicon_search(query: str | None = None, tags: list[str] | None = None
     Returns a JSON list of matching objects. If both query and tags are
     provided, filters by both (AND logic). Redacted objects are excluded
     (#282) -- use constructicon_list_redacted to see those.
+
+    extracted_text (OCR / document / transcript text) is a PREVIEW, not the whole text (#697): about
+    text_chars characters (default 300) around the first query word found in it, else its start,
+    with "…" where it was cut. extracted_text_chars is the full length and extracted_text_truncated
+    says whether anything was left out. text_chars: 0 = no text at all, up to 5000 (more is capped
+    at 5000). For one item's full text, call constructicon_get(slug).
     """
+    chars = text_chars_arg(text_chars)
     # #477: old revisions are still found, marked with `superseded_by` (the current revision's slug) and `rev`.
     # #557: db.search applies the policy's browse clause; the per-item policy is checked here too.
-    return revisions.decorate([_to_public(r) for r in policy.filter_visible(db.search(query=query, tags=tags, client=None))])
+    return revisions.decorate([_to_public_listed(r, query, chars)
+                               for r in policy.filter_visible(db.search(query=query, tags=tags))])
 
 
 @mcp.tool()
 def constructicon_get(slug: str) -> dict | None:
     """Get one object's metadata and hotlink URL by its slug.
 
-    A missing slug returns the not_found error. `superseded_by` (the current revision's slug, or null)
+    extracted_text is the item's WHOLE extracted text (tools that list many items send only a
+    preview of it, #697). A missing slug returns the not_found error. `superseded_by` (the current revision's slug, or null)
     and `rev` (position in its revision chain, or null) say where it sits in a chain (#477).
     """
     row = db.get_by_slug(slug)
@@ -615,10 +697,10 @@ def constructicon_list_import() -> dict:
 
 @mcp.tool()
 def constructicon_update(slug: str, description: str | None = None, tags: list[str] | None = None,
-                   display_name: str | None = None, icon: str | None = None,
+                   display_name: str | None = None,
                    type_metadata: dict | None = None, display_date: float | None = None,
                    reset_display_date: bool = False, content_description: str | None = None) -> dict | None:
-    """Update an object's metadata: description, tags, display name, icon, type-specific fields,
+    """Update an object's metadata: description, tags, display name, type-specific fields,
     its content description, and/or its timeline display date.
 
     Pass None for any field you don't want to change. type_metadata is MERGED by top-level key
@@ -643,8 +725,6 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
         fields["description"] = description
     if display_name is not None:
         fields["display_name"] = display_name
-    if icon is not None:
-        fields["icon"] = icon
     if content_description is not None:
         fields["content_description"] = content_description
     if type_metadata is not None:
@@ -836,7 +916,7 @@ def constructicon_list_redacted() -> list[dict]:
     the only listing that includes them. constructicon_get still works for
     one by slug.
     """
-    return [_to_public(r) for r in db.list_redacted()]
+    return [_to_public_listed(r) for r in db.list_redacted()]
 
 
 @mcp.tool()
@@ -851,7 +931,7 @@ def constructicon_list_restricted() -> list[dict]:
     `sensitive_reason` ({kind: "type", type} or {kind: "flag", by, at}).
     """
     return [
-        {**_to_public(r), "projects": [{"title": p["title"], "slug": p["slug"]} for p in db.list_projects_for_post(r["slug"])]}
+        {**_to_public_listed(r), "projects": [{"title": p["title"], "slug": p["slug"]} for p in db.list_projects_for_post(r["slug"])]}
         for r in db.list_restricted()
     ]
 
@@ -905,7 +985,7 @@ def constructicon_delete_all(confirm: str = "") -> dict:
 
     Pass confirm="DELETE EVERYTHING" (the same typed phrase /admin asks for); anything else
     returns confirm_required and changes nothing. Call constructicon_backup first if you want to
-    keep the current content. Settings, the client list, provenance lists and the change log are
+    keep the current content. Settings, users, provenance lists and the change log are
     kept. Returns {deleted, counts: {table: rows}, files_removed, trash_removed, batch_id}; one
     change-log row (op delete_all) records the counts.
     """
@@ -982,10 +1062,9 @@ def constructicon_add_related(slug: str, related_slug: str) -> list[dict]:
     Also merges tags and project membership between the two.
     Returns the updated list of related objects.
     """
-    if db.get_by_slug(slug) is None or db.get_by_slug(related_slug) is None:
-        raise NotFound(f"No item {slug!r}." if db.get_by_slug(slug) is None else f"No item {related_slug!r}.")
+    policy.viewable_rows([slug, related_slug])  # #709: missing = not_found, not visible = forbidden (says why)
     items.relate(slug, related_slug)  # #541 phase C: one undoable batch (link + what it shares)
-    return [_to_public(r) for r in db.list_related(slug)]
+    return [_to_public_listed(r) for r in db.list_related(slug)]
 
 
 @mcp.tool()
@@ -996,7 +1075,7 @@ def constructicon_remove_related(slug: str, related_slug: str) -> list[dict]:
     Returns the updated list of related objects.
     """
     items.unrelate(slug, related_slug)
-    return [_to_public(r) for r in db.list_related(slug)]
+    return [_to_public_listed(r) for r in db.list_related(slug)]
 
 
 @mcp.tool()
@@ -1009,7 +1088,7 @@ def constructicon_get_related(slug: str) -> list[dict]:
     if row is None:
         raise NotFound(f"No item {slug!r}.")
     policy.require_view(row, message=f"No item {slug!r}.")  # #557
-    return [_to_public(r) for r in policy.filter_visible(db.list_related(slug))]
+    return [_to_public_listed(r) for r in policy.filter_visible(db.list_related(slug))]
 
 
 @mcp.tool()
@@ -1106,8 +1185,7 @@ def constructicon_add_to_project(slug: str, project_id: str | int) -> list[dict]
     free-text tags), and a project with no cover takes this object as its cover. Undoable as
     one batch (constructicon_undo). Returns the object's updated project list.
     """
-    if db.get_by_slug(slug) is None:
-        raise NotFound(f"No item {slug!r}.")
+    policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     if db.get_project(project_id) is None:
         raise NotFound(f"No card {project_id!r}.")
     membership.add_files(project_id, [slug], **membership.UI_EFFECTS)  # #541 phase C: same flags as the web
@@ -1120,8 +1198,7 @@ def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[
 
     Returns the object's updated project list.
     """
-    if db.get_by_slug(slug) is None:
-        raise NotFound(f"No item {slug!r}.")
+    policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
@@ -1141,7 +1218,7 @@ def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) 
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
     result = membership.add_files(project["id"], slugs, missing_ok=True, **membership.UI_EFFECTS)
-    return [_to_public(db.get_by_slug(slug)) for slug in slugs if slug in result.data["slugs"]]
+    return [_to_public_listed(db.get_by_slug(slug)) for slug in slugs if slug in result.data["slugs"]]
 
 
 @mcp.tool()
@@ -1161,9 +1238,7 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
+    row = policy.viewable_rows([slug])[0][0]  # #709: missing = not_found, not visible = forbidden (says why)
     if not object_types.can_be_writeup(row):
         label = object_types.get_object_type(row.get("media_type")).label
         raise ValueError(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
@@ -1180,8 +1255,13 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
 
 
 @mcp.tool()
-def constructicon_get_project(id_or_slug: str | int) -> dict | None:
+def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREVIEW_CHARS) -> dict | None:
     """Get a project with full details: metadata, items, tags, cover, and write-up body.
+
+    Each item's (and the cover's) extracted_text is a preview of its first text_chars characters
+    (default 300; 0 = none, at most 5000), with extracted_text_chars (the full length) and
+    extracted_text_truncated (#697); constructicon_get(slug) has one item's whole text. The
+    write-up object is sent whole.
 
     Returns a comprehensive dict with:
     - id, slug, title, description, cover_slug, writeup_slug, parent_id
@@ -1199,6 +1279,7 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
 
     A missing card returns the not_found error.
     """
+    chars = text_chars_arg(text_chars)
     project = db.get_project(id_or_slug)
     if project is None:
         raise NotFound(f"No card {id_or_slug!r}.")
@@ -1207,7 +1288,7 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
     items = policy.filter_visible(db.list_project_items(project["id"]))
     items_public = []
     for item in items:
-        item_dict = _to_public(item)
+        item_dict = _to_public_listed(item, text_chars=chars)
         # Add tags for each item
         tags = db.list_tags_for_post(item["slug"])
         item_dict["tags"] = [t["name"] for t in tags]
@@ -1218,7 +1299,7 @@ def constructicon_get_project(id_or_slug: str | int) -> dict | None:
     if project.get("cover_slug"):
         cover_row = db.get_by_slug(project["cover_slug"])
         if cover_row and policy.can_view(cover_row):  # #557
-            cover = _to_public(cover_row)
+            cover = _to_public_listed(cover_row, text_chars=chars)
 
     # Get the writeup object if it exists
     writeup = None
@@ -1622,16 +1703,19 @@ def constructicon_create_tag(name: str, parent_name: str | None = None) -> dict:
 
 
 @mcp.tool()
-def constructicon_get_posts_for_tag(tag_name: str) -> list[dict]:
+def constructicon_get_posts_for_tag(tag_name: str, text_chars: int = TEXT_PREVIEW_CHARS) -> list[dict]:
     """Get all objects tagged with a specific tag (including all descendant tags).
 
-    Returns a list of objects.
+    Returns a list of objects. Each one's extracted_text is a preview of its first text_chars
+    characters (default 300; 0 = none, at most 5000), with extracted_text_chars (the full length)
+    and extracted_text_truncated (#697); constructicon_get(slug) has one item's whole text.
     """
+    chars = text_chars_arg(text_chars)
     tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
         raise NotFound(f"No such tag: {tag_name!r}")
     rows = db.list_posts_for_tag(tag["id"], limit=10000)  # the policy's browse clause applies in db
-    return [_to_public(r) for r in policy.filter_visible(rows)]  # #557
+    return [_to_public_listed(r, text_chars=chars) for r in policy.filter_visible(rows)]  # #557
 
 
 @mcp.tool()
@@ -1650,9 +1734,7 @@ def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
 
     Returns the updated object; a missing one returns the not_found error.
     """
-    row = db.get_by_slug(slug)
-    if row is None:
-        raise NotFound(f"No item {slug!r}.")
+    policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
         raise NotFound(f"No such tag: {tag_name!r}")
@@ -1805,7 +1887,7 @@ def constructicon_list_brand_assets() -> list[dict]:
     """
     assets = policy.filter_visible(db.list_brand_assets())  # #557
     return [
-        {**_to_public(asset), "is_brand_asset": bool(asset.get("is_brand_asset")), "brand_role": asset.get("brand_role")}
+        {**_to_public_listed(asset), "is_brand_asset": bool(asset.get("is_brand_asset")), "brand_role": asset.get("brand_role")}
         for asset in assets
     ]
 

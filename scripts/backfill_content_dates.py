@@ -23,7 +23,7 @@ pass (--no-import):
     through the same plausibility gate fill_missing applies.
   - Writes go through POST /api/image/{slug}'s content_date field (the
     surface the YouTube sync's publishedAt correction already uses), not
-    a direct UPDATE. Only description/tags/client-free payloads are sent:
+    a direct UPDATE. Only description/tags-free payloads are sent:
     api_update_image leaves every field it isn't given alone (#213).
   - Fill-only-missing: only rows whose content_date is currently NULL are
     candidates, and each is re-read immediately before its write in case

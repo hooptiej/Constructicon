@@ -8,9 +8,9 @@ built by forking and repurposing
 [ComputerCats-Jason/imagerepo](https://github.com/ComputerCats-Jason/imagerepo)
 (a multi-tech IT screenshot repo) into a single-owner personal content site.
 That fork is kept as a local-only reference elsewhere — it is not part of
-this repo, and its old vocabulary (`tech`, `client`, `ticket_id`) still
-echoes through the schema and code as repurposed/vestigial fields (see
-below).
+this repo. Its old vocabulary mostly echoes no more: `tech` survives, repurposed as the
+Source label, and the dead IT-ticketing columns and client tables were dropped in #704 (see
+"Data model").
 
 It started as a single-owner tool on a LAN-only server with no port forward, where the network
 perimeter was the security boundary. Auth is on (#467; owner decisions 2026-10-07): **step 1**
@@ -45,7 +45,7 @@ the date and commit forward when you re-verify.
     see "Roles and policy" below) per area, **no prefix** (each
     route writes its full path): `pages.py` (HTML pages + legacy redirects),
     `items.py` (`/api/upload`, `/api/content`, `/api/image/*` incl. `replace-file`, per-item
-    captions, `/api/gallery`, `/api/home/files`, `/api/clients`, bulk, tags, search, multi-delete), `cards.py`
+    captions, `/api/gallery`, `/api/home/files`, bulk, tags, search, multi-delete), `cards.py`
     (`/api/projects*`, `/api/project/*`, `/api/cards/*`, `/api/links*`,
     `/api/families/*`, `/api/changes/*`), `hobbies.py`, `curator.py`
     (`/api/curator/*`, `/api/pending-decisions*`), `blog_export.py`
@@ -236,7 +236,8 @@ the date and commit forward when you re-verify.
     see "Build / test / run".
   - *Live tools* (not retired): `run_checks.py`, `deploy.sh`, `release.py`, `run_tool.sh`,
     `golden_master.py`, `seed_test_from_production.py`, `full_youtube_channel_sync.py`,
-    `backfill_content_dates.py`, `regenerate_thumbnails.py`, and the helpers `_http.py` and `_testenv.py`.
+    `backfill_content_dates.py`, `regenerate_thumbnails.py`, `make_type_samples.py` + `drop_test.py` (#720),
+    and the helpers `_http.py` and `_testenv.py`.
     **None of `scripts/` is mounted into the app containers (#634)**: where each kind runs is
     "Scripts: what runs where" below. `reset_password.py` and `mcp_token.py` moved into the app as
     `core/manage/` (`python3 -m core.manage.<tool>`); the files left at the old paths are stubs that
@@ -254,8 +255,6 @@ the date and commit forward when you re-verify.
     exits, and checks `run_checks.py` never collects `archive/`). A new one-shot goes in `scripts/`
     while it is live and moves to `archive/` once it has run, with the guard as its first line.
   - `scripts/data/`: input files for scripts (the V2 curation suggestions JSON).
-  - Outside `scripts/`: `sync_clients.py` at the repo root seeds the vestigial `clients` tables (see
-    "Data model"); it stays until the owner decides whether those tables go.
 - **`core/manage/`** (#634) — the operational command-line tools that ship with the app, because
   `core/` is mounted in every install and `scripts/` is not: `reset_password` (see "Users and
   sessions") and `mcp_token` (see "Auth enforcement"). Run from the repo root or `/app`:
@@ -427,6 +426,20 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   the policy fail the check below).
 - **Since #603** "restricted" = sensitive: a restricted type OR an item flagged "This is sensitive",
   visible to admins AND the item's uploader (`can_view`), see "Ownership and sensitive items" below.
+- **Writes refuse what the caller can't see (#709), in the service op itself**, so web, MCP and any
+  future per-user token are covered: `policy.viewable_rows(slugs, missing_ok=...)` for a set
+  (`items.delete`, `unrelate`, `membership.add_files` / `remove_files`, `tags.merge_item_tags`; bulk
+  delete, add-to-card and tag), `items.get_item` / `tags._get_item` for one item (update, caption,
+  relate, redact, attach / detach / set tags). **Owner decision 2026-10-17: "tell them no, and
+  why."** A hidden item refuses the WHOLE request with 403 `forbidden` (`policy.refusal`): "Nothing
+  was changed: 1 of the 3 selected items is marked sensitive, and only its uploader or an admin can
+  change it." (or "a restricted file type", or both), `details: {refused: [slugs], reason: sensitive |
+  restricted_type | hidden | mixed, reasons: {slug: reason}}`; nothing written. Same code, message and
+  details over MCP. The grid's bulk bar shows that message as is. An unknown slug keeps its old
+  meaning (`missing_ok` skips it, else 404). **Not this rule (owner, PR #727):** `set_sensitive` /
+  `set_provenance` (bulk and single) keep their own 404 for a hidden item, and the single-item WEB
+  routes still answer 404 first (`viewable_item`, the read-door rule above; saying why there is #730).
+  Check: `scripts/test_bulk_visibility_709.py`.
 - **Adding a door** (anything that hands out an item or a list of items, web or MCP): call the
   policy in it, and add it to `DOORS` in `scripts/check_policy_doors.py`. That script (AST, no
   server) fails when a known door stops calling `policy.`, when a GET route or MCP read tool reads
@@ -629,7 +642,14 @@ with the Rendered view: opaque origin, no script, no network); HTML/XHTML is als
 `<img>` keeps working. **#701:** with an original name, everything else is `inline` when the browser
 shows it itself (PDF, JPEG/PNG/GIF/WebP/AVIF/BMP, MP4/WebM/Ogg video, the common audio types, `text/plain`:
 `object_types.BROWSER_VIEWABLE_TYPES`, an exact allowlist, so PSD/TIFF stay downloads) and `attachment`
-otherwise, both keeping the name (`filename*=` / `filename=`); those inline types are sniffed too, so markup
+otherwise, both keeping the name (`filename*=` / `filename=`). **#723:** the allowlist holds canonical names
+only; `object_types.BROWSER_TYPE_ALIASES` folds the other names Python (by version) or a host's mime.types
+gives the same formats (`audio/vnd.wave` / `audio/x-wav` / `audio/wave` -> `audio/wav`, `audio/x-m4a` ->
+`audio/mp4`, `audio/x-flac` -> `audio/flac`, ...) through `object_types.browser_media_type`, which both the
+inline decision and `serve_file`'s `Content-Type` use (so `.wav` is served `audio/wav`); add an alias there,
+never a second name to the allowlist. **#729:** `.opus` (Python 3.14: `audio/opus`; also `audio/x-opus`,
+`audio/x-opus+ogg`) folds to `audio/ogg` (Ogg Opus's registered type, RFC 7845) and `.m4v` (`video/x-m4v`,
+`video/m4v`) to `video/mp4`, so both play inline. `video/quicktime` is deliberately not aliased (.mov stays a download). Those inline types are sniffed too, so markup
 renamed `.pdf` is still HTML (attachment + CSP). The object page's link follows the same set
 (`object_types.original_link(item)`, used by `_preview.thumb_with_original_link` and `object_detail.html`):
 "View original <Type>" in a new tab, or "Download original <Type>" in place. Check with
@@ -931,8 +951,7 @@ fixture next to the certificate.
 - a module outside the service modules calls (or imports) a private `db._*` function. The raw-write
   allowlist, each with its reason in the script: `core/captions.py` (caption status/results),
   `core/embedded_metadata.py` and `core/object_types/youtube.py` (upload-time file metadata, a
-  YouTube publish date), `core/automatch.py` (upload-time automatch tagging), `core/ocr.py` (OCR
-  client tags), `core/card_migration.py` (migrations), the one-off scripts
+  YouTube publish date), `core/automatch.py` (upload-time automatch tagging), `core/card_migration.py` (migrations), the one-off scripts
   `scripts/archive/{apply_project_groupings,seed_example_projects,backfill_from_hooptiej_site,link_lil_dragon_brand}.py`
   (retired, kept readable),
   and `scripts/test_*.py` (throwaway-DB fixtures);
@@ -996,7 +1015,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   resolution in the same batch as what the answer applied (membership / retype), so one undo
   re-opens the question.
 - **Items (phase B): item writes go through `core/items.py`; deletes are held 7 days, then
-  purged; redacts are held until the owner clicks.** `items.update(slug, **fields)` covers display name/icon, description, client,
+  purged; redacts are held until the owner clicks.** `items.update(slug, **fields)` covers display name, description,
   content_description, type_metadata (merged, physical-piece keys cleaned), file provenance,
   highlight, brand asset/role, display-date override and content_date as ONE batch per call (one
   Save = one undo). `redact` / `recover_redacted` / `delete_redacted_file` / `unredact`, `retype` (the media_type change is imaged; the caller's
@@ -1036,15 +1055,15 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   tag the op created; `db.invert_image` refuses that (undo_conflict) while anything made later uses
   the tag. Lookups (`tags.find`, `find_root`, `find_any`) never create. The two tag stores (free-text column vs
   `post_tags`) stay as they were; unifying them is #555. Card creation and hobby creation mint their
-  tags through `tags.ensure` too (phase D); the only raw tag writers left are the upload-time
-  automatch tagging and OCR client tags (pipeline, allowlisted).
+  tags through `tags.ensure` too (phase D); the only raw tag writer left is the upload-time
+  automatch tagging (pipeline, allowlisted; the OCR client tagging went with #704).
 - **Delete-all (phase C): `core/reset.py` `delete_everything(confirm)`**, called by `POST
   /api/delete-all` and MCP `constructicon_delete_all(confirm)`; both need the phrase `DELETE
   EVERYTHING`. Permanent by design (no trash, no undo); one change-log row (op `delete_all`, actor
   from context) with per-table counts in `form_body`. Clears `reset.CLEARED_TABLES` (items and
   everything pointing at them, cards, tags and hobbies, blog entries, questions and their snoozes,
   caption queue, trash) plus every item file and thumbnail and `<storage>/.trash`; keeps
-  `reset.KEPT_TABLES` (settings, clients, provenance options, migrations, the audit/change log). A
+  `reset.KEPT_TABLES` (settings, users, provenance options, migrations, the audit/change log). A
   new table must be added to one of the two lists (`scripts/test_membership_tags.py` fails otherwise).
   Check phase C with `scripts/test_membership_tags.py` (throwaway DB).
 - **Trash.** `items.delete` / `items.redact` move the file and its thumbnail to
@@ -1381,6 +1400,38 @@ To add a new object type (issue #448 contract v2):
   migration re-extracts rows whose file reads as UTF-16/32 and whose text is NUL-ridden or short.
 - Check with `scripts/test_previews_606_607.py` (throwaway DB; the xlsx part needs openpyxl, in the app image).
 
+### Type sampler and drop test (#720)
+
+One generated file of every registered type and extension, to drop-test a new install (owner, 2026-10-17).
+- **Generate** (in the app image, so the executables get made on Linux):
+  `docker run --rm --network none -u 1000:1000 -v "$PWD":/app:ro -v "$PWD/samples-out":/out -w /app <image> python scripts/make_type_samples.py /out`.
+  It writes one sample per entry in its `SAMPLES` list (108 files: every extension any type claims, incl.
+  both `.zip` types and both `.exe` types), `content.json` + `urls.txt` (the no-file types: YouTube, web
+  page, written post), `manifest.json` (per file: the type it must land as and what a correct install shows,
+  derived from the registry at run time) and a `README.md` table. Nothing comes from the archive; credentials
+  are obviously fake (TEST / NOT REAL, a key from a public fixed seed, VPP token "TEST-NOT-A-REAL-TOKEN").
+  Formats with no writer in the image (legacy Office/MSI, ISO, VHD, xar, rpm, PE, ELF, SketchUp, ...) are
+  hand-built minimal files. Byte-identical every run except `VARYING` (the PKCS#12 pair, the .7z).
+  `--list` prints the manifest; `--no-executables` skips the executable class.
+- **Drop-test an install** (writes to it; never prod: it refuses `/api/version` env `prod` without
+  `--i-know-this-is-prod`): `./scripts/run_tool.sh <web container> scripts/drop_test.py --base-url
+  http://localhost:<port> --samples <dir>` (the samples dir must be visible to that container), or from any
+  container in the install's network namespace with `CONSTRUCTICON_TOKEN_FILE`. It uploads through
+  `/api/upload` / `/api/content`, waits on `/api/processing`, prints one row per file (expected vs detected
+  type, thumbnail, text, object page, `/f/` disposition, raw view, content date, and a temporary VIEWER
+  account's view: restricted items must 404), then deletes exactly its own slugs and empties the trash only
+  when it held nothing else. `--keep` leaves the items. Verdict line `ALL PASS: ...` / `FAILED: ...`.
+- **Known findings it shows:** legacy `.doc/.xls/.ppt` and web links end OCR "failed" (#724, expected
+  there). (WAV downloading instead of playing, #723, is fixed: its row passes.)
+- **Windows / Defender (owner rule):** the executable-class samples (PE `.exe`, every installer package,
+  the zipped `.app`, ELF firmware, the `.dmg`) are written only when `sys.platform` is Linux, and never
+  committed: the default output `samples-out/` is gitignored and `.dockerignore` keeps `scripts/` and it out
+  of the image. Never generate them on, or copy them to, the Windows machine.
+- **Checks:** `scripts/check_type_samples.py` (static) fails when a registered type or extension has no
+  sample; `scripts/test_type_samples_720.py` generates the set twice into a temp dir and checks every file is
+  written, sniffs as its type (`detect_media_type`) and is stable (skips the executables off Linux). A new
+  type or extension needs a `Sample(...)` line in `make_type_samples.py`.
+
 ## Data model (verify against `core/db.py`'s `SCHEMA` before trusting this — it evolves)
 
 - **`capture_events`** — the core item table. Despite the name (a holdover
@@ -1392,8 +1443,6 @@ To add a new object type (issue #448 contract v2):
     'document' | 'any'`, ...). **Deliberately no CHECK constraint** — not a
     rigid enum, a new value just needs a registry entry in
     the `core/object_types/` registry.
-  - `source` — upload-pipeline metadata (e.g. `'screenshot'`,
-    `'external'`), distinct from `tech`.
   - `tech` — repurposed. Originally "which technician uploaded this" in
     imagerepo's multi-user days; now a free-text **Source** label ("who or
     what added this row, and how"). See `source_manual_upload()` /
@@ -1401,9 +1450,20 @@ To add a new object type (issue #448 contract v2):
     `source_migrated_from()`/`source_group()` for the fixed vocabulary
     (manual web upload, the legacy automated-upload label, migrated by
     Claude from a named source, or authored by Claude directly).
-  - `client`, `ticket_id` — also vestigial imagerepo IT-ticketing fields;
-    still present in the schema/API but not meaningful to Constructicon's
-    actual use as a personal gallery.
+  - **Gone (#704, owner decision 2026-10-17):** `source` (how the dead uploader app captured a
+    row; link vs file comes from the type's `is_file`), `client`, `ticket_id` (imagerepo
+    IT-ticketing), `artifact_link` (always `/f/<slug>`; the payloads carry `url`) and the `icon`
+    override (never set). `db._drop_dead_columns_704` drops them at web boot (`init_db`, every
+    boot, never the MCP), together with the `clients` / `client_domains` tables, after counting:
+    a column or table holding REAL data is KEPT (client/ticket_id/icon non-empty; artifact_link not
+    the row's own `/f/<slug>`, relative or absolute; source outside NULL/''/'screenshot'/'external';
+    any client row but the three 'special' placeholders; any client_domains row), with a
+    `WARNING drop_dead_columns_704: KEPT ...` line at every boot saying how many rows and how to see
+    them; it drops once they are cleared. The first run is recorded in `schema_migrations`; a run
+    that drops or keeps anything writes one change-log row (op `migration_drop_dead_columns_704`,
+    counts in `details`). Nothing reads or writes a kept column. Row images logged before the drop
+    still name the old columns: `db.invert_image` restores only the columns the table has now, so
+    those undos keep working. Check with `scripts/test_drop_columns_704.py`.
   - `filename`/`stored_filename` — for uploaded files; `NULL` for content
     with no local file (e.g. `media_type='youtube'`, which uses
     `external_url` instead). `db.insert_upload()` handles the file path;
@@ -1413,8 +1473,8 @@ To add a new object type (issue #448 contract v2):
     title). Similarly `timestamp` (capture/upload time) vs. `content_date`
     (the content's own real-world date). These pairs are easy to confuse —
     check which one a given piece of code actually means.
-  - `display_name`, `icon` — optional per-object override of the item's title
-    and the media type's default badge icon. **An item's title (#542) is
+  - `display_name` — optional per-object override of the item's title (the badge icon is always
+    the type's `badge_icon`; the per-object `icon` override went in #704). **An item's title (#542) is
     `core/item_title.py` `title_of(row)` and nothing else:** `display_name` →
     `content_description` → `filename` → `slug`. `description` (the uploader's note)
     is never a title. Python calls `title_of`; Jinja uses the `item_title` filter (the
@@ -1468,13 +1528,9 @@ To add a new object type (issue #448 contract v2):
 - **`project_items`** — many-to-many join, `(project_id, post_slug,
   sort_order)`, with a manual `sort_order` for deliberate (non-chronological)
   ordering within a project.
-- **`clients`, `client_domains`** — vestigial imagerepo IT-client list
-  (Hudu-synced company names). Not part of Constructicon's actual personal-gallery use case; present
-  because it rode along with the fork. **Both tables are empty on prod (per #552)**, so nothing is
-  auto-tagged in practice, although the code path is still there (`core/ocr.py` reads
-  `db.list_client_domains()` to tag OCR text by client domain). They are in `reset.KEPT_TABLES`.
-  The three 'special' rows are no longer seeded at boot (#562). #628 deliberately left the tables and
-  the repo-root `sync_clients.py` in place pending an owner decision on whether they go.
+- **`clients`, `client_domains`** — gone (#704): the imagerepo IT-client list, its OCR client
+  matcher, `/api/clients` and the repo-root `sync_clients.py` were removed; see "Gone (#704)" above
+  for the safeguard that keeps either table if it holds anything but the old placeholder rows.
 - **`app_settings`** — generic key/value store for app-level secrets (e.g.
   the YouTube Data API key), so new integrations don't need a
   docker-compose env var wired in from outside. `GET /api/settings` only
@@ -1585,7 +1641,7 @@ view `item_search_src` in `core/db.py`: `display_name`, `content_description` an
 name the item has had, so a rename never makes the old filename unfindable; `core/item_title.py`
 picks only one of them to SHOW), the free-text `tags` column plus tag-tree tag names (`post_tags`),
 the titles of the cards it is on (`project_items`), the uploader's note (`description`) and
-`extracted_text`. Not indexed: `agent_notes`, `type_metadata`, `provenance`, `client`, the slug.
+`extracted_text`. Not indexed: `agent_notes`, `type_metadata`, `provenance`, the slug.
 
 - **Matching:** each run of letters/digits you type is a word-START match, all required ("tun
   gig" finds "Tuning the Gigabyte"); accents fold; case is ignored. Quotes, `*`, `-`, `:`, brackets
@@ -1655,6 +1711,18 @@ configuration gap for that session, not evidence the server itself is gone.
   `captions.queue_skipped()`) queues every caption-capable item that never got a caption (or whose
   caption failed or was skipped) and has no description; with captions off it answers 409
   `captions_disabled`. Check with `scripts/test_captions_mcp.py` (throwaway DB).
+- **Extracted text is a preview in multi-item results (#697).** One search used to return every
+  match's whole `extracted_text` (224,000 characters for 5 matches on the work install). Now every tool
+  that returns many items (`search`, `get_posts_for_tag`, `get_project` items and cover, `get_related`,
+  `add_related` / `remove_related`, `add_items_to_project`, `list_redacted`, `list_restricted`,
+  `list_brand_assets`, a blog entry's items) sends `_to_public_listed(row)`: `extracted_text` is a
+  window of `TEXT_PREVIEW_CHARS` (300) characters around the first query word found in it (word start,
+  case and accents folded, like the search; else the start), with "…" at each cut end, plus
+  `extracted_text_chars` (full length) and `extracted_text_truncated`. `search`, `get_posts_for_tag` and
+  `get_project` take `text_chars` (0 = no text, capped at `TEXT_PREVIEW_MAX_CHARS` = 5,000). Single-item
+  tools (`constructicon_get`, the setters) still send the WHOLE text, uncapped (one item by design; a
+  window-by-offset read for very long single items is not built). `get_project`'s write-up object is
+  sent whole. Check with `scripts/test_mcp_search_cap_697.py` (throwaway DB).
 - `mcp_server/server.py` still carries some stale-vocabulary rough edges
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.
@@ -1731,9 +1799,6 @@ JSON body). No secrets there: the publish token stays a write-only API key (`app
 - **Owner-archive migrations** live in `scripts/archive/` (`v2c_owner_questions.py`: the
   AlienWhoop family and AW canopy questions, formerly `v2c_3` / `v2c_4` in `db.MIGRATIONS`), not in
   `init_db`. A data migration about specific archive content goes there, never into `MIGRATIONS`.
-- **IT-client seed:** the "Unknown" / "Not Business" / "Internal Infrastructure" rows are no
-  longer inserted on every boot (nothing reads them; only `/api/clients` lists them, and no page
-  calls it). `sync_clients.py` still seeds them.
 - Check with `scripts/test_install_config.py` (throwaway DBs: a fresh install and a legacy one).
 
 ### The hobby label (#700, "A hobby by any other name")
@@ -1859,7 +1924,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
   (plus the Dockerfile's `torch==` pin) doesn't pin, or pins at another version, on a non-`==` line, on a
   stale pin, and on a torch that isn't the `+cpu` build. Fix by pinning what the image actually has.
   `pip` is allowed unpinned (its `ALLOWED` dict): it comes from the base image, which the Dockerfile pins
-  by digest (the comment above `FROM` says how to bump it). Outside the app image (Windows, a venv) it
+  by digest (the comment above `FROM` says how to bump it; `ops/ollama-restarter/Dockerfile` pins the
+  same digest, so bump both together, #696). Outside the app image (Windows, a venv) it
   prints SKIPPED. Until #668's full pin (PR #674) lands it reports the 9 unpinned py7zr/openpyxl helpers.
 - **Dependency audit (#650): run it with network before a PR that touches `requirements.txt` or the
   Dockerfile, and now and then on `main`** (new advisories appear for versions that were clean):
@@ -1889,19 +1955,21 @@ shows what would run; `--show-output` prints the whole output of anything that d
   `with_writeup=False`. A new red line is a real failure: fix it or file it.
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
+    `test_drop_columns_704` (the dead-column drop and its safeguard),
     `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,
-    `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
+    `test_ownership_sensitive`, `test_bulk_visibility_709`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,
     `check_policy_doors`, `test_manage_634` (the `core/manage/` tools, their actor, the stubs);
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,
     `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
     `test_restart_sidecar_643`, `check_compose_ollama` (the compose example's Ollama sidecar, #687);
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
-    `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live);
-  - pages, search, dates, UI: `test_search_543`, `test_item_title_542`, `test_mountain_time_544` (`.py` and
+    `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live),
+    `check_type_samples` and `test_type_samples_720` (the type sampler covers every type and sniffs right, #720);
+  - pages, search, dates, UI: `test_search_543`, `test_mcp_search_cap_697` (MCP text previews), `test_item_title_542`, `test_mountain_time_544` (`.py` and
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
     `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
@@ -1915,7 +1983,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_release` (the CalVer logic), `check_dependency_audit` (known advisories in the installed
     packages; needs network, see above), `check_image_layout` (#688: the Dockerfile bakes the code in
     after the pip layers, `.dockerignore` keeps secrets/data/.git/tests out, the example compose mounts
-    no code; text only, no Docker), `check_text_bytes` (#706: no NUL or other C0 control byte besides
+    no code; #696: every `FROM` in every Dockerfile in the repo is pinned by `@sha256:` digest and the
+    ollama-restarter uses the app's exact base image; text only, no Docker), `check_text_bytes` (#706: no NUL or other C0 control byte besides
     tab/LF/CR in the `.css .js .html .py .md .json .txt` files under `web/`, `core/`, `mcp_server/` and
     `scripts/`; `--all` scans the whole repo, report only; its own test is `test_text_bytes_706`).
 - Besides the runner, **the `constructicon-test` container** (below) is where a change is exercised
@@ -2010,8 +2079,8 @@ from inside either checkout —
 **What `scripts/deploy.sh` does, in order (read from the script, #552, #688):** it first reads the
 checkout's EFFECTIVE compose config (`docker-compose.yml` + `docker-compose.override.yml`) to find the
 web service (`web` on the NAS, `constructicon-web` in the example), its `image:` and whether
-`/app/core` is bind-mounted. Then (1) unless `--no-snapshot`, takes the ZFS snapshot described below
-(aborts the deploy if the snapshot fails); (2) `git fetch origin --tags`; (3) `git reset --hard
+`/app/core` is bind-mounted. Then (1) unless `--no-snapshot`, takes the pre-deploy backup described below
+(a ZFS snapshot, or on a host/folder without its own dataset a db/ copy; aborts the deploy if it fails); (2) `git fetch origin --tags`; (3) `git reset --hard
 origin/main` (nothing if already there); then one of two modes:
 - **Baked (no code mounts: prod):** (4) `sudo docker compose build <web>` with the version build args
   from `git describe --tags --always`, tagged `<repo>:<version>` as well as the compose tag; (5) `sudo
@@ -2085,7 +2154,22 @@ snapshot name includes the version being replaced. Check with
 (instant, atomic across DB/WAL/files, only stores later changes) and keeps the
 newest 10. A failed snapshot aborts the deploy; `--no-snapshot` opts out.
 constructicon-test's data sits inside the shared `Storage Pool/Media` dataset,
-so its deploys skip the snapshot (by design, don't snapshot 2.75 TB for a test).
+so its deploys don't snapshot (by design, don't snapshot 2.75 TB for a test). **They take no
+pre-deploy backup at all (owner decision 2026-10-17):** deploy.sh skips the backup for any instance
+whose web service has `CONSTRUCTICON_ENV=dev` (the dev/test marker, #310; not the code mounts, which
+test can drop for a baked check), printing "Pre-deploy backup: skipped (dev/test instance: ...)".
+Every other install, ZFS or not (e.g. the work install), still takes one.
+- **No ZFS (#698):** on a host without ZFS, a data folder that isn't its own dataset, or no way to run
+  `zfs` as root, deploy.sh copies the DB folder instead: a one-off `--network none` container of the
+  app image (root only to make the folder, then the data folder's owner uid) copies every SQLite file
+  with the online backup API (+ `quick_check`), other files as they are, skips `-wal`/`-shm`, into
+  `<instance>/predeploy-backups/predeploy-<ts>-<commit>-v<ver>/` (0700/0600, newest 10 kept; gitignored).
+  storage/ is not copied. `./scripts/deploy.sh --backup-plan` prints which route a deploy would take
+  and changes nothing (reads the compose config and `df` only). The route is chosen from `df`'s
+  filesystem type, not `command -v zfs` (zfs isn't on hoop's PATH on the NAS; it runs via sudo).
+- **Docker and sudo (#698):** deploy.sh runs `docker` directly when the user can reach the socket (the
+  `docker` group, or root), else `sudo docker` (hoop on the NAS: not in the group, so unchanged); a
+  missing `docker` or Compose v2 plugin stops it with the install link. Compose stays required.
 - **Restore data:** read-only copies are browsable at
   `/mnt/Storage Pool/Media/constructicon/.zfs/snapshot/<name>/` (e.g. copy the
   DB file back with the app stopped). `sudo zfs rollback` discards everything
@@ -2104,7 +2188,12 @@ so its deploys skip the snapshot (by design, don't snapshot 2.75 TB for a test).
 
 **Captions: guarded, not per-image-restarted (#454, 2026-09-30).** The old per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Captions are back ON everywhere with the #454 safety valve (restart only on failure, 10-min cooldown, circuit breaker; status in `GET /api/captions/defaults` → `breaker` and `restart_valve`, reset via `POST /api/captions/reset-breaker`). All four services join `ollama_default` (the separate `~/ollama` project's network) today; once the home install moves to the compose-owned sidecar (#687) only the two web services join the internal `captions` network and the MCPs join neither. **No app container mounts `/var/run/docker.sock` (#643):** web asks the `ollama-restarter` sidecar (see `core/captions.py` above), which is the only holder of the socket; MCP has neither (#458), so only web can trigger safety-valve restarts. After a reboot, check `ollama` is actually running: it can fail to start before the NVIDIA driver loads (see #454).
 
-**The app runs as a non-root user (#643):** UID/GID 1000 (`app` in the image, Dockerfile `APP_UID`/`APP_GID`), which is `hoop` on the NAS. Every read-write bind mount (storage, db, backups, exports, import) must be owned by 1000:1000 on the host; files a root container wrote before #643 need a one-time `sudo chown -R 1000:1000 <dir>`. A `Permission denied` on upload, thumbnail, backup or export after a deploy means a directory missed that chown. `docker exec <web> id` should print `uid=1000(app)`.
+**The app runs as a non-root user (#643):** UID/GID 1000 (`app` in the image, Dockerfile `APP_UID`/`APP_GID`), which is `hoop` on the NAS. Every read-write bind mount (storage, db, backups, exports, import) must be owned by 1000:1000 on the host; files a root container wrote before #643 need a one-time `sudo chown -R 1000:1000 <dir>`. A `Permission denied` on upload, thumbnail, backup or export after a deploy means a directory missed that chown. `docker exec <web> id` should print `uid=1000(app)`. **Since #699 both processes check at startup**
+(`core/paths.unwritable_data_dirs`: the DB folder and file/-wal/-shm, storage, backups, exports; a real
+create-and-delete test, a missing folder judged by its nearest parent; import/ is never written, so not
+checked) and refuse to start with the path, its owner and mode, the uid they run as and the chown fix
+(`paths.data_dirs_error`): web raises from its startup hook (uvicorn exits 3), the MCP `sys.exit`s (1).
+Check with `scripts/test_data_dirs_699.py`. README "Install on a new host" is the non-NAS guide.
 
 **Data files are private to the app user (#652).** Target on the host: `storage/`, `db/`, `backups/`, `exports/` are directories `0750` owned by the app uid (1000:1000), the files in them `0640`, backup zips `0600`. The app keeps new files that way itself: `core/paths.restrict_new_files()` sets the process umask to `027` when `web/app.py` and `mcp_server/server.py` load (it covers every thread and subprocess; `CONSTRUCTICON_UMASK`, octal, overrides it, a bad value falls back to 027), and `core/backup.py` writes each zip `0600` whatever the umask. SQLite gives `-wal`/`-shm` the DB file's own mode, so an existing DB stays as loose as it was until fixed by hand. **Existing installs:** `bash ops/fix-data-permissions.sh DATA_ROOT` prints what it would change (dry run), `--apply` changes it (idempotent; never chowns, lists entries not owned by uid 1000). It leaves `DATA_ROOT` itself and `import/` alone: the import inbox is the owner's drop folder, mounted read-only into the MCP and never written by the app. **Check before applying on the NAS:** the `Media` SMB share (`/mnt/Storage Pool/Media`, which holds both instances' data) is `guestok` with guest = `nobody`, so today any guest on the LAN can read the DB and the backups over SMB; after the fix a guest can't open `storage/` / `db/` / `backups/` / `exports/` at all, and only an SMB session authenticated as `hoop` (uid 1000) can. Check with `scripts/test_private_files_652.py` (throwaway DB, Linux).
 
@@ -2393,12 +2482,9 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
   section to auto-derive from tags — that was the original design and was
   explicitly rejected in favor of manual curation via the `projects` /
   `project_items` tables.
-- **`clients`/`client_domains`/`ticket_id` are imagerepo-era vestiges.**
-  The code paths still exist (OCR auto-tagging by client domain, the `client` field, `/api/clients`)
-  but the client tables are empty on prod and none of it is part
-  of Constructicon's actual personal-use case — don't build new features
-  assuming they're a live, meaningful concept for this app the way they
-  were for imagerepo.
+- **The imagerepo ticketing vestiges are gone (#704).** `client`, `ticket_id`, `source`,
+  `artifact_link`, the `icon` override and the client tables were dropped; don't bring them back.
+  `tech` stays (it is the Source label).
 - **`mcp_server/server.py` IS live** (`constructicon-mcp` / `constructicon-test-mcp`
   containers — see the MCP section above). If a session can't see
   `mcp__constructicon-mcp__*` tools, that's a session configuration gap,

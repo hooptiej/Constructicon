@@ -250,6 +250,13 @@ async def startup():
 
 
 def _startup_as_system():
+    # #699: data folders owned by another uid used to fail later and cryptically ("unable to open
+    # database file", a Permission denied on the first upload). Refuse here, loudly, with the fix.
+    unwritable = paths.unwritable_data_dirs(db.DB_PATH)
+    if unwritable:
+        message = paths.data_dirs_error("constructicon-web", unwritable)
+        print(message, file=sys.stderr, flush=True)
+        raise RuntimeError(message)
     # #467 step 2: a broken install-token configuration (unreadable/empty file, too short) stops the
     # app here, loudly, like the MCP. No token at all is fine: sessions work, bearer clients get 401.
     try:
@@ -258,10 +265,7 @@ def _startup_as_system():
         raise RuntimeError(f"constructicon-web: refusing to start: {exc}") from None
     print(f"install token: {'configured (Bearer clients = admin)' if token_on else 'NOT configured (Bearer clients refused)'}",
           flush=True)
-    db.init_db()
-    # #562: the imagerepo IT-client seed ("Unknown", "Not Business", "Internal Infrastructure")
-    # is no longer inserted on every boot: nothing in Constructicon reads those rows (only
-    # /api/clients lists them, and no page calls it). sync_clients.py still seeds them.
+    db.init_db()  # #704: also drops the dead imagerepo columns/tables (or keeps one holding data, loudly)
     # #551 item 3: once at startup, after the migrations; then hourly (_decision_sweep_loop).
     _sweep_stale_decisions()
     # Self-heal: a redeploy/restart while OCR was still queued or running for

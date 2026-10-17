@@ -1,5 +1,5 @@
 """Item routes (#547): upload, content, processing, /api/image/*, per-item captions,
-gallery, clients, bulk edits, tags, search, multi-delete."""
+gallery, bulk edits, tags, search, multi-delete."""
 
 import json
 import logging
@@ -49,7 +49,9 @@ def api_delete_selected(slugs: list[str] = Form(...)):
     full-reset button; this is the day-to-day 'clear this test content'
     path, driven by gallery checkboxes or a single object's detail page.
     #541: one items.delete batch (files to the trash for 7 days); unknown slugs are skipped.
+    #709: every other slug must be visible to the caller (else 403 forbidden saying why, nothing deleted).
     `batch_id` undoes the lot via POST /api/changes/{batch_id}/undo."""
+    policy.viewable_rows(slugs, missing_ok=True)  # #709 (items.delete checks again, in its transaction)
     result = items.delete(slugs, missing_ok=True)
     return JSONResponse({"deleted": result.data["deleted"], "batch_id": result.batch_id,
                          "trash_days": items.TRASH_DAYS})
@@ -64,7 +66,6 @@ async def api_upload(
     file: UploadFile = File(...),
     description: str = Form(""),
     tags: str = Form("[]"),
-    client: str = Form(""),
     project_id: str = Form(""),
     modified_at: str = Form(""),
     folder_name: str = Form(""),
@@ -99,7 +100,6 @@ async def api_upload(
             run_background=background_tasks.add_task,
             description=description,
             tags=tag_list,
-            client=client,
             source_modified_at=source_modified_at,
             project_id=project_id,
             folder_name=folder_name,
@@ -139,7 +139,6 @@ def api_create_content(
     content_date: str = Form(""),
     description: str = Form(""),
     tags: str = Form("[]"),
-    client: str = Form(""),
     project_id: str = Form(""),
     type_metadata: str | None = Form(None),
     sensitive: str = Form(""),
@@ -188,7 +187,6 @@ def api_create_content(
         content_date=content_date_epoch,
         description=description,
         tags=tag_list,
-        client=client or None,
         type_metadata=parsed_type_metadata,
         project_id=project_id,
         sensitive=_form_bool(sensitive),  # #603
@@ -476,9 +474,7 @@ def api_update_image(
     slug: str,
     description: str | None = Form(None),
     tags: str | None = Form(None),
-    client: str | None = Form(None),
     display_name: str | None = Form(None),
-    icon: str | None = Form(None),
     content_description: str | None = Form(None),
     type_metadata: str | None = Form(None),
     content_date: float | None = Form(None),
@@ -502,19 +498,16 @@ def api_update_image(
     # #244: distinguish "field not provided" (None) from "field provided empty"
     # ("") so we can clear overrides -- FastAPI's Form(None) collapses BOTH
     # cases to the same None value, so read the raw form directly instead.
-    # A present-but-empty display_name/icon clears the override back to the
+    # A present-but-empty display_name clears the override back to the
     # default fallback; an absent one leaves it alone.
     form_data = from_request_thread(request.form)
     fields = {}
     if description is not None:
         fields["description"] = description
-    if client is not None:
-        fields["client"] = client
-    # display_name/icon (#11) — a "rename" or "set icon" by hand (a form POST here).
+    # display_name (#11) — a "rename" by hand (a form POST here). #704: the `icon` and `client`
+    # fields are gone (dead imagerepo columns); a form that still sends them is ignored.
     if "display_name" in form_data:
         fields["display_name"] = form_data.get("display_name")
-    if "icon" in form_data:
-        fields["icon"] = form_data.get("icon")
     # content_description/type_metadata (#54): corrections after creation (e.g.
     # scripts/full_youtube_channel_sync.py). type_metadata is a JSON object string, MERGED
     # into whatever the row already has, never a wholesale replace; the #425 physical-piece
@@ -830,15 +823,15 @@ def api_get_similar(request: Request, slug: str):
 
 
 @router.get("/api/gallery", dependencies=requires(roles.VIEWER))
-def api_gallery(request: Request, query: str = "", client: str = "", per_user: int = 4):
+def api_gallery(request: Request, query: str = "", per_user: int = 4):
     """Grouped-by-uploader gallery data: each uploader's most recent N items
     plus their real total, queried per-uploader so no single prolific
     uploader's activity can push others out of a global result limit.
     """
-    uploaders = db.list_uploaders(query=query or None, client=client or None)
+    uploaders = db.list_uploaders(query=query or None)
     groups = []
     for u in uploaders:
-        items = db.search(query=query or None, client=client or None, uploaded_by=u["uploaded_by"], limit=per_user)
+        items = db.search(query=query or None, uploaded_by=u["uploaded_by"], limit=per_user)
         groups.append({
             # u["uploaded_by"] is already the short group key (see
             # db.list_uploaders) — used both as the display label and as the
@@ -885,13 +878,6 @@ def api_item_grid(source: str = "home", media_type: str = Query("all", alias="ty
         return JSONResponse(files_feed.page(by_type, unfiled, rev == "all", media_type, filed, sort, cursor, limit, src))
 
 
-@router.get("/api/clients", dependencies=requires(roles.VIEWER))
-def api_clients(request: Request):
-    return JSONResponse(db.list_clients())
-
-
-
-
 @router.post("/api/bulk/add-to-project")
 def api_bulk_add_to_project(slugs: list[str] = Form(...), project_id: str = Form(...)):
     """Issue #98: the Unfiled page's bulk "add to project" action. Same
@@ -900,8 +886,11 @@ def api_bulk_add_to_project(slugs: list[str] = Form(...), project_id: str = Form
     single-object path, rather than partially failing the batch.
 
     #541 phase C: one membership.add_files call (all side effects, as before), so the whole
-    bulk add is one batch; the answer carries its batch_id for undo."""
-    count = sum(1 for slug in slugs if db.get_by_slug(slug) is not None)
+    bulk add is one batch; the answer carries its batch_id for undo.
+    #709: every slug must be visible (else 403 forbidden saying why, nothing written), checked first so
+    even the bad-card no-op answer can't count an item the caller can't see."""
+    rows, _ = policy.viewable_rows(slugs, missing_ok=True)
+    count = len(rows)
     if not project_id or db.get_project(project_id) is None:
         return JSONResponse({"count": count})
     result = membership.add_files(project_id, slugs, missing_ok=True, **membership.UI_EFFECTS)
@@ -930,17 +919,19 @@ def api_bulk_provenance(slugs: list[str] = Form(...), provenance: str = Form(...
 @router.post("/api/bulk/attach-tags")
 def api_bulk_attach_tags(slugs: list[str] = Form(...), tag_names: list[str] = Form(...)):
     """Issue #98: the Unfiled page's bulk tagging action. db.update_tags
-    fully replaces a row's tags/description/client with whatever's passed —
+    fully replaced a row's tags/description with whatever was passed —
     the single-object edit form gets away with this because it always
     resends the complete current description+tags together. A bulk action
     can't do that: it must read each row first and merge, or it would wipe
     out every selected item's existing tags and description. tag_names are
-    unioned onto each row's own existing tags (deduped); description/client
-    are passed back unchanged from the row itself."""
+    unioned onto each row's own existing tags (deduped); the description is
+    left unchanged."""
     tag_names = [t.strip() for t in tag_names if t.strip()]
     if not tag_names:
         return JSONResponse({"count": 0})
     # #541 phase C: core/tags.py, one batch (tags it creates are imaged, so undo removes them).
+    # #709: every slug must be visible (else 403 forbidden saying why, nothing written).
+    policy.viewable_rows(slugs, missing_ok=True)
     result = tags_svc.merge_item_tags(slugs, tag_names)
     return JSONResponse({"count": result.data["count"], "batch_id": result.batch_id})
 
@@ -974,9 +965,9 @@ def api_tags(request: Request):
 
 
 @router.get("/api/search", dependencies=requires(roles.VIEWER))
-def api_search(request: Request, query: str = "", tags: str = "", client: str = ""):
+def api_search(request: Request, query: str = "", tags: str = ""):
     tag_list = [t for t in tags.split(",") if t] or None
     # #557: db.search applies the policy's browse clause; the per-item policy is checked here too.
-    results = policy.filter_visible(db.search(query=query or None, tags=tag_list, client=client or None))
+    results = policy.filter_visible(db.search(query=query or None, tags=tag_list))
     # #477: search still finds old revisions, but marks them (superseded_by = the current one).
     return JSONResponse(revisions.decorate([_to_public(r) for r in results]))

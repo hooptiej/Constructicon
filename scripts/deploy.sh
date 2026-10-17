@@ -5,11 +5,17 @@
 # Deployment section for how that's set up; this script doesn't configure
 # credentials itself, only uses them.
 #
+# #698: any Docker host, not only the NAS. Needs: bash, git, python3, Docker with the Compose v2
+# plugin (`docker compose`; required, there is no no-compose mode). `sudo` is used only when this
+# user can't reach the Docker socket itself (a user in the `docker` group, or root, runs without it).
+# ZFS is optional: see the pre-deploy backup below. README.md "Install on a new host" is the guide.
+#
 # Usage (run from inside the checkout, or pass its path):
 #   ./scripts/deploy.sh                  # fetch + reset to origin/main, then (see the two modes below)
 #   ./scripts/deploy.sh --build          # mounted mode: also rebuild the image (requirements.txt /
 #                                        # Dockerfile changed). Baked mode always builds; accepted there.
-#   ./scripts/deploy.sh --no-snapshot    # skip the pre-deploy ZFS snapshot
+#   ./scripts/deploy.sh --no-snapshot    # skip the pre-deploy backup (ZFS snapshot or db/ copy)
+#   ./scripts/deploy.sh --backup-plan    # print which pre-deploy backup a deploy would take; change nothing
 #   ./scripts/deploy.sh --rollback VER   # run the image built for VER again (no git, no build)
 #   ./scripts/deploy.sh --write-version-only   # just write core/VERSION.json (mounted mode)
 #
@@ -40,6 +46,16 @@
 # (e.g. copy the DB back), or `zfs rollback` (destroys everything newer --
 # owner call). Code rollback: baked mode = --rollback <version>; mounted mode = git
 # (the snapshot name carries the commit that was running before the deploy).
+#
+# #698: everywhere else (no ZFS on the host, the data not in a dataset of its own, or no way to run
+# `zfs` as root), the pre-deploy backup is a COPY OF THE DB FOLDER: every SQLite file in it copied
+# with SQLite's online backup API (consistent while the app runs; never a raw copy of a live WAL DB),
+# other files copied as they are, -wal/-shm/-journal skipped. It runs in a one-off container of the
+# app image (no network, as the data folder's owner uid), into <instance>/predeploy-backups/<name>/
+# (0700, files 0600), and keeps the newest $SNAPSHOT_KEEP. storage/ is NOT copied (too big; keep
+# your own file backups). Restore: stop the app, copy the files back into the db folder, start it.
+# The dev/test instance (web service CONSTRUCTICON_ENV=dev) takes NO pre-deploy backup at all
+# (owner decision 2026-10-17); every other install takes one of the two above.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -49,37 +65,86 @@ IMAGE_KEEP=5
 BUILD=""
 SNAPSHOT=1
 WRITE_VERSION_ONLY=""
+BACKUP_PLAN=""
 ROLLBACK=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --build) BUILD=1 ;;
-    --no-snapshot) SNAPSHOT="" ;;
+    --no-snapshot|--no-backup) SNAPSHOT="" ;;
+    --backup-plan) BACKUP_PLAN=1 ;;
     --write-version-only) WRITE_VERSION_ONLY=1 ;;
     --rollback)
       shift
       ROLLBACK="${1:-}"
-      if [ -z "$ROLLBACK" ]; then echo "--rollback needs a version (see: sudo docker image ls)" >&2; exit 2; fi ;;
+      if [ -z "$ROLLBACK" ]; then echo "--rollback needs a version (see: docker image ls)" >&2; exit 2; fi ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
   shift
 done
 
+# #698: how to reach Docker. DOCKER is `docker` when this user can use the socket (the `docker`
+# group, or root), else `sudo docker`; SUDO is how to run a root-only command (zfs): empty as root,
+# else `sudo` when it exists. Compose v2 is required; a missing piece stops here with the fix.
+DOCKER=(docker)
+SUDO=()
+detect_docker() {
+  local err
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "deploy.sh: 'docker' isn't installed (or isn't on PATH). Install Docker Engine with the Compose" >&2
+    echo "plugin (https://docs.docker.com/engine/install/), then run this again." >&2
+    exit 1
+  fi
+  if [ "$(id -u)" != 0 ] && command -v sudo >/dev/null 2>&1; then SUDO=(sudo); fi
+  if err="$(docker info 2>&1 >/dev/null)"; then
+    DOCKER=(docker)
+  elif [ "$(id -u)" = 0 ]; then
+    echo "deploy.sh: can't reach the Docker daemon as root: $err" >&2
+    echo "Start Docker (e.g. systemctl start docker) and run this again." >&2
+    exit 1
+  elif [ "${#SUDO[@]}" -gt 0 ]; then
+    if ! err="$(sudo docker info 2>&1 >/dev/null)"; then
+      echo "deploy.sh: can't reach the Docker daemon, not as $(id -un) and not with sudo: $err" >&2
+      echo "Start Docker, or check this user's sudo rights, and run this again." >&2
+      exit 1
+    fi
+    DOCKER=(sudo docker)
+    echo "Docker: using 'sudo docker' ($(id -un) can't use the Docker socket directly)."
+  else
+    echo "deploy.sh: $(id -un) can't reach the Docker daemon ($err) and sudo isn't installed." >&2
+    echo "Add this user to the 'docker' group (then log out and back in), or run deploy.sh as root." >&2
+    exit 1
+  fi
+  if ! err="$("${DOCKER[@]}" compose version 2>&1)"; then
+    echo "deploy.sh needs Docker Compose v2 ('docker compose'), and '${DOCKER[*]} compose version' failed:" >&2
+    echo "  $err" >&2
+    echo "Install the Compose plugin (Debian/Ubuntu: apt install docker-compose-plugin; others:" >&2
+    echo "https://docs.docker.com/compose/install/linux/), then run this again. The old standalone" >&2
+    echo "'docker-compose' (v1) is not supported." >&2
+    exit 1
+  fi
+}
+
 # #688: one read of the effective compose config. Sets WEB_SVC (the app's web service: "web" on
 # the NAS, "constructicon-web" in the example), WEB_IMAGE (its image: tag), CODE_MOUNTED (1 when
-# /app/core is bind-mounted) and DATA_SRC (host path mounted at /app/data).
+# /app/core is bind-mounted), DATA_SRC (host path mounted at /app/data) and WEB_ENV (the web
+# service's CONSTRUCTICON_ENV, "dev" on the test/dev instance, #310).
 read_compose() {
-  eval "$(sudo docker compose config --format json | python3 -c 'import json, shlex, sys
+  eval "$("${DOCKER[@]}" compose config --format json | python3 -c 'import json, shlex, sys
 c = json.load(sys.stdin).get("services", {})
 name = next((n for n in ("web", "constructicon-web") if n in c), "")
 if not name:
     name = next((n for n, s in c.items() if "web.app:app" in " ".join(s.get("command") or [])), "")
 s = c.get(name, {})
 vols = s.get("volumes", [])
+env = s.get("environment") or {}
+if isinstance(env, list):
+    env = dict(e.split("=", 1) if "=" in e else (e, "") for e in env)
 out = {
     "WEB_SVC": name,
     "WEB_IMAGE": s.get("image", ""),
     "CODE_MOUNTED": "1" if any(v.get("target") == "/app/core" for v in vols) else "",
     "DATA_SRC": next((v.get("source", "") for v in vols if v.get("target") == "/app/data"), ""),
+    "WEB_ENV": str(env.get("CONSTRUCTICON_ENV") or "").strip().lower(),
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(v)}")')"
@@ -89,31 +154,151 @@ for k, v in out.items():
   fi
 }
 
-snapshot_before_deploy() {
-  # Host path mounted at /app/data by the web service (#453 directory mount).
-  local src="$DATA_SRC" inst ds mnt name ver
+# #698: which pre-deploy backup this host can take. Sets BACKUP_KIND (skip | zfs | copy | none),
+# BACKUP_WHY (why, in words) and, for zfs, ZFS_DS (the dataset).
+plan_backup() {
+  local src="$DATA_SRC" inst fstype mnt
+  BACKUP_KIND="" BACKUP_WHY="" ZFS_DS=""
+  # Owner decision 2026-10-17: the dev/test instance never takes a pre-deploy backup (as before
+  # #698); every other install does, ZFS or not. The signal is the web service's
+  # CONSTRUCTICON_ENV=dev, the app's own "this is the dev instance" marker (the DEV- tab title,
+  # the -dev version suffix). Not the code mounts: an override can be dropped on test for a baked
+  # check (still test), and nothing stops another install from using one (not test).
+  if [ "$WEB_ENV" = dev ]; then
+    BACKUP_KIND=skip BACKUP_WHY="dev/test instance: CONSTRUCTICON_ENV=dev; owner decision 2026-10-17"
+    return 0
+  fi
   if [ -z "$src" ]; then
-    echo "Snapshot: no /app/data mount on the web service; skipping."
+    BACKUP_KIND=none BACKUP_WHY="the web service has no /app/data mount"
     return 0
   fi
   inst="$(dirname "$src")"   # e.g. /mnt/Storage Pool/Media/constructicon
-  ds="$(df --output=source "$inst" | tail -1 | sed 's/[[:space:]]*$//')"
-  mnt="$(df --output=target "$inst" | tail -1 | sed 's/[[:space:]]*$//')"
-  if [ "$mnt" != "$inst" ]; then
-    echo "Snapshot: $inst is inside the shared dataset '$ds' (mounted at $mnt), not its own; skipping."
+  # GNU df only (Linux); anything else (macOS, busybox) reads as "not ZFS" and gets the copy.
+  fstype="$(df --output=fstype "$inst" 2>/dev/null | tail -1 | sed 's/[[:space:]]*$//' || true)"
+  if [ "$fstype" != "zfs" ]; then
+    BACKUP_KIND=copy BACKUP_WHY="$inst is not on ZFS (filesystem: ${fstype:-unknown})"
     return 0
   fi
-  # #508: the version being replaced rides along with the commit (describe is
-  # sanitised to ZFS-legal characters; "unversioned" if there are no tags yet).
-  ver="$(git describe --tags --always 2>/dev/null | tr -c 'A-Za-z0-9._:\n-' '_' | tr -d '\n' || true)"
-  name="predeploy-$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)-v${ver:-unversioned}"
-  sudo zfs snapshot "$ds@$name"
-  echo "Snapshot: $ds@$name"
-  # Retention: only ever touches @predeploy-* snapshots of this dataset.
-  sudo zfs list -H -t snapshot -o name -s creation -d 1 "$ds" \
-    | grep "@predeploy-" | head -n "-$SNAPSHOT_KEEP" \
-    | while IFS= read -r old; do sudo zfs destroy "$old" && echo "Snapshot pruned: $old"; done
+  ZFS_DS="$(df --output=source "$inst" | tail -1 | sed 's/[[:space:]]*$//')"
+  mnt="$(df --output=target "$inst" | tail -1 | sed 's/[[:space:]]*$//')"
+  if [ "$mnt" != "$inst" ]; then
+    BACKUP_KIND=copy BACKUP_WHY="$inst is inside the shared dataset '$ZFS_DS' (mounted at $mnt), not its own"
+    return 0
+  fi
+  if [ "$(id -u)" != 0 ] && [ "${#SUDO[@]}" -eq 0 ]; then
+    BACKUP_KIND=copy BACKUP_WHY="$inst is its own ZFS dataset, but there's no sudo to run zfs as root"
+    return 0
+  fi
+  BACKUP_KIND=zfs BACKUP_WHY="$inst is its own ZFS dataset ('$ZFS_DS')"
 }
+
+# #508: the version being replaced rides along with the commit (describe is
+# sanitised to ZFS-legal characters; "unversioned" if there are no tags yet).
+backup_name() {
+  local ver
+  ver="$(git describe --tags --always 2>/dev/null | tr -c 'A-Za-z0-9._:\n-' '_' | tr -d '\n' || true)"
+  printf 'predeploy-%s-%s-v%s' "$(date +%Y%m%d-%H%M%S)" "$(git rev-parse --short HEAD)" "${ver:-unversioned}"
+}
+
+snapshot_before_deploy() {
+  local name
+  plan_backup
+  case "$BACKUP_KIND" in
+    skip)
+      echo "Pre-deploy backup: skipped ($BACKUP_WHY)."
+      return 0 ;;
+    none)
+      echo "Pre-deploy backup: none ($BACKUP_WHY); skipping."
+      return 0 ;;
+    copy)
+      backup_db_copy
+      return 0 ;;
+  esac
+  name="$(backup_name)"
+  # ${SUDO[@]+...}: an empty array under `set -u` is an error in bash < 4.4 (macOS's bash 3.2).
+  ${SUDO[@]+"${SUDO[@]}"} zfs snapshot "$ZFS_DS@$name"
+  echo "Snapshot: $ZFS_DS@$name"
+  echo "Pre-deploy backup: ZFS snapshot ($BACKUP_WHY)."
+  # Retention: only ever touches @predeploy-* snapshots of this dataset.
+  ${SUDO[@]+"${SUDO[@]}"} zfs list -H -t snapshot -o name -s creation -d 1 "$ZFS_DS" \
+    | grep "@predeploy-" | head -n "-$SNAPSHOT_KEEP" \
+    | while IFS= read -r old; do ${SUDO[@]+"${SUDO[@]}"} zfs destroy "$old" && echo "Snapshot pruned: $old"; done
+}
+
+# #698: the no-ZFS backup, a consistent copy of the DB folder (see the header). Any failure stops
+# the deploy (set -e), like a failed snapshot; --no-snapshot deploys without a backup.
+backup_db_copy() {
+  local src="$DATA_SRC" inst owner name listing
+  inst="$(dirname "$src")"
+  if [ ! -d "$src" ]; then
+    echo "Pre-deploy backup: $src doesn't exist yet (first deploy?), so there's no database to back up."
+    return 0
+  fi
+  # Empty = nothing to back up. (A folder this user can't list is NOT taken as empty: the copy runs
+  # as root in a container and reads it anyway.)
+  if listing="$(ls -A "$src" 2>/dev/null)" && [ -z "$listing" ]; then
+    echo "Pre-deploy backup: $src is empty (first deploy?), so there's no database to back up."
+    return 0
+  fi
+  require_image_name
+  if ! "${DOCKER[@]}" image inspect "$WEB_IMAGE" >/dev/null 2>&1; then
+    echo "Pre-deploy backup: can't copy $src: the copy runs in the app image, and $WEB_IMAGE isn't on" >&2
+    echo "this host yet. Build or pull it first, or deploy without a backup: --no-snapshot." >&2
+    exit 1
+  fi
+  owner="$(stat -c '%u:%g' "$src" 2>/dev/null || stat -f '%u:%g' "$src")"
+  name="$(backup_name)"
+  echo "Pre-deploy backup: copying the database folder ($BACKUP_WHY, so no ZFS snapshot)..."
+  "${DOCKER[@]}" run --rm --network none --user 0 --entrypoint python3 \
+    -v "$src":/src -v "$inst":/inst "$WEB_IMAGE" -c "$DB_COPY_PY" \
+    /src /inst/predeploy-backups "$name" "$owner" "$SNAPSHOT_KEEP"
+  echo "Pre-deploy backup: db/ copy (SQLite backup API) at $inst/predeploy-backups/$name"
+  echo "  Restore: stop the app, copy those files back into $src, start it. storage/ is not in it."
+}
+
+# Runs in the one-off container as root: makes the backup folder, then drops to the data folder's
+# owner before it opens anything, so nothing in db/ (a -shm the backup creates) ends up root-owned.
+DB_COPY_PY='import os, shutil, sqlite3, sys
+src, root, name, owner, keep = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+uid, gid = (int(x) for x in owner.split(":"))
+os.makedirs(root, exist_ok=True)
+os.chown(root, uid, gid)
+os.chmod(root, 0o700)
+os.setgroups([])
+os.setgid(gid)
+os.setuid(uid)
+os.umask(0o077)
+dest = os.path.join(root, name)
+os.mkdir(dest)
+for entry in sorted(os.listdir(src)):
+    path = os.path.join(src, entry)
+    if not os.path.isfile(path):
+        print(f"  skipped {entry}/ (not a file)")
+        continue
+    if entry.endswith(("-wal", "-shm", "-journal")):
+        continue  # folded into the SQLite copy of their database
+    with open(path, "rb") as f:
+        is_sqlite = f.read(16) == b"SQLite format 3\x00"
+    out = os.path.join(dest, entry)
+    if is_sqlite:
+        source = sqlite3.connect(path, timeout=30)
+        target = sqlite3.connect(out)
+        source.backup(target)
+        check = target.execute("PRAGMA quick_check").fetchone()[0]
+        target.close()
+        source.close()
+        if check != "ok":
+            sys.exit(f"  {entry}: the copy failed its integrity check: {check}")
+        print(f"  {entry}: SQLite backup API, quick_check ok, {os.path.getsize(out)} bytes")
+    else:
+        shutil.copy2(path, out)
+        os.chmod(out, 0o600)
+        print(f"  {entry}: copied as is, {os.path.getsize(out)} bytes")
+old = sorted(d for d in os.listdir(root) if d.startswith("predeploy-"))[:-keep]
+for d in old:
+    shutil.rmtree(os.path.join(root, d))
+    print(f"  pruned {d}")
+'
 
 # The version of the checked-out commit, as a legal image tag.
 current_version() {
@@ -161,13 +346,13 @@ build_versioned_image() {
   built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   repo="$(image_repo)"
   echo "Building $WEB_IMAGE as version $ver ($commit)..."
-  sudo docker compose build \
+  "${DOCKER[@]}" compose build \
     --build-arg "CONSTRUCTICON_VERSION=$ver" \
     --build-arg "CONSTRUCTICON_COMMIT=$commit" \
     --build-arg "CONSTRUCTICON_BUILT_AT=$built" \
     "$WEB_SVC"
   if [ "$WEB_IMAGE" != "$repo:$ver" ]; then
-    sudo docker tag "$WEB_IMAGE" "$repo:$ver"
+    "${DOCKER[@]}" tag "$WEB_IMAGE" "$repo:$ver"
   fi
   echo "Image: $repo:$ver (also $WEB_IMAGE)"
 }
@@ -178,24 +363,34 @@ prune_version_tags() {
   local repo own
   repo="$(image_repo)"
   own="${WEB_IMAGE##*:}"
-  sudo docker image ls "$repo" --format '{{.CreatedAt}}\t{{.Tag}}' \
+  "${DOCKER[@]}" image ls "$repo" --format '{{.CreatedAt}}\t{{.Tag}}' \
     | sort -r | cut -f2 \
     | grep -v -x -e "$own" -e '<none>' -e 'latest' \
     | tail -n "+$((IMAGE_KEEP + 1))" \
     | while IFS= read -r tag; do
-        sudo docker image rm "$repo:$tag" >/dev/null 2>&1 && echo "Image pruned: $repo:$tag" || true
+        "${DOCKER[@]}" image rm "$repo:$tag" >/dev/null 2>&1 && echo "Image pruned: $repo:$tag" || true
       done || true   # nothing to prune = grep finds nothing; not a failure
 }
 
 # Which version is the running web process actually reporting? (Proof, not the checkout.)
 report_running_version() {
   echo "Running version:"
-  sudo docker compose exec -T "$WEB_SVC" python3 -c \
+  "${DOCKER[@]}" compose exec -T "$WEB_SVC" python3 -c \
     'from core import version; i = version.get_version_info(); print(" ", i["version"], i["commit"], i["deployed_at"])' \
     || echo "  (couldn't ask the web container; check: GET /api/version)"
 }
 
+detect_docker
 read_compose
+
+# #698: say which pre-deploy backup a deploy would take, and stop (reads only: compose config, df).
+if [ -n "$BACKUP_PLAN" ]; then
+  plan_backup
+  echo "Pre-deploy backup plan: $BACKUP_KIND ($BACKUP_WHY)"
+  if [ "$BACKUP_KIND" = zfs ]; then echo "  would run: ${SUDO[*]:-} zfs snapshot $ZFS_DS@predeploy-..."; fi
+  if [ "$BACKUP_KIND" = copy ]; then echo "  would copy $DATA_SRC into $(dirname "$DATA_SRC")/predeploy-backups/ (SQLite backup API)"; fi
+  exit 0
+fi
 
 # Lets you run just the version-writing step (used to verify #508 on the test
 # box without resetting its checkout): ./scripts/deploy.sh --write-version-only
@@ -207,9 +402,9 @@ fi
 if [ -n "$ROLLBACK" ]; then
   require_image_name
   repo="$(image_repo)"
-  if ! sudo docker image inspect "$repo:$ROLLBACK" >/dev/null 2>&1; then
+  if ! "${DOCKER[@]}" image inspect "$repo:$ROLLBACK" >/dev/null 2>&1; then
     echo "No image $repo:$ROLLBACK on this box. Versions available:" >&2
-    sudo docker image ls "$repo" --format '  {{.Tag}}  ({{.CreatedSince}})' >&2
+    "${DOCKER[@]}" image ls "$repo" --format '  {{.Tag}}  ({{.CreatedSince}})' >&2
     exit 1
   fi
   if [ -n "$CODE_MOUNTED" ]; then
@@ -222,11 +417,11 @@ if [ -n "$ROLLBACK" ]; then
   echo "Rolling back: $WEB_IMAGE -> $repo:$ROLLBACK"
   echo "  (database migrations only go forward: if the newer version migrated the DB and the old"
   echo "   code can't read it, restore the DB from the pre-deploy snapshot as well)"
-  sudo docker tag "$repo:$ROLLBACK" "$WEB_IMAGE"
-  sudo docker compose up -d
+  "${DOCKER[@]}" tag "$repo:$ROLLBACK" "$WEB_IMAGE"
+  "${DOCKER[@]}" compose up -d
   echo "Waiting for startup..."
   sleep 3
-  sudo docker compose ps
+  "${DOCKER[@]}" compose ps
   report_running_version
   exit 0
 fi
@@ -254,7 +449,7 @@ if [ -z "$CODE_MOUNTED" ]; then
   require_image_name
   build_versioned_image
   echo "Recreating the services on the new image..."
-  sudo docker compose up -d
+  "${DOCKER[@]}" compose up -d
   prune_version_tags
 else
   # MOUNTED (test/dev): code comes from the checkout through the override's bind mounts.
@@ -262,15 +457,15 @@ else
   if [ -n "$BUILD" ]; then
     require_image_name
     build_versioned_image
-    sudo docker compose up -d
+    "${DOCKER[@]}" compose up -d
   fi
   # Always restart: `up -d` leaves a container whose image and config didn't change running the old
   # code, and only a restart re-reads the bind-mounted files.
   echo "Restarting (bind-mounted code)..."
-  sudo docker compose restart
+  "${DOCKER[@]}" compose restart
 fi
 
 echo "Waiting for startup..."
 sleep 3
-sudo docker compose ps
+"${DOCKER[@]}" compose ps
 report_running_version

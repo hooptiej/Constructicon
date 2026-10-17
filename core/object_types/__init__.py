@@ -441,10 +441,29 @@ BROWSER_VIEWABLE_TYPES = frozenset({
     "application/pdf",
     "image/jpeg", "image/png", "image/gif", "image/webp", "image/avif", "image/bmp",
     "video/mp4", "video/webm", "video/ogg",
-    "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/x-wav", "audio/wave", "audio/webm",
-    "audio/flac", "audio/x-flac", "audio/aac",
+    "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm", "audio/flac", "audio/aac",
     "text/plain",
 })
+
+# #723: the other names Python's `mimetypes` (which version, and the host's /etc/mime.types) or an
+# uploader may give one of the formats above, mapped to the name in BROWSER_VIEWABLE_TYPES that
+# browsers understand. Python 3.14 guesses .wav as audio/vnd.wave (older ones said audio/x-wav), so
+# without this WAV downloaded instead of playing. The allowlist above stays canonical names only;
+# `browser_media_type` is the one place that folds an alias in, for the inline decision and for the
+# Content-Type /f/<slug> sends. video/quicktime is deliberately absent: .mov stays a download (#701).
+BROWSER_TYPE_ALIASES = {
+    "audio/x-wav": "audio/wav", "audio/wave": "audio/wav", "audio/vnd.wave": "audio/wav",
+    "audio/x-pn-wav": "audio/wav",
+    "audio/x-m4a": "audio/mp4", "audio/m4a": "audio/mp4",
+    "audio/x-flac": "audio/flac",
+    "audio/x-aac": "audio/aac",
+    "audio/mp3": "audio/mpeg", "audio/x-mp3": "audio/mpeg", "audio/x-mpeg": "audio/mpeg",
+    # #729: an .opus file is Ogg Opus, whose registered type is audio/ogg (RFC 7845); Python 3.14
+    # guesses audio/opus, freedesktop says audio/x-opus+ogg. Served as audio/ogg, which every browser
+    # plays. .m4v is MP4 video (Python: video/x-m4v), served as video/mp4.
+    "audio/opus": "audio/ogg", "audio/x-opus": "audio/ogg", "audio/x-opus+ogg": "audio/ogg",
+    "video/x-m4v": "video/mp4", "video/m4v": "video/mp4",
+}
 
 
 def guess_file_type(filename):
@@ -453,10 +472,16 @@ def guess_file_type(filename):
     return mimetypes.guess_type(filename or "")[0] if filename else None
 
 
+def browser_media_type(media_type):
+    """#723: `media_type` (parameters dropped, lower-cased) with a known alias folded into the name
+    browsers understand (`BROWSER_TYPE_ALIASES`), or "" for none."""
+    mt = (media_type or "").split(";")[0].strip().lower()
+    return BROWSER_TYPE_ALIASES.get(mt, mt)
+
+
 def opens_in_browser(filename=None, media_type=None):
     """True when the browser can show this file itself (#701), from its served media type."""
-    mt = (media_type or guess_file_type(filename) or "").split(";")[0].strip().lower()
-    return mt in BROWSER_VIEWABLE_TYPES
+    return browser_media_type(media_type or guess_file_type(filename)) in BROWSER_VIEWABLE_TYPES
 
 
 def original_link(item):

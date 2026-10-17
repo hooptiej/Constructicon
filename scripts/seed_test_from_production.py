@@ -465,7 +465,6 @@ def create_item(target, row, primary_project_new):
     common = {
         "description": row.get("description") or "",
         "tags": json.dumps(row.get("tags") or []),
-        "client": row.get("client") or "",
         "project_id": str(primary_project_new) if primary_project_new else "",
     }
     if row["_path"] is not None:
@@ -505,8 +504,6 @@ def create_item(target, row, primary_project_new):
     # whatever the target's upload path just derived itself.
     if row.get("display_name"):
         follow["display_name"] = row["display_name"]
-    if row.get("icon"):
-        follow["icon"] = row["icon"]
     if row.get("content_date") and row["_path"] is not None:
         follow["content_date"] = str(row["content_date"])
     if row["_path"] is not None and row.get("type_metadata"):

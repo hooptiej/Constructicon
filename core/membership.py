@@ -89,7 +89,7 @@ def add_files(card, slugs, *, link_tag, merge_free_tags, auto_cover, missing_ok=
     """Puts files on a card with the named side effects (see the module docstring). Unknown file
     slugs raise not_found before anything is written, unless `missing_ok` (the bulk paths skip
     them, as before). #709: a file the actor may not see (policy.viewable_rows) refuses the WHOLE
-    call with the same not_found, so nothing is added. One batch, one change-log row. data: {card,
+    call (403 forbidden, saying how many and why), so nothing is added. One batch, one change-log row. data: {card,
     slugs, added, already, skipped, tagged, cover}."""
     wanted = _slugs(slugs)
     batch_id = batch_id or changes.new_batch_id()
@@ -119,7 +119,7 @@ def add_files(card, slugs, *, link_tag, merge_free_tags, auto_cover, missing_ok=
 
 def remove_files(card, slugs, *, dry_run=False, actor=None, batch_id=None):
     """Takes files off a card (membership only: tags and the cover are left alone). Files that
-    aren't on the card are a no-op, as before. #709: a file the actor may not see is not_found
+    aren't on the card are a no-op, as before. #709: a file the actor may not see is refused (403)
     (unknown slugs stay a no-op). data: {card, removed}."""
     wanted = _slugs(slugs)
     batch_id = batch_id or changes.new_batch_id()

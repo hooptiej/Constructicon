@@ -85,14 +85,13 @@ UPDATE_FIELDS = ("display_name", "icon", "description", "client", "content_descr
 # --- helpers ---------------------------------------------------------------------------
 
 def get_item(slug, actor=None):
-    """The item row, or NotFound (404 `not_found`) when there is no such row OR `actor` (None = the
-    context's) may not see it (#709: every single-item op refuses a hidden item itself, with the
-    same answer as a missing one, whichever front end called it)."""
+    """The item row; NotFound (404 `not_found`) when there is no such row, and the #709 refusal
+    (403 `forbidden`, saying why: policy.refusal) when `actor` (None = the context's) may not see
+    it. Every single-item op refuses a hidden item itself, whichever front end called it."""
     from . import policy  # lazy: policy is imported by db at call time
-    row = db.get_by_slug(slug) if slug else None
-    if row is None:
+    if not slug:
         raise NotFound(f"No item {slug!r}.")
-    return policy.require_view(row, actor, f"No item {slug!r}.")
+    return policy.viewable_rows([slug], actor=actor)[0][0]
 
 
 def _slim(table, img):
@@ -310,7 +309,8 @@ def set_sensitive(slugs, sensitive, *, dry_run=False, actor=None, batch_id=None)
         sensitive_at, which Admin's restricted list shows as the reason.
       * Clearing: admin only (403 `forbidden` for anyone else, checked before the items are even
         looked up, so the answer says nothing about whether they exist).
-    Every slug must exist and be visible to the actor (else 404 not_found, nothing written). An item
+    Every slug must exist (else 404) and be visible to the actor (else #709's 403 forbidden saying
+    why; nothing written). An item
     already in the wanted state is left alone. data: {slugs, changed, sensitive}."""
     from . import actor as actor_ctx, policy, roles  # lazy: policy is imported by db at call time
     wanted = [slugs] if isinstance(slugs, str) else list(slugs or [])
@@ -321,14 +321,10 @@ def set_sensitive(slugs, sensitive, *, dry_run=False, actor=None, batch_id=None)
     who = actor_ctx.resolve(actor)
     if want and not roles.at_least(roles.role_of(who), roles.EDITOR):
         raise _forbidden("Marking an item sensitive needs an editor or an admin.")
-    rows = []
-    for slug in wanted:
-        row = db.get_by_slug(slug)
-        if row is None or not policy.can_view(row, who):
-            raise NotFound(f"No item {slug!r}.")
+    rows, _ = policy.viewable_rows(wanted, actor=who)  # #709: unknown = 404, hidden = 403 saying why
+    for row in rows:
         if not want and row.get("sensitive") and not policy.can_unmark_sensitive(who, row):
             raise _forbidden("Only the uploader or an admin can clear the sensitive flag.")
-        rows.append(row)
     batch_id = batch_id or changes.new_batch_id()
     now = time.time()
     with db.transaction(dry_run=dry_run):
@@ -349,8 +345,8 @@ def set_provenance(slugs, provenance, *, dry_run=False, actor=None, batch_id=Non
     """(#553) Sets the file provenance of several items as ONE imaged change-log row (op
     item_bulk_provenance), undoable with the generic undo: the file grids' bulk "Set provenance".
     `provenance` is validated per item exactly as update() validates it (an active key, or the
-    item's own current retired key; "" / None clears). Every slug must exist and be visible to the
-    actor (else 404 not_found, nothing written). An item already holding that value is left alone.
+    item's own current retired key; "" / None clears). Every slug must exist (else 404) and be visible
+    to the actor (else #709's 403 forbidden saying why; nothing written). An item already holding that value is left alone.
     data: {slugs, changed, provenance}."""
     from . import actor as actor_ctx, policy  # lazy: policy is imported by db at call time
     wanted = [slugs] if isinstance(slugs, str) else list(slugs or [])
@@ -359,13 +355,11 @@ def set_provenance(slugs, provenance, *, dry_run=False, actor=None, batch_id=Non
         raise InvalidInput("Give at least one item.", code="no_items")
     who = actor_ctx.resolve(actor)
     plan = []
-    for slug in wanted:
-        row = db.get_by_slug(slug)
-        if row is None or not policy.can_view(row, who):
-            raise NotFound(f"No item {slug!r}.")
+    rows, _ = policy.viewable_rows(wanted, actor=who)  # #709: unknown = 404, hidden = 403 saying why
+    for row in rows:
         value = provenance_options.validate("file", provenance or None, current=row.get("provenance"))
         if value != row.get("provenance"):
-            plan.append((slug, value))
+            plan.append((row["slug"], value))
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         with db.ImageLog(OP_BULK_PROVENANCE, actor, batch_id, wanted) as log:
@@ -429,7 +423,7 @@ def relate(slug, other, *, dry_run=False, actor=None, batch_id=None):
 def unrelate(slug, other, *, dry_run=False, actor=None, batch_id=None):
     """Removes the related link (both directions). Like before, the tags and cards the link
     shared stay (only undoing the relate takes those back). Unknown slugs stay a no-op; an item the
-    actor may not see is not_found (#709)."""
+    actor may not see refuses with #709's 403 forbidden."""
     from . import policy  # lazy: policy is imported by db at call time
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
@@ -866,7 +860,7 @@ def delete(slugs, *, missing_ok=False, dry_run=False, actor=None, batch_id=None)
     into the trash for TRASH_DAYS. One batch for the whole call, so one undo restores them all.
     Unknown slugs raise not_found before anything is written, unless `missing_ok` (bulk paths
     skip them, as before). #709: an item the actor may not see (policy.viewable_rows) refuses the
-    WHOLE call with the same not_found, missing_ok or not, so nothing is deleted. Returns data
+    WHOLE call (403 forbidden, saying how many and why), so nothing is deleted. Returns data
     {deleted, slugs, trashed, expires_at}."""
     from . import policy  # lazy: policy is imported by db at call time
     batch_id = batch_id or changes.new_batch_id()

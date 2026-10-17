@@ -6,16 +6,18 @@
 Same fixtures as test_ownership_sensitive.py: real sessions for an admin A, editors E1 and E2 and a
 viewer V, anonymous, and the per-run install token. E1 uploads a SENSITIVE file (only E1 and admins
 can see it) and E2 an ordinary one.
-  1. web, as E2: POST /api/delete, /api/bulk/add-to-project and /api/bulk/attach-tags with the hidden
-     slug alone and mixed with a visible one -> 404 not_found ("No item '<slug>'.", the answer a missing
-     single item gets) and NOTHING written (change log, rows, card members, tags, trash all unchanged);
+  1. web, as E2: POST /api/delete, /api/bulk/add-to-project, /api/bulk/attach-tags (and sensitive /
+     provenance) with the hidden slug alone and mixed with visible ones -> 403 `forbidden` that says
+     why (owner decision on #709: "tell them no, and why"): "Nothing was changed: 1 of the 3 selected
+     items is marked sensitive, ...", details {refused, reason, reasons}, and NOTHING written (change
+     log, rows, card members, tags, trash all unchanged); a restricted TYPE says so; two hidden = "2 of";
   2. unknown slugs keep their old meaning (skipped; a request of only unknown slugs is a 200 no-op);
      viewer 403, anonymous 401 (the route roles, unchanged);
   3. the uploader E1, the admin A and the token succeed on the same item;
-  4. the service ops refuse the same way when run as a non-admin actor (user:os_ed2): items.delete,
+  4. the service ops refuse the same way (403 forbidden, AppError with details) when run as a non-admin actor (user:os_ed2): items.delete,
      update, relate, unrelate, redact, membership add/remove, tags attach/detach/set/merge;
   5. the MCP tools, run as a non-admin actor (what a per-user token would be, #604 step 5), refuse
-     with not_found and write nothing; run as the MCP itself (admin) they still work.
+     with the same 403 forbidden, message and details, and write nothing; run as the MCP itself (admin) they still work.
 Prints `N failure(s)` or `all checks passed`.
 """
 
@@ -37,7 +39,7 @@ from starlette.testclient import TestClient  # noqa: E402
 
 from core import actor, db, items, membership, policy, users  # noqa: E402
 from core import tags as tags_svc  # noqa: E402
-from core.errors import NotFound  # noqa: E402
+from core.errors import AppError  # noqa: E402
 _testenv.assert_isolated()
 from web import app as webapp  # noqa: E402
 
@@ -97,11 +99,12 @@ for key, name in (("A", "bv_admin"), ("E1", "bv_ed1"), ("E2", "bv_ed2"), ("V", "
 H = {k: ({**SAME, "X-CSRF-Token": csrf_of(c)} if k in ("A", "E1", "E2", "V") else dict(SAME)) for k, c in C.items()}
 
 
-def upload(who, filename, seed, sensitive=False):
+def upload(who, filename, seed, sensitive=False, data=None, mime="image/png"):
     fields = {"description": f"bulkvis {filename}"}
     if sensitive:
         fields["sensitive"] = "true"
-    r = C[who].post("/api/upload", files={"file": (filename, png_bytes(seed), "image/png")}, data=fields, headers=H[who])
+    body = data if data is not None else png_bytes(seed)
+    r = C[who].post("/api/upload", files={"file": (filename, body, mime)}, data=fields, headers=H[who])
     check(f"{who} uploads {filename}", r.status_code == 200, r.text[:200])
     return r.json()["slug"]
 
@@ -111,6 +114,12 @@ SECRET2 = upload("E1", "bv-secret2.png", 2, sensitive=True)
 VIS = upload("E2", "bv-visible.png", 3)
 VIS2 = upload("E2", "bv-visible2.png", 4)
 VIS3 = upload("E2", "bv-visible3.png", 5)
+PEM = (b"-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUOwnsensFixtureNotARealCert0wCgYIKoZIzj0EAwIw\n"
+       b"-----END CERTIFICATE-----\n")
+CERT = upload("E1", "bv-cert.pem", 0, data=PEM, mime="application/x-pem-file")
+check("fixture: CERT is a restricted type (not flagged), hidden from E2",
+      policy.is_type_restricted(db.get_by_slug(CERT)) and not policy.is_flagged(db.get_by_slug(CERT))
+      and not policy.can_view(db.get_by_slug(CERT), "user:bv_ed2"))
 check("fixture: SECRET is hidden from E2 and visible to E1",
       not policy.can_view(db.get_by_slug(SECRET), "user:bv_ed2") and policy.can_view(db.get_by_slug(SECRET), "user:bv_ed1"))
 CARD = C["token"].post("/api/projects", data={"title": "Bulkvis Card"}).json()
@@ -151,16 +160,64 @@ DOORS = {
     "add-to-card": ("/api/bulk/add-to-project", {"project_id": str(CARD_ID)}),
     "tag": ("/api/bulk/attach-tags", {"tag_names": ["bv-new-tag"]}),
 }
+SENS_ONE = "Nothing was changed: this item is marked sensitive, and only its uploader or an admin can change it."
+SENS_1_OF = "Nothing was changed: 1 of the {n} selected items is marked sensitive, and only its uploader or an admin can change it."
+SENS_2_OF = ("Nothing was changed: 2 of the {n} selected items are marked sensitive, and only their uploader or an "
+             "admin can change them.")
+CERT_1_OF = ("Nothing was changed: 1 of the {n} selected items is a restricted file type (keys, certificates), which "
+             "only an admin or its uploader can change.")
+MIXED_2_OF = ("Nothing was changed: 2 of the {n} selected items are marked sensitive or a restricted file type, and "
+              "only their uploaders or an admin can change them.")
+
+
+def details(r):
+    try:
+        return (r.json().get("error") or {}).get("details") or {}
+    except ValueError:
+        return {}
+
+
+def refused_ok(label, r, before, want_msg, want_refused, want_reason):
+    code, msg = err(r)
+    diff = unchanged(before)
+    d = details(r)
+    check(f"{label}: 403 forbidden, nothing written", r.status_code == 403 and code == "forbidden" and not diff,
+          f"{r.status_code} {code} {diff} {r.text[:200]}")
+    check(f"{label}: the message says how many and why", msg == want_msg, msg)
+    check(f"{label}: details name the refused slugs and the reason",
+          d.get("refused") == want_refused and d.get("reason") == want_reason, d)
+    return r
+
+
+FIRST = None
 for label, (path, extra) in DOORS.items():
-    for combo_name, slugs in (("alone", [SECRET]), ("mixed with a visible one", [VIS, SECRET]),
-                              ("hidden first, then visible + unknown", [SECRET, VIS, UNKNOWN])):
+    for combo_name, slugs, want in (("alone", [SECRET], SENS_ONE),
+                                    ("mixed with a visible one", [VIS, SECRET], SENS_1_OF.format(n=2)),
+                                    ("hidden first, then visible + unknown", [SECRET, VIS, UNKNOWN], SENS_1_OF.format(n=3))):
         before = snapshot()
         r = C["E2"].post(path, data={"slugs": slugs, **extra}, headers=H["E2"])
-        code, msg = err(r)
-        diff = unchanged(before)
-        check(f"E2 {label} ({combo_name}): 404 not_found, nothing written",
-              r.status_code == 404 and code == "not_found" and not diff, f"{r.status_code} {code} {diff} {r.text[:160]}")
-        check(f"E2 {label} ({combo_name}): the message is the missing-item one", msg == f"No item {SECRET!r}.", msg)
+        refused_ok(f"E2 {label} ({combo_name})", r, before, want, [SECRET], "sensitive")
+        FIRST = FIRST or r
+    before = snapshot()
+    r = C["E2"].post(path, data={"slugs": [VIS, SECRET, SECRET2], **extra}, headers=H["E2"])
+    refused_ok(f"E2 {label} (two hidden of three)", r, before, SENS_2_OF.format(n=3), [SECRET, SECRET2], "sensitive")
+    before = snapshot()
+    r = C["E2"].post(path, data={"slugs": [VIS, CERT], **extra}, headers=H["E2"])
+    refused_ok(f"E2 {label} (a restricted type)", r, before, CERT_1_OF.format(n=2), [CERT], "restricted_type")
+    before = snapshot()
+    r = C["E2"].post(path, data={"slugs": [VIS, SECRET, CERT], **extra}, headers=H["E2"])
+    refused_ok(f"E2 {label} (one of each)", r, before, MIXED_2_OF.format(n=3), [SECRET, CERT], "mixed")
+check("the web answer keeps `detail` = the message (the old page JS reads it)",
+      FIRST.json().get("detail") == FIRST.json()["error"]["message"], FIRST.text[:200])
+for label, path, extra in (("sensitive", "/api/bulk/sensitive", {"sensitive": "true"}),
+                           ("provenance", "/api/bulk/provenance", {"provenance": ""})):
+    before = snapshot()
+    r = C["E2"].post(path, data={"slugs": [VIS, SECRET], **extra}, headers=H["E2"])
+    refused_ok(f"E2 bulk {label} [visible, hidden]", r, before, SENS_1_OF.format(n=2), [SECRET], "sensitive")
+    before = snapshot()
+    r = C["E2"].post(path, data={"slugs": [VIS, UNKNOWN], **extra}, headers=H["E2"])
+    check(f"E2 bulk {label} [visible, unknown]: still 404 not_found for the unknown slug, nothing written",
+          r.status_code == 404 and err(r)[0] == "not_found" and not unchanged(before), r.text[:200])
 check("the hidden item still exists after all that", db.get_by_slug(SECRET) is not None)
 check("no tag 'bv-new-tag' was created", tags_svc.find("bv-new-tag") is None)
 
@@ -237,12 +294,13 @@ for label, fn in SERVICE.items():
         try:
             fn()
             got = "no error"
-        except NotFound as exc:
-            got = f"not_found: {exc}"
+        except AppError as exc:
+            got = f"{exc.code}: {exc.status} {exc.details.get('refused')} {exc}"
         except Exception as exc:  # noqa: BLE001 -- reported as a failure below
             got = f"{type(exc).__name__}: {exc}"
     diff = unchanged(before)
-    check(f"service {label} as E2: not_found, nothing written", got.startswith("not_found") and not diff, f"{got} {diff}")
+    check(f"service {label} as E2: 403 forbidden naming the hidden item, nothing written",
+          got.startswith(f"forbidden: 403 ['{SECRET}']") and "marked sensitive" in got and not diff, f"{got} {diff}")
 with actor.acting_as("user:bv_ed2"):
     r_unk = items.delete([UNKNOWN], missing_ok=True)
 check("service items.delete(missing_ok) of an unknown slug as E2: no-op, as before", r_unk.data["deleted"] == 0)
@@ -272,8 +330,10 @@ def as_user(name):
     return call
 
 
-def is_not_found(value):
-    return isinstance(value, dict) and value.get("ok") is False and (value.get("error") or {}).get("code") == "not_found"
+def is_refused(value):
+    e = (value.get("error") or {}) if isinstance(value, dict) else {}
+    return (value.get("ok") is False and e.get("code") == "forbidden" and SECRET in (e.get("details") or {}).get("refused", [])
+            and e.get("message", "").startswith("Nothing was changed:") and "marked sensitive" in e.get("message", ""))
 
 
 MCP_CALLS = {
@@ -288,6 +348,7 @@ MCP_CALLS = {
     "add_related": lambda: mcp.constructicon_add_related(VIS, SECRET),
     "remove_related": lambda: mcp.constructicon_remove_related(VIS, SECRET),
     "update": lambda: mcp.constructicon_update(SECRET, description="pwned"),
+    "set_sensitive": lambda: mcp.constructicon_set_sensitive(SECRET, True),
 }
 mcp._call_as_mcp = as_user("bv_ed2")
 try:
@@ -295,7 +356,8 @@ try:
         before = snapshot()
         value = fn()
         diff = unchanged(before)
-        check(f"MCP {label} as E2: not_found, nothing written", is_not_found(value) and not diff, f"{value!r:.200} {diff}")
+        check(f"MCP {label} as E2: 403 forbidden with the message and details, nothing written",
+              is_refused(value) and not diff, f"{value!r:.300} {diff}")
 finally:
     mcp._call_as_mcp = _real_call
 value = mcp.constructicon_attach_tags(SECRET, ["bv-mcp-tag"])

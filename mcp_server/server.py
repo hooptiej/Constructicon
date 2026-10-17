@@ -1043,7 +1043,8 @@ def constructicon_set_sensitive(slug: str, sensitive: bool = True, dry_run: bool
     MCP acts as admin with the install token). One change-log entry: constructicon_undo(batch_id)
     reverses it. Opening a sensitive item (get / download / view) is recorded in its access log.
     Returns {ok, dry_run, batch_id, slug, sensitive, changed: [slugs actually changed], item}.
-    Errors: not_found (no such item, or one you may not see), forbidden (clearing without admin).
+    Errors: not_found (no such item), forbidden (an item you may not see, #709: the message says why
+    and details.refused names it; or clearing without admin).
     """
     result = items.set_sensitive(slug, sensitive, dry_run=dry_run)
     return {"ok": True, "dry_run": dry_run, "batch_id": result.batch_id, "slug": slug,
@@ -1058,7 +1059,7 @@ def constructicon_add_related(slug: str, related_slug: str) -> list[dict]:
     Also merges tags and project membership between the two.
     Returns the updated list of related objects.
     """
-    policy.viewable_rows([slug, related_slug])  # #709: missing or not visible = not_found
+    policy.viewable_rows([slug, related_slug])  # #709: missing = not_found, not visible = forbidden (says why)
     items.relate(slug, related_slug)  # #541 phase C: one undoable batch (link + what it shares)
     return [_to_public_listed(r) for r in db.list_related(slug)]
 
@@ -1181,7 +1182,7 @@ def constructicon_add_to_project(slug: str, project_id: str | int) -> list[dict]
     free-text tags), and a project with no cover takes this object as its cover. Undoable as
     one batch (constructicon_undo). Returns the object's updated project list.
     """
-    policy.viewable_rows([slug])  # #709: missing or not visible = not_found
+    policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     if db.get_project(project_id) is None:
         raise NotFound(f"No card {project_id!r}.")
     membership.add_files(project_id, [slug], **membership.UI_EFFECTS)  # #541 phase C: same flags as the web
@@ -1194,7 +1195,7 @@ def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[
 
     Returns the object's updated project list.
     """
-    policy.viewable_rows([slug])  # #709: missing or not visible = not_found
+    policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
@@ -1234,7 +1235,7 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
     project = db.get_project(project_id)
     if project is None:
         raise NotFound(f"No card {project_id!r}.")
-    row = policy.viewable_rows([slug])[0][0]  # #709: missing or not visible = not_found
+    row = policy.viewable_rows([slug])[0][0]  # #709: missing = not_found, not visible = forbidden (says why)
     if not object_types.can_be_writeup(row):
         label = object_types.get_object_type(row.get("media_type")).label
         raise ValueError(f"{label} items can't be a project write-up (their type declares no writeup_body_key)")
@@ -1730,7 +1731,7 @@ def constructicon_detach_tag(slug: str, tag_name: str) -> dict | None:
 
     Returns the updated object; a missing one returns the not_found error.
     """
-    policy.viewable_rows([slug])  # #709: missing or not visible = not_found
+    policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
         raise NotFound(f"No such tag: {tag_name!r}")

@@ -86,12 +86,11 @@ def _slugify(name):
 
 
 def _get_item(slug, actor=None):
-    """The item row, or NotFound when it is missing or `actor` may not see it (#709)."""
+    """The item row; NotFound when it is missing, #709's 403 refusal when `actor` may not see it."""
     from . import policy  # lazy, as in core/items.py
-    row = db.get_by_slug(slug) if slug else None
-    if row is None:
+    if not slug:
         raise NotFound(f"No item {slug!r}.")
-    return policy.require_view(row, actor, f"No item {slug!r}.")
+    return policy.viewable_rows([slug], actor=actor)[0][0]
 
 
 # --- writers on an open ImageLog (shared with items / membership) -----------------------
@@ -260,7 +259,8 @@ def set_item_tags(slug, names, *, dry_run=False, actor=None, batch_id=None):
 def merge_item_tags(slugs, names, *, dry_run=False, actor=None, batch_id=None):
     """Bulk attach-tags (#98): unions `names` onto each item's free-text tags (sorted, as before)
     and syncs post_tags. Unknown slugs are skipped. #709: an item the actor may not see
-    (policy.viewable_rows) refuses the WHOLE call with not_found before anything is written. ONE
+    (policy.viewable_rows) refuses the WHOLE call (403 forbidden, saying how many and why)
+    before anything is written. ONE
     batch and one change-log row for the call. data: {count, slugs, created}."""
     from . import policy  # lazy, as in core/items.py
     names = _names(names)

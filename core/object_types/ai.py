@@ -15,11 +15,12 @@ Text extraction tries only the PDF path (fitz) — no text extraction attempted
 on the EPS fallback path, matching eps.py's own discipline (raw PostScript
 has no generic text layer to pull structured text from).
 
-Best-effort, same as every other type's capture_fn in this codebase: a
-corrupt/unreadable .ai (even one that's supposedly PDF-compatible), a fitz
-or gs failure, or a missing file all return None/"" rather than raising, so
-a bad upload never breaks the upload response or the OCR background task
-that calls this indirectly via thumbnails.ensure_thumbnail.
+The thumbnail render is best-effort, same as every other type's capture_fn
+in this codebase: a corrupt/unreadable .ai, a fitz or gs failure, or a
+missing file render None rather than raising, so a bad upload never breaks
+the upload response. The text reader says so instead (#724 b2): a
+PDF-compatible .ai that can't be read raises UnreadableFile, which
+core/ocr.py reports ("corrupt or unreadable .ai: ...").
 """
 
 from pathlib import Path
@@ -50,14 +51,29 @@ def render_first_page(path):
     return eps.render_raster(path)
 
 
+def is_pdf_compatible(path):
+    """True when the .ai is a PDF inside (CS/v9+ "PDF Compatible": it starts with %PDF), False for a
+    legacy PostScript .ai (%!PS-Adobe), which has no text layer to read."""
+    with open(path, "rb") as f:
+        return f.read(1024).lstrip().startswith(b"%PDF")
+
+
 def extract_text(path):
     """The .ai's embedded text layer (PDF-compatible path), or "" if there
-    isn't one, or on any failure. Falls back to "" for legacy .ai files
-    (Ghostscript path has no text extraction)."""
+    isn't one. "" for legacy PostScript .ai files (Ghostscript path has no
+    text extraction: OCR of the rendered page is the text). #724 (b2): a
+    PDF-compatible .ai that PyMuPDF can't read raises, like a corrupt PDF
+    ("corrupt or unreadable .ai: ..."), instead of reading as "no text"."""
     if not path:
         return ""
+    from . import unreadable
+    try:
+        if not is_pdf_compatible(path):
+            return ""
+    except OSError as e:
+        raise unreadable(path, e) from e
     # Only try PDF extraction path — no text extraction on EPS fallback
-    return pdf.extract_text(path)
+    return pdf.text_layer(path)
 
 
 def capture_thumbnail(row):

@@ -177,8 +177,13 @@ check("a .docx that isn't a zip (the reader raised) stays 'failed'", state(BAD_D
 check("a missing stored file stays 'failed' (not 'unsupported')", state(GONE_DOC)[0] == "failed", state(GONE_DOC))
 check("a corrupt image stays 'failed'", state(BAD_IMG)[0] == "failed", state(BAD_IMG))
 check("a YouTube video whose thumbnail couldn't be fetched stays 'failed'", state(YT)[0] == "failed", state(YT))
-check("no note is left on a failed row whose reader gave no reason",
-      all(state(s)[1] is None for s in (GONE_DOC, BAD_IMG, YT)))
+# #724 (b2): every failure says why ("never fail silently"); these used to carry no note
+check("a missing stored file's failure says so", state(GONE_DOC)[1] == ocr.MISSING_FILE_NOTE, state(GONE_DOC))
+check("a corrupt image's failure says it's corrupt, naming the file not the server path",
+      (state(BAD_IMG)[1] or "").startswith("corrupt or unreadable .png: ")
+      and str(paths.storage_dir()) not in (state(BAD_IMG)[1] or ""), state(BAD_IMG))
+check("a YouTube video with no picture says no picture could be made",
+      state(YT)[1] == ocr.NO_PICTURE_NOTE, state(YT))
 check("a corrupt .docx's failure says so (#724 owner decision 2026-10-17)",
       (state(BAD_DOCX)[1] or "").startswith("corrupt or unreadable .docx: "), state(BAD_DOCX))
 

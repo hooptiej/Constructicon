@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from .. import datefmt
+from . import TooLarge  # #724 b2: defined in the registry now, shared by every text reader
 
 MAX_PART_BYTES = 32 * 1024 * 1024
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -57,22 +58,12 @@ def ole_streams(path):
         return {"/".join(e) for e in ole.listdir()}
 
 
-class TooLarge(ValueError):
-    """A part or stream over its size cap (#644): refused, reported as "too large to read"."""
-
-
-def unreadable(path, exc):
+def unreadable(path, exc, partial_text=None):
     """#724: the exception an Office text reader raises when it couldn't read `path` (it raised
-    `exc`): an object_types.UnreadableFile whose message is the reason shown with the red lamp,
-    "corrupt or unreadable .doc: <short error>" (or "too large to read .doc: ..." for a size cap)."""
-    from . import UnreadableFile
-    ext = str(path).rsplit(".", 1)[-1].lower() if "." in str(path) else "file"
-    detail = (str(exc).strip() or type(exc).__name__).replace("\n", " ")
-    if len(detail) > 120:
-        detail = detail[:119] + "…"
-    if isinstance(exc, TooLarge):
-        return UnreadableFile(f"too large to read .{ext}: {detail}")
-    return UnreadableFile(f"corrupt or unreadable .{ext}: {detail}")
+    `exc`): object_types.unreadable, "corrupt or unreadable .doc: <short error>" (or "too large to
+    read .doc: ..." for a size cap). Kept as a name here for the Office readers."""
+    from . import unreadable as _unreadable
+    return _unreadable(path, exc, partial_text=partial_text)
 
 
 def read_ole_stream(ole, name, cap=None):

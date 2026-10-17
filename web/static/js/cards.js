@@ -48,9 +48,12 @@
     if (item.ocr_status == null) return '';
     var meta = OCR_LAMP_META[item.ocr_status || 'none'] || OCR_LAMP_META.none;
     var title = item.ocr_status === 'done' ? (item.extracted_text || 'OCR found no text') : meta.title;
+    var note = (item.type_metadata || {}).ocr_note;
     if (item.ocr_status === 'unsupported' || item.ocr_status === 'failed') {  // #724: failed may say why (corrupt)
-      var note = (item.type_metadata || {}).ocr_note;
       if (note) title = meta.title + ': ' + note;
+    } else if (item.ocr_status === 'done' && note) {
+      // #724 (b2): done, with a warning (the reader failed; OCR read the picture instead)
+      title = 'Read with a warning: ' + note + (item.extracted_text ? '\n\n' + item.extracted_text : '');
     }
     return lamp(meta.color, title);
   }

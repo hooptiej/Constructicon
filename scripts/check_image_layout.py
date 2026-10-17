@@ -1,6 +1,9 @@
 """The image carries the app code, and only the app code (#688).
 
 Text and YAML only: no Docker, no server, no database, no network. It checks that
+  * every FROM in every Dockerfile in the repo (root, ops/*, ...) pins its base image by
+    @sha256: digest, and the ollama-restarter sidecar uses the app's exact base image (#696; the
+    rule is self-tested against unpinned samples first, so a broken rule can't pass everything);
   * the Dockerfile COPYs core/, web/, mcp_server/ and assets/ into /app, AFTER the pip installs (so a
     code change never invalidates the package layers), before `USER app` (so the code is root-owned
     and read-only to the app user), and stamps the version from a build arg after the code;
@@ -50,8 +53,86 @@ def dockerfile_instructions(text):
     return out
 
 
+# ---- every FROM pinned by digest (#696) -------------------------------------------------------
+# A tag alone (python:3.14-slim) can move under a rebuild; a digest can't. Every Dockerfile in the
+# repo (the app's, the ollama-restarter sidecar's, any new one) must pin each base image as
+# image:tag@sha256:<64 hex>. A FROM naming an earlier build stage (FROM x AS build ... FROM build)
+# and FROM scratch need no digest.
+DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+SKIP_DIRS = {".git", "node_modules", "worktrees", "archive"}
+
+
+def unpinned_froms(text):
+    """[(line_no, image)] for each FROM in a Dockerfile's text whose image has no @sha256: digest."""
+    stages, bad = set(), []
+    for line_no, op, args in dockerfile_instructions(text):
+        if op != "FROM":
+            continue
+        toks = [t for t in args.split() if not t.startswith("--")]
+        if not toks:
+            bad.append((line_no, "(no image)"))
+            continue
+        image = toks[0]
+        if len(toks) >= 3 and toks[1].lower() == "as":
+            stages.add(toks[2].lower())
+        if image.lower() == "scratch" or image.lower() in stages:
+            continue
+        if not DIGEST_RE.search(image):
+            bad.append((line_no, image))
+    return bad
+
+
+def repo_dockerfiles():
+    out = []
+    for p in sorted(ROOT.rglob("*")):
+        rel = p.relative_to(ROOT)
+        if any(part in SKIP_DIRS for part in rel.parts[:-1]) or not p.is_file():
+            continue
+        if p.name == "Dockerfile" or p.name.startswith("Dockerfile.") or p.name.endswith(".Dockerfile"):
+            out.append(p)
+    return out
+
+
+# Self-test: the rule fails an unpinned FROM and passes a pinned one, so a broken regex can't
+# quietly pass every file.
+_PIN = "@sha256:" + "a" * 64
+_SAMPLES = [
+    ("FROM python:3.14-slim\n", [(1, "python:3.14-slim")]),
+    ("FROM python:3.14-slim" + _PIN + "\n", []),
+    ("# c\nFROM --platform=linux/amd64 node:22-slim AS build\nRUN x\nFROM build\n", [(2, "node:22-slim")]),
+    ("FROM node:22" + _PIN + " AS build\nFROM build\nFROM scratch\n", []),
+    ("FROM python:3.14-slim@sha256:abc\n", [(1, "python:3.14-slim@sha256:abc")]),
+    ("FROM python@sha256:" + "b" * 64 + "\nFROM debian:12\n", [(2, "debian:12")]),
+    ("FROM ${BASE}\n", [(1, "${BASE}")]),
+]
+for i, (sample, want) in enumerate(_SAMPLES, 1):
+    got = unpinned_froms(sample)
+    check(f"FROM-pin rule self-test {i}: {sample.strip().splitlines()[-1][:40]!r} -> {len(want)} unpinned",
+          got == want, f"got {got}, want {want}")
+
+dockerfiles = repo_dockerfiles()
+names = [p.relative_to(ROOT).as_posix() for p in dockerfiles]
+check("found the repo's Dockerfiles (root and ops/ollama-restarter)",
+      {"Dockerfile", "ops/ollama-restarter/Dockerfile"} <= set(names), str(names))
+for p, name in zip(dockerfiles, names):
+    bad = unpinned_froms(p.read_text(encoding="utf-8"))
+    check(f"{name}: every FROM is pinned by @sha256: digest", not bad,
+          ", ".join(f"line {n}: {img}" for n, img in bad))
+
 dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 ins = dockerfile_instructions(dockerfile)
+
+
+def base_image(text):
+    return next((args.split()[0] for _, op, args in dockerfile_instructions(text)
+                 if op == "FROM" and args.split()), None)
+
+
+restarter = ROOT / "ops" / "ollama-restarter" / "Dockerfile"
+if restarter.exists():
+    check("the restarter sidecar uses the app's exact base image (one base layer on the box, #696)",
+          base_image(restarter.read_text(encoding="utf-8")) == base_image(dockerfile),
+          f"{base_image(restarter.read_text(encoding='utf-8'))} vs {base_image(dockerfile)}")
 
 
 def first_index(pred):

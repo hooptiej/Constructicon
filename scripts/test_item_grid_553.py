@@ -127,6 +127,14 @@ def static_checks():
           "text-overflow: ellipsis" in name_body and "white-space: nowrap" in name_body and "min-width" in name_body, name_body)
     row_fixed = [s for s, b in crules if ".cx-row" in s and re.search(r"(?<![-\w])width:\s*(\d{3,}|[4-9]\d)px", b)]
     check("cards.css: no row part has a wide fixed width (no horizontal scroll at 375 px)", not row_fixed, row_fixed)
+    # #718: the rows' unwrapped names must never size their container (home's Files column grew over Projects).
+    list_body = " ".join(b for s, b in crules if ".cx-item-list" in [x.strip() for x in s.split(",")])
+    check("cards.css: .cx-item-list has contain: inline-size (#718)", re.search(r"contain:\s*inline-size", list_body) is not None, list_body)
+    check("style.css: home's columns can't be forced wider than their share (minmax(0, ...) tracks, #718)",
+          re.search(r"grid-template-columns:\s*minmax\(0,\s*2fr\)\s+minmax\(0,\s*1fr\)", body_of(".home-widgets")) is not None,
+          body_of(".home-widgets"))
+    check("style.css: home's right column has min-width: 0 (#718)",
+          re.search(r"min-width:\s*0", body_of(".home-widgets-right-column")) is not None)
     js = open(os.path.join(ROOT, "web", "static", "js", "item-grid.js"), encoding="utf-8").read()
     cjs = open(os.path.join(ROOT, "web", "static", "js", "cards.js"), encoding="utf-8").read()
     check("the old width-only 'list' hack is gone (#714)", "opts.width" not in js and "opts.width" not in cjs)

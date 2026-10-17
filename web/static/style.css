@@ -784,9 +784,11 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
    TRUE natural height instead of an already-inflated one, which is what
    made this fix ineffective on the first two attempts (the CSS was
    corrupting the very measurement the JS relied on). */
-.home-widgets { display: grid; grid-template-columns: 2fr 1fr; gap: 28px; align-items: start; }
+/* #718: minmax(0, ...) so content can never force a column wider than its share (a plain fr track's
+   minimum is the content's min-content width: a List row's unwrapped file name pushed Files over Projects). */
+.home-widgets { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 28px; align-items: start; }
 .home-widget { display: flex; flex-direction: column; gap: 18px; min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
-.home-widgets-right-column { display: flex; flex-direction: column; gap: 28px; }
+.home-widgets-right-column { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
 .home-col-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .home-col-header h2 { font-size: 15px; font-weight: 500; margin: 0; }
 /* #176: was plain colored text with no button chrome, stood out as

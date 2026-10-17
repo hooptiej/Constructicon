@@ -51,7 +51,8 @@ check("mcp boot reports all pending", db.pending_migrations() == names)
 # --- web boot: every step recorded once ---
 db.init_db()
 done = db.applied_migrations()
-check("web boot records every step", sorted(done) == sorted(names), str(sorted(done)))
+# #704: the dead-column drop is an every-boot step (not in MIGRATIONS); it records its first run too.
+check("web boot records every step", sorted(done) == sorted(names + [db.MIGRATION_704]), str(sorted(done)))
 check("second web boot applies nothing", db.run_pending_migrations() == [])
 before = dict(done)
 db.init_db()

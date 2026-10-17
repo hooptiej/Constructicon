@@ -6,7 +6,7 @@ row written through `db.ImageLog` (row images in the change log), and a `Result`
 actor context, core/actor.py). Undo is the generic `cards.undo` / POST /api/changes/{id}/undo /
 constructicon_undo(batch_id); it calls back into this module for the file side of the trash.
 
-  update(slug, **fields)   title/icon, description, client, content_description, type_metadata
+  update(slug, **fields)   title, description, content_description, type_metadata
                            (merged; physical-piece keys cleaned), file provenance, highlight, brand
                            asset/role, display-date override, content_date. One Save = one batch.
   redact(slug)             "remove file, keep info": the file goes to the trash as a HOLD (no expiry),
@@ -77,7 +77,7 @@ TRASH_DAYS = 7
 TRASH_TTL_SECONDS = TRASH_DAYS * 24 * 3600
 EMPTY_TRASH_PHRASE = "EMPTY TRASH"
 
-UPDATE_FIELDS = ("display_name", "icon", "description", "client", "content_description", "type_metadata",
+UPDATE_FIELDS = ("display_name", "description", "content_description", "type_metadata",
                  "provenance", "highlight", "is_brand_asset", "brand_role", "display_date_override",
                  "content_date", "agent_notes")
 
@@ -165,14 +165,11 @@ def _plan_update(row, fields):
         raise InvalidInput(f"Unknown item field(s): {', '.join(unknown)}", code="unknown_field",
                            details={"allowed": list(UPDATE_FIELDS)})
     cols = {}
-    for k in ("display_name", "icon"):
-        if k in fields:
-            v = fields[k]
-            cols[k] = str(v) if v not in (None, "") else None
+    if "display_name" in fields:
+        v = fields["display_name"]
+        cols["display_name"] = str(v) if v not in (None, "") else None
     if "description" in fields:
         cols["description"] = "" if fields["description"] is None else str(fields["description"])
-    if "client" in fields:
-        cols["client"] = fields["client"]
     if "content_description" in fields:
         cols["content_description"] = fields["content_description"]
     if "type_metadata" in fields:

@@ -84,8 +84,11 @@ DROPPED_COLUMNS = [
     ("capture_events", "sensitive_at"), ("capture_events", "sensitive_by"), ("capture_events", "sensitive"),
     ("projects", "writeup_lead"), ("projects", "flavor"), ("projects", "synopsis"),
     ("hobby_settings", "synopsis"), ("hobby_settings", "flavor"),
-    ("blog_entries", "created_by_user_id"), ("blog_tags", "group_code"), ("clients", "nickname"),
+    ("blog_entries", "created_by_user_id"), ("blog_tags", "group_code"),
 ]
+# #704: what every install had before #704 and a fresh DB no longer has (the web boot drops them).
+OLD_ITEM_COLUMNS = (("source", "TEXT NOT NULL DEFAULT 'screenshot'"), ("client", "TEXT"), ("ticket_id", "TEXT"),
+                    ("artifact_link", "TEXT"), ("icon", "TEXT"))
 
 
 def downgrade(path, full):
@@ -106,6 +109,17 @@ def downgrade(path, full):
             conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
         conn.execute("DROP TABLE project_hobbies")
         conn.execute("DROP TABLE family_members")
+        # #704: the dead imagerepo columns, their indexes and the client tables (placeholder rows only)
+        for column, ddl in OLD_ITEM_COLUMNS:
+            conn.execute(f"ALTER TABLE capture_events ADD COLUMN {column} {ddl}")
+        conn.execute("CREATE INDEX idx_capture_events_source ON capture_events(source)")
+        conn.execute("CREATE INDEX idx_capture_events_client ON capture_events(client)")
+        conn.execute("CREATE INDEX idx_capture_events_ticket ON capture_events(ticket_id)")
+        conn.execute("CREATE TABLE clients (name TEXT PRIMARY KEY, category TEXT NOT NULL)")
+        conn.execute("CREATE TABLE client_domains (client_name TEXT NOT NULL, domain TEXT NOT NULL, "
+                     "PRIMARY KEY (client_name, domain))")
+        conn.execute("INSERT INTO clients (name, category) VALUES ('Unknown', 'special'), "
+                     "('Not Business', 'special'), ('Internal Infrastructure', 'special')")
         if not full:
             conn.execute("COMMIT")
             return
@@ -192,6 +206,7 @@ for rnd in range(1, ROUNDS + 1):
     check(f"r{rnd}: the DB starts in the old shape (no client_ip, no search index"
           + (", untyped links)" if full else ")"),
           "client_ip" not in old_cols["audit_log"] and ("table", "item_search") not in old_objects
+          and "client" in old_cols["capture_events"] and ("table", "clients") in old_objects
           and ("type" not in old_cols["project_relations"]) == full)
     go = time.time() + 12  # every child imports core before this moment, then they all start at once
     env = {**os.environ, "CONSTRUCTICON_DB_PATH": str(path), "PYTHONDONTWRITEBYTECODE": "1"}

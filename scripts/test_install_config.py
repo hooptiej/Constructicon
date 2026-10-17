@@ -80,7 +80,7 @@ check("fresh: card_migration has no AlienWhoop / canopy code",
       and not hasattr(__import__("core.card_migration", fromlist=["x"]), "run_v2c_4"))
 check("fresh: the #562 migrations ran (and seeded nothing)",
       {"install_config_seed_562", "hobby_physical_piece_562"} <= {r[0] for r in q("SELECT name FROM schema_migrations")})
-check("fresh: no IT-client seed rows at boot", q("SELECT COUNT(*) FROM clients")[0][0] == 0)
+check("fresh: no IT-client table at all (#704)", not q("SELECT name FROM sqlite_master WHERE name = 'clients'"))
 dump = json.dumps([q("SELECT * FROM install_config"), q("SELECT * FROM app_settings"),
                    q("SELECT name FROM blog_tags"), q("SELECT title FROM projects")]).lower()
 check("fresh: nothing owner-specific stored", not any(w in dump for w in OWNERISH), dump[:200])
@@ -218,8 +218,8 @@ db.DB_PATH = Path(TMP) / "legacy.db"
 install_config.clear_cache()
 db.init_db(migrate=False)  # schema only: the DB as an old install has it before this deploy
 c = sqlite3.connect(db.DB_PATH)
-c.execute("INSERT INTO capture_events (slug, timestamp, tech, tags, artifact_link) VALUES "
-          "('old1', 0, 'Hooptie J (me) — manual upload', '[]', '/f/old1')")
+c.execute("INSERT INTO capture_events (slug, timestamp, tech, tags) VALUES "
+          "('old1', 0, 'Hooptie J (me) — manual upload', '[]')")
 c.execute("INSERT INTO blog_tags (name, slug, is_hobby, hobby_status) VALUES ('Traditional Media', 'traditional-media', 1, 'active')")
 c.execute("INSERT INTO blog_tags (name, slug, is_hobby, hobby_status) VALUES ('Collecting', 'collecting', 1, 'active')")
 c.execute("DELETE FROM schema_migrations WHERE name IN ('install_config_seed_562', 'hobby_physical_piece_562')")

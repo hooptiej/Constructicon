@@ -193,8 +193,10 @@ def _attachments(msg):
 
 def _load(path):
     path = Path(path)
-    if path.stat().st_size > MAX_FILE_BYTES:
-        raise ValueError("file too large to parse")
+    size = path.stat().st_size
+    if size > MAX_FILE_BYTES:
+        from . import TooLarge  # a ValueError, as before; #724 b2: the reason says "too large to read"
+        raise TooLarge(f"{size:,} bytes, over the {MAX_FILE_BYTES:,} byte cap")
     with open(path, "rb") as f:
         return email.message_from_binary_file(f, policy=policy.default)
 
@@ -242,18 +244,23 @@ def get_embedded_metadata(path):
 
 
 def extract_text_for_row(row):
-    """text_extract_fn: Subject + body for search, capped."""
+    """text_extract_fn: Subject + body for search, capped. #724 (b2): a message that
+    can't be read raises UnreadableFile ("corrupt or unreadable .eml: ...", or "too
+    large to read .eml: ..."), never "" (which means "read, and empty")."""
     stored = row.get("stored_filename")
     if not stored:
         return ""
     path = storage.path_for(stored)
     if not path.exists():
-        return ""
+        return ""  # core/ocr.py sees the stored file is missing and says so
     try:
         facts = parse(path)
+    except MemoryError:
+        raise
     except Exception as e:
         print(f"Email text extraction failed for {path}: {e!r}")
-        return ""
+        from . import unreadable
+        raise unreadable(path, e) from e
     text = "\n\n".join(p for p in (facts["subject"], facts["_body"]) if p)
     return text[:min(MAX_BODY_CHARS, storage.MAX_EXTRACTED_TEXT_CHARS)]
 

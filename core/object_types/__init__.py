@@ -49,14 +49,64 @@ class UnreadableFile(Exception):
     - UnreadableFile itself: the file is corrupt or unreadable ("corrupt or unreadable .doc: ...");
       core/ocr.py settles ocr_status='failed' with that reason (never fail silently).
     - NotCompatibleFile: the file is fine but holds nothing we can read (encrypted, an older format);
-      core/ocr.py settles 'unsupported' (grey) with that reason, like a None return but per file."""
+      core/ocr.py settles 'unsupported' (grey) with that reason, like a None return but per file.
+
+    #724 (b2): `partial_text` is what the reader got out before the error (a tar listing that broke
+    halfway, the first sheets of a workbook). core/ocr.py keeps it as the item's text (done) and
+    keeps the reason as the note, so neither the text nor the warning is lost. It survives the trip
+    back from a parse_limits child (an exception's __dict__ is pickled with it)."""
+
+    def __init__(self, message, partial_text=None):
+        super().__init__(message)
+        self.partial_text = partial_text or None
 
 
 class NotCompatibleFile(UnreadableFile):
     """#724: see UnreadableFile: a readable-in-principle file we can't read (grey, not red)."""
 
 
+class TooLarge(ValueError):
+    """A part, stream or file over its size cap (#644): refused, reported as "too large to read"."""
+
+
 ENCRYPTED_NOTE = "encrypted: can't read without the password"  # #724 owner wording
+MAX_REASON_DETAIL_CHARS = 120
+_DOUBLE_EXTENSIONS = (".tar.gz", ".tar.bz2", ".tar.xz")
+
+
+def file_ext(path):
+    """The extension a reason names, without the dot: "pdf", "tar.gz"; "file" when there is none."""
+    name = str(path).lower()
+    for ext in _DOUBLE_EXTENSIONS:
+        if name.endswith(ext):
+            return ext[1:]
+    suffix = Path(name).suffix
+    return suffix[1:] if suffix else "file"
+
+
+def short_error(exc, path=None):
+    """A one-line, human-sized version of `exc` for a reason: its message (or its class name when
+    it has none), newlines folded, cut at MAX_REASON_DETAIL_CHARS. With `path`, the full server path
+    a library put in its message ("cannot identify image file '/app/storage/x.png'") is cut down to
+    the file's name: the reason is shown to people, the storage layout isn't theirs to read."""
+    detail = str(exc).strip() or type(exc).__name__
+    if path:
+        full = str(path)
+        # as given, as repr() writes it inside an OSError's message ("\\" doubled), and with "/"
+        for form in (full.replace("\\", "\\\\"), full, full.replace("\\", "/")):
+            detail = detail.replace(form, Path(full).name)
+    detail = detail.replace("\r", " ").replace("\n", " ")
+    if len(detail) > MAX_REASON_DETAIL_CHARS:
+        detail = detail[:MAX_REASON_DETAIL_CHARS - 1] + "…"
+    return detail
+
+
+def unreadable(path, exc, partial_text=None):
+    """#724: the UnreadableFile a text reader raises when it couldn't read `path` (it raised `exc`):
+    "corrupt or unreadable .<ext>: <short error>", or "too large to read .<ext>: ..." for a size
+    cap (TooLarge). The red lamp shows this reason. `partial_text`: see UnreadableFile."""
+    kind = "too large to read" if isinstance(exc, TooLarge) else "corrupt or unreadable"
+    return UnreadableFile(f"{kind} .{file_ext(path)}: {short_error(exc, path)}", partial_text=partial_text)
 
 
 class ThumbnailSource(Enum):
@@ -223,6 +273,12 @@ class ObjectTypeSpec:
     # row, e.g. a legacy format with no reader (ocr_status 'unsupported', with ocr_unsupported_note);
     # raising = a real read error (failed). A falsy return still falls back to OCR when there IS a
     # picture (a scanned PDF).
+    # #724 (b2): a reader never turns a read error into "" or None: it raises UnreadableFile
+    # (object_types.unreadable(path, exc): "corrupt or unreadable .<ext>: ...", red) or
+    # NotCompatibleFile (grey, e.g. encrypted). "" is only for a file that was read and is empty.
+    # When the reader raised but the item has a picture, OCR still reads the picture and the row
+    # settles done, with the reader's reason kept in type_metadata.ocr_note ("text layer
+    # unreadable: ...; OCR used instead"). UnreadableFile(partial_text=...) keeps what was read.
     text_extract_fn: object = None
     # Issue #135: (row: dict) -> dict[str, str] of type-specific properties
     # suitable for display on the object detail page. Returns an ordered dict

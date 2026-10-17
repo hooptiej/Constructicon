@@ -15,9 +15,10 @@ Text extraction reads the file as UTF-8 with best-effort error handling
 (corrupt/legacy encodings are replaced rather than erroring), returning the
 full raw content as searchable text.
 
-Best-effort, same as every other type's text_extract_fn in this codebase: a
-missing file or unreadable encoding returns "" rather than raising, so a bad
-upload never breaks the upload response or the OCR background task.
+A bad upload never breaks the upload response or the OCR background task.
+Odd bytes are replaced, not refused (they are still text). #724 (b2): a real
+read error is not "no text": text_extract_fn raises UnreadableFile, and OCR
+settles failed with the reason ("corrupt or unreadable .<ext>: ...").
 """
 
 from markupsafe import Markup, escape
@@ -49,9 +50,11 @@ def extract_text(path):
 
 def extract_text_for_row(row):
     """ObjectTypeSpec.text_extract_fn for media_type='text' — see
-    core/ocr.py."""
+    core/ocr.py. #724 (b2): a read error raises UnreadableFile (failed, with the
+    reason) instead of reading as an empty file; extract_text above stays
+    best-effort for the properties panel."""
     path = _stored_path(row)
-    return extract_text(path) if path else ""
+    return _textstats.read_text_for_search(path, storage.MAX_EXTRACTED_TEXT_CHARS) if path else ""
 
 
 def get_properties(row):

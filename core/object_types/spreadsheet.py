@@ -218,8 +218,9 @@ def extract_text_for_row(row):
         raise
     except Exception as e:
         print(f"Spreadsheet text extraction failed for {path}: {e!r}")
-        if not out:  # #724: nothing read is a real read error (core/ocr.py: failed, saying so), not "no text"
-            raise _office.unreadable(path, e) from e
+        # #724: nothing read is a real read error (core/ocr.py: failed, saying so), not "no text";
+        # (b2) a workbook that broke partway keeps the cells read so far AND says it broke.
+        raise _office.unreadable(path, e, partial_text="\n".join(out)[:cap]) from e
     return "\n".join(out)[:cap]
 
 

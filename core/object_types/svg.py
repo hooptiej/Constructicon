@@ -27,9 +27,10 @@ back to OCR against the rendered raster (core/ocr.py) still catches text
 that's actually vector paths/outlines rather than <text> elements, same as
 any other type's OCR fallback.
 
-Both entry points below are best-effort, same as every other type's
-capture_fn/text_extract_fn in this codebase: a corrupt/malformed SVG or
-missing file returns None/"" rather than raising.
+The render is best-effort, same as every other type's capture_fn: a
+corrupt/malformed SVG or missing file renders None rather than raising. The
+text reader is not silent about it (#724 b2): a malformed SVG raises
+UnreadableFile, and core/ocr.py reports "corrupt or unreadable .svg: ...".
 """
 
 import xml.etree.ElementTree as ET
@@ -77,18 +78,24 @@ def render_raster(path):
 
 def extract_text(path):
     """Concatenated content of every top-level <text> element in the SVG at
-    `path`, in document order, or "" if there are none, the file is
-    malformed, or the file is missing. Only <text> is matched (not <tspan>
+    `path`, in document order, or "" if there are none. Only <text> is matched (not <tspan>
     directly) — itertext() already recurses into a <text> element's nested
     <tspan> children, so matching both would double-count their content.
     "" (not None) on the no-text case specifically, matching PDF's
     extract_text — core/ocr.py treats falsy either way as "fall back to OCR
-    against the rendered raster"."""
+    against the rendered raster".
+
+    #724 (b2): an SVG that isn't well-formed XML raises UnreadableFile ("corrupt
+    or unreadable .svg: not well-formed (invalid token): line 1, column 4"),
+    never "" (which means "read, and holds no <text>")."""
+    from . import unreadable
     try:
         tree = ET.parse(path)
+    except MemoryError:
+        raise
     except Exception as e:
         print(f"SVG text extraction failed for {path}: {e!r}")
-        return ""
+        raise unreadable(path, e) from e
     texts = []
     for elem in tree.getroot().iter(f"{_SVG_NS}text"):
         text = "".join(elem.itertext()).strip()

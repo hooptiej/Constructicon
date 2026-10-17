@@ -66,6 +66,8 @@
     {% for line in c.notes %}<span class="cx-note">{{ line }}</span>{% endfor %}
     {% if c.flavor %}<span class="cx-flavor">{{ c.flavor }}</span>{% endif %}
     {%- endif -%}
+    {#- #686: computed mismatch flags (a hobby's, db.hobby_flags), last in the text box; a face without `flags` sends nothing. -#}
+    {%- for f in c.flags or [] %}<span class="cx-flag" title="{{ f.detail }}"><span aria-hidden="true">&#9888;</span> {{ f.label }}</span>{% endfor -%}
   </span>
   <span class="cx-boxes">
     {%- if c.zone %}

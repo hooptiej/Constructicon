@@ -266,10 +266,8 @@ CREATE INDEX IF NOT EXISTS idx_item_access_log_slug ON item_access_log(slug, at)
 
 SPECIAL_CLIENTS = ["Unknown", "Not Business", "Internal Infrastructure"]
 
-# --- Provenance (capture_events.provenance) — #341 ---
-# Controlled vocab for object provenance (how an object came to be captured).
-# Loose (no DB CHECK), extensible — trim in use as patterns emerge.
-PROVENANCE_TYPES = ["found", "created", "documented", "result", "reference", "design"]
+# Provenance (capture_events.provenance, #341): the options live in the provenance_options
+# table since #529 (core/provenance_options.py seeds and owns them).
 
 # --- Brand asset roles (capture_events.brand_role) — #350 ---
 # Suggested vocab for reusable branding objects (logo, logotype, icon, etc.).
@@ -1028,7 +1026,9 @@ def init_db(migrate=True):
                 _add_column(conn, "projects", column, ddl_type)
         # #596: a hobby's own synopsis / flavor live with its other per-hobby settings.
         existing_hobby_settings_columns = {row["name"] for row in conn.execute("PRAGMA table_info(hobby_settings)")}
-        for column, ddl_type in (("synopsis", "TEXT"), ("flavor", "TEXT")):
+        # #686: cover_slug = the hobby's chosen cover (a capture_events slug, NULL = automatic: its
+        # highlighted project's cover, else its most recent project's; see cards.resolve_hobby_cover).
+        for column, ddl_type in (("synopsis", "TEXT"), ("flavor", "TEXT"), ("cover_slug", "TEXT")):
             if column not in existing_hobby_settings_columns:
                 _add_column(conn, "hobby_settings", column, ddl_type)
         # #604 step 1: ownership. The user who uploaded an item / created a card, hobby or blog entry
@@ -4899,13 +4899,13 @@ def physical_piece_hobbies():
 
 
 def get_hobby_settings(hobby_id):
-    """#562/#596: one hobby's settings ({shows_physical_piece, synopsis, flavor}); defaults when
-    the hobby has no settings row yet."""
+    """#562/#596/#686: one hobby's settings ({shows_physical_piece, synopsis, flavor, cover_slug});
+    defaults when the hobby has no settings row yet."""
     conn = get_conn()
     try:
-        row = conn.execute("SELECT shows_physical_piece, synopsis, flavor FROM hobby_settings WHERE hobby_tag_id = ?",
-                           (hobby_id,)).fetchone()
-        return dict(row) if row else {"shows_physical_piece": 0, "synopsis": None, "flavor": None}
+        row = conn.execute("SELECT shows_physical_piece, synopsis, flavor, cover_slug FROM hobby_settings "
+                           "WHERE hobby_tag_id = ?", (hobby_id,)).fetchone()
+        return dict(row) if row else {"shows_physical_piece": 0, "synopsis": None, "flavor": None, "cover_slug": None}
     finally:
         conn.close()
 

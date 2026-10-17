@@ -1,13 +1,20 @@
 """Hobby routes (#547): /api/hobbies and /api/hobby/*."""
 
 from fastapi import Request, Form, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from core import card_rules, cards, db, hobbies
-from web.shapes import _to_object_detail
+from core import card_rules, cards, db, hobbies, install_config
+from web.common import templates
+from web.shapes import _hobby_cover, _to_hobby_face, _to_object_detail
 from core import policy, roles
 from web.roles import RoleRouter, requires
+
+
+def _not_found():
+    """#700: the 404 detail, in the install's word ("hobby not found" by default)."""
+    return f"{install_config.hobby_label().one_lc} not found"
+
 
 router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own label are editor
 
@@ -19,8 +26,19 @@ def api_list_hobbies(request: Request):
     """List all hobbies (tags marked is_hobby=1) with their project counts.
 
     Returns a list of hobby tag dicts, each with `status` (active|inactive), `group_code`,
-    and the computed mismatch `flags` (V2 cards 3.3; never stored)."""
-    return JSONResponse([{**h, **cards.hobby_fields(h)} for h in db.list_hobbies()])
+    the computed mismatch `flags` (V2 cards 3.3; never stored) and, since #686, its resolved
+    cover: `cover_url` (the thumb route, or null), `cover_slug`, `cover_picked` (chosen by hand)
+    and `cover_source` (picked | highlighted_project | recent_project | null), `cover_project`,
+    `picked_cover_slug`, `picked_cover_unavailable` (see cards.resolve_hobby_cover)."""
+    return JSONResponse([{**h, **cards.hobby_fields(h), **_hobby_cover(h)[1]} for h in db.list_hobbies()])
+
+
+@router.get("/api/hobbies/html", response_class=HTMLResponse, dependencies=requires(roles.VIEWER))
+def api_hobbies_html(request: Request):
+    """#686: every hobby as a card (the shared card component, _hobby_cards.html), as a
+    server-rendered fragment for the Hobbies drawer; the /hobbies page renders the same partial."""
+    return templates.TemplateResponse(request, "_hobby_cards.html",
+                                      {"hobby_faces": [_to_hobby_face(h) for h in db.list_hobbies()]})
 
 
 @router.post("/api/hobbies")
@@ -41,7 +59,7 @@ def api_get_hobby(request: Request, id_or_slug: str):
     Returns a dict with the hobby tag, its projects, and its objects (via post_tags)."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
 
     projects = db.list_projects_for_hobby(hobby["id"])
     # Get all objects tagged with this hobby tag
@@ -49,6 +67,7 @@ def api_get_hobby(request: Request, id_or_slug: str):
 
     return JSONResponse({
         **cards.hobby_fields(hobby),
+        **_hobby_cover(hobby, projects)[1],  # #686
         "projects": [
             {
                 "id": p["id"],
@@ -71,7 +90,7 @@ def api_set_hobby_status(request: Request, id_or_slug: str, status: str = Form(.
     Returns the updated hobby dict (with computed flags) plus `warnings`."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
 
     result = cards.set_hobby_activity(hobby["id"], status)
     updated = db.get_hobby(hobby["id"])
@@ -83,7 +102,7 @@ def api_set_hobby_group_code(request: Request, id_or_slug: str, group_code: str 
     """Edit a hobby's 2-4 char group code (V2 cards 3.9). Unique across hobbies."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
     cards.set_group_code(hobby["id"], group_code)
     updated = db.get_hobby(hobby["id"])
     return JSONResponse({**updated, **cards.hobby_fields(updated)})
@@ -108,6 +127,18 @@ async def api_set_hobby_text(request: Request, id_or_slug: str):
     return JSONResponse(result.to_dict())
 
 
+@router.post("/api/hobby/{id_or_slug}/cover")
+def api_set_hobby_cover(id_or_slug: str, cover_slug: str = Form("")):
+    """#686: choose the hobby's cover (`cover_slug`, an item slug), or send it blank to go back to
+    the automatic cover (its highlighted project's, else its most recent project's). Editor, like
+    a card's cover. 404 not_found for an unknown or hidden item, 422 bad_cover for one with no
+    picture or a redacted one. One undoable change-log row (op hobby_cover). The answer carries
+    the resolved cover (`cover`, with `cover_url`)."""
+    result = hobbies.set_cover(id_or_slug, cover_slug or None).to_dict()
+    result["cover"] = _hobby_cover(hobbies.get_hobby(id_or_slug))[1]
+    return JSONResponse(result)
+
+
 @router.post("/api/hobby/{id_or_slug}/add-project")
 def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str = Form(...)):
     """Add a project to a hobby.
@@ -116,7 +147,7 @@ def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str 
     Returns the updated hobby's project list."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
 
     project = db.get_project(project_id)
     if project is None:
@@ -144,7 +175,7 @@ def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id:
     Returns the updated hobby's project list."""
     hobby = db.get_hobby(id_or_slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=_not_found())
 
     project = db.get_project(project_id)
     if project is None:

@@ -23,6 +23,7 @@ import functools
 import io
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +44,8 @@ from core import backup, captions, thumbnails, card_rules, cards, curation_queue
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
 from core import blog, changes, hobbies, membership, parse_limits, reset
+from core import besteffort, install_config
+from core import hobby_label as hobby_label_rules
 from core import tags as tags_svc
 from core import paths
 
@@ -104,12 +107,63 @@ def _call_as_mcp(fn, args, kwargs):
 
 
 _sdk_tool = mcp.tool
-_WRAPPED_TOOLS = {}
+_WRAPPED_TOOLS = {}  # registered tool name (aliases included) -> the wrapped function
+
+
+# --- #700: tool names and descriptions follow the install's hobby label ---
+# The label is read ONCE, when this module loads (= when the MCP process starts): a label saved
+# later in Admin > Install reaches the tools only after the MCP restarts (and clients reconnect).
+# With the default "Hobby / Hobbies" every name and description is exactly as before. With e.g.
+# "Department / Departments": `constructicon_create_hobby` is registered as
+# `constructicon_create_department`, `constructicon_list_hobbies` as `constructicon_list_departments`,
+# and the descriptions say department(s) (core.hobby_label.relabel_text: identifiers, `backticked`
+# words, `hobby=` parameters and paths stay). PARAMETER names and JSON fields stay `hobby` (stable
+# API). The old names (`*_hobby*`, and each earlier label's) stay callable as HIDDEN aliases: they
+# answer tools/call but tools/list leaves them out, so clients see only the new names while old
+# scripts keep working until they are updated. The process records the label it started with
+# (install_config.record_mcp_started_label, in __main__ below) so Admin can say "restart the MCP".
+STARTED_LABEL = install_config.hobby_label()
+_ALIAS_LABELS = [hobby_label_rules.Label(one, many) for one, many in
+                 ((o.replace("-", " "), m.replace("-", " ")) for o, m in install_config.known_label_slugs())]
+_HIDDEN_ALIASES = set()
+_TOOL_WORD = re.compile(r"(?<=_)(hobby|hobbies)(?=_|\b)")
+
+
+def tool_name_for(name, label):
+    """#700: the registered name of tool `name` (its function name) under `label`: the `hobby` /
+    `hobbies` parts of the name become the label's words ("_" for any "-")."""
+    if label.is_default:
+        return name
+    return _TOOL_WORD.sub(lambda m: label.one_ident if m.group(1) == "hobby" else label.many_ident, name)
+
+
+def tool_description_for(doc, label):
+    """#700: a tool's description under `label`: the words relabelled, and every tool name it
+    mentions (`constructicon_list_hobbies`) given as that tool's name under the label."""
+    if label.is_default or not doc:
+        return doc
+    doc = re.sub(r"\bconstructicon_\w+", lambda m: tool_name_for(m.group(0), label), doc)
+    return hobby_label_rules.relabel_text(doc, label)
+
+
+def tool_registrations(name, doc, label=None):
+    """#700: [(registered name, description, hidden)] for one tool function under `label` (default:
+    the label this process started with): the visible tool, then its hidden aliases (the original
+    name and each earlier label's name, when they differ). `description` None = the SDK's own (the
+    docstring, unchanged). Pure: the tests build the whole list with any label."""
+    label = STARTED_LABEL if label is None else label
+    visible = tool_name_for(name, label)
+    out = [(visible, None if label.is_default else tool_description_for(doc, label), False)]
+    seen = {visible}
+    for old in [hobby_label_rules.DEFAULT] + _ALIAS_LABELS:
+        alias = tool_name_for(name, old)
+        if alias not in seen:
+            seen.add(alias)
+            out.append((alias, out[0][1], True))
+    return out
 
 
 def _tool(*dargs, **dkwargs):
-    register = _sdk_tool(*dargs, **dkwargs)
-
     def decorate(fn):
         @functools.wraps(fn)
         def for_sdk(*args, **kwargs):
@@ -123,14 +177,32 @@ def _tool(*dargs, **dkwargs):
         def direct(*args, **kwargs):
             return _call_as_mcp(fn, args, kwargs)[1]
 
-        register(for_sdk)
-        _WRAPPED_TOOLS[fn.__name__] = for_sdk
+        for reg_name, description, hidden in tool_registrations(fn.__name__, fn.__doc__):
+            kwargs = dict(dkwargs)
+            if reg_name != fn.__name__:
+                kwargs["name"] = reg_name
+            if description is not None:
+                kwargs["description"] = description
+            _sdk_tool(*dargs, **kwargs)(for_sdk)
+            _WRAPPED_TOOLS[reg_name] = for_sdk
+            if hidden:
+                _HIDDEN_ALIASES.add(reg_name)
         return direct
 
     return decorate
 
 
 mcp.tool = _tool
+
+_sdk_list_tools = mcp.list_tools
+
+
+async def _list_tools_without_aliases():
+    """#700: tools/list without the hidden aliases (tools/call still answers them)."""
+    return [t for t in await _sdk_list_tools() if t.name not in _HIDDEN_ALIASES]
+
+
+mcp.list_tools = _list_tools_without_aliases
 
 
 def _resolve_import_path(rel):
@@ -1185,6 +1257,11 @@ def constructicon_list_hobbies() -> list[dict]:
     {code, label, detail}: inactive_with_active_work (an inactive hobby that has an active
     project) and active_untouched (an active hobby nothing in has been touched for ~2 years).
     A flag only points at a mismatch; the owner flips the switch by hand.
+    #686: each also carries its resolved cover: cover_slug (null = none), cover_picked (chosen by
+    hand with constructicon_set_hobby_cover), cover_source (picked | highlighted_project |
+    recent_project | null), cover_project (the project an automatic cover came from),
+    picked_cover_slug and picked_cover_unavailable (a chosen cover that was deleted, redacted or
+    hidden: the automatic one shows instead).
     Ordered by name."""
     out = []
     for h in db.list_hobbies():
@@ -1197,6 +1274,7 @@ def constructicon_list_hobbies() -> list[dict]:
             "group_code": f["group_code"],
             "project_count": h.get("project_count", 0),
             "flags": f["flags"],
+            **cards.hobby_cover_fields(cards.resolve_hobby_cover(h)),
         })
     return out
 
@@ -1356,6 +1434,29 @@ def constructicon_set_hobby_code(hobby_slug: str, group_code: str) -> dict | Non
     updated = db.get_hobby(hobby["id"])
     return {"id": updated["id"], "name": updated["name"], "slug": updated["slug"],
             "group_code": updated["group_code"], "changes": result.changes, "batch_id": result.batch_id}
+
+
+@mcp.tool()
+def constructicon_set_hobby_cover(hobby: str | int, cover_slug: str | None = None, clear: bool = False,
+                                  dry_run: bool = False) -> dict:
+    """Choose a HOBBY's cover picture (#686), or go back to its automatic cover.
+
+    The hobby-level twin of a card's cover (constructicon_update_project(cover_slug=...)), named
+    like the other hobby setters (constructicon_set_hobby_status / _code). hobby: id or slug.
+    cover_slug: any item (file slug) with a picture, e.g. one of its projects' photos or a loose
+    object. clear=true (or no cover_slug) removes the choice, and the hobby shows its automatic
+    cover again: its highlighted project's cover, else its most recently updated project that has
+    a cover, else none. A chosen cover whose item is later deleted, trashed or redacted is not
+    shown (the automatic one is) until it comes back.
+    Refused: {"ok": false, "error": {"code": "not_found" | "bad_cover", ...}} (no such item, or a
+    redacted / picture-less one). dry_run=true previews. Returns {ok, dry_run, changes, warnings,
+    batch_id, hobby, picked_cover_slug, cover: {cover_slug, cover_picked, cover_source,
+    cover_source_label, cover_project, picked_cover_slug, picked_cover_unavailable}}; undo with
+    constructicon_undo(batch_id).
+    """
+    if clear and cover_slug:
+        raise InvalidInput("Pass either cover_slug or clear=true, not both.")
+    return hobbies.set_cover(hobby, None if clear else cover_slug, dry_run=dry_run).to_dict()
 
 
 @mcp.tool()
@@ -2525,12 +2626,20 @@ _check_every_tool_wrapped()
 
 
 if __name__ == "__main__":
+    import logging
     # #549: web owns background work (migrations, OCR self-heal, captions). This process only
     # runs the idempotent schema DDL; a stuck OCR row is healed by web's startup pass and its
     # periodic watchdog (same shared DB), and captions are enqueued, never run, here.
     db.init_db(migrate=False)
+    # #700: record the label this process named its tools after, so Admin > Install can say
+    # "restart the MCP" until it runs with the current one. Best effort: never blocks the start.
+    try:
+        install_config.record_mcp_started_label(STARTED_LABEL)
+    except Exception as exc:  # noqa: BLE001 -- a locked or read-only DB must not stop the MCP
+        besteffort.warn(logging.getLogger("constructicon-mcp"), "could not record the started hobby label", exc)
+    print(f"constructicon-mcp: hobby label {STARTED_LABEL.one} / {STARTED_LABEL.many}"
+          f" ({len(_HIDDEN_ALIASES)} hidden alias tool name(s))", flush=True)
     # #561: bearer install-token auth. Fail BEFORE touching anything else if misconfigured.
-    import logging
     import uvicorn
     from mcp_server import auth as mcp_auth
     try:

@@ -36,9 +36,10 @@ DOORS = {
     ("web/routes/pages.py", "project_detail_page"): "/project/{slug} (the card's items)",
     ("web/routes/pages.py", "hobby_detail_page"): "/hobby/{slug} (member cards' items, loose items)",
     ("web/routes/pages.py", "_home_context"): "/ (reference objects; home_page itself only renders it, #624)",
-    ("web/files_feed.py", "load"): "/ files panel and GET /api/home/files (#624: the one visible list both build from)",
-    ("web/routes/pages.py", "unfiled_page"): "/unfiled",
-    ("web/routes/pages.py", "user_gallery_page"): "/gallery/user/{uploader}",
+    # #553: every file grid (home Files, /unfiled, /gallery/user/{uploader}, a hobby's loose objects) and
+    # GET /api/items/grid + /api/home/files build their list here (#624), so /unfiled and the uploader
+    # gallery read no items themselves any more (they were doors of their own until #553).
+    ("web/files_feed.py", "load"): "the file grids' visible list: home, /unfiled, user gallery, hobby loose; GET /api/items/grid",
     ("web/routes/items.py", "api_get_image"): "GET /api/image/{slug}",
     ("web/routes/items.py", "api_get_item_text"): "GET /api/image/{slug}/text (#607)",
     ("web/routes/items.py", "api_rendered_html"): "GET /api/image/{slug}/rendered (#607)",
@@ -48,6 +49,7 @@ DOORS = {
     ("web/routes/items.py", "api_search"): "GET /api/search",
     ("web/routes/files.py", "get_file"): "/f/{slug}",
     ("web/routes/files.py", "get_thumbnail"): "/f/{slug}/thumb",
+    ("web/routes/files.py", "get_raw_file"): "/f/{slug}/raw (#703)",
     ("web/routes/files.py", "api_list_brand_assets"): "GET /api/brand-assets",
     ("web/routes/files.py", "api_list_wallpapers"): "GET /api/wallpapers",
     ("web/routes/hobbies.py", "api_get_hobby"): "GET /api/hobby/{id_or_slug} (its items)",
@@ -81,6 +83,7 @@ ACCESS_LOGGED = {
     ("web/routes/items.py", "api_get_image"): "GET /api/image/{slug}",
     ("web/routes/files.py", "get_file"): "/f/{slug}",
     ("web/routes/files.py", "get_thumbnail"): "/f/{slug}/thumb",
+    ("web/routes/files.py", "get_raw_file"): "/f/{slug}/raw (#703)",
     ("mcp_server/server.py", "constructicon_get"): "MCP get",
     ("mcp_server/server.py", "constructicon_download"): "MCP download",
     ("mcp_server/server.py", "constructicon_view"): "MCP view",

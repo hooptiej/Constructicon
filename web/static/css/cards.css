@@ -140,6 +140,8 @@
 }
 .cx-note { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; flex-shrink: 0; }
 .cx-flavor { margin-top: auto; padding-top: .31em; border-top: 1px solid rgba(30, 27, 22, .25); font-style: italic; color: #3B352B; flex-shrink: 0; }
+/* #686: a computed mismatch flag (hobby cards): a nudge, in the card's own ink, never hidden */
+.cx-flag { flex-shrink: 0; font-weight: 600; color: #7A4B00; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Status + counts */
 .cx-boxes { display: flex; gap: .375em; font-family: var(--card-font-mono); font-size: .656em; }
@@ -189,6 +191,16 @@
 .cx-active-grid { display: flex; flex-wrap: wrap; gap: 16px; flex: 1 1 240px; min-width: 0; align-items: flex-start; }
 .cx-mini-row { display: flex; flex-wrap: wrap; gap: 12px; overflow-y: auto; max-height: 460px; padding: 2px 4px 6px 2px; }
 .cx-slot { display: block; max-width: 100%; }
+/* #686: the hobbies index and drawer: small hobby cards in a wrapping row */
+.cx-hobby-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+/* #686: the hobby page's COVER group: one radio per picture (plus "Automatic"), in a scrolling grid.
+   Kept here rather than details.css, which carries a stray NUL byte (`file` calls it data). */
+.dp-cover-choices { border: 0; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; max-height: 320px; overflow-y: auto; }
+.dp-cover-choice { display: flex; flex-direction: column; gap: 4px; font-size: 11px; line-height: 1.3; cursor: pointer; min-width: 0; }
+.dp-cover-choice img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: #15161A; }
+.dp-cover-choice span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-cover-choice:has(input:checked) img { outline: 2px solid var(--card-pip-on); outline-offset: 1px; }
+.dp-cover-auto { justify-content: center; }
 
 /* #514 featured card: sized to its column instead of a fixed 320px. The row is a size
    container, so cqw is the row's own width: 46% of it, never under the old 320px and never
@@ -218,6 +230,39 @@
 .cx-item-redacted .cx-art { opacity: .8; }
 @media (max-width: 600px) {
   .cx-item-grid .cx-item { --cx-w: 150px; }
+}
+
+/* #714 list layout: one compact row per file (static/js/cards.js ItemCards.row), the grid element
+   carrying role="list". Always one line: the name takes the room and ellipsizes, the type, date and
+   card columns shrink (ellipsis) before it does, nothing is fixed-width, so a row never makes the
+   page scroll sideways (375 px phone included). The select checkbox (only while selecting) and the
+   revision badge sit outside the row's link. */
+.cx-item-list { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cx-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 3px 6px; border-radius: 6px; border: 1px solid transparent; }
+.cx-row:hover { background: var(--card); border-color: var(--border); }
+.cx-row .card-select-row { margin: 0; flex: 0 0 auto; }
+.cx-row-link { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; font-size: 12.5px; line-height: 1.3; }
+.cx-row-link:hover { color: inherit; }
+.cx-row-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.cx-row-thumb { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: rgba(20, 23, 15, .72); color: var(--text-3); }
+.cx-row-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cx-row-name, .cx-row-type, .cx-row-date, .cx-row-card { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cx-row-name { flex: 1 1 10em; min-width: 4em; color: var(--text); font-weight: 500; }
+.cx-row-type { flex: 0 1 auto; max-width: 9em; color: var(--text-2); }
+.cx-row-date { flex: 0 1 auto; max-width: 8em; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.cx-row-card { flex: 0 1 12em; max-width: 12em; color: var(--text-2); }
+.cx-row-unfiled { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); }
+.cx-row-badges { flex: 0 0 auto; display: inline-flex; gap: 4px; }
+.cx-row-badges .cx-item-badge { height: 18px; font-size: 10px; }
+.cx-row-redacted .cx-row-name { color: var(--text-3); }
+@media (max-width: 600px) {
+  .cx-row { gap: 6px; padding: 3px 2px; }
+  .cx-row-link { gap: 6px; font-size: 12px; }
+  .cx-row-thumb { flex-basis: 28px; width: 28px; height: 28px; }
+  .cx-row-name { flex-basis: 6em; min-width: 3.5em; }
+  .cx-row-type { max-width: 5.5em; }
+  .cx-row-date { max-width: 6em; }
+  .cx-row-card { flex-basis: 5em; max-width: 6em; }
 }
 
 /* Phone width: the featured card fits the column; small and mini keep two to a row */

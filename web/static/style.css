@@ -300,16 +300,15 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 
 /* Selective delete (#19) — checkbox lives in the corner opposite the
    type badge above, so the two never collide on the same tile. Hidden
-   unless the "Delete mode" toggle (#24) is on — see body.delete-mode-on
-   below, set/cleared by user_gallery.html's switch (it lived in the admin
-   pop-out until #295 made that its own page) and forced on by
-   unfiled.html. */
+   unless the grid is selecting: #553 replaced the per-page "Delete mode"
+   body class with the shared grid's own .is-selecting (its Select button,
+   always on for /unfiled; templates/_item_grid.html). */
 .card-select {
   position: absolute; top: 6px; right: 6px; z-index: 1;
   width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: var(--accent);
   display: none;
 }
-body.delete-mode-on .card-select { display: block; }
+.item-grid.is-selecting .card-select { display: block; }
 /* #117 follow-up: on the Unfiled page, .card-select moved out of the
    thumbnail overlay (it got lost/obscured against busy thumbnails,
    especially in grid view's larger tiles) and down into the card body,
@@ -319,7 +318,7 @@ body.delete-mode-on .card-select { display: block; }
   display: none; align-items: center; justify-content: flex-end; gap: 6px;
   margin-top: 2px; cursor: pointer;
 }
-body.delete-mode-on .card-select-row { display: flex; }
+.item-grid.is-selecting .card-select-row { display: flex; }
 .card-select-row .card-select { position: static; top: auto; right: auto; width: 15px; height: 15px; }
 .card-select-label { font-size: 11px; color: var(--text-3); }
 .selection-bar {
@@ -328,11 +327,35 @@ body.delete-mode-on .card-select-row { display: flex; }
 }
 .selection-bar .selection-count { font-size: 13px; color: var(--text-2); flex: 1; }
 .selection-bar .btn-danger { width: auto; padding: 8px 14px; }
-/* #160: the Unfiled page's bulk-action control panel specifically (not
-   every .selection-bar -- the "turn into project" followup bar below it
-   uses the same class but should scroll normally) stays reachable while
-   scrolling a long unfiled list, instead of scrolling out of view. */
-#selection-bar { position: sticky; top: 0; z-index: 10; }
+/* #160/#553: a grid's bulk-action bar stays reachable while scrolling a long
+   list. It shows only while the grid is selecting (templates/_item_grid.html). */
+.item-grid { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.item-grid-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.item-grid-controls .filter-select { min-width: 0; padding: 6px 10px; font-size: 12px; }
+/* #715: the bar WRAPS. Its controls sit in groups (count + Clear | add to card + turn into card |
+   tag | provenance | sensitive | delete); the bar and each group are flex-wrap, nothing has a fixed
+   width or nowrap, and every control may shrink to the bar's width, so at any width (375 px phone,
+   the narrow home Files column, wide desktop) every control is on screen, never clipped or behind a
+   horizontal scroll. Delete is last, pushed to the end of its line and set apart by a rule.
+   Sticky on wider screens (one or two lines); at phone width it is NOT sticky: wrapped there it is
+   five or six lines (~230 px, a third of a 667 px-tall phone), too much to pin over the list. */
+.item-grid-bar { position: sticky; top: 0; z-index: 10; flex-wrap: wrap; gap: 8px 14px; padding: 8px 12px; max-width: 100%; box-sizing: border-box; }
+.item-grid.is-selecting .item-grid-bar { display: flex; }
+.item-grid-bar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.item-grid-bar .selection-count { flex: 0 0 auto; }
+.item-grid-bar .filter-select { min-width: 0; max-width: 100%; padding: 6px 10px; font-size: 12px; }
+.item-grid-bar .btn-secondary { padding: 7px 12px; font-size: 12px; flex-shrink: 1; min-width: 0; max-width: 100%; }
+.item-grid-bar-tag { flex: 1 1 180px; max-width: 280px; }
+.item-grid-tag-box { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 10px; }
+.item-grid-bar-danger { margin-left: auto; padding-left: 14px; border-left: 1px solid var(--border); }
+.item-grid-bar .btn-danger { padding: 7px 12px; font-size: 12px; }
+@media (max-width: 600px) {
+  .item-grid-bar { position: static; padding: 8px 10px; gap: 8px 10px; }
+  .item-grid-bar-tag { max-width: none; }
+}
+.item-grid-select-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+/* home's Files panel: the grid fills the widget's matched height and scrolls inside it (#256) */
+.home-widget[data-widget="files"] .item-grid { flex: 1; min-height: 0; }
 .type-badge {
   display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px;
   font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 500;
@@ -402,8 +425,6 @@ body.delete-mode-on .card-select-row { display: flex; }
 /* Delete mode switch on user_gallery.html's title row (#24, relocated by
    #295 -- see that template's comment). .admin-toggle below is the switch
    itself, shared with any future on/off control. */
-.user-gallery-controls { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
-.delete-mode-control { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .admin-toggle { position: relative; display: inline-block; width: 38px; height: 22px; flex-shrink: 0; cursor: pointer; }
 .admin-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
 .admin-toggle-track {
@@ -420,18 +441,12 @@ body.delete-mode-on .card-select-row { display: flex; }
 /* The three scrolling lists below cap at ~a screen's worth on the full page
    (they were 260-320px in the pop-out, where the whole column was that). */
 
-.pending-decision {
-  display: flex; flex-direction: column; gap: 8px; padding: 10px;
-  background: var(--bg); border: 1px solid var(--border); border-left: 2px solid var(--hazard-yellow); border-radius: 4px;
-}
-
 .pending-decision-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
 .pending-decision-thumb-icon { display: flex; align-items: center; justify-content: center; font-size: 18px; background: var(--surface); border: 1px solid var(--border); }
 .pending-decision-title { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Redacted items (#282) — /admin list of hidden rows, each with an un-redact button.
-   Same card bones as .pending-decision, neutral left rule instead of the hazard one
-   (nothing here is asking for a decision). */
+   A card with a neutral left rule (nothing here is asking for a decision). */
 .admin-redacted-list { display: flex; flex-direction: column; gap: 8px; max-height: 480px; overflow-y: auto; }
 .redacted-item {
   display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
@@ -548,10 +563,6 @@ body.delete-mode-on .card-select-row { display: flex; }
 /* --- Image detail page --- */
 .back-link { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
 .back-link:hover { color: var(--accent); }
-
-/* #137: breadcrumb navigation — replaced back-link with breadcrumb trail */
-
-.breadcrumb-current { color: var(--text-2); font-weight: 500; }
 
 /* #241: inline title editing, shared by the object detail page (display_name)
    and the project detail page (title). The wrapper holds the read-only text
@@ -820,11 +831,8 @@ body.delete-mode-on .card-select-row { display: flex; }
   flex-shrink: 0;
 }
 
-/* #117: Unfiled page's grid/list layout toggle. Both views reuse the exact
-   same .gallery-card markup — .gallery-grid gives the untouched base
-   .gallery-card styling (taller vertical tile, the "grid" default);
-   .home-gallery-grid's own rules above are what compress it into the
-   compact row/list look, same as the small home-page widget always used. */
+/* #117/#714: the file grids' Grid / List toggle (every grid since #714). Grid draws the
+   item cards, List one row per file (.cx-item-list / .cx-row in css/cards.css). */
 .layout-toggle { display: flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; align-self: flex-start; }
 .layout-toggle-btn {
   padding: 7px 13px; background: var(--surface); border: none; border-right: 1px solid var(--border-strong);
@@ -898,19 +906,8 @@ body.delete-mode-on .card-select-row { display: flex; }
    out to be. See that script for the mobile/narrow-viewport fallback. */
 .home-widget[data-widget="files"] { min-height: 0; }
 
-/* Files widget tabs (#69 part 1, #256) — type-scoped filtering across every
-   upload. Tabs are built from the actual media types present in the data,
-   with an "All" tab for unfiltered view. Only types that have data get tabs
-   (no empty tabs). */
-.file-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
-.file-tab {
-  font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px;
-  color: var(--text-3); background: var(--surface); border: 1px solid var(--border);
-  border-radius: 6px; padding: 6px 10px; cursor: pointer; flex-shrink: 0;
-  transition: all 0.15s ease;
-}
-.file-tab:hover { color: var(--text-2); border-color: var(--border-stronger); }
-/* #536: All / Unfiled / Filed segmented control in the Files header, same chip look as the tabs. */
+/* #536: All / Unfiled / Filed segmented control (every file grid's, #553). The home panel's type
+   tabs (#69/#256) became the grid's type <select> in #553. */
 .filed-seg { display: inline-flex; }
 .filed-seg-btn {
   font-size: 11px; font-weight: 500; letter-spacing: 0.3px;
@@ -923,7 +920,6 @@ body.delete-mode-on .card-select-row { display: flex; }
 .filed-seg-btn.active { color: var(--text); background: var(--card); border-color: var(--border-strong); font-weight: 600; position: relative; z-index: 1; }
 .filed-seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; position: relative; z-index: 2; }
 .filed-count { font-variant-numeric: tabular-nums; opacity: 0.8; }
-.file-tab.active { color: var(--text); background: var(--card); border-color: var(--border-strong); font-weight: 600; }
 /* #256: was a flat max-height: 300px (bounding the old standalone Files
    widget's own footprint) — flex:1/min-height:0 now fills whatever's left
    inside the merged widget after its header/tabs, tracking the explicit

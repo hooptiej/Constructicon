@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-hobby-label="{{ hobby_label.as_dict() | tojson | forceescape }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,6 +10,9 @@
   {#- #467 step 1: a signed-in page carries its session's CSRF token; csrf.js (loaded before every
       other script) adds it as X-CSRF-Token to the page's same-origin fetch / XMLHttpRequest
       writes. Anonymous pages get neither, so their HTML is unchanged. -#}
+  {#- #700: the install's word for a hobby (data-hobby-label on <html>) as window.HobbyLabel, for
+      JS-built text and links; loaded first so every other script can use it. -#}
+  <script src="/static/js/hobby-label.js?v={{ static_version('js/hobby-label.js') }}"></script>
   {% set _csrf = csrf_token() %}
   {% if _csrf %}
   <meta name="csrf-token" content="{{ _csrf }}">

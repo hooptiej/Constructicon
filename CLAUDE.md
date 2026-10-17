@@ -65,8 +65,8 @@ the date and commit forward when you re-verify.
     `requires`, `NON_ROUTE_ROLES`), `request_guard.py` (same-origin guard and the audit-log redaction
     rules), `body_limit.py` (per-route request-body caps, #649), `proxy_trust.py` (the real scheme and client
     address behind a trusted reverse proxy, #646), `security_headers.py` (CSP, framing and the other
-    browser security headers on every app response, #645), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged home
-    Files feed, #624), `guides/` (in-app markdown guides), `export_templates/` (the static site's
+    browser security headers on every app response, #645), `content_security.py` (serving user files safely, #610), `files_feed.py` (the paged
+    file-grid feed, #624/#553), `item_grid.py` (the shared file grid's config, #553), `guides/` (in-app markdown guides), `export_templates/` (the static site's
     Jinja templates), `templates/` and `static/` (css, js; `static/js/mountain-time.js` is the JS twin
     of `core/datefmt.py`).
   - **Adding a route:** put it in the router for its area, decorated
@@ -626,7 +626,22 @@ place that decides: every user-file response (`/f/<slug>`, `/f/<slug>/thumb`, th
 type, extension or a sniff of the first bytes) also carries the sandbox CSP (`RENDERED_HTML_CSP`, shared
 with the Rendered view: opaque origin, no script, no network); HTML/XHTML is also
 `Content-Disposition: attachment` (look at it in the in-app Rendered view); SVG stays inline so a hotlinked
-`<img>` keeps working. **Any new route that streams a stored file must go through
+`<img>` keeps working. **#701:** with an original name, everything else is `inline` when the browser
+shows it itself (PDF, JPEG/PNG/GIF/WebP/AVIF/BMP, MP4/WebM/Ogg video, the common audio types, `text/plain`:
+`object_types.BROWSER_VIEWABLE_TYPES`, an exact allowlist, so PSD/TIFF stay downloads) and `attachment`
+otherwise, both keeping the name (`filename*=` / `filename=`); those inline types are sniffed too, so markup
+renamed `.pdf` is still HTML (attachment + CSP). The object page's link follows the same set
+(`object_types.original_link(item)`, used by `_preview.thumb_with_original_link` and `object_detail.html`):
+"View original <Type>" in a new tab, or "Download original <Type>" in place. Check with
+`scripts/test_view_original_701.py`. **#703, the raw view** (`/f/<slug>/raw`, viewer, the same
+`policy.require_file` door and view log as `/f/<slug>`): a type with `ObjectTypeSpec.raw_text_fn` (only
+`code`) shows its file as `text/plain; charset=utf-8`, `inline` under its original name, nosniff, and the
+sandbox CSP on every response (`content_security.serve_raw_text`). It is never served as its own type,
+so markup inside (HTML in a `.py`, a PHP template) shows as text and cannot run; UTF-16/32 is transcoded to
+UTF-8. When the type's function says no (binary, over `code.RAW_MAX_BYTES` = 32 MB), or the type has no
+raw view, the route answers with the download (`serve_file(..., download=True)`: `/f/<slug>`'s bytes and
+type, always `attachment`; Python maps `.c`/`.h` to `text/plain`, so `/f/` alone shows those inline). Check with
+`scripts/test_raw_view_703.py`. **Any new route that streams a stored file must go through
 `content_security.serve_file` (or add `file_headers`)**, never a bare `FileResponse` on a user file.
 Thumbnails are generated JPEGs (nosniff only). Check with `scripts/test_f_sandbox_610.py`. Longer term: a
 separate user-content origin.
@@ -859,8 +874,8 @@ string) + `sensitive_at`. Written only by `items.set_sensitive(slugs, on)`: ONE 
   An undo that would clear a flag is an unmark, so the same rule applies
   (`items.check_undo_allowed`, called by `cards.undo`); undoing an unmark (re-locking) is open.
 - **Where:** the item page's ORIGIN group ("This is sensitive" / "Clear sensitive", `POST
-  /api/image/{slug}/sensitive`, `sensitive=true|false`); the Unfiled and uploader-gallery selection bars
-  ("Mark sensitive", `POST /api/bulk/sensitive`, one batch); the upload drawer's checkbox (`sensitive`
+  /api/image/{slug}/sensitive`, `sensitive=true|false`); every file grid's bulk bar
+  (#553: home, Unfiled, the uploader gallery, a hobby's loose objects; "Mark sensitive", `POST /api/bulk/sensitive`, one batch); the upload drawer's checkbox (`sensitive`
   form field on `/api/upload` and `/api/content`, set IN the INSERT so the item is never visible
   unlocked; a duplicate upload marks the existing item instead); MCP `constructicon_set_sensitive(slug,
   sensitive, dry_run)`, and `sensitive` on `constructicon_upload` / `import` / `add_content`.
@@ -1086,6 +1101,23 @@ matching the V2 mockup's Card template:
   details panel (ORIGIN / STATUS) only. Mini cards carry no text box, stat or footer at all.
 - Hobby face text box: its synopsis, then "Projects: A, B, C, +N more." and "Every card in this hobby
   carries its group code, CODE.".
+- **Hobby covers (#686, owner decision: chosen, with an automatic fallback).** `hobby_settings.cover_slug`
+  (added by `init_db`'s ALTER loop, NULL = automatic; no data migration). `cards.resolve_hobby_cover(hobby,
+  projects, usable)` decides, read-only: the chosen cover; else the resolved cover of its **highlighted**
+  member project (`projects.highlight`); else of its **most recent** member project that has one
+  (`cards.recent_first`: latest `updated_at`, then `created_at`, then id); else none. A chosen cover whose
+  item is deleted / trashed / redacted / hidden from the actor is skipped (`picked_unavailable`), never a
+  broken image; the choice is kept, so undoing the delete brings it back. Web passes
+  `web.shapes._hobby_cover_usable` (policy + the thumb route's rules). Write: `hobbies.set_cover(hobby,
+  slug_or_None)` (op `hobby_cover`, imaged, undoable; `bad_cover` 422 for a redacted or picture-less item,
+  `not_found`): web `POST /api/hobby/{id}/cover` (editor, blank = automatic; the hobby page's COVER group),
+  MCP `constructicon_set_hobby_cover(hobby, cover_slug, clear, dry_run)`. Reads carry `cover_url`,
+  `cover_slug`, `cover_picked`, `cover_source` (picked | highlighted_project | recent_project):
+  `GET /api/hobbies`, `GET /api/hobby/{id}`, MCP `constructicon_list_hobbies`. The **/hobbies page and the
+  Hobbies drawer** render the shared card (`_hobby_cards.html` -> `card(face, "small")`, faces from
+  `web.shapes._to_hobby_face`, with the computed flags as `cx-flag` lines); the drawer fetches the same
+  fragment from `GET /api/hobbies/html`; their JS is `static/js/hobbies.js`. The user-visible word is
+  `card_rules.HOBBY_LABEL` (#700 will make it renameable). Check: `scripts/test_hobby_covers_686.py`.
 
 **The text, in this order** (`cards.face_text(card)` -> `(text, source)`; never whereabouts or provenance):
 1. `projects.synopsis`: a few hand-written sentences (max 600; one paragraph per line);
@@ -1125,9 +1157,38 @@ matching the V2 mockup's Card template:
   shared shape with a specific code: `bad_type`, `bad_filed`, `bad_sort`, `bad_limit`, `bad_cursor`,
   `cursor_view_mismatch`. Client: `ItemCards.pager` takes `loadMore` and a total, `ItemCards.feed` keeps
   one view's items and cursor, `ItemCards.getJson` reports failures with code, message and status.
-  `/unfiled`, the user gallery and the hobby page still embed their whole list and can reuse this
-  endpoint the same way. Check with `scripts/test_home_paging_624.py` (and `--bench`) and
-  `node scripts/test_home_paging_624.js [--compare DIR]`.
+  Since #553 every file grid is paged this way (next item). Check with `scripts/test_home_paging_624.py`
+  (and `--bench`) and `node scripts/test_home_paging_624.js [--compare DIR]`.
+- **One file grid (#553).** Home's Files panel, /unfiled, the user gallery (`/gallery/user/<label>`) and a
+  hobby's loose objects are one component: the page route calls `web/item_grid.py` `build(grid_id, source,
+  show_all_revs, ...)` and passes the result as `grid`; the template includes `templates/_item_grid.html`
+  (controls + a JSON config block, `<script type="application/json" id="<grid>-config" nonce=...>`, no
+  inline code); `static/js/item-grid.js` mounts every such block. Every grid gets the same controls: the
+  shared Sort, a type `<select>` with counts (it replaced home's type tabs), All / Unfiled / Filed (not on
+  /unfiled), Select + the bulk bar (always on for /unfiled) with **add to card, turn into card, tag,
+  provenance, mark sensitive, delete**, the `?rev=all` note. Bulk actions call the existing endpoints
+  (`/api/bulk/add-to-project`, `/api/projects/from-selection` (now answers `batch_id`),
+  `/api/bulk/attach-tags`, `/api/bulk/sensitive`, `/api/delete`) plus `POST /api/bulk/provenance`
+  (`items.set_provenance`, one imaged row `item_bulk_provenance`; it was one `/api/image/{slug}` POST per
+  file); each answer's `batch_id` feeds the Undo bar, then the grid re-reads its view from the server.
+  **Viewers get no Select button, no bar and an empty `bulk` list** (`item_grid.can_edit()`, editor+, the
+  bulk routes' own role). Every grid is server-paged: the page embeds the first batch of its default view
+  plus per-type counts; `GET /api/items/grid` (viewer) = `/api/home/files` with `source` = `home` |
+  `unfiled` | `user:<label>` | `hobby:<slug>` (`files_feed.parse_source`; 400 `bad_source`, unknown hobby
+  404), and its answer also carries `counts` / `labels` (the type filter after a refresh). A cursor is
+  bound to its source (`cursor_view_mismatch`); home's cursors are unchanged. Each source reads its rows
+  as its page did, then `policy.filter_visible` + `_split_revisions` (`files_feed.load`, the door in
+  `check_policy_doors.py`). User-visible grid words live in `item_grid.LABELS`. **Grid / List
+  (#714), on every grid:** List is one compact row per file (`ItemCards.row` in `cards.js`: lazy thumb,
+  `display_name`, type label, `card_date`, the card it's on or the unfiled lamp, the revision badge, the
+  select checkbox outside the link), the grid element gets `role="list"` + `cx-item-list`; Select, the
+  bar, Undo, paging, sort and filters work the same in both. Remembered per grid in localStorage
+  (`constructicon.grid.<id>.layout`, try/catch, default Grid). The card face is unchanged. **The bulk
+  bar wraps (#715):** groups in order (count + Clear | add to card + turn into card | tag | provenance |
+  sensitive | delete, last and set apart), flex-wrap with no nowrap or fixed widths; sticky above 600 px,
+  static on a phone (wrapped it is ~5 lines). Check with
+  `scripts/test_item_grid_553.py` (throwaway DB: the four pages, viewers, every bulk action from a
+  non-/unfiled grid with change log + undo, 1,050 gallery rows) and `node scripts/test_item_grid_553.js`.
 - **Grid sort: the date on the card, or the upload time (#622).** Every item grid (home Files, /unfiled,
   the user gallery, hobby loose objects) has the same Sort menu, `templates/_item_sort_options.html`:
   **Date: newest** (`date_newest`, the default) / **Date: oldest** (`date_oldest`), **Uploaded: newest** /
@@ -1138,9 +1199,9 @@ matching the V2 mockup's Card template:
   falls back to the file's own modified time, then the upload time, and the card shows that date, so the
   item sorts where its card's date says. Ties on the card date go by upload time (same direction), then
   keep the list's order (stable). One sorter, `static/js/item-sort.js` (`ItemSort.sorted(items, name)`,
-  `ItemSort.wire(select, onChange)`; loaded by each grid page with `?v=static_version`): /unfiled, the
-  gallery and the hobby page sort in the browser with it; home passes the name to the endpoint, where
-  `files_feed.SORTS` uses the same keys. **To add a sort:** one entry in `files_feed.SORTS`, the same in
+  `ItemSort.wire(select, onChange)`; loaded by `_item_grid.html` with `?v=static_version`): since #553
+  every grid passes the name to `GET /api/items/grid`, where `files_feed.SORTS` uses the same keys
+  (`ItemSort.sorted` has no page caller left; the tests keep the two in step). **To add a sort:** one entry in `files_feed.SORTS`, the same in
   `item-sort.js` `SORTS`, one `<option>` in the partial. Check with `scripts/test_card_date_sort_622.py`
   (throwaway DB: the field per dating rule, the four pages, the server face, the endpoint order) and
   `node scripts/test_item_sort_622.js` (the comparators, and that the three lists agree).
@@ -1272,7 +1333,7 @@ To add a new object type (issue #448 contract v2):
 
 2. **Required fields**: Every type must declare `preview_fn` and `properties_fn` at registration (enforced, will raise `ObjectTypeContractError` otherwise).
 
-3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), and `sniff_priority` (for resolution when multiple sniffers claim the same extension).
+3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), `raw_text_fn` (#703: `(path) -> codec or None`, whether `/f/<slug>/raw` may show this file as plain text; `code` has one), and `sniff_priority` (for resolution when multiple sniffers claim the same extension).
 
 4. **Preview guidance**: previews must escape all data (no raw HTML from untrusted sources; build with `_preview.py` helpers or `markupsafe.escape`) and handle `ctx.mode`: `"live"` (object page) and `"export"` (static site; most types render export markup via the helpers, some deliberately return the download link or `None` to keep the export as it was). A preview that needs its own file reads `ctx.file_path`; never guess at item-dict keys. **Anything expensive goes in `embedded_metadata_fn` (computed once at upload, stored in `type_metadata`), never in `preview_fn`/`properties_fn`, which run on every page view.** Measured lesson: per-view STL mesh parsing took 7.9 s on a real 22 MB file.
 
@@ -1291,8 +1352,9 @@ To add a new object type (issue #448 contract v2):
 - **A preview never carries the whole file.** `code` reads only the head of the stored file
   (`_textstats.read_head_lines`: at most 2,000 lines, 200 K characters and 140 K of escaped markup, so the
   object page stays near 300 KB whatever the file size), says "Showing the first N of M lines" (the count reads
-  at most 64 MB: "at least" past that) with Download (and Open raw, except for `.html`: a raw HTML file served from
-  `/f/<slug>` runs as a page in the app's own origin), and leaves the block unhighlighted above 60 K characters
+  at most 64 MB: "at least" past that) with Download and Open raw (#703: `/f/<slug>/raw`, the source as plain
+  text in a new tab; offered only when `code.raw_text_codec` says the file is showable text, and not for `.html`,
+  which has its Rendered / Code toggle instead), and leaves the block unhighlighted above 60 K characters
   (`data-nohl`). **`extracted_text` is never embedded in the page**: the template gets only
   `item.extracted_text_chars`; the OCR/text panel fetches `GET /api/image/{slug}/text?limit=` on first open
   (viewer, item policy, default 100,000 characters, hard cap 1,000,000, also returns `ocr_status` for the OCR
@@ -1466,7 +1528,8 @@ To add a new object type (issue #448 contract v2):
   managed in `/admin`. `core/provenance_options.py` owns reads, validation
   (active keys for new writes; a record's existing retired key stays valid) and
   change-logged writes. Pickers, labels and the MCP tools read the table; the
-  old constants in `card_rules` / `db.PROVENANCE_TYPES` are only the seed.
+  seed is `provenance_options.SEED` (`card_rules`' label dicts are only fallbacks;
+  `db.PROVENANCE_TYPES` is gone, #546).
   `scripts/test_provenance_options.py` runs on a throwaway DB, no server.
 
 - **Revision chains (#477)** — `item_revisions(old_slug PK, new_slug UNIQUE)`: "new
@@ -1673,6 +1736,53 @@ JSON body). No secrets there: the publish token stays a write-only API key (`app
   calls it). `sync_clients.py` still seeds them.
 - Check with `scripts/test_install_config.py` (throwaway DBs: a fresh install and a legacy one).
 
+### The hobby label (#700, "A hobby by any other name")
+
+An install can call a hobby something else: Admin > Install, keys `hobby_label` (singular) and
+`hobby_label_plural`, both or neither (default "Hobby / Hobbies" = not set). Owner decision
+2026-10-16: rename EVERYTHING the user sees, keep the plumbing.
+- **Rules** (`core/hobby_label.py`, pure): 2-32 characters, letters (any alphabet), spaces and
+  `- ' & .`, starting with a letter; each word's slug (`slugify`: accents dropped, lower case, `-`)
+  must not be in `RESERVED_SLUGS` (every first URL segment of the app and a few likely ones;
+  `test_hobby_label_700.py` checks the route table is covered); singular and plural slugs differ;
+  "hobbies" only as the plural, "hobby" only as the singular. Refusals: 400 `bad_hobby_label`. A save
+  is the usual imaged `install_config_update` row, undoable.
+- **One place to read it:** `install_config.hobby_label()` -> `Label` (`.one` "Hobby", `.many`
+  "Hobbies", `.one_lc` / `.many_lc` for inside a sentence, `.one_slug` / `.many_slug`, `.index_url`,
+  `.url(slug)`). Templates: the `hobby_label` Jinja global (`{{ hobby_label.many }}`,
+  `{{ hobby_label.url(h.slug) }}`, `web/common.py`). JS: `HobbyLabel.*` (`static/js/hobby-label.js`,
+  loaded first by `base.html`, which puts the label on `<html data-hobby-label="...">`; no inline
+  script). Python: `install_config.hobby_label()`; `card_rules.HOBBY_LABEL` still works (a module
+  `__getattr__` that returns the singular). Guides are relabelled at render (`relabel_text`).
+- **URLs:** the routes stay at their internal paths `/hobbies` and `/hobby/{slug}`; `web/hobby_paths.py`
+  (pure ASGI, inside the security headers and origin guard, outside the access gate) rewrites the
+  label's `/<plural>` and `/<singular>/<slug>` to them, and **308-redirects** `/hobbies`, `/hobby/<slug>`
+  and every earlier label's paths (query kept) to the label's. Earlier labels are remembered in the
+  non-imaged `hobby_label_known` row (written by `install_config.update`, never dropped, not even by an
+  undo), so no link ever breaks. Links are built with the label (`hobby_label.url`, never a literal).
+- **Immediate vs relaunch:** the web side follows at once (install config is cached ~2 s per process
+  and cleared on save; no restart). The **MCP reads the label when its process starts**: tool names
+  (`constructicon_create_hobby` -> `constructicon_create_department`, `list_hobbies` -> `list_departments`)
+  and descriptions follow it (`server.tool_registrations` / `tool_name_for` / `tool_description_for`).
+  The old names (the default ones and each earlier label's) stay registered as **hidden aliases**:
+  `tools/call` answers them, `tools/list` leaves them out (`mcp.list_tools` is filtered by
+  `_HIDDEN_ALIASES`). At startup the MCP records the label it used (`app_settings`
+  `mcp_started_hobby_label`); Admin shows a persistent "Restart the MCP server" notice while it
+  differs from the current label (`install_config.hobby_label_status()`), and a one-time notice after a
+  save when no MCP has recorded one. The warning text (`install_config.HOBBY_LABEL_WARNING`) is on the
+  Install panel, and the Save asks to confirm a label change with it.
+- **Stays "hobby", on purpose:** DB tables/columns, API routes (`/api/hobby/...`, `/api/hobbies...`),
+  JSON field names, MCP parameter names, `core/` identifiers and route function names, and the core
+  error texts the API returns.
+- **Guard:** `scripts/check_hobby_label.py` (text/AST, in the suite) fails on a hard-coded
+  hobby/hobbies word a user can read in `web/templates`, `web/static/js` or `web/**/*.py` (visible text,
+  title/aria-label/placeholder/alt/label, string literals that read like text, a page link written as
+  `/hobby...`), and skips comments, identifiers, paths and one-token lower-case keys. Exceptions go in
+  its `ALLOW` with a reason. A word that arrives as DATA (e.g. a home source "hobby") is not seen by
+  it: render it through the label. Check the behaviour with `scripts/test_hobby_label_700.py`
+  (throwaway DB; the MCP tool names are compared with `scripts/data/mcp_tool_names_700.json`, which a PR
+  that adds or renames a tool updates).
+
 ## Web owns background work; MCP enqueues (#549)
 
 `constructicon-web` and `constructicon-mcp` are two processes on one SQLite DB, so
@@ -1780,7 +1890,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
-    `test_replace_file_617`, `test_card_faces`, `test_install_config`, `check_layering`;
+    `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
+    `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,
     `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,
@@ -1789,18 +1900,24 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `check_no_silent_except`, `test_async_blocking_550`, `test_one_brain`, `test_captions_mcp`,
     `test_restart_sidecar_643`, `check_compose_ollama` (the compose example's Ollama sidecar, #687);
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
-    `test_email_type`, `test_traditional_media`, `test_office` (live);
+    `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live);
   - pages, search, dates, UI: `test_search_543`, `test_item_title_542`, `test_mountain_time_544` (`.py` and
-    `.js`), `test_home_paging_624` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
+    `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
     `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
-  - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `check_archive_guard`
+  - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `check_dead_code`
+    (#546: the reference scan, **report only**, never fails: module-level functions, classes and
+    UPPER_CASE constants in `core/` and `web/` that nothing else names, the ones only tests use, and
+    CSS classes no template/JS/Python mentions; read its list before a cleanup PR, then grep each name
+    yourself; entry points go in its `ALLOW`; its own test is `test_dead_code_546`), `check_archive_guard`
     (every retired script in `scripts/archive/` refuses to run, #633), `test_live_bugs_563`,
     `test_round2` and `test_round3a` (the work-install shakedown rounds: several small fixes each),
     `test_release` (the CalVer logic), `check_dependency_audit` (known advisories in the installed
     packages; needs network, see above), `check_image_layout` (#688: the Dockerfile bakes the code in
     after the pip layers, `.dockerignore` keeps secrets/data/.git/tests out, the example compose mounts
-    no code; text only, no Docker).
+    no code; text only, no Docker), `check_text_bytes` (#706: no NUL or other C0 control byte besides
+    tab/LF/CR in the `.css .js .html .py .md .json .txt` files under `web/`, `core/`, `mcp_server/` and
+    `scripts/`; `--all` scans the whole repo, report only; its own test is `test_text_bytes_706`).
 - Besides the runner, **the `constructicon-test` container** (below) is where a change is exercised
   against a copy of real data before prod.
 

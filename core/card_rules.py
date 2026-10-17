@@ -98,6 +98,27 @@ FILE_PROVENANCE_TO_CARD = {
     "purchased": "purchased",
 }
 
+# The user-visible word for a hobby (#686: one place; #700 made it renameable). `HOBBY_LABEL` is
+# not a constant any more: reading `card_rules.HOBBY_LABEL` goes through the module __getattr__
+# below and returns the install's singular label (install_config.hobby_label(), "Hobby" by
+# default). New code should call install_config.hobby_label() for the other casings and URLs.
+def __getattr__(name):
+    if name == "HOBBY_LABEL":
+        from . import install_config  # lazy: this module stays importable without the DB layer
+        return install_config.hobby_label().one
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+# #686: where a hobby's cover came from (cards.resolve_hobby_cover). `picked` = chosen by hand
+# (hobby_settings.cover_slug); the other two are the automatic fallback, in this order.
+HOBBY_COVER_PICKED = "picked"
+HOBBY_COVER_HIGHLIGHT = "highlighted_project"
+HOBBY_COVER_RECENT = "recent_project"
+HOBBY_COVER_SOURCE_LABELS = {
+    HOBBY_COVER_PICKED: "Chosen by hand",
+    HOBBY_COVER_HIGHLIGHT: "Automatic: its highlighted project's cover",
+    HOBBY_COVER_RECENT: "Automatic: its most recently updated project with a cover",
+}
+
 # --- Hobby activity (3.3) ------------------------------------------------------
 # A hobby's two-value manual switch (blog_tags.hobby_status). Never computed; the
 # mismatch flags in core/db.hobby_flags only SURFACE disagreement with the cards.

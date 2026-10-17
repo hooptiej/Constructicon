@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Hobbies — {{ app_name() }}{% endblock %}
+{% block title %}{{ hobby_label.many }} — {{ app_name() }}{% endblock %}
 {% block body %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
@@ -13,79 +13,14 @@
 
   <div class="home-col-header">
     <div>
-      <h1 class="page-title">Hobbies</h1>
-      <p class="page-subtitle">Collections organized by hobby interest.</p>
+      <h1 class="page-title">{{ hobby_label.many }}</h1>
+      <p class="page-subtitle">Collections organized by {{ hobby_label.one_lc }} interest.</p>
     </div>
-    <button type="button" class="btn-secondary" id="new-hobby-btn" title="Create a new hobby">+ New hobby</button>
+    <button type="button" class="btn-secondary" id="new-hobby-btn" title="Create a new {{ hobby_label.one_lc }}">+ New {{ hobby_label.one_lc }}</button>
   </div>
 
-  <div id="hobbies-grid" class="gallery-grid"></div>
-  <p id="hobbies-empty" class="empty-state" style="display:none">No hobbies yet.</p>
+  {#- #686: the shared card component (was an inline JS template with a placeholder for every cover). -#}
+  <div id="hobbies-grid">{% include "_hobby_cards.html" %}</div>
 </div>
-
-<script nonce="{{ csp_nonce() }}">
-async function loadHobbies() {
-  try {
-    const res = await fetch('/api/hobbies');
-    if (!res.ok) return;
-    const hobbies = await res.json();
-
-    const grid = document.getElementById('hobbies-grid');
-    const empty = document.getElementById('hobbies-empty');
-
-    if (!hobbies.length) {
-      empty.style.display = 'block';
-      return;
-    }
-
-    grid.innerHTML = hobbies.map(hobby => `
-      <div class="project-item-card-wrapper">
-        <a class="project-item-card" href="/hobby/${encodeURIComponent(hobby.slug)}">
-          <div class="project-item-thumb">
-            <div class="project-cover-placeholder"></div>
-          </div>
-          <div class="project-item-body">
-            <div class="project-item-title">${encodeHtml(hobby.name)}</div>
-            <div class="project-item-meta">
-              ${hobby.group_code ? `<span style="display:inline-block;padding:2px 6px;border:1px solid #6E6B57;border-radius:2px;font-size:11px;letter-spacing:.05em;margin-right:4px" title="Group code">${encodeHtml(hobby.group_code)}</span>` : ''}
-              <span style="display:inline-block;padding:2px 6px;background:${hobby.status === 'inactive' ? 'rgba(168,164,143,0.2)' : 'rgba(127,163,124,0.2)'};border-radius:2px;font-size:11px;color:${hobby.status === 'inactive' ? '#A8A48F' : '#7FA37C'};margin-right:4px">${encodeHtml(hobby.status_label || 'Active')}</span>
-              ${hobby.project_count || 0} project${hobby.project_count === 1 ? '' : 's'}
-            </div>
-            ${(hobby.flags || []).map(f => `<div class="hobby-flag" style="margin-top:4px;font-size:11px;color:#C9A227" title="${encodeHtml(f.detail)}">&#9888; ${encodeHtml(f.label)}</div>`).join('')}
-          </div>
-        </a>
-      </div>
-    `).join('');
-  } catch (err) {
-    console.error('Failed to load hobbies:', err);
-  }
-}
-
-function encodeHtml(str) {
-  return String(str || '').replace(/[&<>"']/g, c => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  }[c]));
-}
-
-document.getElementById('new-hobby-btn').addEventListener('click', async () => {
-  const name = prompt('New hobby name:');
-  if (!name || !name.trim()) return;
-  const fd = new FormData();
-  fd.append('name', name.trim());
-  const res = await fetch('/api/hobbies', { method: 'POST', body: fd });
-  if (res.ok) {
-    const hobby = await res.json();
-    window.location.href = `/hobby/${encodeURIComponent(hobby.slug)}`;
-  } else {
-    alert('Failed to create hobby.');
-  }
-});
-
-loadHobbies();
-</script>
-
+<script src="/static/js/hobbies.js?v={{ static_version('js/hobbies.js') }}" defer></script>
 {% endblock %}

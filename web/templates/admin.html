@@ -42,6 +42,16 @@
   {#- #562: shown until the install has an owner name (core/install_config.setup_needed). #467's
       first-run setup (the first admin account) will take this over; until then it points at
       Admin > Install below. Dismissing it hides it in this browser only. -#}
+  {#- #700: the MCP names its tools after the label it STARTED with (it records that label in
+      app_settings at startup). Until it restarts after a label change, say so on every admin load.
+      install_config.hobby_label_status(); hidden (but present, for the JS) otherwise. -#}
+  {% set _hl = hobby_label_status %}
+  <div class="admin-panel" id="hobby-label-mcp-notice" role="status"{% if not _hl.mcp_needs_restart %} hidden{% endif %}
+       style="margin:8px 0 16px;border-color:var(--hazard-yellow)">
+    <strong>Restart the MCP server.</strong>
+    <span id="hobby-label-mcp-notice-text">{% if _hl.mcp_needs_restart %}Its tools are still named for "{{ _hl.mcp_started.one }} / {{ _hl.mcp_started.many }}", but this install now says "{{ _hl.current.one }} / {{ _hl.current.many }}". Restart the MCP container (e.g. sudo docker restart constructicon-mcp); MCP clients must then reconnect to see the renamed tools.{% endif %}</span>
+  </div>
+
   {% if install_setup_needed %}
   <div class="admin-panel" id="install-setup-banner" role="status"
        style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 16px;border-color:var(--hazard-yellow)">
@@ -175,6 +185,14 @@
         </div>
       </div>
       <div id="admin-install-fields"></div>
+      {#- #700: what renaming hobbies does, shown before anyone saves a new label (install_config.
+          HOBBY_LABEL_WARNING; the Save asks to confirm with the same words). -#}
+      <div class="admin-row" id="admin-hobby-label-warning" style="border-left:3px solid var(--hazard-yellow);padding-left:10px">
+        <div class="admin-row-label">Before you rename {{ hobby_label.many_lc }}</div>
+        <div class="admin-row-hint" data-warning="immediate">{{ _hl.warning.immediate }}</div>
+        <div class="admin-row-hint" data-warning="relaunch">{{ _hl.warning.relaunch }}</div>
+        <div class="admin-row-hint" data-warning="unchanged">{{ _hl.warning.unchanged }}</div>
+      </div>
       <div class="admin-divider"></div>
       <div class="admin-row">
         <div class="admin-row-label">Publish targets</div>
@@ -232,7 +250,7 @@
          reports presence, never the real value — so each input is always
          left blank on load/save, same as a normal password field never
          redisplaying what you last typed. Add another labeled row here (and
-         to web/app.py's KNOWN_SETTINGS, and the JS API_KEY_SETTINGS array
+         to web/routes/admin.py's KNOWN_SETTINGS, and the JS API_KEY_SETTINGS array
          below) for each additional integration that needs a key. -->
     <section class="admin-panel">
       <div class="admin-panel-header">
@@ -725,10 +743,39 @@
       if (JSON.stringify(targets) !== JSON.stringify(saved.values.publish_targets || {})) out.publish_targets = targets;
       return out;
     }
+    // #700: after a label save. The web pages already use it (reload this page to see its own
+    // wording change); the MCP needs a restart. When the MCP has recorded the label it started
+    // with, the notice stays (it is also rendered on every admin load) until the MCP restarts
+    // with the current one; when it hasn't (mcp_needs_restart null), it is a one-time notice.
+    function showLabelNotice(hl) {
+      const box = document.getElementById('hobby-label-mcp-notice');
+      const text = document.getElementById('hobby-label-mcp-notice-text');
+      if (!box || !text) return;
+      const cur = hl.current || {};
+      if (hl.mcp_needs_restart === false) { box.hidden = true; return; }
+      const started = hl.mcp_started;
+      text.textContent = (started
+        ? `Its tools are still named for "${started.one} / ${started.many}", but this install now says "${cur.one} / ${cur.many}". `
+        : `The label is now "${cur.one} / ${cur.many}". `)
+        + 'Restart the MCP container (e.g. sudo docker restart constructicon-mcp); MCP clients must then reconnect to see the renamed tools. '
+        + 'Reload this page to see its own wording change.';
+      box.hidden = false;
+    }
     document.getElementById('admin-install-add-target').addEventListener('click', () => addTarget('', '', 'main'));
     saveBtn.addEventListener('click', async () => {
       const body = collect();
       if (!Object.keys(body).length) { setMsg('Nothing changed'); return; }
+      // #700: a label change asks first, with the panel's own words: what applies now, what needs
+      // the MCP restarted, what stays.
+      const labelChange = ('hobby_label' in body) || ('hobby_label_plural' in body);
+      if (labelChange) {
+        const hl = saved.hobby_label || {};
+        const val = k => (k in body ? body[k] : (saved.values[k] || '')) || (saved.fallbacks[k] || '');
+        const w = hl.warning || {};
+        const ask = `Rename "${hl.current ? hl.current.one + ' / ' + hl.current.many : ''}" to "${val('hobby_label')} / ${val('hobby_label_plural')}"?\n\n`
+          + [w.immediate, w.relaunch, w.unchanged].filter(Boolean).join('\n\n');
+        if (!window.confirm(ask)) { setMsg('Not saved'); return; }
+      }
       saveBtn.disabled = true; setMsg('Saving\u2026');
       try {
         const res = await fetch('/api/install-config', {
@@ -738,6 +785,7 @@
         if (!res.ok) throw new Error((r.error && r.error.message) || r.detail || `Save failed (${res.status})`);
         render(r.config);
         setMsg('Saved', true);
+        if (labelChange) showLabelNotice(r.config.hobby_label || {});
         const banner = document.getElementById('install-setup-banner');
         if (banner && !r.config.setup_needed) banner.remove();
         if (window.showUndoBar && r.batch_id) {
@@ -884,7 +932,7 @@
   })();
 
   // API Keys (#55) — presence-only status, and a save that never echoes the
-  // real value back. KNOWN_SETTINGS is web/app.py's allowlist; this array is
+  // real value back. KNOWN_SETTINGS is web/routes/admin.py's allowlist; this array is
   // just this page's UI-side list of which of those keys get a labeled row —
   // add an entry here (plus the matching markup above) for a future key.
   const API_KEY_SETTINGS = ['youtube_data_api_key', 'pages_publish_token'];

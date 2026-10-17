@@ -65,6 +65,21 @@ templates.env.globals["app_version"] = version_info.get_version
 templates.env.globals["app_name"] = install_config.app_name
 templates.env.globals["app_logo_url"] = install_config.app_logo_url
 
+
+class _HobbyLabelGlobal:
+    """#700: the install's word for a hobby, in every template as `hobby_label`: `.one` ("Hobby"),
+    `.many` ("Hobbies"), `.one_lc` / `.many_lc` (in a sentence), `.index_url` ("/hobbies"),
+    `.url(slug)` ("/hobby/<slug>"), `.as_dict()` (base.html hands it to the JS as data-hobby-label,
+    read by static/js/hobby-label.js). Every attribute is read at render time
+    (install_config.hobby_label(), cached briefly), so a saved label shows on the next page load.
+    Templates never write the word themselves: scripts/check_hobby_label.py fails on one that does."""
+
+    def __getattr__(self, name):
+        return getattr(install_config.hobby_label(), name)
+
+
+templates.env.globals["hobby_label"] = _HobbyLabelGlobal()
+
 # #467 step 1: who is signed in (the header's user chip) and the session's CSRF token (base.html
 # injects it only for a signed-in page, so an anonymous page's HTML is unchanged). Both read the
 # request's context, set by web/auth.py's SessionMiddleware.

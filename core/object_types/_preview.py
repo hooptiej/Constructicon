@@ -38,8 +38,19 @@ def image_viewer(ctx):
     return Markup(f'<img src="{escape(ctx.media_url)}" alt="{escape(_alt(item))}" class="item-media">')
 
 
+def original_link_html(url, item):
+    """#701: the object page's link to the stored file, the same for every type
+    (`object_types.original_link`): "View original <Type>" in a new tab for a file
+    the browser shows itself, "Download original <Type>" for anything else."""
+    from . import original_link  # the package defines it before importing this module
+    link = original_link(item)
+    target = ' target="_blank" rel="noopener"' if link["new_tab"] else ""
+    return f'<a href="{escape(url)}" class="external-link-btn"{target}>{escape(link["label"])}</a>'
+
+
 def thumb_with_original_link(ctx):
-    """Live: <div class="capture-preview"> with img and optional "View original" link.
+    """Live: <div class="capture-preview"> with img and optional "View original" /
+    "Download original" link (#701).
     Export: linked or bare image depending on media_url."""
     item = ctx.item
     alt = _alt(item)
@@ -47,8 +58,7 @@ def thumb_with_original_link(ctx):
         html = (f'<div class="capture-preview"><img id="preview-img" src="{escape(ctx.thumb_url)}" '
                 f'alt="{escape(alt)}" title="Click to view full size"{_rotation_style(item)}>')
         if ctx.media_url:
-            html += (f'<a href="{escape(ctx.media_url)}" class="external-link-btn">'
-                     f'View original {escape(item.get("type_label") or "file")}</a>')
+            html += original_link_html(ctx.media_url, item)
         return Markup(html + "</div>")
     img = f'<img src="{escape(ctx.thumb_url)}" alt="{escape(alt)}" class="item-media">'
     return Markup(f'<a href="{escape(ctx.media_url)}">{img}</a>' if ctx.media_url else img)

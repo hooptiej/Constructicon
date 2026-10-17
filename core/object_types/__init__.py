@@ -27,6 +27,7 @@ codebase should need to change.
 """
 
 import importlib
+import mimetypes
 import pkgutil
 import sys
 from dataclasses import dataclass, field
@@ -263,6 +264,11 @@ class ObjectTypeSpec:
     # (max 700 px, the side panel beside it); "table" gives a wide table the whole page width
     # (the side panel moves below it). The data and spreadsheet types say "table".
     preview_layout: str = "default"
+    # #703: (path: Path) -> the codec to show the stored file as plain text in the browser
+    # (`/f/<slug>/raw`: text/plain; charset=utf-8, inline, nosniff, sandbox CSP), or None when this
+    # file isn't showable text (binary, too big), in which case the raw view is the download.
+    # None here = the type has no raw view at all. Read only a little of the file; never raise.
+    raw_text_fn: object = None
     # Issue #448: content-based detection for file uploads.
     # (path: Path, filename: str) -> bool — True if this file's bytes match the type.
     # If None, extension-only matching; if present, called after extension match.
@@ -422,6 +428,62 @@ def can_be_writeup(row_or_media_type):
         media_type = row_or_media_type
     spec = get_object_type(media_type)
     return spec.writeup_body_key is not None
+
+
+# #701: the media types a browser shows by itself (its PDF viewer, an image, the video/audio player,
+# plain text). /f/<slug> serves these `inline` and their link says "View original" and opens a new
+# tab; everything else (STL, PSD, ZIP, EXE, fonts, ...) is a download and its link says so.
+# Deliberately an allowlist of exact types, not "image/*": image/vnd.adobe.photoshop, image/tiff and
+# friends are image/* but no browser shows them. web/content_security.py decides the actual header
+# from this set plus #610's sniff (so an .html renamed .pdf is still a download), never the
+# extension alone.
+BROWSER_VIEWABLE_TYPES = frozenset({
+    "application/pdf",
+    "image/jpeg", "image/png", "image/gif", "image/webp", "image/avif", "image/bmp",
+    "video/mp4", "video/webm", "video/ogg",
+    "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/x-wav", "audio/wave", "audio/webm",
+    "audio/flac", "audio/x-flac", "audio/aac",
+    "text/plain",
+})
+
+
+def guess_file_type(filename):
+    """The media type a stored file is served with (the same guess Starlette's FileResponse makes
+    from the original name), or None."""
+    return mimetypes.guess_type(filename or "")[0] if filename else None
+
+
+def opens_in_browser(filename=None, media_type=None):
+    """True when the browser can show this file itself (#701), from its served media type."""
+    mt = (media_type or guess_file_type(filename) or "").split(";")[0].strip().lower()
+    return mt in BROWSER_VIEWABLE_TYPES
+
+
+def original_link(item):
+    """#701: how the object page links to an item's stored file, for every type alike:
+    {"label", "new_tab"}. A browser-viewable file says "View original <Type>" and opens in a new
+    tab; anything else says "Download original <Type>" and downloads in place."""
+    kind = item.get("type_label") or "file"
+    if opens_in_browser(item.get("filename")):
+        return {"label": f"View original {kind}", "new_tab": True}
+    return {"label": f"Download original {kind}", "new_tab": False}
+
+
+def raw_url(slug):
+    """#703: the raw plain-text view of an item's stored file."""
+    return f"/f/{slug}/raw"
+
+
+def raw_text_codec(spec, path):
+    """#703: the codec `/f/<slug>/raw` reads the file at `path` with (from the type's `raw_text_fn`),
+    or None when the type has no raw view or this file isn't showable text. Never raises."""
+    if spec is None or spec.raw_text_fn is None or not path:
+        return None
+    try:
+        return spec.raw_text_fn(path) or None
+    except Exception as e:
+        print(f"raw_text_fn failed for {spec.key}: {e!r}")
+        return None
 
 
 def render_preview(spec, ctx):

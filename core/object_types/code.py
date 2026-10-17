@@ -150,15 +150,46 @@ def render_source(path):
     return text[:RENDER_MAX_CHARS], len(text) > RENDER_MAX_CHARS
 
 
-def _lines_note(path, shown, media_url, html):
-    """"Showing the first 2,000 of 312,000 lines" + Download / Open raw, for a file cut for the page."""
+# #703: the raw view (/f/<slug>/raw, plain text in the browser) serves at most this much; a bigger
+# file is a download. Same ceiling as the HTML rendered view.
+RAW_MAX_BYTES = RENDER_MAX_CHARS
+RAW_SNIFF_BYTES = 16 * 1024
+RAW_MAX_BAD_FRACTION = 0.10  # more undecodable / control bytes than this in the head = not text
+
+
+def raw_text_codec(path):
+    """#703 raw_text_fn: the codec to show the code file at `path` as plain text (`/f/<slug>/raw`),
+    or None when it isn't showable text: over RAW_MAX_BYTES, unreadable, or binary (a NUL outside
+    UTF-16/32, or a head that is mostly undecodable or control bytes). Reads only the first 16 KB."""
+    try:
+        if path.stat().st_size > RAW_MAX_BYTES:
+            return None
+        with open(path, "rb") as fh:
+            head = fh.read(RAW_SNIFF_BYTES)
+    except OSError as e:
+        besteffort.warn(log, "code raw-view check", e, path=str(path))
+        return None
+    codec, _label = _textstats.detect_encoding(head)
+    if not codec.startswith("utf-8"):
+        return codec  # UTF-16/32 by BOM or NUL pattern: transcoded to UTF-8 when served
+    if b"\x00" in head:
+        return None
+    text = head.decode("utf-8", errors="replace")
+    bad = text.count("�") + sum(1 for ch in text if ord(ch) < 0x20 and ch not in "\t\n\r\f\x1b")
+    return None if text and bad > len(text) * RAW_MAX_BAD_FRACTION else codec
+
+
+def _lines_note(path, shown, media_url, html, raw_url=None):
+    """"Showing the first 2,000 of 312,000 lines" + Download / Open raw, for a file cut for the page.
+    #703: Open raw goes to the plain-text view (`raw_url`) and is offered only when that view can show
+    the file as text; otherwise the Download link is the only one."""
     total, complete = _textstats.count_lines(path, COUNT_BUDGET_BYTES)
     of = f"{total:,}" if complete else f"at least {total:,}"
     links = ""
     if media_url:
         links = f' <a href="{escape(media_url)}" download>Download</a>'
-        if not html:  # a raw .html would run as a page in the app's own origin; only offer the download
-            links += f' &middot; <a href="{escape(media_url)}" target="_blank" rel="noopener">Open raw</a>'
+        if raw_url and not html:  # an .html file has its own Rendered / Code toggle instead
+            links += f' &middot; <a href="{escape(raw_url)}" target="_blank" rel="noopener">Open raw</a>'
     return (f'<p class="muted code-preview-note">Showing the first {shown:,} of {of} lines.{links}</p>')
 
 
@@ -192,10 +223,13 @@ def preview(ctx):
     css = f"hljs language-{lang}" if lang else "hljs"  # #469: explicit language when known
     nohl = ' data-nohl="1"' if len(text) > HIGHLIGHT_MAX_CHARS else ""
     block = f'<pre><code id="code-preview-block" class="{css}"{nohl}>{esc}</code></pre>'
-    note = _lines_note(path, shown, ctx.media_url, is_html(filename)) if cut else ""
+    slug = ctx.item.get("slug") or ""
+    note = ""
+    if cut:
+        raw = raw_url(slug) if slug and not is_html(filename) and raw_text_codec(path) else None
+        note = _lines_note(path, shown, ctx.media_url, is_html(filename), raw)
     if not is_html(filename):
         return Markup(f'<div class="code-preview">{block}</div>{note}')
-    slug = ctx.item.get("slug") or ""
     big = (ctx.item.get("file_size") or 0) > RENDER_BIG_BYTES
     return Markup(
         '<div class="html-preview" id="html-preview"'
@@ -215,7 +249,7 @@ def preview(ctx):
 
 
 # Registration: add this type to the object-type registry
-from . import register, ObjectTypeSpec, ThumbnailSource
+from . import register, raw_url, ObjectTypeSpec, ThumbnailSource
 
 register(ObjectTypeSpec(
     key="code",
@@ -227,6 +261,7 @@ register(ObjectTypeSpec(
     properties_fn=get_properties,
     preview_fn=preview,
     preview_assets=("highlightjs",),
+    raw_text_fn=raw_text_codec,  # #703: /f/<slug>/raw shows the source as plain text
     badge_icon="💻",
     badge_text="CODE",
 ))

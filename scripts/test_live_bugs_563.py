@@ -90,9 +90,20 @@ page = client.get("/gallery/user/bulk")
 check("gallery renders", page.status_code == 200, page.status_code)
 m = re.search(r"(\d+) uploads?<", page.text)
 check("gallery count is the true total", bool(m) and m.group(1) == "1030", m.group(0) if m else "no count")
-check("gallery embeds every item (client pager draws batches of 120)", page.text.count('"slug"') >= 1030)
-check("gallery template uses the ItemCards pager", "ItemCards.pager(" in open(
-    os.path.join(ROOT, "web", "templates", "user_gallery.html"), encoding="utf-8").read())
+# #553: the gallery is the shared file grid, server-paged: the page embeds the first batch, and
+# GET /api/items/grid?source=user:<label> serves every row (it used to embed the whole list).
+seen, cursor = [], ""
+for _ in range(20):
+    body = client.get("/api/items/grid", params={"source": "user:bulk", "limit": "500", "cursor": cursor}).json()
+    seen += [it["slug"] for it in body["items"]]
+    cursor = body["next_cursor"]
+    if not cursor:
+        break
+check("gallery lists every item, paged through the grid endpoint", len(seen) == len(set(seen)) == 1030 and body["total"] == 1030,
+      (len(seen), body.get("total")))
+check("gallery template uses the shared grid (ItemCards pager inside it)", '{% include "_item_grid.html" %}' in open(
+    os.path.join(ROOT, "web", "templates", "user_gallery.html"), encoding="utf-8").read() and "IC.pager(" in open(
+    os.path.join(ROOT, "web", "static", "js", "item-grid.js"), encoding="utf-8").read())
 
 # ---- 6. retype runs the real background steps (stubbed runner records them) ----------------
 calls = []

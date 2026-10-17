@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ hobby.name }} — Hobby — {{ app_name() }}{% endblock %}
+{% block title %}{{ hobby.name }} — {{ hobby_label.one }} — {{ app_name() }}{% endblock %}
 {% block body %}
 {% from "_card.html" import card %}
 {% from "_details_group.html" import dp_group %}
@@ -20,7 +20,7 @@
     <nav class="dp-crumbs" aria-label="Breadcrumb">
       <a href="/">Home</a>
       <span aria-hidden="true">&rsaquo;</span>
-      <a href="/hobbies">Hobbies</a>
+      <a href="{{ hobby_label.index_url }}">{{ hobby_label.many }}</a>
       <span aria-hidden="true">&rsaquo;</span>
       <span class="dp-crumb-current" aria-current="page">{{ hobby.name }}</span>
     </nav>
@@ -29,8 +29,8 @@
         <button type="button" class="dp-btn dp-more-btn" id="hobby-more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="hobby-more-menu">More <span aria-hidden="true">&#9662;</span></button>
         <div class="dp-menu" id="hobby-more-menu" role="menu" aria-labelledby="hobby-more-btn" hidden>
           <a role="menuitem" href="/curator">Open the Curator queue</a>
-          <a role="menuitem" href="/hobbies">All hobbies</a>
-          <button type="button" role="menuitem" id="hobby-convert-btn" title="Turn this hobby into a family, collection or project card">Convert to card&hellip;</button>
+          <a role="menuitem" href="{{ hobby_label.index_url }}">All {{ hobby_label.many_lc }}</a>
+          <button type="button" role="menuitem" id="hobby-convert-btn" title="Turn this {{ hobby_label.one_lc }} into a family, collection or project card">Convert to card&hellip;</button>
           {% if shows_physical_piece %}<a role="menuitem" href="/guides/capture-physical-piece">How to capture a physical piece</a>{% endif %}
         </div>
       </div>
@@ -45,7 +45,7 @@
     <div class="dp-side">
       <div>
         <h1 class="dp-title">{{ hobby.name }}</h1>
-        <p class="dp-subtitle">{{ project_count }} project{{ '' if project_count == 1 else 's' }}{% if loose_items %} &middot; {{ loose_items | length }} loose object{{ '' if loose_items | length == 1 else 's' }}{% endif %}</p>
+        <p class="dp-subtitle">{{ project_count }} project{{ '' if project_count == 1 else 's' }}{% if loose_count %} &middot; {{ loose_count }} loose object{{ '' if loose_count == 1 else 's' }}{% endif %}</p>
       </div>
 
       {% set card_queue = hobby_queue %}
@@ -107,12 +107,41 @@
       </dl>
       {% endset %}
 
+      {# ---- COVER (#686): chosen by hand, else automatic (highlighted project's cover, else the most
+           recently updated project's). Same radio-per-picture idea as a project's "Set as cover". ---- #}
+      {% set cover_view %}
+      <dl class="dp-rows">
+        <div class="dp-row"><dt>Cover</dt><dd>{% if hobby_cover.cover_source %}{{ hobby_cover.cover_source_label }}{% if hobby_cover.cover_project %} (<a href="/project/{{ hobby_cover.cover_project }}">{{ hobby_card.cover.project_title }}</a>){% endif %}{% else %}<span class="dp-muted">None yet: no project has a cover</span>{% endif %}</dd></div>
+      </dl>
+      {% if hobby_cover.picked_cover_unavailable %}
+      <p class="dp-muted" role="note">The chosen cover can't be shown (its file was deleted, redacted or is hidden), so the automatic one is. Pick another, or go back to automatic.</p>
+      {% endif %}
+      {% endset %}
+      {% set cover_edit %}
+      <fieldset class="dp-cover-choices" id="hobby-cover-choices">
+        <legend class="dp-sr-label">Cover</legend>
+        <label class="dp-cover-choice dp-cover-auto">
+          <input type="radio" name="hobby-cover" value="" {% if not hobby_cover.picked_cover_slug %}checked{% endif %}>
+          <span>Automatic</span>
+        </label>
+        {% for ch in cover_choices %}
+        <label class="dp-cover-choice" title="{{ ch.label }}">
+          <input type="radio" name="hobby-cover" value="{{ ch.slug }}" {% if ch.slug == hobby_cover.picked_cover_slug %}checked{% endif %}>
+          <img src="{{ ch.url }}" loading="lazy" alt="">
+          <span>{{ ch.label }}</span>
+        </label>
+        {% endfor %}
+      </fieldset>
+      {% if cover_choices | length >= cover_choices_max %}<p class="dp-muted">Showing the first {{ cover_choices_max }} pictures.</p>{% endif %}
+      {% endset %}
+
       {# ---- ABOUT (#596): the hobby card's own synopsis + flavor (shown above its project list) ---- #}
       {% set about_v %}{{ about_view(hobby_text) }}{% endset %}
       {% set about_e %}{{ about_edit(hobby_text, card_text_limits) }}{% endset %}
 
       <div class="dp-panel">
         {{ dp_group("about", "ABOUT", about_v, about_e) }}
+        {{ dp_group("cover", "COVER", cover_view, cover_edit) }}
         {{ dp_group("status", "STATUS", status_view, status_edit) }}
         {{ dp_group("identity", "IDENTITY", identity_view, identity_edit) }}
         {{ dp_group("settings", "SETTINGS", settings_view, settings_edit) }}
@@ -136,9 +165,9 @@
           </select>
         </div>
         {% endif %}
-        <label class="dp-sr-label" for="hobby-add-project-select">Add a project to this hobby</label>
+        <label class="dp-sr-label" for="hobby-add-project-select">Add a project to this {{ hobby_label.one_lc }}</label>
         <select id="hobby-add-project-select" class="input">
-          <option value="">+ Add project to hobby…</option>
+          <option value="">+ Add project to {{ hobby_label.one_lc }}…</option>
         </select>
       </div>
     </div>
@@ -163,22 +192,10 @@
   <section class="hp-section" id="loose-objects" aria-labelledby="hp-loose-heading">
     <div class="home-col-header">
       <h2 id="hp-loose-heading">Loose objects</h2>
-      {% if loose_items | length > 1 %}
-      <div class="sort-control">
-        <label for="hobby-loose-sort" class="sort-label">Sort</label>
-        <select class="filter-select" id="hobby-loose-sort">
-          {% include "_item_sort_options.html" %}
-        </select>
-      </div>
-      {% endif %}
     </div>
-    <p class="dp-subtitle">Tagged with this hobby, but not in any of its projects.</p>
-    {% include "_revisions_note.html" %}
-    {% if loose_items %}
-    <div class="cx-item-grid cx-item-grid-roomy" id="hobby-loose-grid"></div>
-    {% else %}
-    <p class="empty-state" id="hobby-loose-empty">No loose objects.</p>
-    {% endif %}
+    <p class="dp-subtitle">Tagged with this {{ hobby_label.one_lc }}, but not in any of its projects. <span id="loose-count"></span></p>
+    {# #553: the shared file grid (sort, type filter, All/Unfiled/Filed, select + bulk actions) #}
+    {% include "_item_grid.html" %}
   </section>
 </div>
 
@@ -190,7 +207,7 @@
       <button type="button" class="modal-close" id="hobby-convert-close" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
-      <p style="margin:0 0 12px;line-height:1.5">"{{ hobby.name }}" stops being a hobby and becomes a card that keeps its tag. Its cards move onto the new card (as members of a family or collection, or as parts of a project), its loose objects go onto it, and it can join another hobby. One undo reverses all of it.</p>
+      <p style="margin:0 0 12px;line-height:1.5">"{{ hobby.name }}" stops being a {{ hobby_label.one_lc }} and becomes a card that keeps its tag. Its cards move onto the new card (as members of a family or collection, or as parts of a project), its loose objects go onto it, and it can join another {{ hobby_label.one_lc }}. One undo reverses all of it.</p>
       <div class="dp-field">
         <label for="hobby-convert-kind">Kind</label>
         <select id="hobby-convert-kind" class="input">
@@ -204,7 +221,7 @@
         <input id="hobby-convert-title-input" class="input" value="{{ hobby.name }}">
       </div>
       <div class="dp-field">
-        <label for="hobby-convert-into">Put it in hobby</label>
+        <label for="hobby-convert-into">Put it in {{ hobby_label.one_lc }}</label>
         <select id="hobby-convert-into" class="input"><option value="">(none)</option></select>
       </div>
       <p id="hobby-convert-preview" style="margin:12px 0 0;line-height:1.5;display:none"></p>
@@ -218,9 +235,8 @@
   </div>
 </div>
 
-<script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
+{# undo-bar.js, item-sort.js: loaded by the file grid's include above (#553) #}
 <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
-<script src="/static/js/item-sort.js?v={{ static_version('js/item-sort.js') }}"></script>
 <script nonce="{{ csp_nonce() }}">
 (function () {
   const DP = window.DetailsPanel;
@@ -256,6 +272,16 @@
   const savedPP = {{ shows_physical_piece | tojson }};
   DP.register('settings', {
     save: async () => { if (ppInput.checked !== savedPP) await post('physical-piece', { enabled: ppInput.checked ? 'true' : 'false' }); },
+  });
+
+  // COVER (#686): POST /api/hobby/{id}/cover (blank = back to automatic; undoable).
+  const savedCover = {{ (hobby_cover.picked_cover_slug or '') | tojson }};
+  DP.register('cover', {
+    save: async () => {
+      const picked = document.querySelector('#hobby-cover-choices input[name="hobby-cover"]:checked');
+      const value = picked ? picked.value : '';
+      if (value !== savedCover) await post('cover', { cover_slug: value });
+    },
   });
 
   // Add / remove a project: the page is server-rendered, so a change reloads it.
@@ -318,19 +344,7 @@
     });
   }
 
-  // Loose objects: the shared item card renderer (static/js/cards.js), same as home's Files panel.
-  const loose = {{ loose_items | tojson }};
-  const grid = document.getElementById('hobby-loose-grid');
-  const looseSort = document.getElementById('hobby-loose-sort');
-  const loosePager = grid ? ItemCards.pager(grid, it => ItemCards.html(it, {})) : null;
-  // #622: the shared Sort (static/js/item-sort.js); with one item there is no select and the
-  // default (card date, newest first) applies.
-  const looseSortName = ItemSort.wire(looseSort, () => renderLoose());
-  function renderLoose() {
-    if (!grid) return;
-    loosePager.set(ItemSort.sorted(loose, looseSortName()));
-  }
-  renderLoose();
+  // Loose objects: the shared file grid (templates/_item_grid.html, static/js/item-grid.js, #553).
 
   // Convert to card (#541 phase D): POST /api/hobby/{id}/convert-to-card; Preview sends dry_run.
   const cv = {

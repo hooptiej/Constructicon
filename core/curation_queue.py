@@ -31,7 +31,7 @@ import threading
 import time
 from urllib.parse import quote
 
-from . import actor as actor_ctx, cards, curator_needs, db, decisions, item_title, policy, roles
+from . import actor as actor_ctx, cards, curator_needs, db, decisions, install_config, item_title, policy, roles
 from .errors import InvalidInput
 
 TYPE_QUESTION = "question"
@@ -201,7 +201,7 @@ def _need_item(r):
     else:
         # A hobby need: the hobby page opens its STATUS group (the Active/Inactive switch).
         group = "status"
-        href = f"/hobby/{quote(r.get('hobby_slug') or '', safe='')}?edit=status"
+        href = install_config.hobby_label().url(quote(r.get('hobby_slug') or '', safe='')) + "?edit=status"
     suggestion = None
     if r.get("suggested"):
         opts = {o["key"]: o.get("label", o["key"]) for o in r.get("options", [])}
@@ -240,7 +240,7 @@ def _hobby_group(slug):
     h = db.get_hobby(slug) or {}
     return {
         "id": f"hobby:{slug}", "type": "hobby", "slug": slug, "title": h.get("name") or slug,
-        "href": f"/hobby/{quote(slug, safe='')}", "card_kind": "hobby",
+        "href": install_config.hobby_label().url(quote(slug, safe='')), "card_kind": "hobby",
         "activity": h.get("hobby_status") or "active", "last_touched": 0, "items": [],
     }
 

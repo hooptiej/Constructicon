@@ -2,7 +2,7 @@
 into the dicts pages and the JSON API return, plus the small pure helpers they use.
 Moved verbatim from web/app.py."""
 
-from core import (captions, card_payload, cards, datefmt, db, item_title, object_types, parse_limits, policy, revisions,
+from core import (captions, card_payload, cards, datefmt, db, install_config, item_title, object_types, parse_limits, policy, revisions,
                   storage, thumbnails, timeline, users)
 
 
@@ -374,6 +374,9 @@ def _to_object_detail(row):
         # #604 step 1 / #603: the uploader (ORIGIN: "Uploaded by") and the sensitive lock.
         **ownership_fields(row),
     }
+    # #701: the label and target of every link to the stored file ("View original" in a new tab, or
+    # "Download original"), decided once for all types by object_types.original_link.
+    item["original_link"] = object_types.original_link(item)
     # #449: the type's own preview, built from the finished item dict (not the
     # raw row) so preview_fn sees display_name/type_label/icon/url/thumb_url.
     # None -> the template's generic chain renders instead.
@@ -425,6 +428,39 @@ def _project_effective_cover_url(project):
     the effective cover slug, then delegates to _project_cover_url."""
     effective_slug = db.resolve_project_cover_slug(project)
     return _project_cover_url(effective_slug) if effective_slug else None
+
+
+def _hobby_cover_usable(slug):
+    """#686: a hobby cover candidate is shown only when the item policy lets this actor see it
+    AND the thumb route would serve it (_project_cover_url: exists, not redacted, has a
+    thumbnail). Otherwise the resolver moves on to the next candidate (never a broken image)."""
+    row = db.get_by_slug(slug) if slug else None
+    return bool(row) and policy.can_view(row) and _project_cover_url(slug) is not None
+
+
+def _hobby_cover(hobby_row, projects=None):
+    """#686: (resolved cover dict, flat API fields incl. `cover_url`) for one hobby."""
+    cover = cards.resolve_hobby_cover(hobby_row, projects, usable=_hobby_cover_usable)
+    fields = cards.hobby_cover_fields(cover)
+    fields["cover_url"] = _project_cover_url(cover["slug"]) if cover["slug"] else None
+    return cover, fields
+
+
+def _to_hobby_face(hobby_row, projects=None, items_by_project=None):
+    """#686: a hobby as a card (core.cards.hobby_card_face, kind 'hobby') for the hobbies index and
+    drawer: the shared card macro (_card.html), linking to the hobby page, with its resolved cover
+    and its computed mismatch flags. `items_by_project` (id -> rows) feeds the date span; missing
+    = read here, through the item policy."""
+    if projects is None:
+        projects = db.list_projects_for_hobby(hobby_row["id"])
+    if items_by_project is None:
+        items_by_project = {p["id"]: policy.filter_visible(db.list_project_items(p["id"])) for p in projects}
+    cover, fields = _hobby_cover(hobby_row, projects)
+    face = cards.hobby_card_face(hobby_row, projects, items_by_project, cover=cover)
+    face["href"] = install_config.hobby_label().url(hobby_row["slug"])
+    face["cover_url"] = fields["cover_url"]
+    face["flags"] = db.hobby_flags(hobby_row["id"])
+    return face
 
 
 def _to_card_face(project, items=None):

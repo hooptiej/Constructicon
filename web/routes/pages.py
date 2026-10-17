@@ -8,10 +8,11 @@ from pathlib import Path
 
 from core import card_rules, cards, curation_queue, curator, db, install_config, item_title, markdown_render, object_types, revisions, timeline
 from core import hobbies, physical_piece, provenance_options
+from core import hobby_label as hobby_label_rules
 from core.db import BRAND_ROLES
-from web import files_feed
+from web import files_feed, item_grid
 from web.common import _build_breadcrumbs, _rev_note, templates
-from web.shapes import _card_items, _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_object_detail, _to_public, _to_timeline_project
+from web.shapes import _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _hobby_cover, _hobby_cover_usable, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_hobby_face, _to_object_detail, _to_public, _to_timeline_project
 from core import access_log, actor as actor_ctx, policy, roles, users
 from web.shapes import actor_label
 from web.roles import RoleRouter, requires
@@ -105,8 +106,9 @@ def _home_context(request, hobby, ref, rev):
     # uploads gets a tab and "all files" really means all of them. The page embeds only the first
     # batch of the default view plus the counts and the cursor for more; the rest is served a page at a
     # time by GET /api/home/files (web/files_feed.py, which also keeps the visibility rules).
-    by_type, older_revs, unfiled = files_feed.load(show_all_revs)
-    files_seed, files_meta = files_feed.initial(by_type, unfiled, show_all_revs)
+    # #553: the panel is the shared file grid (web/item_grid.py, templates/_item_grid.html).
+    files_grid, older_revs = item_grid.build("files", files_feed.HOME, show_all_revs, grid_class="cx-item-grid files-scroll",
+                                             empty_text="No files yet.", filed_key="constructicon.filesFiled")
     # Timeline feature: the gallery rail shows every project (including
     # children, with an is_child flag) in date order -- deliberately built
     # from all_projects, not the top-level-only `projects` local above that
@@ -141,8 +143,7 @@ def _home_context(request, hobby, ref, rev):
         "reference_objects": reference_objects,  # #370 follow-up: loose reference objects
         "owner_name": _owner_label,
         "owner_initials": _owner_initials,
-        "files_seed": files_seed,
-        "files_meta": files_meta,
+        "grid": files_grid,
         "rev_note": _rev_note(request, older_revs, show_all_revs),
         "timeline_projects": timeline_projects,
     }
@@ -287,7 +288,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
     for h in reversed(cards.home_chain(project["id"])):
         if h.get("title"):
             home_crumbs.append({"title": h["title"],
-                                "href": f"/hobby/{h['slug']}" if h["type"] == "hobby" else f"/project/{h['slug']}"})
+                                "href": install_config.hobby_label().url(h['slug']) if h["type"] == "hobby" else f"/project/{h['slug']}"})
 
     return templates.TemplateResponse(
         request, "project_detail.html",
@@ -361,20 +362,28 @@ def unfiled_page(request: Request, rev: str = ""):
     with bulk selection/filing tools the widget has no room for. Reuses the
     exact same db.list_unfiled_items()/_to_public() data shape the widget
     already uses, so the gallery-card markup is identical everywhere."""
-    rows, n_sup = _split_revisions(policy.filter_visible(db.list_unfiled_items(include_superseded=True)),
-                                   rev == "all")  # #477, #557
-    unfiled_items = _card_items(rows)
+    # #553: the shared file grid, source "unfiled" (no All/Unfiled/Filed toggle: it would always
+    # say Unfiled; no unfiled lamp, every card would carry it). Selecting is always on here.
+    grid, n_sup = item_grid.build("unfiled", ("unfiled", None), rev == "all", filters=("type",), select_default=True,
+                                  href_from="unfiled", layouts=True, grid_class="cx-item-grid cx-item-grid-roomy",
+                                  empty_text="No unfiled items — everything's been filed.", unfiled_lamp=False,
+                                  count_suffix=" not yet added to a project.")
     return templates.TemplateResponse(
         request, "unfiled.html",
-        {"unfiled_items": unfiled_items, "file_provenance_options": provenance_options.picker_options("file"),
-         "rev_note": _rev_note(request, n_sup, rev == "all")},
+        {"grid": grid, "rev_note": _rev_note(request, n_sup, rev == "all")},
     )
 
 
 @router.get("/hobbies", response_class=HTMLResponse)
 def hobbies_page(request: Request):
-    """Hobbies listing page (#360) showing all hobby interests."""
-    return templates.TemplateResponse(request, "hobbies.html", {})
+    """Hobbies listing page (#360) showing all hobby interests. #686: server-rendered with the
+    shared card component (_hobby_cards.html), each with its resolved cover.
+    #700: `/hobbies` (and `/hobby/{slug}` below) is the INTERNAL path. The page's address is the
+    label's (`/<plural slug>`, e.g. /departments): web/hobby_paths.py rewrites that to this route,
+    and 308-redirects /hobbies itself (and any earlier label's paths) there when the label isn't
+    the default."""
+    return templates.TemplateResponse(request, "hobbies.html",
+                                      {"hobby_faces": [_to_hobby_face(h) for h in db.list_hobbies()]})
 
 
 @router.get("/hobby/{slug}", response_class=HTMLResponse)
@@ -385,7 +394,7 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     objects (tagged with the hobby, in none of its member projects)."""
     hobby = db.get_hobby(slug)
     if hobby is None:
-        raise HTTPException(status_code=404, detail="hobby not found")
+        raise HTTPException(status_code=404, detail=f"{install_config.hobby_label().one_lc} not found")
 
     fields = cards.hobby_fields(hobby)
     projects = db.list_projects_for_hobby(hobby["id"])
@@ -427,12 +436,19 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     active_roots = [n for n in roots if n["face"]["activity"] == "active"]
     inactive_roots = [n for n in roots if n["face"]["activity"] != "active"]
 
-    hobby_face = cards.hobby_card_face(hobby, projects, items_by_project, needs_input=bool(queue["items"]))
-    hobby_face["cover_url"] = _project_cover_url(hobby_face["cover_slug"]) if hobby_face["cover_slug"] else None
+    # #686: chosen cover, else automatic (highlighted project's, else the most recent project's).
+    cover, cover_fields = _hobby_cover(hobby, projects)
+    hobby_face = cards.hobby_card_face(hobby, projects, items_by_project, needs_input=bool(queue["items"]), cover=cover)
+    hobby_face["cover_url"] = cover_fields["cover_url"]
 
     loose_rows, n_sup = _split_revisions(policy.filter_visible(db.list_loose_hobby_objects(hobby["id"], include_superseded=True)),
                                      rev == "all")  # #477, #557
-    loose = _card_items(loose_rows)
+    # #553: the loose objects are the shared file grid (source hobby:<slug>), seeded from these rows.
+    loose_grid, _ = item_grid.build("loose", ("hobby", hobby["slug"]), rev == "all",
+                                    loaded=(files_feed.group_by_type(loose_rows), n_sup, files_feed.unfiled_slugs()),
+                                    grid_class="cx-item-grid cx-item-grid-roomy", empty_text="No loose objects.",
+                                    count_noun=("loose object", "loose objects"))
+    cover_choices = _hobby_cover_choices(cover, projects, loose_rows)
     start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
     return templates.TemplateResponse(
@@ -444,7 +460,8 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
             "active_nodes": active_roots,
             "inactive_nodes": inactive_roots,
             "project_count": len(projects),
-            "loose_items": loose,
+            "loose_count": len(loose_rows),
+            "grid": loose_grid,
             "rev_note": _rev_note(request, n_sup, rev == "all"),
             "dates_label": hobby_face["dates"],
             "dates_start": _friendly_date(start) if start else None,
@@ -454,8 +471,38 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
             # #596: the hobby card's own synopsis / flavor (the ABOUT group).
             "hobby_text": hobbies.text_fields(hobby),
             "card_text_limits": card_rules.CARD_TEXT_LIMITS,
+            # #686: the COVER group (chosen / automatic, and what can be chosen here).
+            "hobby_cover": cover_fields,
+            "cover_choices": cover_choices,
+            "cover_choices_max": HOBBY_COVER_CHOICES_MAX,
         },
     )
+
+
+HOBBY_COVER_CHOICES_MAX = 120  # #686: the picker lists at most this many; MCP can set any item
+
+
+def _hobby_cover_choices(cover, projects, loose_rows):
+    """#686: what the hobby page's COVER group offers: each member project's resolved cover (the
+    automatic candidates, most recent first), then its loose objects that have a picture, then the
+    current choice if it is neither. Only covers this actor can see and the thumb route serves
+    (web.shapes._hobby_cover_usable). [{slug, url, label}], capped at HOBBY_COVER_CHOICES_MAX."""
+    out, seen = [], set()
+
+    def add(slug, label):
+        if not slug or slug in seen or len(out) >= HOBBY_COVER_CHOICES_MAX or not _hobby_cover_usable(slug):
+            return
+        seen.add(slug)
+        out.append({"slug": slug, "url": _project_cover_url(slug), "label": label})
+
+    if cover.get("picked_slug"):
+        row = db.get_by_slug(cover["picked_slug"])
+        add(cover["picked_slug"], f"Current choice: {item_title.title_of(row)}" if row else "Current choice")
+    for p in cards.recent_first(projects):
+        add(db.resolve_project_cover_slug(p), f"{p['title']} (its cover)")
+    for r in loose_rows:
+        add(r["slug"], item_title.title_of(r))
+    return out
 
 
 @router.get("/brand", response_class=HTMLResponse)
@@ -473,14 +520,14 @@ def wallpaper_page(request: Request):
 
 @router.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str, rev: str = ""):
-    # #563: no 1000-row cap (it made "1000 uploads" of 1,640). The page embeds the whole list and
-    # the ItemCards pager (batches of 120) draws it lazily, so the count is the true total.
-    rows, n_sup = _split_revisions(policy.filter_visible(db.search(uploaded_by=uploader, limit=10_000_000)),
-                                   rev == "all")  # #477, #557
-    items = _card_items(rows)
+    # #563: no 1000-row cap (it made "1000 uploads" of 1,640). #553: the shared file grid, server-paged
+    # (source user:<uploader>): the page embeds the first batch and the count of every row, and
+    # GET /api/items/grid serves the rest, so the count and the list are both complete.
+    grid, n_sup = item_grid.build("uploads", ("user", uploader), rev == "all", href_from=f"user:{uploader}",
+                                  empty_text="No uploads yet.")
     return templates.TemplateResponse(
         request, "user_gallery.html",
-        {"uploader": uploader, "uploader_display": uploader, "items": items,
+        {"uploader": uploader, "uploader_display": uploader, "grid": grid,
          "rev_note": _rev_note(request, n_sup, rev == "all")},
     )
 
@@ -521,7 +568,7 @@ def object_detail_page(request: Request, slug: str):
         for h in reversed(cards.home_chain(home["id"])):
             if h.get("title"):
                 trail.append({"label": h["title"],
-                              "href": f"/hobby/{h['slug']}" if h["type"] == "hobby" else f"/project/{h['slug']}"})
+                              "href": install_config.hobby_label().url(h['slug']) if h["type"] == "hobby" else f"/project/{h['slug']}"})
         trail.append({"label": home["title"], "href": f"/project/{home['slug']}"})
         trail.append({"label": item["display_name"], "href": None})
         breadcrumbs = trail
@@ -573,7 +620,9 @@ def admin_page(request: Request, embed: int = 0):
     # #467 step 1: "Create the admin account" banner while the install has no user at all.
     return templates.TemplateResponse(request, "admin.html", {"embed": bool(embed),
                                                               "install_setup_needed": install_config.setup_needed(),
-                                                              "users_setup_needed": users.setup_needed()})
+                                                              "users_setup_needed": users.setup_needed(),
+                                                              # #700: the label's warning text + the MCP restart notice
+                                                              "hobby_label_status": install_config.hobby_label_status()})
 
 
 # #562: in-app guides (served from the app, not the owner's GitHub). slug -> (file, title).
@@ -592,6 +641,8 @@ def guide_page(request: Request, guide: str):
     if entry is None:
         raise HTTPException(status_code=404, detail="guide not found")
     text = (GUIDES_DIR / entry[0]).read_text(encoding="utf-8")
+    # #700: the guide's "hobby" / "hobbies" in the install's word (paths and code spans stay)
+    text = hobby_label_rules.relabel_text(text, install_config.hobby_label())
     return templates.TemplateResponse(request, "guide.html", {
         "title": entry[1], "body": markdown_render.render(text, breaks=False)})
 

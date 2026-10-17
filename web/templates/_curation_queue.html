@@ -13,7 +13,7 @@
     <button type="button" class="cq-group-toggle" data-cq-action="toggle" aria-expanded="false" aria-controls="cq-body-{{ section }}-{{ loop.index }}">
       <span class="cq-chev" aria-hidden="true"></span>
       <span class="cq-group-name">{{ g.title }}</span>
-      <span class="cq-group-meta">{{ n }} item{{ '' if n == 1 else 's' }}{% if g.type == 'card' and g.activity %} &middot; {{ g.activity | capitalize }}{% elif g.type == 'hobby' %} &middot; Hobby{% endif %}</span>
+      <span class="cq-group-meta">{{ n }} item{{ '' if n == 1 else 's' }}{% if g.type == 'card' and g.activity %} &middot; {{ g.activity | capitalize }}{% elif g.type == 'hobby' %} &middot; {{ hobby_label.one }}{% endif %}</span>
     </button>
     <a class="cq-group-open" href="{{ g.href }}">Open<span class="dp-sr-label"> {{ g.title }}</span></a>
   </h3>

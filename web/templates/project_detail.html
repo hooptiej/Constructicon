@@ -28,7 +28,7 @@
       <div class="dp-more" data-dp-more>
         <button type="button" class="dp-btn dp-more-btn" id="project-more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="project-more-menu">More <span aria-hidden="true">&#9662;</span></button>
         <div class="dp-menu" id="project-more-menu" role="menu" aria-labelledby="project-more-btn" hidden>
-          <button type="button" role="menuitem" id="convert-to-hobby-btn" title="Convert this project to a hobby">Convert to hobby</button>
+          <button type="button" role="menuitem" id="convert-to-hobby-btn" title="Convert this project to a {{ hobby_label.one_lc }}">Convert to {{ hobby_label.one_lc }}</button>
           <button type="button" role="menuitem" class="dp-menu-danger" id="delete-project-btn" title="Delete this project (orphan children, detach objects)">Delete project</button>
         </div>
       </div>
@@ -83,7 +83,7 @@
       {% set identity_view %}
       <dl class="dp-rows">
         <div class="dp-row"><dt>Kind</dt><dd>{{ card_status.kind_label }}{% if card_queue['items'] | selectattr('kind', 'equalto', 'card_kind') | list %} <span class="dp-muted">(question open)</span>{% endif %}</dd></div>
-        <div class="dp-row"><dt>Hobbies</dt><dd>{% for h in project_hobbies %}<a href="/hobby/{{ h.slug }}">{{ h.name }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
+        <div class="dp-row"><dt>{{ hobby_label.many }}</dt><dd>{% for h in project_hobbies %}<a href="{{ hobby_label.url(h.slug) }}">{{ h.name }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
         <div class="dp-row"><dt>{{ 'Members' if is_group else 'Family' }}</dt><dd>{% for c in (family_info.members if is_group else family_info.families) %}<a href="/project/{{ c.slug }}">{{ c.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
         {% if not is_group %}<div class="dp-row"><dt>Part of</dt><dd>{% if parent_card %}<a href="/project/{{ parent_card.slug }}">{{ parent_card.title }}</a>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>{% endif %}
       </dl>
@@ -98,11 +98,11 @@
       </div>
       {# #381 / #365: hobbies the card is in (add / remove act immediately) #}
       <div class="dp-field">
-        <span class="dp-label" id="hobby-chips-label">Hobbies</span>
+        <span class="dp-label" id="hobby-chips-label">{{ hobby_label.many }}</span>
         <div id="hobby-chips-container" class="dp-chips" role="group" aria-labelledby="hobby-chips-label"></div>
-        <label class="dp-sr-label" for="add-to-hobby-select">Add to hobby</label>
+        <label class="dp-sr-label" for="add-to-hobby-select">Add to {{ hobby_label.one_lc }}</label>
         <select id="add-to-hobby-select" class="input">
-          <option value="">+ Add to hobby…</option>
+          <option value="">+ Add to {{ hobby_label.one_lc }}…</option>
         </select>
       </div>
       {# V2 cards 3.6: a family or collection lists its MEMBERS; any other card shows the families it is IN.
@@ -239,7 +239,7 @@
       {% set structure_view %}
       <dl class="dp-rows">
         <div class="dp-row"><dt>Inside</dt><dd>{% for c in timeline_children %}<a href="/project/{{ c.slug }}">{{ c.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
-        <div class="dp-row"><dt>Home</dt><dd>{% if card_home.type %}<a href="{{ '/hobby/' if card_home.type == 'hobby' else '/project/' }}{{ card_home.slug }}">{{ card_home.title }}</a> <span class="dp-muted">({{ 'chosen' if card_home.source == 'override' else 'automatic' }})</span>{% else %}The home page <span class="dp-muted">(automatic)</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Home</dt><dd>{% if card_home.type %}<a href="{{ hobby_label.url(card_home.slug) if card_home.type == 'hobby' else '/project/' ~ card_home.slug }}">{{ card_home.title }}</a> <span class="dp-muted">({{ 'chosen' if card_home.source == 'override' else 'automatic' }})</span>{% else %}The home page <span class="dp-muted">(automatic)</span>{% endif %}</dd></div>
       </dl>
       {% endset %}
       {% set structure_edit %}
@@ -249,9 +249,9 @@
         <select id="home-select" class="input">
           <option value="">Automatic{% if card_home.title %} ({{ card_home.title }}){% endif %}</option>
           <optgroup label="Cards">{% for o in home_card_options %}<option value="{{ o.value }}" {% if card_home_value == o.value %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</optgroup>
-          <optgroup label="Hobbies">{% for o in home_hobby_options %}<option value="{{ o.value }}" {% if card_home_value == o.value %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</optgroup>
+          <optgroup label="{{ hobby_label.many }}">{% for o in home_hobby_options %}<option value="{{ o.value }}" {% if card_home_value == o.value %}selected{% endif %}>{{ o.label }}</option>{% endfor %}</optgroup>
         </select>
-        <p class="dp-note">{% if card_home.type %}Currently: {{ card_home.title }} ({{ card_home.source }}){% else %}Currently: the home page{% endif %}</p>
+        <p class="dp-note">{% if card_home.type %}Currently: {{ card_home.title }} ({{ hobby_label.one_lc if card_home.source == 'hobby' else card_home.source }}){% else %}Currently: the home page{% endif %}</p>
       </div>
       <div class="dp-field">
         <button type="button" id="unnest-btn" class="dp-btn" style="align-self:flex-start;{% if not project.parent_id %}display:none{% endif %}" title="Take this card out of its parent">Unnest from its parent</button>
@@ -510,7 +510,7 @@
 <div class="modal-backdrop" id="convert-hobby-backdrop">
   <div class="modal">
     <div class="modal-header">
-      <h2>Convert to hobby?</h2>
+      <h2>Convert to {{ hobby_label.one_lc }}?</h2>
       <button type="button" class="modal-close" id="convert-hobby-close">&times;</button>
     </div>
     <div class="modal-body">
@@ -784,7 +784,7 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
       if (!currentHobbies.length) {
         const note = document.createElement('span');
         note.className = 'dp-muted';
-        note.textContent = 'Not in any hobby yet.';
+        note.textContent = `Not in any ${HobbyLabel.one_lc} yet.`;
         chipsContainer.appendChild(note);
         return;
       }
@@ -792,7 +792,7 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
         const chip = document.createElement('span');
         chip.className = 'chip';
         const link = document.createElement('a');
-        link.href = `/hobby/${encodeURIComponent(hobby.slug)}`;
+        link.href = HobbyLabel.url(hobby.slug);
         link.textContent = hobby.name;
         chip.appendChild(link);
         const btn = document.createElement('button');
@@ -1121,7 +1121,7 @@ function showConvertDialog() {
   convertHobbyError.style.display = 'none';
   convertHobbySuccess.style.display = 'none';
   convertHobbyConfirm.disabled = false;
-  convertHobbyMessage.textContent = `"${convertProjectTitle}" isn't a project — make it a hobby? Its sub-projects move to the new hobby and this project entry is removed. You can undo it right after.`;
+  convertHobbyMessage.textContent = `"${convertProjectTitle}" isn't a project — make it a ${HobbyLabel.one_lc}? Its sub-projects move to the new ${HobbyLabel.one_lc} and this project entry is removed. You can undo it right after.`;
   convertHobbyBackdrop.style.display = 'flex';
 }
 
@@ -1152,19 +1152,19 @@ convertHobbyConfirm.addEventListener('click', async () => {
     const hobbyName = body.name || convertProjectTitle;
     const hobbySlug = body.slug;
     const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    convertHobbySuccess.innerHTML = `Made "${escHtml(hobbyName)}" a hobby — moved ${summary.children_moved || 0} sub-project${summary.children_moved === 1 ? '' : 's'} and ${summary.items_moved || 0} object${summary.items_moved === 1 ? '' : 's'}. <a href="/hobby/${encodeURIComponent(hobbySlug)}" style="color:inherit;text-decoration:underline">View hobby</a>`;
+    convertHobbySuccess.innerHTML = `Made "${escHtml(hobbyName)}" a ${HobbyLabel.one_lc} — moved ${summary.children_moved || 0} sub-project${summary.children_moved === 1 ? '' : 's'} and ${summary.items_moved || 0} object${summary.items_moved === 1 ? '' : 's'}. <a href="${HobbyLabel.url(hobbySlug)}" style="color:inherit;text-decoration:underline">View ${HobbyLabel.one_lc}</a>`;
     convertHobbySuccess.style.display = 'block';
 
     // #541 phase D: the conversion is one undoable batch. Offer Undo, then go to the hobby
     // (or stay here, restored, if the owner undid it).
     if (body.batch_id && window.showUndoBar) {
       hideConvertDialog();
-      window.showUndoBar(`Made "${hobbyName}" a hobby.`, body.batch_id, (how) => {
+      window.showUndoBar(`Made "${hobbyName}" a ${HobbyLabel.one_lc}.`, body.batch_id, (how) => {
         if (how === 'undone') window.location.reload();
-        else window.location.href = `/hobby/${hobbySlug}`;
+        else window.location.href = HobbyLabel.url(hobbySlug);
       });
     } else {
-      setTimeout(() => { window.location.href = `/hobby/${hobbySlug}`; }, 1500);
+      setTimeout(() => { window.location.href = HobbyLabel.url(hobbySlug); }, 1500);
     }
   } catch (err) {
     convertHobbyError.textContent = err.message;

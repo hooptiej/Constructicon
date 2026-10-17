@@ -427,6 +427,13 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   the policy fail the check below).
 - **Since #603** "restricted" = sensitive: a restricted type OR an item flagged "This is sensitive",
   visible to admins AND the item's uploader (`can_view`), see "Ownership and sensitive items" below.
+- **Writes refuse what the caller can't see (#709), in the service op itself**, so web, MCP and any
+  future per-user token are covered: `policy.viewable_rows(slugs, missing_ok=...)` for a set
+  (`items.delete`, `unrelate`, `membership.add_files` / `remove_files`, `tags.merge_item_tags`; bulk
+  delete, add-to-card and tag), `items.get_item` / `tags._get_item` for one item (update, caption,
+  relate, redact, retype, replace, attach / detach / set tags), `set_sensitive` / `set_provenance` as
+  before. A hidden slug = 404 `not_found` ("No item 'x'.") for the WHOLE request, nothing written;
+  an unknown slug keeps its old meaning (`missing_ok` skips it). Check: `scripts/test_bulk_visibility_709.py`.
 - **Adding a door** (anything that hands out an item or a list of items, web or MCP): call the
   policy in it, and add it to `DOORS` in `scripts/check_policy_doors.py`. That script (AST, no
   server) fails when a known door stops calling `policy.`, when a GET route or MCP read tool reads
@@ -1906,7 +1913,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,
-    `test_ownership_sensitive`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
+    `test_ownership_sensitive`, `test_bulk_visibility_709`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,
     `check_policy_doors`, `test_manage_634` (the `core/manage/` tools, their actor, the stubs);
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,

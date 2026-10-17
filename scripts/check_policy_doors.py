@@ -2,14 +2,25 @@
 
 A static check (AST, no server, no DB). It fails when:
   1. a KNOWN door below no longer calls `policy.<something>` in its body;
-  2. (the net) a web GET route, or an MCP read tool (constructicon_get*/download*/search*/list*/
-     explain*), calls a db read that hands out items (ITEM_READS) without calling `policy.` and
-     isn't in EXEMPT with a reason; this catches NEW doors nobody registered;
+  2. (the net) a web GET route calls a db read that hands out items (ITEM_READS) without calling
+     `policy.` and isn't in EXEMPT with a reason; this catches NEW doors nobody registered;
   3. anything outside core/policy.py (and the type registry that defines it) decides restriction
      itself: `object_types.is_restricted(`, `restricted_types(` or the retired `_not_restricted`.
      `db.list_restricted` (the admin's list of restricted items) is the one allowed exception.
   1b. (#604 follow-up 7) a door that OPENS one item (ACCESS_LOGGED) no longer records a sensitive
      item's access with `policy.note_access(...)`.
+  4. (#746) EVERY MCP tool function (visible tools and hidden aliases; no name-prefix heuristic) is
+     in MCP_TOOLS with a kind, and the kind holds. The tool's body is followed into the server
+     helpers it calls (not into core/, except CORE_GUARDED):
+       opens  - opens one item: reaches an item-policy gate AND calls policy.note_access, and is
+                in ACCESS_LOGGED (which holds exactly these MCP tools);
+       items  - hands out or changes existing items: reaches an item-policy gate (policy.require_view
+                / filter_visible / viewable_rows / can_view ...), a DOORS function, or a core op in
+                CORE_GUARDED (checked here to call its door);
+       admin  - an admin-only listing or wipe: every ACTION_ROLES row of the tool (an alias: of the
+                call it stands for) is admin;
+       new    - creates the item it returns (nothing to check);
+       none   - hands out no item rows: no ITEM_READS anywhere it reaches (MCP_SHAPERS aside).
 Since #603 "restricted" means sensitive: a restricted type OR an item flagged "This is sensitive";
 visible to admins and the item's uploader (scripts/test_ownership_sensitive.py proves the matrix).
 
@@ -18,9 +29,13 @@ What it CAN'T check, honestly:
     `policy.`), or that a door calling a helper which calls the policy is covered;
   * doors that reach items through a helper not named in ITEM_READS (e.g. a shaper that loads
     rows itself), templates, or JS;
-  * write routes the net doesn't reach (it only nets GET routes and MCP read tools). Writes are
+  * write routes the net doesn't reach (it nets GET routes; MCP tools are rule 4). Writes are
     role-gated by web/roles.py; the item-gated ones that matter (#709: bulk delete, add-to-card,
-    tagging, and the service ops behind them) are listed in DOORS by hand.
+    tagging, and the service ops behind them) are listed in DOORS by hand;
+  * WHICH branch of a merged MCP tool reaches the gate (#746): list_items' tag and brand branches
+    filter, and that also satisfies rule 4 for its redacted / restricted branches (admin listings by
+    design); the role table (ACTION_ROLES) gates those per action. Nor whether the gate comes
+    before the read. Core internals are not followed (only CORE_GUARDED's one-call check).
 The behaviour itself is proven by scripts/test_role_policy.py (flip the switch, every door refuses).
 
     python scripts/check_policy_doors.py
@@ -56,15 +71,20 @@ DOORS = {
     ("web/routes/files.py", "api_list_wallpapers"): "GET /api/wallpapers",
     ("web/routes/hobbies.py", "api_get_hobby"): "GET /api/hobby/{id_or_slug} (its items)",
     ("web/shapes.py", "_to_blog_entry_detail"): "GET /api/blog-entries/{slug} items",
-    ("mcp_server/server.py", "constructicon_get"): "MCP get",
+    ("mcp_server/server.py", "constructicon_get"): "MCP get (and its include=related / revisions)",
     ("mcp_server/server.py", "constructicon_download"): "MCP download",
     ("mcp_server/server.py", "constructicon_search"): "MCP search",
     ("mcp_server/server.py", "constructicon_get_project"): "MCP get_project (items, cover, write-up)",
-    ("mcp_server/server.py", "constructicon_get_related"): "MCP get_related",
-    ("mcp_server/server.py", "constructicon_list_revisions"): "MCP list_revisions",
-    ("mcp_server/server.py", "constructicon_get_posts_for_tag"): "MCP get_posts_for_tag",
+    ("mcp_server/server.py", "_viewable_item"): "MCP one-item reads (the get_related / list_revisions aliases)",
+    ("mcp_server/server.py", "_related_listed"): "MCP get(include=related), related, the related aliases",
+    ("mcp_server/server.py", "_posts_for_tag"): "MCP list_items(which=tag), get_posts_for_tag",
     ("mcp_server/server.py", "_to_public_blog_entry"): "MCP get/list blog entry items",
-    ("mcp_server/server.py", "constructicon_list_brand_assets"): "MCP list_brand_assets",
+    ("mcp_server/server.py", "_list_brand_assets"): "MCP list_items(which=brand_assets), list_brand_assets",
+    ("mcp_server/server.py", "constructicon_card_files"): "MCP card_files (add/remove: every slug visible)",
+    ("mcp_server/server.py", "constructicon_item_tags"): "MCP item_tags (detach)",
+    ("mcp_server/server.py", "constructicon_set_caption"): "MCP set_caption",
+    ("mcp_server/server.py", "constructicon_run_type_action"): "MCP run_type_action (#746: was ungated)",
+    ("mcp_server/server.py", "_retry_ocr"): "MCP run_type_action(retry_ocr), retry_ocr (#746: was ungated)",
     ("core/site_export.py", "build_site"): "static site export",
     ("core/project_export.py", "export_project"): "project zip export",
     # #603: a flagged item can be in flight or captioned, so these name items now.
@@ -91,11 +111,11 @@ DOORS = {
     ("core/membership.py", "remove_files"): "membership.remove_files (web + MCP remove_from_project)",
     ("core/tags.py", "_get_item"): "tags.attach / detach / set_item_tags (MCP attach_tags / detach_tag)",
     ("core/tags.py", "merge_item_tags"): "tags.merge_item_tags (bulk attach-tags)",
-    ("mcp_server/server.py", "constructicon_add_related"): "MCP add_related",
-    ("mcp_server/server.py", "constructicon_add_to_project"): "MCP add_to_project",
-    ("mcp_server/server.py", "constructicon_remove_from_project"): "MCP remove_from_project",
-    ("mcp_server/server.py", "constructicon_detach_tag"): "MCP detach_tag",
-    ("mcp_server/server.py", "constructicon_set_project_writeup"): "MCP set_project_writeup",
+    ("mcp_server/server.py", "_relate"): "MCP related(add), add_related",
+    ("mcp_server/server.py", "_add_to_project"): "MCP add_to_project",
+    ("mcp_server/server.py", "_remove_from_project"): "MCP remove_from_project",
+    ("mcp_server/server.py", "_detach_tag"): "MCP detach_tag",
+    ("mcp_server/server.py", "_set_writeup"): "MCP update_project(fields.writeup_slug), set_project_writeup",
 }
 
 # #604 follow-up 7: doors that OPEN one item must record a sensitive item's access
@@ -126,9 +146,169 @@ EXEMPT = {
 
 NET_FILES = ["web/routes/pages.py", "web/routes/items.py", "web/routes/files.py", "web/routes/cards.py",
              "web/routes/hobbies.py", "web/routes/curator.py", "web/routes/blog_export.py", "web/routes/admin.py",
-             "web/routes/meta.py", "mcp_server/server.py"]
-MCP_READ_PREFIXES = ("constructicon_get", "constructicon_download", "constructicon_search", "constructicon_list",
-                     "constructicon_explain")
+             "web/routes/meta.py"]
+
+# --- #746: rule 4, every MCP tool ---------------------------------------------------------------------
+MCP = "mcp_server/server.py"
+# Core service ops that guard themselves through a door: (file, op) -> the door function its body
+# must call (checked). A tool reaching one of these counts as gated.
+CORE_GUARDED = {
+    ("core/items.py", "update"): "get_item",
+    ("core/items.py", "set_caption"): "get_item",
+    ("core/items.py", "relate"): "get_item",
+    ("core/items.py", "redact"): "get_item",
+    ("core/items.py", "unredact"): "get_item",
+    ("core/items.py", "recover_redacted"): "get_item",
+    ("core/items.py", "delete_redacted_file"): "get_item",
+    ("core/items.py", "replace_file"): "get_item",
+    ("core/tags.py", "attach"): "_get_item",
+    ("core/tags.py", "detach"): "_get_item",
+}
+# How server.py names the core modules (for `items.delete(...)` -> core/items.py:delete).
+MODULE_FILES = {"items": "core/items.py", "tags_svc": "core/tags.py", "membership": "core/membership.py",
+                "captions": "core/captions.py", "curation_queue": "core/curation_queue.py",
+                "decisions": "core/decisions.py", "revisions": "core/revisions.py", "cards": "core/cards.py",
+                "hobbies": "core/hobbies.py", "blog": "core/blog.py", "reset": "core/reset.py"}
+# The policy calls that decide visibility (`policy.restriction_reason` in a shaper is not a gate).
+POLICY_GATES = {"require_view", "filter_visible", "viewable_rows", "can_view", "viewable_item", "require_file",
+                "filter_exportable"}
+# Server helpers the walk does not descend into: why each hands out no item it wasn't given.
+MCP_SHAPERS = {
+    "_to_public": "shapes one row the caller already holds",
+    "_to_public_listed": "shapes one row the caller already holds",
+    "_to_public_project": "reads a card's items only to date the card (its effective span); hands out none",
+}
+# Every MCP tool function (visible tools and #746's hidden aliases): (kind, what it hands out / why).
+O, I, ADM, NEW, NONE = "opens", "items", "admin", "new", "none"
+MCP_TOOLS = {
+    "constructicon_get": (O, "one item, whole"),
+    "constructicon_download": (O, "one item's bytes"),
+    "constructicon_view": (O, "one item's picture"),
+    "constructicon_upload": (NEW, "the item it creates"),
+    "constructicon_import": (NEW, "the item it creates"),
+    "constructicon_add_content": (NEW, "the item it creates"),
+    "constructicon_search": (I, "matching items"),
+    "constructicon_replace_file": (I, "the item it changed (items.replace_file)"),
+    "constructicon_get_related": (I, "related items (alias)"),
+    "constructicon_list_revisions": (I, "a revision chain (alias)"),
+    "constructicon_update": (I, "the item it changed"),
+    "constructicon_list_needs_caption": (I, "items needing a caption (alias; captions.needs_caption)"),
+    "constructicon_set_caption": (I, "the item it changed"),
+    "constructicon_redact": (I, "the item it changed (items.redact / unredact / recover / delete_redacted_file)"),
+    "constructicon_unredact": (I, "alias"),
+    "constructicon_recover_redacted": (I, "alias"),
+    "constructicon_delete_redacted_file": (I, "alias"),
+    "constructicon_list_items": (I, "items of one kind (tag / brand branches filter; redacted / restricted are "
+                                    "admin listings, gated by ACTION_ROLES per action)"),
+    "constructicon_list_redacted": (ADM, "every redacted item: the admin's list (alias)"),
+    "constructicon_list_restricted": (ADM, "every sensitive item: the admin's list (alias)"),
+    "constructicon_delete": (I, "deletes items (items.delete), a card, an entry, or everything (admin)"),
+    "constructicon_delete_multiple": (I, "alias (items.delete)"),
+    "constructicon_delete_all": (ADM, "the whole-archive wipe (alias); counts only"),
+    "constructicon_trash": (ADM, "deleted items' names and sizes; the purge"),
+    "constructicon_list_trash": (ADM, "alias"),
+    "constructicon_empty_trash": (ADM, "alias"),
+    "constructicon_backup": (ADM, "a backup file's name"),
+    "constructicon_set_sensitive": (I, "alias (items.set_sensitive)"),
+    "constructicon_related": (I, "related items"),
+    "constructicon_add_related": (I, "alias"),
+    "constructicon_remove_related": (I, "alias (items.unrelate)"),
+    "constructicon_card_files": (I, "the files it moved"),
+    "constructicon_add_to_project": (I, "alias"),
+    "constructicon_remove_from_project": (I, "alias"),
+    "constructicon_add_items_to_project": (I, "alias (membership.add_files)"),
+    "constructicon_set_project_writeup": (I, "alias"),
+    "constructicon_update_project": (I, "a card; its write-up item (fields.writeup_slug)"),
+    "constructicon_get_project": (I, "a card's items, cover and write-up"),
+    "constructicon_get_posts_for_tag": (I, "alias"),
+    "constructicon_item_tags": (I, "the item it changed"),
+    "constructicon_attach_tags": (I, "alias (tags.attach)"),
+    "constructicon_detach_tag": (I, "alias"),
+    "constructicon_retry_ocr": (I, "alias"),
+    "constructicon_run_type_action": (I, "the item it ran on"),
+    "constructicon_set_agent_notes": (I, "the item it changed (items.update)"),
+    "constructicon_set_provenance": (I, "alias (items.update)"),
+    "constructicon_set_content_date": (I, "alias (items.update)"),
+    "constructicon_set_highlight": (I, "alias (items.update)"),
+    "constructicon_set_brand_asset": (I, "alias (items.update)"),
+    "constructicon_list_brand_assets": (I, "alias"),
+    "constructicon_create_blog_entry": (I, "an entry's items"),
+    "constructicon_get_blog_entry": (I, "an entry's items"),
+    "constructicon_update_blog_entry": (I, "an entry's items"),
+    "constructicon_set_blog_entry_projects": (I, "alias"),
+    "constructicon_set_blog_entry_items": (I, "alias"),
+    "constructicon_needs": (I, "the queue (curation_queue.for_actor), questions (decisions.list_open), "
+                               "caption candidates (captions.needs_caption)"),
+    "constructicon_curation_queue": (I, "alias"),
+    "constructicon_list_pending_decisions": (I, "alias"),
+    "constructicon_version": (NONE, "build info"),
+    "constructicon_list_import": (NONE, "inbox file names (not items)"),
+    "constructicon_list_projects": (NONE, "cards"),
+    "constructicon_create_project": (NONE, "a card"),
+    "constructicon_explain_card": (NONE, "a card's facts and counts (no item rows)"),
+    "constructicon_list_hobbies": (NONE, "hobbies (cover slugs resolved through policy.can_view in core)"),
+    "constructicon_create_hobby": (NONE, "a hobby"),
+    "constructicon_update_hobby": (NONE, "a hobby (hobbies.set_cover checks policy.can_view in core)"),
+    "constructicon_unmark_hobby": (NONE, "a hobby"),
+    "constructicon_card_hobby": (NONE, "card membership"),
+    "constructicon_convert": (NONE, "a card or hobby"),
+    "constructicon_convert_project_to_hobby": (NONE, "alias"),
+    "constructicon_convert_hobby_to_card": (NONE, "alias"),
+    "constructicon_add_project_to_hobby": (NONE, "alias"),
+    "constructicon_set_hobby_status": (NONE, "alias"),
+    "constructicon_set_hobby_code": (NONE, "alias"),
+    "constructicon_set_hobby_cover": (NONE, "alias"),
+    "constructicon_list_blog_entries": (NONE, "entries without their items"),
+    "constructicon_delete_blog_entry": (NONE, "alias"),
+    "constructicon_list_tags": (NONE, "the tag tree"),
+    "constructicon_create_tag": (NONE, "a tag"),
+    "constructicon_list_provenance_options": (NONE, "option lists"),
+    "constructicon_set_project_status": (NONE, "alias"),
+    "constructicon_set_status": (NONE, "alias"),
+    "constructicon_set_kind": (NONE, "alias"),
+    "constructicon_set_whereabouts": (NONE, "alias"),
+    "constructicon_set_card_text": (NONE, "alias"),
+    "constructicon_set_card_provenance": (NONE, "alias"),
+    "constructicon_set_card_highlight": (NONE, "alias"),
+    "constructicon_set_home": (NONE, "alias"),
+    "constructicon_nest": (NONE, "card nesting"),
+    "constructicon_unnest": (NONE, "alias"),
+    "constructicon_family": (NONE, "card membership"),
+    "constructicon_add_to_family": (NONE, "alias"),
+    "constructicon_remove_from_family": (NONE, "alias"),
+    "constructicon_link": (NONE, "card links"),
+    "constructicon_unlink": (NONE, "alias"),
+    "constructicon_retype_link": (NONE, "alias"),
+    "constructicon_retype_links": (NONE, "card links"),
+    "constructicon_list_links": (NONE, "alias"),
+    "constructicon_list_needs_decision": (NONE, "alias (card needs)"),
+    # Card reshaping moves files by slug in core/cards.py, which has no item-policy check of its own
+    # (it predates #709's write rule; a follow-up). They hand out slugs, not item rows.
+    "constructicon_split_card": (NONE, "cards and file slugs"),
+    "constructicon_merge_cards": (NONE, "cards and file slugs"),
+    "constructicon_delete_project": (NONE, "alias"),
+    "constructicon_move_files": (NONE, "alias"),
+    "constructicon_copy_files": (NONE, "alias"),
+    "constructicon_add_to_hobby": (NONE, "alias"),
+    "constructicon_remove_from_hobby": (NONE, "alias"),
+    "constructicon_bulk_edit": (NONE, "card changes"),
+    "constructicon_resolve_decisions": (NONE, "card changes"),
+    "constructicon_resolve_pending_decision": (NONE, "what the answer applied"),
+    "constructicon_sweep_stale_decisions": (NONE, "resolved question ids"),
+    # The change log's row images carry whatever was written (item fields too): role-gated (editor),
+    # not item-gated; per-user tokens will need that (a follow-up).
+    "constructicon_undo": (NONE, "change rows"),
+    "constructicon_list_changes": (NONE, "change rows"),
+    "constructicon_list_needs": (NONE, "alias (nudges)"),
+    "constructicon_queue_item": (NONE, "{ok, changed}"),
+    "constructicon_dismiss_need": (NONE, "alias"),
+    "constructicon_defer": (NONE, "alias"),
+    "constructicon_bring_back": (NONE, "alias"),
+    # Revision chains by slug: core/revisions.py has no item-policy check (predates #709; a follow-up).
+    "constructicon_revision": (NONE, "slugs of a chain"),
+    "constructicon_mark_superseded": (NONE, "alias"),
+    "constructicon_remove_from_revisions": (NONE, "alias"),
+}
 
 SELF_DECIDING = ("is_restricted(", "restricted_types(", "_not_restricted")
 SELF_DECIDING_ALLOWED = {"core/policy.py", "core/object_types/__init__.py", "scripts/check_policy_doors.py"}
@@ -192,8 +372,7 @@ def main():
     netted_names = set()
     for rel in NET_FILES:
         for name, fn in _functions(tree(rel)).items():
-            is_door = _is_get_route(fn) if rel.startswith("web/") else (_is_mcp_tool(fn) and name.startswith(MCP_READ_PREFIXES))
-            if not is_door:
+            if not _is_get_route(fn):
                 continue
             reads = _db_reads(fn)
             if not reads:
@@ -209,6 +388,9 @@ def main():
         if key not in netted_names:
             failures.append(f"{key[0]}:{key[1]}: stale EXEMPT entry (the net no longer reaches it); remove it")
 
+    # 4. #746: every MCP tool, classified, and the class holds
+    mcp_counts = _check_mcp_tools(tree, failures)
+
     # 3. nobody else decides restriction
     for path in list((ROOT / "core").rglob("*.py")) + list((ROOT / "web").rglob("*.py")) + \
             list((ROOT / "mcp_server").rglob("*.py")) + list((ROOT / "scripts").glob("*.py")):
@@ -222,7 +404,8 @@ def main():
                 failures.append(f"{rel}:{i}: decides restriction itself ({line.strip()[:90]}); ask core/policy.py")
 
     print(f"known doors: {len(DOORS)}; access-logged doors: {len(ACCESS_LOGGED)}; "
-          f"GET routes / MCP read tools reading items (net): {netted}; exempt: {len(EXEMPT)}")
+          f"GET routes reading items (net): {netted}; exempt: {len(EXEMPT)}; MCP tools classified: "
+          + ", ".join(f"{k} {v}" for k, v in sorted(mcp_counts.items())))
     if failures:
         print(f"FAIL: {len(failures)} problem(s):")
         for f in failures:
@@ -230,6 +413,89 @@ def main():
         return 1
     print("OK: every known door calls the item policy, and nothing else decides restriction")
     return 0
+
+
+def _mcp_walk(name, fns, tools, seen):
+    """(item reads, gated) for server.py function `name` and the server helpers it calls (not into
+    other tools or MCP_SHAPERS). Gated = it calls a POLICY_GATES function, a DOORS function, or a
+    CORE_GUARDED op."""
+    fn = fns[name]
+    reads, gated = set(_db_reads(fn)), False
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "policy" \
+                and n.attr in POLICY_GATES:
+            gated = True
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in MODULE_FILES:
+            key = (MODULE_FILES[f.value.id], f.attr)
+            gated |= key in DOORS or key in CORE_GUARDED
+        elif isinstance(f, ast.Name) and f.id in fns:
+            gated |= (MCP, f.id) in DOORS
+            if f.id not in seen and f.id not in tools and f.id not in MCP_SHAPERS:
+                seen.add(f.id)
+                r, g = _mcp_walk(f.id, fns, tools, seen)
+                reads |= r
+                gated |= g
+    return reads, gated
+
+
+def _mcp_roles(tree):
+    """{tool: [roles of its ACTION_ROLES rows]} and {alias: (tool, action)}, read from server.py."""
+    rows, aliases, names = {}, {}, {"V": "viewer", "E": "editor", "A": "admin"}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "ACTION_ROLES" for t in n.targets):
+            for k, v in zip(n.value.keys, n.value.values):
+                tool, action = (e.value for e in k.elts)
+                rows.setdefault(tool, {})[action] = names.get(getattr(v, "id", ""), "?")
+        if isinstance(n, ast.FunctionDef):
+            for d in n.decorator_list:
+                for kw in getattr(d, "keywords", []):
+                    if kw.arg == "alias_of":
+                        aliases[n.name] = tuple(e.value for e in kw.value.elts)
+    return rows, aliases
+
+
+def _check_mcp_tools(tree, failures):
+    """Rule 4 (#746): every MCP tool function is in MCP_TOOLS and its kind holds."""
+    t = tree(MCP)
+    fns = {n.name: n for n in ast.walk(t) if isinstance(n, ast.FunctionDef)}
+    tools = {name for name, fn in fns.items() if _is_mcp_tool(fn)}
+    for name in sorted(tools - set(MCP_TOOLS)):
+        failures.append(f"{MCP}:{fns[name].lineno} {name}: an MCP tool not in MCP_TOOLS (classify it: opens / "
+                        "items / admin / new / none, with what it hands out)")
+    for name in sorted(set(MCP_TOOLS) - tools):
+        failures.append(f"{MCP}:{name}: stale MCP_TOOLS entry (no such tool); remove it")
+    for (rel, op), door in CORE_GUARDED.items():
+        fn = _functions(tree(rel)).get(op)
+        if fn is None or not any(isinstance(c, ast.Call) and getattr(c.func, "id", getattr(c.func, "attr", None)) == door
+                                 for c in ast.walk(fn)):
+            failures.append(f"{rel}:{op}: CORE_GUARDED says it calls {door}(), and it doesn't (any more)")
+    roles, aliases = _mcp_roles(t)
+    logged = {name for (rel, name) in ACCESS_LOGGED if rel == MCP}
+    counts = {}
+    for name in sorted(tools & set(MCP_TOOLS)):
+        kind, why = MCP_TOOLS[name]
+        counts[kind] = counts.get(kind, 0) + 1
+        reads, gated = _mcp_walk(name, fns, tools, {name})
+        where = f"{MCP}:{fns[name].lineno} {name} ({kind}: {why})"
+        if kind in ("opens", "items") and not gated:
+            failures.append(f"{where}: reaches no item-policy gate, door or guarded core op")
+        if kind == "opens" and not any(isinstance(n, ast.Attribute) and n.attr == "note_access" for n in ast.walk(fns[name])):
+            failures.append(f"{where}: opens one item but doesn't record it (policy.note_access)")
+        if (kind == "opens") != (name in logged):
+            failures.append(f"{where}: ACCESS_LOGGED must list exactly the MCP tools of kind 'opens'")
+        if kind == "none" and reads:
+            failures.append(f"{where}: reads items ({', '.join(sorted(reads))}) though classified as handing out none")
+        if kind == "admin":
+            target = aliases.get(name, (name, None))
+            got = [roles.get(target[0], {}).get(target[1])] if name in aliases else list(roles.get(name, {}).values())
+            if not got or any(r != "admin" for r in got):
+                failures.append(f"{where}: an admin listing, but its ACTION_ROLES rows say {got or 'nothing'}")
+        if kind not in ("opens", "items", "admin", "new", "none"):
+            failures.append(f"{where}: unknown kind")
+    return counts
 
 
 def _in_function(tree, lineno, name):

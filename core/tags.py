@@ -85,11 +85,13 @@ def _slugify(name):
     return slug or "tag"
 
 
-def _get_item(slug):
+def _get_item(slug, actor=None):
+    """The item row, or NotFound when it is missing or `actor` may not see it (#709)."""
+    from . import policy  # lazy, as in core/items.py
     row = db.get_by_slug(slug) if slug else None
     if row is None:
         raise NotFound(f"No item {slug!r}.")
-    return row
+    return policy.require_view(row, actor, f"No item {slug!r}.")
 
 
 # --- writers on an open ImageLog (shared with items / membership) -----------------------
@@ -215,7 +217,7 @@ def attach(slug, names, *, dry_run=False, actor=None, batch_id=None):
     names = _names(names)
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
-        _get_item(slug)
+        _get_item(slug, actor)
         with db.ImageLog(OP_ATTACH, actor, batch_id, [slug]) as log:
             attached, created = [], []
             for name in names:
@@ -233,7 +235,7 @@ def detach(slug, tag_id, *, dry_run=False, actor=None, batch_id=None):
     """Removes one tag from an item's post_tags (a no-op if it isn't attached)."""
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
-        _get_item(slug)
+        _get_item(slug, actor)
         if db.get_tag(tag_id) is None:
             raise NotFound(f"No tag {tag_id!r}.")
         with db.ImageLog(OP_DETACH, actor, batch_id, [slug]) as log:
@@ -248,7 +250,7 @@ def set_item_tags(slug, names, *, dry_run=False, actor=None, batch_id=None):
     names = list(names or [])
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
-        _get_item(slug)
+        _get_item(slug, actor)
         with db.ImageLog(OP_SET, actor, batch_id, [slug]) as log:
             created = write_free_text(log, slug, names)
             muts = list(log.muts)
@@ -257,19 +259,20 @@ def set_item_tags(slug, names, *, dry_run=False, actor=None, batch_id=None):
 
 def merge_item_tags(slugs, names, *, dry_run=False, actor=None, batch_id=None):
     """Bulk attach-tags (#98): unions `names` onto each item's free-text tags (sorted, as before)
-    and syncs post_tags. Unknown slugs are skipped. ONE batch and one change-log row for the
-    call. data: {count, slugs, created}."""
+    and syncs post_tags. Unknown slugs are skipped. #709: an item the actor may not see
+    (policy.viewable_rows) refuses the WHOLE call with not_found before anything is written. ONE
+    batch and one change-log row for the call. data: {count, slugs, created}."""
+    from . import policy  # lazy, as in core/items.py
     names = _names(names)
     batch_id = batch_id or changes.new_batch_id()
     done, created = [], []
     if not names:
         return Result(True, [], [], batch_id, dry_run, {"count": 0, "slugs": [], "created": []})
     with db.transaction(dry_run=dry_run):
+        rows, _ = policy.viewable_rows(slugs, missing_ok=True, actor=actor)
         with db.ImageLog(OP_MERGE, actor, batch_id) as log:
-            for slug in dict.fromkeys(slugs or []):
-                row = db.get_by_slug(slug)
-                if row is None:
-                    continue
+            for row in rows:
+                slug = row["slug"]
                 merged = sorted(set(row["tags"]) | set(names))
                 created += write_free_text(log, slug, merged)
                 done.append(slug)

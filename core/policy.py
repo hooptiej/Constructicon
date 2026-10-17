@@ -13,6 +13,9 @@ item (or a list of items) asks this module:
     has the rows in hand;
   * the static site export and the project zip (anything that leaves the install)
     ->  `filter_exportable(rows)`.
+  * writes (#709): the service ops refuse an item the actor can't see, the same 404, before they
+    write: `viewable_rows(slugs)` for a set (items.delete, membership add/remove, tag merge),
+    `require_view` / `can_view` for one item (items.get_item, tags' item lookup, set_sensitive).
 
 scripts/check_policy_doors.py fails if a known door stops calling this module.
 
@@ -138,6 +141,30 @@ def viewable_item(slug, message="not found", actor=None):
     if row is None:
         raise NotFound(message)
     return require_view(row, actor, message)
+
+
+def viewable_rows(slugs, *, missing_ok=False, actor=None):
+    """(#709) The write-side door for a SET of items (bulk delete, add-to-card, tagging; the service
+    ops call it before they write anything). Returns (rows, missing): the item rows in the order
+    given (blanks and repeats dropped) when the actor may see EVERY one of them. A slug that exists
+    but the actor may not see raises NotFound (404 `not_found`, the very answer a missing item gets,
+    "No item 'x'.") so the whole request is refused and nothing is written. An unknown slug raises
+    the same, unless `missing_ok` (the bulk paths that always skipped unknown slugs): then it is
+    left out and listed in `missing`."""
+    from core import db  # lazy: core.db imports this module
+    wanted = [slugs] if isinstance(slugs, str) else list(slugs or [])
+    wanted = list(dict.fromkeys((s or "").strip() for s in wanted if (s or "").strip()))
+    who = actor_ctx.resolve(actor)
+    rows, missing = [], []
+    for slug in wanted:
+        row = db.get_by_slug(slug)
+        if row is None and missing_ok:
+            missing.append(slug)
+            continue
+        if row is None or not can_view(row, who):
+            raise NotFound(f"No item {slug!r}.")
+        rows.append(row)
+    return rows, missing
 
 
 def require_file(item, actor=None, message="not found"):

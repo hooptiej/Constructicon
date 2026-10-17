@@ -18,7 +18,9 @@ What it CAN'T check, honestly:
     `policy.`), or that a door calling a helper which calls the policy is covered;
   * doors that reach items through a helper not named in ITEM_READS (e.g. a shaper that loads
     rows itself), templates, or JS;
-  * write routes (they're role-gated by web/roles.py, not item-gated here).
+  * write routes the net doesn't reach (it only nets GET routes and MCP read tools). Writes are
+    role-gated by web/roles.py; the item-gated ones that matter (#709: bulk delete, add-to-card,
+    tagging, and the service ops behind them) are listed in DOORS by hand.
 The behaviour itself is proven by scripts/test_role_policy.py (flip the switch, every door refuses).
 
     python scripts/check_policy_doors.py
@@ -74,6 +76,26 @@ DOORS = {
     ("core/curation_queue.py", "for_actor"): "the Curator queue (shared cache, filtered per actor)",
     ("core/decisions.py", "list_open"): "the decision queue",
     ("core/revisions.py", "chain_detail"): "revision chains on the item page / MCP",
+    # #709: the write side. Every slug a write names must be visible (else 404, nothing written),
+    # checked in the service op itself so web, MCP and any future per-user token are covered.
+    ("web/routes/items.py", "api_delete_selected"): "POST /api/delete (bulk delete)",
+    ("web/routes/items.py", "api_bulk_add_to_project"): "POST /api/bulk/add-to-project",
+    ("web/routes/items.py", "api_bulk_attach_tags"): "POST /api/bulk/attach-tags",
+    ("web/routes/cards.py", "api_create_project_from_related"): "POST /api/projects/from-related (its related items)",
+    ("core/items.py", "get_item"): "every single-item op (update, caption, relate, redact, retype, replace ...)",
+    ("core/items.py", "delete"): "items.delete (web delete + bulk delete, MCP delete / delete_multiple)",
+    ("core/items.py", "unrelate"): "items.unrelate (web + MCP remove_related)",
+    ("core/items.py", "set_sensitive"): "items.set_sensitive (bulk + single, #603)",
+    ("core/items.py", "set_provenance"): "items.set_provenance (bulk provenance, #553)",
+    ("core/membership.py", "add_files"): "membership.add_files (bulk add-to-project, from-selection, MCP add_items_to_project ...)",
+    ("core/membership.py", "remove_files"): "membership.remove_files (web + MCP remove_from_project)",
+    ("core/tags.py", "_get_item"): "tags.attach / detach / set_item_tags (MCP attach_tags / detach_tag)",
+    ("core/tags.py", "merge_item_tags"): "tags.merge_item_tags (bulk attach-tags)",
+    ("mcp_server/server.py", "constructicon_add_related"): "MCP add_related",
+    ("mcp_server/server.py", "constructicon_add_to_project"): "MCP add_to_project",
+    ("mcp_server/server.py", "constructicon_remove_from_project"): "MCP remove_from_project",
+    ("mcp_server/server.py", "constructicon_detach_tag"): "MCP detach_tag",
+    ("mcp_server/server.py", "constructicon_set_project_writeup"): "MCP set_project_writeup",
 }
 
 # #604 follow-up 7: doors that OPEN one item must record a sensitive item's access

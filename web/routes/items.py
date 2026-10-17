@@ -49,7 +49,9 @@ def api_delete_selected(slugs: list[str] = Form(...)):
     full-reset button; this is the day-to-day 'clear this test content'
     path, driven by gallery checkboxes or a single object's detail page.
     #541: one items.delete batch (files to the trash for 7 days); unknown slugs are skipped.
+    #709: every other slug must be visible to the caller (404 not_found otherwise, nothing deleted).
     `batch_id` undoes the lot via POST /api/changes/{batch_id}/undo."""
+    policy.viewable_rows(slugs, missing_ok=True)  # #709 (items.delete checks again, in its transaction)
     result = items.delete(slugs, missing_ok=True)
     return JSONResponse({"deleted": result.data["deleted"], "batch_id": result.batch_id,
                          "trash_days": items.TRASH_DAYS})
@@ -900,8 +902,11 @@ def api_bulk_add_to_project(slugs: list[str] = Form(...), project_id: str = Form
     single-object path, rather than partially failing the batch.
 
     #541 phase C: one membership.add_files call (all side effects, as before), so the whole
-    bulk add is one batch; the answer carries its batch_id for undo."""
-    count = sum(1 for slug in slugs if db.get_by_slug(slug) is not None)
+    bulk add is one batch; the answer carries its batch_id for undo.
+    #709: every slug must be visible (404 not_found otherwise, nothing written), checked first so
+    even the bad-card no-op answer can't count an item the caller can't see."""
+    rows, _ = policy.viewable_rows(slugs, missing_ok=True)
+    count = len(rows)
     if not project_id or db.get_project(project_id) is None:
         return JSONResponse({"count": count})
     result = membership.add_files(project_id, slugs, missing_ok=True, **membership.UI_EFFECTS)
@@ -941,6 +946,8 @@ def api_bulk_attach_tags(slugs: list[str] = Form(...), tag_names: list[str] = Fo
     if not tag_names:
         return JSONResponse({"count": 0})
     # #541 phase C: core/tags.py, one batch (tags it creates are imaged, so undo removes them).
+    # #709: every slug must be visible (404 not_found otherwise, nothing written).
+    policy.viewable_rows(slugs, missing_ok=True)
     result = tags_svc.merge_item_tags(slugs, tag_names)
     return JSONResponse({"count": result.data["count"], "batch_id": result.batch_id})
 

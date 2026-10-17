@@ -31,7 +31,7 @@ phase C (it used to do the linked tag only).
 
 import time
 
-from . import changes, db, tags
+from . import changes, db, policy, tags
 from .cards import Result
 from .errors import NotFound
 
@@ -88,20 +88,15 @@ def add_files(card, slugs, *, link_tag, merge_free_tags, auto_cover, missing_ok=
               actor=None, batch_id=None):
     """Puts files on a card with the named side effects (see the module docstring). Unknown file
     slugs raise not_found before anything is written, unless `missing_ok` (the bulk paths skip
-    them, as before). One batch, one change-log row. data: {card, slugs, added, already,
-    skipped, tagged, cover}."""
+    them, as before). #709: a file the actor may not see (policy.viewable_rows) refuses the WHOLE
+    call with the same not_found, so nothing is added. One batch, one change-log row. data: {card,
+    slugs, added, already, skipped, tagged, cover}."""
     wanted = _slugs(slugs)
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         project = get_card(card)
-        present, skipped = [], []
-        for s in wanted:
-            if db.get_by_slug(s) is None:
-                if missing_ok:
-                    skipped.append(s)
-                    continue
-                raise NotFound(f"No item {s!r}.")
-            present.append(s)
+        rows, skipped = policy.viewable_rows(wanted, missing_ok=missing_ok, actor=actor)
+        present = [r["slug"] for r in rows]
         tag = db.get_tag(project["tag_id"]) if project.get("tag_id") else None
         tagged, cover = [], None
         with db.ImageLog(OP_ADD, actor, batch_id, [project["slug"]] + present) as log:
@@ -124,11 +119,13 @@ def add_files(card, slugs, *, link_tag, merge_free_tags, auto_cover, missing_ok=
 
 def remove_files(card, slugs, *, dry_run=False, actor=None, batch_id=None):
     """Takes files off a card (membership only: tags and the cover are left alone). Files that
-    aren't on the card are a no-op, as before. data: {card, removed}."""
+    aren't on the card are a no-op, as before. #709: a file the actor may not see is not_found
+    (unknown slugs stay a no-op). data: {card, removed}."""
     wanted = _slugs(slugs)
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         project = get_card(card)
+        policy.viewable_rows(wanted, missing_ok=True, actor=actor)
         with db.ImageLog(OP_REMOVE, actor, batch_id, [project["slug"]] + wanted) as log:
             _, removed = write_items(log, project["id"], (), wanted)
             muts = list(log.muts)

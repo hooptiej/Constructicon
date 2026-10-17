@@ -122,7 +122,10 @@ def api_create_project_from_related(slug: str = Form(...), title: str = Form(...
     batch_id = changes.new_batch_id()
     with db.transaction():
         project = cards.create(title, batch_id=batch_id).data["card"]
-        membership.add_files(project["id"], [slug] + [r["slug"] for r in db.list_related(slug)],
+        # #709: only the related items the caller can see (the Related panel shows no others, and
+        # add_files would refuse the whole card for a hidden one).
+        related = [r["slug"] for r in policy.filter_visible(db.list_related(slug))]
+        membership.add_files(project["id"], [slug] + related,
                              missing_ok=True, batch_id=batch_id, **membership.UI_EFFECTS)
     return JSONResponse(_to_project_option(project))
 

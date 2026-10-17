@@ -237,7 +237,9 @@
    card columns shrink (ellipsis) before it does, nothing is fixed-width, so a row never makes the
    page scroll sideways (375 px phone included). The select checkbox (only while selecting) and the
    revision badge sit outside the row's link. */
-.cx-item-list { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* #718: contain: inline-size, so the rows' unwrapped names never set the list's intrinsic width (they
+   used to, and a narrow column, home's Files panel, grew to the longest file name). */
+.cx-item-list { display: flex; flex-direction: column; gap: 2px; min-width: 0; contain: inline-size; }
 .cx-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 3px 6px; border-radius: 6px; border: 1px solid transparent; }
 .cx-row:hover { background: var(--card); border-color: var(--border); }
 .cx-row .card-select-row { margin: 0; flex: 0 0 auto; }

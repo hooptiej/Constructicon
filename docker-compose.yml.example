@@ -14,6 +14,8 @@ services:
   # #643: the app image runs as a non-root user, UID/GID 1000 (Dockerfile ARG APP_UID /
   # APP_GID). Every host directory bind-mounted read-write below (storage, db, backups,
   # exports, import) must be owned by that UID, e.g. `sudo chown -R 1000:1000 ./storage ./db`.
+  # #699: if one isn't, web and MCP refuse to start and say which folder, its owner and the fix
+  # (README.md, "Install on a new host", step 3).
   #
   # #652: and private to it. Target: data directories 0750, their files 0640, backup zips 0600
   # (`sudo chmod 0750 ./storage ./db ./backups ./exports` on a fresh install). The app keeps new

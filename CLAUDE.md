@@ -2079,8 +2079,8 @@ from inside either checkout —
 **What `scripts/deploy.sh` does, in order (read from the script, #552, #688):** it first reads the
 checkout's EFFECTIVE compose config (`docker-compose.yml` + `docker-compose.override.yml`) to find the
 web service (`web` on the NAS, `constructicon-web` in the example), its `image:` and whether
-`/app/core` is bind-mounted. Then (1) unless `--no-snapshot`, takes the ZFS snapshot described below
-(aborts the deploy if the snapshot fails); (2) `git fetch origin --tags`; (3) `git reset --hard
+`/app/core` is bind-mounted. Then (1) unless `--no-snapshot`, takes the pre-deploy backup described below
+(a ZFS snapshot, or on a host/folder without its own dataset a db/ copy; aborts the deploy if it fails); (2) `git fetch origin --tags`; (3) `git reset --hard
 origin/main` (nothing if already there); then one of two modes:
 - **Baked (no code mounts: prod):** (4) `sudo docker compose build <web>` with the version build args
   from `git describe --tags --always`, tagged `<repo>:<version>` as well as the compose tag; (5) `sudo
@@ -2154,7 +2154,19 @@ snapshot name includes the version being replaced. Check with
 (instant, atomic across DB/WAL/files, only stores later changes) and keeps the
 newest 10. A failed snapshot aborts the deploy; `--no-snapshot` opts out.
 constructicon-test's data sits inside the shared `Storage Pool/Media` dataset,
-so its deploys skip the snapshot (by design, don't snapshot 2.75 TB for a test).
+so its deploys don't snapshot (by design, don't snapshot 2.75 TB for a test); since #698 they take
+the db/ copy below instead.
+- **No ZFS (#698):** on a host without ZFS, a data folder that isn't its own dataset, or no way to run
+  `zfs` as root, deploy.sh copies the DB folder instead: a one-off `--network none` container of the
+  app image (root only to make the folder, then the data folder's owner uid) copies every SQLite file
+  with the online backup API (+ `quick_check`), other files as they are, skips `-wal`/`-shm`, into
+  `<instance>/predeploy-backups/predeploy-<ts>-<commit>-v<ver>/` (0700/0600, newest 10 kept; gitignored).
+  storage/ is not copied. `./scripts/deploy.sh --backup-plan` prints which route a deploy would take
+  and changes nothing (reads the compose config and `df` only). The route is chosen from `df`'s
+  filesystem type, not `command -v zfs` (zfs isn't on hoop's PATH on the NAS; it runs via sudo).
+- **Docker and sudo (#698):** deploy.sh runs `docker` directly when the user can reach the socket (the
+  `docker` group, or root), else `sudo docker` (hoop on the NAS: not in the group, so unchanged); a
+  missing `docker` or Compose v2 plugin stops it with the install link. Compose stays required.
 - **Restore data:** read-only copies are browsable at
   `/mnt/Storage Pool/Media/constructicon/.zfs/snapshot/<name>/` (e.g. copy the
   DB file back with the app stopped). `sudo zfs rollback` discards everything
@@ -2173,7 +2185,12 @@ so its deploys skip the snapshot (by design, don't snapshot 2.75 TB for a test).
 
 **Captions: guarded, not per-image-restarted (#454, 2026-09-30).** The old per-image Ollama restart cycled the GPU container ~180 times during a bulk seed and hard-crashed the whole NAS. Captions are back ON everywhere with the #454 safety valve (restart only on failure, 10-min cooldown, circuit breaker; status in `GET /api/captions/defaults` → `breaker` and `restart_valve`, reset via `POST /api/captions/reset-breaker`). All four services join `ollama_default` (the separate `~/ollama` project's network) today; once the home install moves to the compose-owned sidecar (#687) only the two web services join the internal `captions` network and the MCPs join neither. **No app container mounts `/var/run/docker.sock` (#643):** web asks the `ollama-restarter` sidecar (see `core/captions.py` above), which is the only holder of the socket; MCP has neither (#458), so only web can trigger safety-valve restarts. After a reboot, check `ollama` is actually running: it can fail to start before the NVIDIA driver loads (see #454).
 
-**The app runs as a non-root user (#643):** UID/GID 1000 (`app` in the image, Dockerfile `APP_UID`/`APP_GID`), which is `hoop` on the NAS. Every read-write bind mount (storage, db, backups, exports, import) must be owned by 1000:1000 on the host; files a root container wrote before #643 need a one-time `sudo chown -R 1000:1000 <dir>`. A `Permission denied` on upload, thumbnail, backup or export after a deploy means a directory missed that chown. `docker exec <web> id` should print `uid=1000(app)`.
+**The app runs as a non-root user (#643):** UID/GID 1000 (`app` in the image, Dockerfile `APP_UID`/`APP_GID`), which is `hoop` on the NAS. Every read-write bind mount (storage, db, backups, exports, import) must be owned by 1000:1000 on the host; files a root container wrote before #643 need a one-time `sudo chown -R 1000:1000 <dir>`. A `Permission denied` on upload, thumbnail, backup or export after a deploy means a directory missed that chown. `docker exec <web> id` should print `uid=1000(app)`. **Since #699 both processes check at startup**
+(`core/paths.unwritable_data_dirs`: the DB folder and file/-wal/-shm, storage, backups, exports; a real
+create-and-delete test, a missing folder judged by its nearest parent; import/ is never written, so not
+checked) and refuse to start with the path, its owner and mode, the uid they run as and the chown fix
+(`paths.data_dirs_error`): web raises from its startup hook (uvicorn exits 3), the MCP `sys.exit`s (1).
+Check with `scripts/test_data_dirs_699.py`. README "Install on a new host" is the non-NAS guide.
 
 **Data files are private to the app user (#652).** Target on the host: `storage/`, `db/`, `backups/`, `exports/` are directories `0750` owned by the app uid (1000:1000), the files in them `0640`, backup zips `0600`. The app keeps new files that way itself: `core/paths.restrict_new_files()` sets the process umask to `027` when `web/app.py` and `mcp_server/server.py` load (it covers every thread and subprocess; `CONSTRUCTICON_UMASK`, octal, overrides it, a bad value falls back to 027), and `core/backup.py` writes each zip `0600` whatever the umask. SQLite gives `-wal`/`-shm` the DB file's own mode, so an existing DB stays as loose as it was until fixed by hand. **Existing installs:** `bash ops/fix-data-permissions.sh DATA_ROOT` prints what it would change (dry run), `--apply` changes it (idempotent; never chowns, lists entries not owned by uid 1000). It leaves `DATA_ROOT` itself and `import/` alone: the import inbox is the owner's drop folder, mounted read-only into the MCP and never written by the app. **Check before applying on the NAS:** the `Media` SMB share (`/mnt/Storage Pool/Media`, which holds both instances' data) is `guestok` with guest = `nobody`, so today any guest on the LAN can read the DB and the backups over SMB; after the fix a guest can't open `storage/` / `db/` / `backups/` / `exports/` at all, and only an SMB session authenticated as `hoop` (uid 1000) can. Check with `scripts/test_private_files_652.py` (throwaway DB, Linux).
 

@@ -250,6 +250,13 @@ async def startup():
 
 
 def _startup_as_system():
+    # #699: data folders owned by another uid used to fail later and cryptically ("unable to open
+    # database file", a Permission denied on the first upload). Refuse here, loudly, with the fix.
+    unwritable = paths.unwritable_data_dirs(db.DB_PATH)
+    if unwritable:
+        message = paths.data_dirs_error("constructicon-web", unwritable)
+        print(message, file=sys.stderr, flush=True)
+        raise RuntimeError(message)
     # #467 step 2: a broken install-token configuration (unreadable/empty file, too short) stops the
     # app here, loudly, like the MCP. No token at all is fine: sessions work, bearer clients get 401.
     try:

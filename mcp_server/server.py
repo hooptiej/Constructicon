@@ -59,6 +59,14 @@ from core import paths
 # users on the host. Set at import, before main() runs init_db.
 paths.restrict_new_files()
 
+# #699: run as the server (not imported by a test), refuse to start, with the folder, its owner and
+# the fix, when a data folder isn't writable. Here at import, before anything below reads the DB
+# (the hobby label is read at import), which would otherwise fail with "unable to open database file".
+if __name__ == "__main__":
+    _unwritable = paths.unwritable_data_dirs(db.DB_PATH)
+    if _unwritable:
+        sys.exit(paths.data_dirs_error("constructicon-mcp", _unwritable))
+
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 
 # #433 part 3: a read-only bind-mounted inbox (host: Media/constructicon/import,

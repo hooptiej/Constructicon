@@ -82,16 +82,23 @@ else:
               and str(storage) in raised, raised)
         check("web startup refused before creating the DB", not db_path.exists())
 
-        # The MCP server exits non-zero with it, before init_db.
+        # The MCP server exits non-zero with it, before anything reads the DB (it reads the hobby
+        # label at import, so the DB folder is locked too: that used to crash with "unable to open
+        # database file" before any check ran).
+        os.chmod(db_path.parent, 0o500)
         env = dict(os.environ)
         r = subprocess.run([sys.executable, "-m", "mcp_server.server"], cwd=ROOT, env=env,
                            capture_output=True, text=True, timeout=300)
         check("MCP exits non-zero", r.returncode != 0, r.returncode)
         check("MCP prints the message", "constructicon-mcp: refusing to start" in r.stderr
-              and str(storage) in r.stderr and "sudo chown -R" in r.stderr, r.stderr[-800:])
+              and str(storage) in r.stderr and str(db_path.parent) in r.stderr
+              and "sudo chown -R" in r.stderr, r.stderr[-800:])
+        check("MCP never got as far as opening the DB", "unable to open database file" not in r.stderr,
+              r.stderr[-800:])
         check("MCP refused before creating the DB", not db_path.exists())
     finally:
         os.chmod(storage, 0o750)
+        os.chmod(db_path.parent, 0o750)
 
     # A DB folder the app can't write, and the known compose path in the fix.
     dbdir = db_path.parent

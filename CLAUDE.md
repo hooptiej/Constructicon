@@ -1473,7 +1473,8 @@ To add a new object type (issue #448 contract v2):
   managed in `/admin`. `core/provenance_options.py` owns reads, validation
   (active keys for new writes; a record's existing retired key stays valid) and
   change-logged writes. Pickers, labels and the MCP tools read the table; the
-  old constants in `card_rules` / `db.PROVENANCE_TYPES` are only the seed.
+  seed is `provenance_options.SEED` (`card_rules`' label dicts are only fallbacks;
+  `db.PROVENANCE_TYPES` is gone, #546).
   `scripts/test_provenance_options.py` runs on a throwaway DB, no server.
 
 - **Revision chains (#477)** — `item_revisions(old_slug PK, new_slug UNIQUE)`: "new
@@ -1801,7 +1802,11 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
     `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
-  - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `check_archive_guard`
+  - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `check_dead_code`
+    (#546: the reference scan, **report only**, never fails: module-level functions, classes and
+    UPPER_CASE constants in `core/` and `web/` that nothing else names, the ones only tests use, and
+    CSS classes no template/JS/Python mentions; read its list before a cleanup PR, then grep each name
+    yourself; entry points go in its `ALLOW`; its own test is `test_dead_code_546`), `check_archive_guard`
     (every retired script in `scripts/archive/` refuses to run, #633), `test_live_bugs_563`,
     `test_round2` and `test_round3a` (the work-install shakedown rounds: several small fixes each),
     `test_release` (the CalVer logic), `check_dependency_audit` (known advisories in the installed

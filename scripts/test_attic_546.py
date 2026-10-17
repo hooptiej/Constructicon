@@ -46,7 +46,9 @@ def code_files():
     for p in pats:
         out.update(glob.glob(os.path.join(ROOT, p), recursive=True))
     me = os.path.abspath(__file__)
-    return sorted(f for f in out if os.path.abspath(f) != me and "__pycache__" not in f)
+    # test_dead_code_546.py names the deleted symbols to check they stay gone: not a caller
+    skip = {me, os.path.join(os.path.dirname(me), "test_dead_code_546.py")}
+    return sorted(f for f in out if os.path.abspath(f) not in skip and "__pycache__" not in f)
 
 
 def refs(word, files):
@@ -80,7 +82,8 @@ check("client badge CSS is gone", "client-badge" not in read("web", "static", "s
 
 # ---- 2. every deleted symbol is gone, and nothing refers to it ------------------------------
 DELETED = {
-    db: ["add_test_client", "count_table_rows", "count_project_links_by_type", "list_recent_posts", "list_project_ancestors"],
+    db: ["add_test_client", "count_table_rows", "count_project_links_by_type", "list_recent_posts", "list_project_ancestors",
+         "PROVENANCE_TYPES"],
     cards: ["card_json", "STACK_UNDER"],
     card_rules: ["ACTIVITIES", "HOME_SOURCES", "CARD_PROVENANCE"],
     curation_queue: ["cached_counts", "invalidate_cache", "DEDUPE_PAIRS"],
@@ -132,6 +135,9 @@ for c in DEAD_CSS:
     check(f".{c} is gone from the stylesheets", not re.search(r"\." + re.escape(c) + r"(?![\w-])", css))
     users = [f for f in FILES if not f.endswith(("test_live_bugs_563.py", "check_layering.py"))]
     check(f"nothing uses the class {c}", not refs(c, users), refs(c, users))
+# their -thumb / -title siblings (and dp-crumb-current) are still used, so only the stylesheet is checked
+for c in ("pending-decision", "breadcrumb-current"):
+    check(f".{c} is gone from the stylesheets", not re.search(r"\." + re.escape(c) + r"(?![\w-])", css))
 for c in ("audit-log-status-success", "audit-log-status-error", "audit-log-status-other"):
     check(f".{c} kept (admin.html builds it from the HTTP status class)", "." + c in css)
 check("admin.html still builds audit-log-status-${...}", "audit-log-status-${" in read("web", "templates", "admin.html"))

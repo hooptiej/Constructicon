@@ -420,18 +420,12 @@ body.delete-mode-on .card-select-row { display: flex; }
 /* The three scrolling lists below cap at ~a screen's worth on the full page
    (they were 260-320px in the pop-out, where the whole column was that). */
 
-.pending-decision {
-  display: flex; flex-direction: column; gap: 8px; padding: 10px;
-  background: var(--bg); border: 1px solid var(--border); border-left: 2px solid var(--hazard-yellow); border-radius: 4px;
-}
-
 .pending-decision-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
 .pending-decision-thumb-icon { display: flex; align-items: center; justify-content: center; font-size: 18px; background: var(--surface); border: 1px solid var(--border); }
 .pending-decision-title { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Redacted items (#282) — /admin list of hidden rows, each with an un-redact button.
-   Same card bones as .pending-decision, neutral left rule instead of the hazard one
-   (nothing here is asking for a decision). */
+   A card with a neutral left rule (nothing here is asking for a decision). */
 .admin-redacted-list { display: flex; flex-direction: column; gap: 8px; max-height: 480px; overflow-y: auto; }
 .redacted-item {
   display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
@@ -548,10 +542,6 @@ body.delete-mode-on .card-select-row { display: flex; }
 /* --- Image detail page --- */
 .back-link { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
 .back-link:hover { color: var(--accent); }
-
-/* #137: breadcrumb navigation — replaced back-link with breadcrumb trail */
-
-.breadcrumb-current { color: var(--text-2); font-weight: 500; }
 
 /* #241: inline title editing, shared by the object detail page (display_name)
    and the project detail page (title). The wrapper holds the read-only text

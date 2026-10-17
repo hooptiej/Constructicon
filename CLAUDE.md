@@ -626,7 +626,14 @@ place that decides: every user-file response (`/f/<slug>`, `/f/<slug>/thumb`, th
 type, extension or a sniff of the first bytes) also carries the sandbox CSP (`RENDERED_HTML_CSP`, shared
 with the Rendered view: opaque origin, no script, no network); HTML/XHTML is also
 `Content-Disposition: attachment` (look at it in the in-app Rendered view); SVG stays inline so a hotlinked
-`<img>` keeps working. **Any new route that streams a stored file must go through
+`<img>` keeps working. **#701:** with an original name, everything else is `inline` when the browser
+shows it itself (PDF, JPEG/PNG/GIF/WebP/AVIF/BMP, MP4/WebM/Ogg video, the common audio types, `text/plain`:
+`object_types.BROWSER_VIEWABLE_TYPES`, an exact allowlist, so PSD/TIFF stay downloads) and `attachment`
+otherwise, both keeping the name (`filename*=` / `filename=`); those inline types are sniffed too, so markup
+renamed `.pdf` is still HTML (attachment + CSP). The object page's link follows the same set
+(`object_types.original_link(item)`, used by `_preview.thumb_with_original_link` and `object_detail.html`):
+"View original <Type>" in a new tab, or "Download original <Type>" in place. Check with
+`scripts/test_view_original_701.py`. **Any new route that streams a stored file must go through
 `content_security.serve_file` (or add `file_headers`)**, never a bare `FileResponse` on a user file.
 Thumbnails are generated JPEGs (nosniff only). Check with `scripts/test_f_sandbox_610.py`. Longer term: a
 separate user-content origin.

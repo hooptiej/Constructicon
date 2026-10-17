@@ -13,6 +13,12 @@ are never served as active content on the app origin.**
   in-app Rendered view (`/api/image/<slug>/rendered`, #607) is how to look at one.
 - SVG stays inline so a hotlinked `<img src="/f/<slug>">` keeps working; the CSP only bites when the
   SVG is opened as a document.
+
+#701, "look, don't take": everything else that the browser can show by itself (PDF, JPEG/PNG/GIF/WebP,
+video, audio, plain text: `object_types.BROWSER_VIEWABLE_TYPES`) is served `inline`, so "View original"
+opens the browser's own viewer; anything else (STL, PSD, ZIP, EXE, fonts, ...) stays `attachment`. Both
+keep the original name (`filename*=` / `filename=`), so Save-as names the file right. The decision uses
+the detected kind first: a file that sniffs as HTML is a download whatever its name says.
 """
 
 import mimetypes
@@ -20,6 +26,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi.responses import FileResponse
+
+from core import object_types
 
 # The sandbox policy for HTML shown or served on the app origin. `sandbox` (no tokens) = no scripts,
 # forms, popups, same-origin or top navigation even if the URL is opened directly; default-src 'none'
@@ -90,7 +98,10 @@ def active_kind(path, name=None, media_type=None):
     if kind:
         return kind
     guessed = media_type or mimetypes.guess_type(name or str(path))[0] or "application/octet-stream"
-    if guessed.startswith("text/") or guessed == "application/octet-stream":
+    # #701: anything that would be served inline is sniffed too, so markup renamed .pdf/.jpg/... is
+    # caught here and never handed to the browser inline.
+    if (guessed.startswith("text/") or guessed == "application/octet-stream"
+            or object_types.opens_in_browser(media_type=guessed)):
         try:
             with open(path, "rb") as fh:
                 return _kind_from_bytes(fh.read(SNIFF_BYTES))
@@ -99,17 +110,32 @@ def active_kind(path, name=None, media_type=None):
     return None
 
 
-def _attachment(filename):
+def content_disposition(disposition, filename):
+    """`inline` / `attachment` plus the original name: RFC 5987 `filename*=` when it isn't plain ASCII
+    (spaces, quotes, unicode), else `filename="..."`."""
     if not filename:
-        return "attachment"
+        return disposition
     quoted = quote(filename)
-    return f"attachment; filename*=utf-8''{quoted}" if quoted != filename else f'attachment; filename="{filename}"'
+    return f"{disposition}; filename*=utf-8''{quoted}" if quoted != filename else f'{disposition}; filename="{filename}"'
 
 
-def file_headers(path, name=None, media_type=None):
-    """The security headers for serving the stored file at `path` (its original name `name`)."""
+def _attachment(filename):
+    return content_disposition("attachment", filename)
+
+
+def disposition_for(kind, name=None, media_type=None):
+    """#701: "inline" or "attachment" for a stored file whose active kind (`active_kind`) is `kind`.
+    HTML/XHTML is always a download (#610); SVG/XML stay inline under the sandbox CSP; anything else
+    is inline only when the browser shows it itself (`object_types.BROWSER_VIEWABLE_TYPES`)."""
+    if kind == "html":
+        return "attachment"
+    if kind:
+        return "inline"
+    return "inline" if object_types.opens_in_browser(name, media_type) else "attachment"
+
+
+def _headers_for(kind, path, name):
     headers = dict(NOSNIFF)
-    kind = active_kind(path, name, media_type)
     if kind:
         headers["Content-Security-Policy"] = RENDERED_HTML_CSP
         if kind == "html":
@@ -117,16 +143,22 @@ def file_headers(path, name=None, media_type=None):
     return headers
 
 
+def file_headers(path, name=None, media_type=None):
+    """The security headers for serving the stored file at `path` (its original name `name`)."""
+    return _headers_for(active_kind(path, name, media_type), path, name)
+
+
 def serve_file(path, filename=None, type_name=None):
     """A FileResponse for a user's stored file with the #610 headers. `filename` (the original name)
-    sets the download name as before; `type_name` names the file for type detection when the bytes
-    served are not the original's (a thumbnail that fell back to the original)."""
+    names the file in Content-Disposition: inline for what the browser shows itself, attachment for
+    the rest (#701). `type_name` names the file for type detection when the bytes served are not the
+    original's (a thumbnail that fell back to the original)."""
     name = filename or type_name
-    headers = file_headers(path, name)
+    kind = active_kind(path, name)
+    headers = _headers_for(kind, path, name)
     resp = FileResponse(path, filename=filename, headers=headers)
-    if "Content-Disposition" in headers:
+    if filename is not None:
+        resp.headers["content-disposition"] = content_disposition(disposition_for(kind, filename), filename)
+    elif "Content-Disposition" in headers:
         resp.headers["content-disposition"] = headers["Content-Disposition"]
-    elif filename is not None and "Content-Security-Policy" in headers:
-        # SVG / XML: inline (hotlinked <img> keeps working); the CSP stops script if opened directly.
-        resp.headers["content-disposition"] = resp.headers["content-disposition"].replace("attachment", "inline", 1)
     return resp

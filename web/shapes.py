@@ -374,6 +374,9 @@ def _to_object_detail(row):
         # #604 step 1 / #603: the uploader (ORIGIN: "Uploaded by") and the sensitive lock.
         **ownership_fields(row),
     }
+    # #701: the label and target of every link to the stored file ("View original" in a new tab, or
+    # "Download original"), decided once for all types by object_types.original_link.
+    item["original_link"] = object_types.original_link(item)
     # #449: the type's own preview, built from the finished item dict (not the
     # raw row) so preview_fn sees display_name/type_label/icon/url/thumb_url.
     # None -> the template's generic chain renders instead.

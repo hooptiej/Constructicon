@@ -88,8 +88,8 @@
           <div class="capture-preview">
             <img id="preview-img" src="{{ item.thumb_url }}" alt="{{ item.display_name }}" title="Click to view full size"{% if item.type_metadata.rotation %} style="transform:rotate({{ item.type_metadata.rotation }}deg)"{% endif %}>
             {% if item.url %}
-            <a href="{{ item.url }}" class="external-link-btn">
-              View original {{ item.type_label }}
+            <a href="{{ item.url }}" class="external-link-btn"{% if item.original_link.new_tab %} target="_blank" rel="noopener"{% endif %}>
+              {{ item.original_link.label }}
             </a>
             {% endif %}
           </div>
@@ -130,7 +130,12 @@
         <button type="button" class="dp-btn" id="refresh-thumbnail-btn" title="Refresh thumbnail">&#8635; Refresh thumbnail</button>
         {% endif %}
         {% if item.url and not item.redacted %}
+        {# #701: a file the browser can't show is a download, so the button says so (no new tab). #}
+        {% if item.original_link.new_tab %}
         <a class="dp-btn" id="open-full-size" href="{{ item.url }}" target="_blank" rel="noopener" style="text-decoration:none">Open full size</a>
+        {% else %}
+        <a class="dp-btn" id="open-full-size" href="{{ item.url }}" style="text-decoration:none">Download original</a>
+        {% endif %}
         {% endif %}
       </div>
       {% endif %}

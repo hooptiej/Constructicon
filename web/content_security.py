@@ -178,17 +178,19 @@ def serve_raw_text(path, filename, codec):
     return Response(body, media_type=RAW_TEXT_TYPE, headers=headers)
 
 
-def serve_file(path, filename=None, type_name=None):
+def serve_file(path, filename=None, type_name=None, download=False):
     """A FileResponse for a user's stored file with the #610 headers. `filename` (the original name)
     names the file in Content-Disposition: inline for what the browser shows itself, attachment for
     the rest (#701). `type_name` names the file for type detection when the bytes served are not the
-    original's (a thumbnail that fell back to the original)."""
+    original's (a thumbnail that fell back to the original). `download=True` makes it `attachment`
+    whatever the type (#703: the raw view's fallback for a file it won't show as text)."""
     name = filename or type_name
     kind = active_kind(path, name)
     headers = _headers_for(kind, path, name)
     resp = FileResponse(path, filename=filename, headers=headers)
     if filename is not None:
-        resp.headers["content-disposition"] = content_disposition(disposition_for(kind, filename), filename)
+        disposition = "attachment" if download else disposition_for(kind, filename)
+        resp.headers["content-disposition"] = content_disposition(disposition, filename)
     elif "Content-Disposition" in headers:
         resp.headers["content-disposition"] = headers["Content-Disposition"]
     return resp

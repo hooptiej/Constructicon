@@ -10,8 +10,8 @@ Covers `/f/<slug>/raw`:
 - a .py upload -> 200, `text/plain; charset=utf-8`, inline, nosniff, the sandbox CSP, the original name
   (plain and RFC 5987), the bytes unchanged; a UTF-16 source transcoded to UTF-8;
 - HTML disguised as .py (and an SVG-looking .js) -> never text/html, the CSP on, shown as text;
-- a binary "code" file and one over the size cap -> the download fallback (what /f/<slug> serves);
-- a type without a raw view (a .txt) -> exactly /f/<slug>'s answer;
+- a binary "code" file and one over the size cap -> the download fallback (attachment, /f/<slug>'s bytes);
+- a type without a raw view (a .txt) -> the download too;
 - roles and policy: a viewer gets it, anonymous is sent to sign in, a sensitive item is 404 for an
   editor who isn't its uploader and 200 for the uploader and the admin, a redacted one 404 / 410;
 - the code preview's link: "Open raw" -> /f/<slug>/raw in a new tab when the file is text, absent for a
@@ -159,16 +159,13 @@ bin_path = storage.path_for(db.get_by_slug(S["bin"])["stored_filename"])
 check("contract: binary .c has no raw codec", object_types.raw_text_codec(object_types.get_object_type("code"), bin_path) is None)
 r = tok.get(f"/f/{S['bin']}/raw")
 f = tok.get(f"/f/{S['bin']}")
-# What /f/<slug> answers for a .c depends on the platform's mimetypes table (Linux: text/x-csrc, a download;
-# Windows' registry may say text/plain), so the fallback is checked as "exactly /f/<slug>'s answer".
-check("binary .c raw: 200, exactly /f/<slug>'s answer (disposition, type, bytes)", r.status_code == 200
-      and r.headers.get("content-disposition") == f.headers.get("content-disposition")
-      and r.headers.get("content-type") == f.headers.get("content-type") and r.content == f.content == BIN,
-      (r.headers.get("content-disposition"), r.headers.get("content-type"), f.headers.get("content-type")))
-check("binary .c raw: not the raw-text view (no sandbox CSP added)", "content-security-policy" not in r.headers, dict(r.headers))
-if os.name != "nt":
-    check("binary .c raw (Linux): a download under its name", r.headers.get("content-disposition") == 'attachment; filename="firmware.c"',
-          r.headers.get("content-disposition"))
+# Python's mimetypes maps .c/.h to text/plain, so /f/<slug> itself shows a .c inline (#701); the raw
+# view's fallback is a download whatever /f/ would do.
+check("binary .c raw: 200, a download under its name", r.status_code == 200
+      and r.headers.get("content-disposition") == 'attachment; filename="firmware.c"', (r.status_code, r.headers.get("content-disposition")))
+check("binary .c raw: /f/<slug>'s type and bytes, not the raw-text view", r.headers.get("content-type") == f.headers.get("content-type")
+      and r.content == f.content == BIN and "content-security-policy" not in r.headers,
+      (r.headers.get("content-type"), f.headers.get("content-type"), r.headers.get("content-security-policy")))
 check("binary .c raw: nosniff", r.headers.get("x-content-type-options") == "nosniff")
 
 py_path = storage.path_for(db.get_by_slug(S["py"])["stored_filename"])
@@ -188,9 +185,11 @@ txt_spec = object_types.get_object_type(db.get_by_slug(S["txt"])["media_type"])
 check("contract: a type without raw_text_fn has no raw view", txt_spec.raw_text_fn is None
       and object_types.raw_text_codec(txt_spec, py_path) is None, txt_spec.key)
 r, f = tok.get(f"/f/{S['txt']}/raw"), tok.get(f"/f/{S['txt']}")
-check("a .txt's raw = exactly what /f serves", r.status_code == f.status_code == 200 and r.content == f.content
-      and r.headers.get("content-disposition") == f.headers.get("content-disposition")
-      and r.headers.get("content-type") == f.headers.get("content-type"), (r.headers.get("content-disposition"), f.headers.get("content-disposition")))
+check("a .txt's raw = /f's bytes and type, as a download", r.status_code == f.status_code == 200 and r.content == f.content
+      and r.headers.get("content-disposition") == 'attachment; filename="notes.txt"'
+      and r.headers.get("content-type") == f.headers.get("content-type"), (r.headers.get("content-disposition"), f.headers.get("content-type")))
+check("/f .txt itself is unchanged (inline, #701)", f.headers.get("content-disposition", "").startswith("inline;"),
+      f.headers.get("content-disposition"))
 check("contract: raw_url", object_types.raw_url("abc") == "/f/abc/raw")
 
 # ---- 4. roles and policy -------------------------------------------------------------------------

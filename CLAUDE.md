@@ -639,7 +639,8 @@ renamed `.pdf` is still HTML (attachment + CSP). The object page's link follows 
 sandbox CSP on every response (`content_security.serve_raw_text`). It is never served as its own type,
 so markup inside (HTML in a `.py`, a PHP template) shows as text and cannot run; UTF-16/32 is transcoded to
 UTF-8. When the type's function says no (binary, over `code.RAW_MAX_BYTES` = 32 MB), or the type has no
-raw view, the route answers exactly what `/f/<slug>` would (for code, the download). Check with
+raw view, the route answers with the download (`serve_file(..., download=True)`: `/f/<slug>`'s bytes and
+type, always `attachment`; Python maps `.c`/`.h` to `text/plain`, so `/f/` alone shows those inline). Check with
 `scripts/test_raw_view_703.py`. **Any new route that streams a stored file must go through
 `content_security.serve_file` (or add `file_headers`)**, never a bare `FileResponse` on a user file.
 Thumbnails are generated JPEGs (nosniff only). Check with `scripts/test_f_sandbox_610.py`. Longer term: a

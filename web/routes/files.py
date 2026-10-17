@@ -81,8 +81,8 @@ def get_file(slug: str):
 def get_raw_file(slug: str):
     """#703: the stored file as plain text in the browser (text/plain; charset=utf-8, inline, nosniff,
     sandbox CSP), for types that offer it (`raw_text_fn`: source code). A file the type won't show as
-    text (binary, too big), or a type without a raw view, gets the original exactly as /f/<slug> serves it
-    (for code: a download)."""
+    text (binary, too big), or a type without a raw view, is the download: /f/<slug>'s response, made
+    `attachment` (Python maps .c/.h to text/plain, so /f/ alone would show a binary .c inline)."""
     row = db.get_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -97,7 +97,7 @@ def get_raw_file(slug: str):
         raise HTTPException(status_code=404, detail="file missing on disk")
     codec = object_types.raw_text_codec(object_types.get_object_type(row.get("media_type")), path)
     if codec is None:
-        return content_security.serve_file(path, filename=row["filename"])
+        return content_security.serve_file(path, filename=row["filename"], download=True)
     return content_security.serve_raw_text(path, row["filename"], codec)
 
 

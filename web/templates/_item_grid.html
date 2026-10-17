@@ -38,7 +38,7 @@
   {% if grid.bulk %}
   <div class="selection-bar item-grid-bar" id="{{ g }}-bar" role="toolbar" aria-label="Bulk actions">
     <span class="selection-count" id="{{ g }}-selcount">0 selected</span>
-    <button type="button" class="ocr-retry-btn" id="{{ g }}-clear">{{ grid.labels.clear }}</button>
+    <button type="button" class="ocr-retry-btn" id="{{ g }}-clear">{{ grid.labels['clear'] }}</button>
     {% if 'add_to_card' in grid.bulk %}
     <select class="filter-select" id="{{ g }}-card" title="Add the selection to a card">
       <option value="">{{ grid.labels.add_to_card }}</option>

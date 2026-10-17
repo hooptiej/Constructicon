@@ -152,6 +152,11 @@ def main():
         ctl = controls(html, gid)
         seen[name] = ctl
         check(f"{name}: embeds the grid config", cfg is not None)
+        # #712: `labels.clear` once printed dict.clear itself ("<built-in method clear of dict ...>").
+        check(f"{name}: no Python method or object repr leaks into the page",
+              "<built-in method" not in html and "<bound method" not in html and " object at 0x" not in html)
+        check(f"{name}: the bulk bar's Clear button says Clear",
+              re.search(r'id="%s-clear">Clear</button>' % gid, html) is not None)
         cfg = cfg or {}
         check(f"{name}: draws every shared control (sort, type filter, bulk bar with all six actions)", core <= ctl, sorted(core - ctl))
         check(f"{name}: the bulk list is the shared one, in order", cfg.get("bulk") == list(item_grid.BULK_ACTIONS), cfg.get("bulk"))

@@ -6,18 +6,22 @@
 Same fixtures as test_ownership_sensitive.py: real sessions for an admin A, editors E1 and E2 and a
 viewer V, anonymous, and the per-run install token. E1 uploads a SENSITIVE file (only E1 and admins
 can see it) and E2 an ordinary one.
-  1. web, as E2: POST /api/delete, /api/bulk/add-to-project, /api/bulk/attach-tags (and sensitive /
-     provenance) with the hidden slug alone and mixed with visible ones -> 403 `forbidden` that says
+  1. web, as E2: POST /api/delete, /api/bulk/add-to-project, /api/bulk/attach-tags with the hidden
+     slug alone and mixed with visible ones -> 403 `forbidden` that says
      why (owner decision on #709: "tell them no, and why"): "Nothing was changed: 1 of the 3 selected
      items is marked sensitive, ...", details {refused, reason, reasons}, and NOTHING written (change
      log, rows, card members, tags, trash all unchanged); a restricted TYPE says so; two hidden = "2 of";
   2. unknown slugs keep their old meaning (skipped; a request of only unknown slugs is a 200 no-op);
      viewer 403, anonymous 401 (the route roles, unchanged);
   3. the uploader E1, the admin A and the token succeed on the same item;
-  4. the service ops refuse the same way (403 forbidden, AppError with details) when run as a non-admin actor (user:os_ed2): items.delete,
-     update, relate, unrelate, redact, membership add/remove, tags attach/detach/set/merge;
+  4. the service ops refuse the same way (403 forbidden, AppError with details) when run as a
+     non-admin actor (user:bv_ed2): items.delete, update, relate, unrelate, redact, membership
+     add/remove, tags attach/detach/set/merge;
   5. the MCP tools, run as a non-admin actor (what a per-user token would be, #604 step 5), refuse
-     with the same 403 forbidden, message and details, and write nothing; run as the MCP itself (admin) they still work.
+     with the same 403 forbidden, message and details, and write nothing; run as the MCP itself
+     (admin) they still work.
+Out of scope (owner, PR #727): bulk sensitive / provenance and set_sensitive keep their #603 / #553
+404 (test_ownership_sensitive.py); the single-item web routes keep their 404 too (#730).
 Prints `N failure(s)` or `all checks passed`.
 """
 
@@ -209,15 +213,6 @@ for label, (path, extra) in DOORS.items():
     refused_ok(f"E2 {label} (one of each)", r, before, MIXED_2_OF.format(n=3), [SECRET, CERT], "mixed")
 check("the web answer keeps `detail` = the message (the old page JS reads it)",
       FIRST.json().get("detail") == FIRST.json()["error"]["message"], FIRST.text[:200])
-for label, path, extra in (("sensitive", "/api/bulk/sensitive", {"sensitive": "true"}),
-                           ("provenance", "/api/bulk/provenance", {"provenance": "found"})):
-    before = snapshot()
-    r = C["E2"].post(path, data={"slugs": [VIS, SECRET], **extra}, headers=H["E2"])
-    refused_ok(f"E2 bulk {label} [visible, hidden]", r, before, SENS_1_OF.format(n=2), [SECRET], "sensitive")
-    before = snapshot()
-    r = C["E2"].post(path, data={"slugs": [VIS, UNKNOWN], **extra}, headers=H["E2"])
-    check(f"E2 bulk {label} [visible, unknown]: still 404 not_found for the unknown slug, nothing written",
-          r.status_code == 404 and err(r)[0] == "not_found" and not unchanged(before), r.text[:200])
 check("the hidden item still exists after all that", db.get_by_slug(SECRET) is not None)
 check("no tag 'bv-new-tag' was created", tags_svc.find("bv-new-tag") is None)
 
@@ -280,7 +275,6 @@ SERVICE = {
     "items.relate": lambda: items.relate(VIS, SECRET),
     "items.unrelate": lambda: items.unrelate(VIS2, SECRET),
     "items.redact": lambda: items.redact(SECRET),
-    "items.set_provenance": lambda: items.set_provenance([VIS, SECRET], None),
     "membership.add_files(missing_ok)": lambda: membership.add_files(CARD_ID, [VIS, SECRET], missing_ok=True, **membership.UI_EFFECTS),
     "membership.remove_files": lambda: membership.remove_files(CARD_ID, [SECRET]),
     "tags.attach": lambda: tags_svc.attach(SECRET, ["pwned"]),
@@ -348,7 +342,6 @@ MCP_CALLS = {
     "add_related": lambda: mcp.constructicon_add_related(VIS, SECRET),
     "remove_related": lambda: mcp.constructicon_remove_related(VIS, SECRET),
     "update": lambda: mcp.constructicon_update(SECRET, description="pwned"),
-    "set_sensitive": lambda: mcp.constructicon_set_sensitive(SECRET, True),
 }
 mcp._call_as_mcp = as_user("bv_ed2")
 try:

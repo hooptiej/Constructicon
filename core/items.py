@@ -309,8 +309,7 @@ def set_sensitive(slugs, sensitive, *, dry_run=False, actor=None, batch_id=None)
         sensitive_at, which Admin's restricted list shows as the reason.
       * Clearing: admin only (403 `forbidden` for anyone else, checked before the items are even
         looked up, so the answer says nothing about whether they exist).
-    Every slug must exist (else 404) and be visible to the actor (else #709's 403 forbidden saying
-    why; nothing written). An item
+    Every slug must exist and be visible to the actor (else 404 not_found, nothing written). An item
     already in the wanted state is left alone. data: {slugs, changed, sensitive}."""
     from . import actor as actor_ctx, policy, roles  # lazy: policy is imported by db at call time
     wanted = [slugs] if isinstance(slugs, str) else list(slugs or [])
@@ -321,10 +320,14 @@ def set_sensitive(slugs, sensitive, *, dry_run=False, actor=None, batch_id=None)
     who = actor_ctx.resolve(actor)
     if want and not roles.at_least(roles.role_of(who), roles.EDITOR):
         raise _forbidden("Marking an item sensitive needs an editor or an admin.")
-    rows, _ = policy.viewable_rows(wanted, actor=who)  # #709: unknown = 404, hidden = 403 saying why
-    for row in rows:
+    rows = []
+    for slug in wanted:
+        row = db.get_by_slug(slug)
+        if row is None or not policy.can_view(row, who):
+            raise NotFound(f"No item {slug!r}.")
         if not want and row.get("sensitive") and not policy.can_unmark_sensitive(who, row):
             raise _forbidden("Only the uploader or an admin can clear the sensitive flag.")
+        rows.append(row)
     batch_id = batch_id or changes.new_batch_id()
     now = time.time()
     with db.transaction(dry_run=dry_run):
@@ -345,8 +348,8 @@ def set_provenance(slugs, provenance, *, dry_run=False, actor=None, batch_id=Non
     """(#553) Sets the file provenance of several items as ONE imaged change-log row (op
     item_bulk_provenance), undoable with the generic undo: the file grids' bulk "Set provenance".
     `provenance` is validated per item exactly as update() validates it (an active key, or the
-    item's own current retired key; "" / None clears). Every slug must exist (else 404) and be visible
-    to the actor (else #709's 403 forbidden saying why; nothing written). An item already holding that value is left alone.
+    item's own current retired key; "" / None clears). Every slug must exist and be visible to the
+    actor (else 404 not_found, nothing written). An item already holding that value is left alone.
     data: {slugs, changed, provenance}."""
     from . import actor as actor_ctx, policy  # lazy: policy is imported by db at call time
     wanted = [slugs] if isinstance(slugs, str) else list(slugs or [])
@@ -355,11 +358,13 @@ def set_provenance(slugs, provenance, *, dry_run=False, actor=None, batch_id=Non
         raise InvalidInput("Give at least one item.", code="no_items")
     who = actor_ctx.resolve(actor)
     plan = []
-    rows, _ = policy.viewable_rows(wanted, actor=who)  # #709: unknown = 404, hidden = 403 saying why
-    for row in rows:
+    for slug in wanted:
+        row = db.get_by_slug(slug)
+        if row is None or not policy.can_view(row, who):
+            raise NotFound(f"No item {slug!r}.")
         value = provenance_options.validate("file", provenance or None, current=row.get("provenance"))
         if value != row.get("provenance"):
-            plan.append((row["slug"], value))
+            plan.append((slug, value))
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         with db.ImageLog(OP_BULK_PROVENANCE, actor, batch_id, wanted) as log:

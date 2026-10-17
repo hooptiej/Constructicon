@@ -431,14 +431,16 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   future per-user token are covered: `policy.viewable_rows(slugs, missing_ok=...)` for a set
   (`items.delete`, `unrelate`, `membership.add_files` / `remove_files`, `tags.merge_item_tags`; bulk
   delete, add-to-card and tag), `items.get_item` / `tags._get_item` for one item (update, caption,
-  relate, redact, attach / detach / set tags), `set_sensitive` / `set_provenance`. **Owner decision
-  2026-10-17: "tell them no, and why."** A hidden item refuses the WHOLE request with 403 `forbidden`
-  (`policy.refusal`): "Nothing was changed: 1 of the 3 selected items is marked sensitive, and only its
-  uploader or an admin can change it." (or "a restricted file type", or both), `details: {refused:
-  [slugs], reason: sensitive | restricted_type | mixed, reasons: {slug: reason}}`; nothing written.
-  Same code, message and details over MCP. The grid's bulk bar shows that message as is. An unknown
-  slug keeps its old meaning (`missing_ok` skips it, else 404). The single-item WEB routes still answer
-  404 first (`viewable_item`, the read-door rule above). Check: `scripts/test_bulk_visibility_709.py`.
+  relate, redact, attach / detach / set tags). **Owner decision 2026-10-17: "tell them no, and
+  why."** A hidden item refuses the WHOLE request with 403 `forbidden` (`policy.refusal`): "Nothing
+  was changed: 1 of the 3 selected items is marked sensitive, and only its uploader or an admin can
+  change it." (or "a restricted file type", or both), `details: {refused: [slugs], reason: sensitive |
+  restricted_type | hidden | mixed, reasons: {slug: reason}}`; nothing written. Same code, message and
+  details over MCP. The grid's bulk bar shows that message as is. An unknown slug keeps its old
+  meaning (`missing_ok` skips it, else 404). **Not this rule (owner, PR #727):** `set_sensitive` /
+  `set_provenance` (bulk and single) keep their own 404 for a hidden item, and the single-item WEB
+  routes still answer 404 first (`viewable_item`, the read-door rule above; saying why there is #730).
+  Check: `scripts/test_bulk_visibility_709.py`.
 - **Adding a door** (anything that hands out an item or a list of items, web or MCP): call the
   policy in it, and add it to `DOORS` in `scripts/check_policy_doors.py`. That script (AST, no
   server) fails when a known door stops calling `policy.`, when a GET route or MCP read tool reads

@@ -1043,8 +1043,7 @@ def constructicon_set_sensitive(slug: str, sensitive: bool = True, dry_run: bool
     MCP acts as admin with the install token). One change-log entry: constructicon_undo(batch_id)
     reverses it. Opening a sensitive item (get / download / view) is recorded in its access log.
     Returns {ok, dry_run, batch_id, slug, sensitive, changed: [slugs actually changed], item}.
-    Errors: not_found (no such item), forbidden (an item you may not see, #709: the message says why
-    and details.refused names it; or clearing without admin).
+    Errors: not_found (no such item, or one you may not see), forbidden (clearing without admin).
     """
     result = items.set_sensitive(slug, sensitive, dry_run=dry_run)
     return {"ok": True, "dry_run": dry_run, "batch_id": result.batch_id, "slug": slug,

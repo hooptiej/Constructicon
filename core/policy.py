@@ -13,9 +13,10 @@ item (or a list of items) asks this module:
     has the rows in hand;
   * the static site export and the project zip (anything that leaves the install)
     ->  `filter_exportable(rows)`.
-  * writes (#709): the service ops refuse an item the actor can't see (403 forbidden saying why), before they
-    write: `viewable_rows(slugs)` for a set (items.delete, membership add/remove, tag merge),
-    `require_view` / `can_view` for one item (items.get_item, tags' item lookup, set_sensitive).
+  * writes (#709): the service ops refuse an item the actor can't see (403 forbidden saying why)
+    before they write: `viewable_rows(slugs)` for a set (items.delete, membership add/remove, tag
+    merge) and for one item (items.get_item, tags' item lookup). set_sensitive / set_provenance keep
+    their own `can_view` check and 404 (#603 / #553).
 
 scripts/check_policy_doors.py fails if a known door stops calling this module.
 
@@ -186,8 +187,8 @@ def refusal(refused, total):
 
 
 def viewable_rows(slugs, *, missing_ok=False, actor=None):
-    """(#709) The write-side door for a SET of items (bulk delete, add-to-card, tagging, sensitive,
-    provenance; the service ops call it before they write anything). Returns (rows, missing): the
+    """(#709) The write-side door for a SET of items (bulk delete, add-to-card, tagging, and the
+    single-item ops; the service ops call it before they write anything). Returns (rows, missing): the
     item rows in the order given (blanks and repeats dropped) when the actor may see EVERY one.
       * An unknown slug raises NotFound ("No item 'x'."), unless `missing_ok` (the bulk paths that
         always skipped unknown slugs): then it is left out and listed in `missing`.

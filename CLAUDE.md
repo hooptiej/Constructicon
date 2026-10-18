@@ -1416,6 +1416,29 @@ already ranks first), so it is the same field as the item page's DATES group.
   its start / end.
 - Not built: dragging the axis end caps to set the card's Timeline start/end, dragging a whole stack.
 
+## Home timeline: the radio dial (#775)
+
+The home page's timeline is a horizontal dial across the top (`static/js/radio-dial.js`, maths in
+`static/js/radio-dial-math.js`), styled like the card page's tuner. It replaced the vertical left rail
+(`timeline-rail.js` and the `-shifted` layout offsets are gone). Data: the page's `timeline_projects`
+(every card with a real start, children included), embedded as a nonce'd JSON block.
+- **Behaviour (owner decisions on #775):** a fixed needle over a sliding band; about a decade visible
+  (fewer on a narrow screen, so every year label fits); drag (pointer events), wheel / trackpad and the
+  arrow keys (Shift or PageUp/Down = a year, Home/End = the ends) slide it. One tick per card at its start.
+  **Browse only:** it never scrolls or filters the cards. Starts **untuned** (needle mid-range, the readout
+  shows static); once moved, the readout names the cards within a few px of the needle, with dates and
+  links, capped with "+N more". **Marks never grow or zoom** (the old rail's hover-zoom was a time sink).
+- **Feel values** live in one place: `DIAL_DEFAULTS` in `radio-dial.js` (span, tolerance, inertia, snap,
+  tick density, glow) plus the `--dial-*` CSS variables on `.radio-dial`. **The tuning panel**
+  (`radio-dial-tuning.js`, live sliders, "Copy values") shows only on a dev instance (`CONSTRUCTICON_ENV=dev`)
+  or with `/?tune=1` for an admin. Bake the owner's chosen numbers into `DIAL_DEFAULTS`.
+- Empty, malformed or unloadable data shows a plain message in the chassis, never a blank bar.
+- Pass 2 (not built): start-to-end span bars and a per-year density glow; their empty layers
+  (`.radio-dial-layer-spans`, `-density`) and no-op `_renderSpans` / `_renderDensity` are the hooks.
+- Checks: `node scripts/test_radio_dial_775.js` (maths), `node scripts/test_radio_dial_ui_775.js` (the
+  widget against a fake DOM), `scripts/test_radio_dial_775.py` (the rendered page, the rail gone, who sees
+  the tuning panel).
+
 ## Dates: real, approximate, undated (#725, "Import date is not a birthday")
 
 Owner, 2026-10-17: stop using the import date for anything but the import date. **An item's date is
@@ -1429,8 +1452,8 @@ time (`timestamp`) is shown only as **"Imported <date>"** (the item page's heade
 `real_dates(items)` skips them.
 - **Card spans** (`resolve_project_span`) are built from real dates only; the card's own Timeline
   start/end overrides win; an ongoing card's open end ("... - now") stays. A card with nothing real and no
-  overrides has span **(None, None)**, not its `created_at` (faces show no date line, the gallery rail
-  leaves it off, the DATES group says "No real dates yet").
+  overrides has span **(None, None)**, not its `created_at` (faces show no date line, the home page's
+  radio dial leaves it off, the DATES group says "No real dates yet").
 - **What an item SHOWS** is `core/item_dates.py` `item_date(row)`: the real date; else, **when its card
   has a real-dated range, that range, approximately: "≈ Nov 2019 - Jul 2021 · from Desk Build"**; else
   **"Undated"**. Derived at read time, NEVER stored as `content_date`, and never an input to any span (spans
@@ -2381,7 +2404,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
   - pages, search, dates, UI: `test_search_543`, `test_mcp_search_cap_697` (MCP text previews), `test_item_title_542`, `test_mountain_time_544` (`.py` and
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
-    `test_timeline_drag_ui` (`.js`), `check_item_cards`, `check_curator_queue` (live);
+    `test_timeline_drag_ui` (`.js`), `test_radio_dial_775` (`.py` and `.js`) with `test_radio_dial_ui_775` (`.js`),
+    `check_item_cards`, `check_curator_queue` (live);
   - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `check_dead_code`
     (#546: the reference scan, **report only**, never fails: module-level functions, classes and
     UPPER_CASE constants in `core/` and `web/` that nothing else names, the ones only tests use, and

@@ -1,5 +1,6 @@
 // Horizontal, video-editor-style timeline for a project's detail page --
-// distinct from the gallery page's vertical rail (web/static/js/timeline-rail.js).
+// distinct from the home page's radio dial (web/static/js/radio-dial.js, #775), which
+// replaced the old vertical rail (timeline-rail.js).
 // Sub-projects render as blocks on a track (they're spans, like clips);
 // this project's own items render as point events below the track (like
 // markers/keyframes). See

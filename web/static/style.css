@@ -1101,196 +1101,234 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 }
 .lightbox-close:hover { border-color: var(--accent); }
 
-/* Timeline feature: shared rail used on the gallery page (project spans)
-   and a project detail page (item points). See
-   docs/superpowers/specs/2026-09-11-constructicon-timeline-design.md.
-
-   No card, no background of its own -- a real vertical axis with a small
-   perpendicular tick at every entry and larger ticks + labels at year and
-   month boundaries, floating directly on the page. Fixed to the viewport
-   (doesn't scroll with the page) and fit to the full window height via
-   flex space-between, so the whole chronology is visible with no
-   scrollbar. .app-main-shifted (added to the page's main content when the
-   rail is present) pushes the rest of the page over so there's real empty
-   space behind the rail instead of page content running underneath it.
-
-   Every year between the earliest and latest entry gets a marker, even
-   ones with zero entries -- a real chronology has to show the gaps
-   between activity, not just the years something happened (a version
-   before this only emitted a marker for years that actually had an
-   entry, so a real 2017-to-2026 span read as two labels back to back with
-   no sense that 9 quiet years separated them).
-
-   Hovering an entry shows a lightweight popover positioned next to it (no
-   backdrop -- meant for glancing while moving through the list); clicking
-   navigates straight to the real page. An earlier version had this
-   backwards (click opened a heavier modal-with-backdrop, no hover at
-   all). */
-.timeline-rail {
-  /* Spans the FULL viewport height, header included -- not just the area
-     below it. It's positioned/z-indexed above the header (which is plain
-     unpositioned flow, so a fixed+z-indexed element already paints over
-     it regardless of DOM order) and its own content -- just tick marks
-     poking left of it now, no border -- sits entirely inside the header's
-     empty left margin (32px padding, and the shifted brand text starts
-     well past that at 102px), so it runs harmlessly behind/through the
-     header bar rather than covering anything in it.
-     Width is capped at 90px specifically so its right edge (left:12 +
-     width) stays clear of x=102px -- where .app-main-shifted's own
-     margin+padding puts the real page content's left edge -- so the
-     rail's mask background (below) can't creep over the Projects card
-     the way it did at the old 110px width. */
-  position: fixed;
-  left: 12px;
-  top: 12px;
-  bottom: 12px;
-  width: 84px;
-  z-index: 45;
-  /* Solid, matching the page's own background rather than transparent --
-     since this now runs up through the header/hazard-tape (see above),
-     a solid fill acts as a mask over whatever's behind it there, reading
-     as a clean cutout rather than the rail overlapping the tape. No
-     border anymore either, per the same "cut a section out" look --
-     the tick marks (below) still carry the axis on their own. */
-  background: var(--bg);
-  padding: 0 0 0 16px;
-  box-sizing: border-box;
-  overflow: visible;
+/* #775 "Tune in to the past": the home page timeline as a sliding radio dial (radio-dial.js).
+   Replaced the old vertical left rail (.timeline-rail, timeline-rail.js) and its -shifted layout
+   offsets. Same look as the card page's tuner below (.project-video-timeline-panel): near-black
+   chassis, faint green backlight, hazard-yellow axis and needle, phosphor-green readouts.
+   A fixed needle at the window's centre; the band slides under it (radio-dial.js sets its width
+   and translateX). Marks are static: no zoom-on-hover (#775's lesson), the readout carries detail.
+   Feel values: CSS variables here, JS constants in radio-dial.js's DIAL_DEFAULTS (the dev tuning
+   panel edits both live). */
+.radio-dial {
+  --dial-glow: 0.10;          /* backlight intensity (tuning panel: "Backlight glow") */
+  --dial-window-h: 66px;      /* the sliding window's height */
+  --dial-axis-y: 28px;        /* the axis line, from the window's top */
+  --dial-card-tick-h: 14px;   /* a card's tick, standing on the axis */
+  --dial-year-tick-h: 18px;   /* a year's tick, centred on the axis */
+  --dial-month-tick-h: 8px;
+  --dial-phosphor: var(--accent-hover);
+  --dial-phosphor-glow: 0 0 4px rgba(166, 212, 119, 0.85), 0 0 12px rgba(166, 212, 119, 0.35);
+  --dial-yellow-glow: 0 0 6px rgba(232, 185, 58, 0.7);
 }
-.app-main-shifted {
-  margin-left: 70px;
+.radio-dial-chassis {
+  padding: 10px 16px 10px;
+  background: #0a0d12;
+  border: 1px solid #232a36;
+  border-radius: 8px;
+  box-shadow: 0 0 28px rgba(166, 212, 119, var(--dial-glow)), inset 0 0 46px rgba(166, 212, 119, calc(var(--dial-glow) / 2));
 }
-.brand-shifted {
-  /* Only set on the gallery/home page (see _header.html), where the fixed
-     timeline rail occupies the same left column below this header --
-     shifted the same 70px as .app-main-shifted so the brand lines up with
-     the content that's actually making room for the rail, instead of
-     sitting above the rail's own empty tick-mark gutter. */
-  margin-left: 70px;
+.radio-dial-message {
+  /* Empty, loading or failed (#775 item 9: never a blank bar). */
+  margin: 8px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--dial-phosphor);
+  text-shadow: var(--dial-phosphor-glow);
 }
-.timeline-track {
+.radio-dial-window {
+  position: relative;
+  height: var(--dial-window-h);
+  overflow: hidden;
+  cursor: grab;
+  touch-action: pan-y;        /* a vertical swipe still scrolls the page; a sideways one tunes */
+  user-select: none;
+  -webkit-user-select: none;
+  border-radius: 4px;
+  outline: none;
+}
+.radio-dial-window:focus-visible { box-shadow: 0 0 0 2px var(--hazard-yellow); }
+.radio-dial-window--dragging { cursor: grabbing; }
+.radio-dial-window::before,
+.radio-dial-window::after {
+  /* The dial glass darkening toward its edges. */
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 48px;
+  z-index: 2;
+  pointer-events: none;
+}
+.radio-dial-window::before { left: 0; background: linear-gradient(to right, #0a0d12, rgba(10, 13, 18, 0)); }
+.radio-dial-window::after { right: 0; background: linear-gradient(to left, #0a0d12, rgba(10, 13, 18, 0)); }
+.radio-dial-band {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  will-change: transform;
+}
+.radio-dial-layer-density,
+.radio-dial-layer-spans,
+.radio-dial-ticks {
+  /* density and spans are pass 2 hooks (#775): empty for now. */
+  position: absolute;
+  inset: 0;
+}
+.radio-dial-axis {
+  position: absolute;
+  top: var(--dial-axis-y);
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--hazard-yellow);
+  box-shadow: var(--dial-yellow-glow);
+}
+.radio-dial-year {
+  position: absolute;
+  top: calc(var(--dial-axis-y) + 1px - var(--dial-year-tick-h) / 2);
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  height: 100%;
+  align-items: center;
 }
-.timeline-year-marker {
-  position: relative;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent);
-  letter-spacing: 0.03em;
+.radio-dial-year-mark {
+  width: 2px;
+  height: var(--dial-year-tick-h);
+  background: var(--hazard-yellow);
+  box-shadow: 0 0 4px rgba(232, 185, 58, 0.5);
 }
-.timeline-year-marker::before {
-  /* the year tick: a perpendicular mark crossing the axis, bigger than a
-     per-entry tick. .timeline-rail's padding-box edge (no border anymore --
-     the rail's own background masks the axis now, see .timeline-rail) sits
-     16px to the left of this element's own box -- left:-24px/width:14px
-     spans -8px to +6px past that edge, like a ruler's major tick poking
-     out past the rail into the page margin. */
-  content: '';
+.radio-dial-year-label {
+  margin-top: 1px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  line-height: 1.1;
+  color: var(--dial-phosphor);
+  text-shadow: var(--dial-phosphor-glow);
+  white-space: nowrap;
+}
+.radio-dial-month {
   position: absolute;
-  left: -24px;
-  top: 50%;
-  width: 14px;
-  height: 2px;
-  background: var(--accent);
-  transform: translateY(-50%);
+  top: calc(var(--dial-axis-y) + 1px - var(--dial-month-tick-h) / 2);
+  width: 1px;
+  height: var(--dial-month-tick-h);
+  background: rgba(232, 185, 58, 0.55);
 }
-.timeline-month-marker {
-  /* Medium tier, between the year marker and a bare entry tick -- the
-     chronology cue within a year (or a year with no marker of its own
-     yet, since real data can span just one or two years, where year
-     markers alone give almost no temporal texture). */
-  position: relative;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text-3);
-  letter-spacing: 0.02em;
-}
-.timeline-month-marker::before {
-  /* medium tick: same idea as the year tick, smaller. */
-  content: '';
+.radio-dial-card {
+  /* One per card at its start date, standing on the axis. Static: never grows. */
   position: absolute;
-  left: -21px;
-  top: 50%;
-  width: 11px;
-  height: 2px;
-  background: var(--text-3);
-  transform: translateY(-50%);
+  top: calc(var(--dial-axis-y) - var(--dial-card-tick-h));
+  width: 2px;
+  height: var(--dial-card-tick-h);
+  margin-left: -1px;
+  background: var(--dial-phosphor);
+  box-shadow: 0 0 3px rgba(166, 212, 119, 0.7);
 }
-.timeline-entry-row {
-  position: relative;
+.radio-dial-card--child { height: calc(var(--dial-card-tick-h) * 0.6); top: calc(var(--dial-axis-y) - var(--dial-card-tick-h) * 0.6); opacity: 0.75; }
+.radio-dial-needle {
+  /* Fixed at the window's centre; the band slides under it. */
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  z-index: 3;
+  background: var(--hazard-yellow);
+  box-shadow: 0 0 8px rgba(232, 185, 58, 0.9), 0 0 2px rgba(232, 185, 58, 1);
+  pointer-events: none;
+}
+.radio-dial-needle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -5px;
+  border: 6px solid transparent;
+  border-top-color: var(--hazard-yellow);
+  border-bottom: 0;
+}
+.radio-dial-readout {
+  /* What's under the needle, phosphor green. Wraps on a narrow screen. */
   display: flex;
-  align-items: center;
-}
-.timeline-entry-row::before {
-  /* the per-entry tick: same idea as the year tick, smaller (minor tick). */
-  content: '';
-  position: absolute;
-  left: -20px;
-  top: 50%;
-  width: 8px;
-  height: 1px;
-  background: var(--border-strong);
-  transform: translateY(-50%);
-}
-.timeline-entry {
-  /* Time is the primary content of a row now, not the item itself -- this
-     is a month/day label, not a thumbnail. Hover shows .timeline-popover
-     (the "what was this" preview); click navigates straight to the real
-     page. */
-  all: unset;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: baseline;
   justify-content: center;
-  min-width: 28px;
-  height: 18px;
-  padding: 0 4px;
-  border-radius: 3px;
-  border: 1px solid var(--border-strong);
-  box-sizing: border-box;
-  font-size: 10px;
+  gap: 4px 14px;
+  min-height: 24px;
+  margin-top: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  color: var(--dial-phosphor);
+  text-shadow: var(--dial-phosphor-glow);
+}
+.radio-dial-freq { font-size: 15px; font-weight: 600; letter-spacing: 0.04em; }
+.radio-dial-stations {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.radio-dial-station { color: var(--dial-phosphor); text-decoration: none; border-bottom: 1px dotted rgba(166, 212, 119, 0.5); }
+.radio-dial-station:hover,
+.radio-dial-station:focus-visible { color: var(--text); border-bottom-color: var(--hazard-yellow); outline: none; }
+.radio-dial-station-date { margin-left: 6px; opacity: 0.7; font-size: 12px; }
+.radio-dial-quiet,
+.radio-dial-more { opacity: 0.6; }
+.radio-dial-static {
+  /* Untuned: between stations. A faint flicker, off for reduced motion. */
+  opacity: 0.55;
+  letter-spacing: 0.08em;
+  animation: radio-dial-static 1.6s steps(6) infinite;
+}
+@keyframes radio-dial-static {
+  0%, 100% { opacity: 0.55; }
+  33% { opacity: 0.35; }
+  66% { opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) { .radio-dial-static { animation: none; } }
+.radio-dial-note {
+  margin: 4px 0 0;
+  font-size: 12px;
   color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-  /* #292: a real chronology packs rows down to just a few px tall
-     (timeline-rail.js's _layout() divides the rail's height by entry
-     count), leaving the date label unreadably small. transform: scale
-     grows the whole pill -- text included -- without disturbing the
-     JS-computed row layout underneath it (transform is paint-only, no
-     reflow), so neighboring rows don't jump when one entry magnifies.
-     transform-origin left instead of center: it grows away from the
-     rail's own tick axis (to its left, see .timeline-entry-row::before)
-     and into the page's open margin, rather than over the axis itself. */
-  position: relative;
-  transform-origin: left center;
-  transition: transform 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  text-align: center;
 }
-.timeline-entry:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--bg);
-  box-shadow: 0 2px 10px rgba(0,0,0,0.45);
-  transform: scale(2.04);
-  z-index: 20;
+.radio-dial-tune {
+  /* Dev-only tuning panel (#775), under the chassis. */
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px dashed var(--border-stronger);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-2);
 }
-.timeline-entry-span {
-  border-width: 2px;
+.radio-dial-tune summary { cursor: pointer; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.radio-dial-tune-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 6px 18px;
+  margin: 8px 0;
 }
-.timeline-entry-child {
-  opacity: 0.75;
+.radio-dial-tune-row { display: grid; grid-template-columns: 1fr 110px 44px; align-items: center; gap: 8px; }
+.radio-dial-tune-row output { font-family: 'JetBrains Mono', monospace; text-align: right; }
+.radio-dial-tune-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.radio-dial-tune-status { overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .radio-dial-chassis { padding: 8px 8px; }
+  .radio-dial-year-label { font-size: 13px; }
+  .radio-dial-window::before,
+  .radio-dial-window::after { width: 24px; }
 }
 .timeline-popover {
-  /* No backdrop -- meant to be glanced at while moving through the list,
-     not a modal dialog. Position (left/top) is set by JS per hover,
-     placed to the entry's right. Shared base class -- also used by
-     project-video-timeline.js's horizontal popover, which floats directly
+  /* No backdrop -- meant to be glanced at, not a modal dialog. Position
+     (left/top) is set by project-video-timeline.js per hover; it floats
      over its own hovered element with no deliberate overlap and no
-     hover-bridging logic, so pointer-events stays `none` here (the
-     original, click/hover-through behavior both users were built against).
-     See .timeline-popover-hoverable below for the vertical rail's own
-     opt-in override. */
+     hover-bridging logic, so pointer-events stays `none` (click/hover
+     passes through). The gallery rail's hoverable variant went with the
+     rail (#775). */
   position: fixed;
   z-index: 50;
   display: none;
@@ -1304,20 +1342,6 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   padding: 10px;
   box-sizing: border-box;
   pointer-events: none;
-}
-.timeline-popover-hoverable {
-  /* #292: the vertical rail's popover deliberately overlaps its magnified
-     pill so they read as one object -- that only works if the popover can
-     itself catch mouseenter to keep itself open while the mouse crosses
-     from the pill onto the card (see timeline-rail.js's _ensurePopover/
-     _scheduleHidePopover). Its footprint sits to the right of the rail's
-     own entry column, so this doesn't intercept clicks on other entries.
-     Being a real hit-test target now also means a click on the card lands
-     on it instead of passing through to the pill underneath -- given its
-     own click handler (same navigate-to-entry as the pill) to match, so
-     cursor: pointer here isn't a false promise. */
-  pointer-events: auto;
-  cursor: pointer;
 }
 .timeline-popover.visible {
   display: flex;
@@ -1339,7 +1363,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 }
 
 /* Project detail page: horizontal, video-editor-style in-page timeline
-   (distinct from the gallery page's vertical rail above). Sub-projects
+   (the home page's dial above, #775, borrows its look). Sub-projects
    are blocks on a track (they're spans); this project's own items are
    point events below the track. Position is continuous/proportional --
    workable here since one project's own blocks/events are a single
@@ -1348,8 +1372,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
    preview -- same shape, just positioned above the hovered element
    instead of to its right (see project-video-timeline.js).
 
-   Unlike the gallery rail (deliberately no card/background), this one
-   gets a real contrasting panel with a label -- it's an embedded page
+   Unlike the old gallery rail (no card/background), this one gets a
+   real contrasting panel with a label -- it's an embedded page
    element, not something floating over the viewport, and needs to read
    as its own distinct "timescale" instrument at a glance. */
 .project-video-timeline-panel {

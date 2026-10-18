@@ -426,12 +426,26 @@ if WRITE_GOLDEN:
 # ---- 1 + 2. alias parity and the new call ----------------------------------------------------------------
 print("--- 1/2. every alias: same JSON as before, and the new call does the same ---")
 GOLD = json.load(open(GOLDEN, encoding="utf-8"))["results"]
+# Schema added AFTER the golden file was written: a new column shows up in row images, a new table in
+# delete-all's counts. Leave those keys out of the comparison (the golden file stays the pre-#746 record).
+ADDED_SINCE_746 = {"private",        # #604 step 3: projects.private, hobby_settings.private
+                   "share_members"}  # #604 step 3: delete-all clears the member lists
+
+
+def _strip_added(value):
+    if isinstance(value, dict):
+        return {k: _strip_added(v) for k, v in value.items() if k not in ADDED_SINCE_746}
+    if isinstance(value, list):
+        return [_strip_added(v) for v in value]
+    return value
+
+
 aliases_seen = set()
 for label, alias, akw, new, nkw, read in SCEN:
     aliases_seen.add("constructicon_" + alias)
     restore()
-    got = as_json(call(alias, **akw))
-    check(f"alias {label}: same JSON as before #746", got == GOLD.get(label),
+    got = _strip_added(as_json(call(alias, **akw)))
+    check(f"alias {label}: same JSON as before #746", got == _strip_added(GOLD.get(label)),
           f"got {json.dumps(got)[:300]} want {json.dumps(GOLD.get(label))[:300]}")
     after_alias = dump_db()
     restore()

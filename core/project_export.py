@@ -54,7 +54,11 @@ def export_project(project_id_or_slug):
             "slug": project["slug"],
             "title": project["title"],
             "description": project.get("description"),
-            "status": card_rules.export_status(project),
+            # #545: the live status (the frozen v1 `status` word is retired)
+            "kind": project.get("kind") or "project",
+            "stage": project.get("stage"),
+            "stage_label": card_rules.stage_label(project.get("stage")),
+            "stop_reason": project.get("stop_reason"),
             "writeup_body": writeup_body,
         },
         "items": [],

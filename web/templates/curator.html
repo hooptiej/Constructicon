@@ -7,7 +7,7 @@
 <div class="app-main">
   <div>
     <h1 class="page-title">Curator</h1>
-    <p class="page-subtitle">The queue of what needs you, then the state of the beast: project health scores, status distribution and gap buckets.</p>
+    <p class="page-subtitle">The queue of what needs you, then the state of the beast: project health scores, cards per stage and gap buckets.</p>
   </div>
 
   <div class="curator-grid">
@@ -284,9 +284,9 @@ async function loadCuratorDashboard() {
 }
 
 function renderCuratorDashboard(data) {
-  // Projects by status
+  // Cards by stage (#545: the stage is the only status)
   const statusList = document.getElementById('curator-status-list');
-  const statusHtml = Object.entries(data.projects_by_status || {})
+  const statusHtml = Object.entries(data.projects_by_stage || {})
     .sort()
     .map(([status, count]) => `
       <div class="status-item">
@@ -329,7 +329,7 @@ function renderCuratorDashboard(data) {
     <div class="project-score-item ${score.band}" title="${score.unmet.map(u => u.dimension + ':' + u.item).join(', ')}">
       <div class="project-score-title">
         <a href="/project/${score.slug}" class="project-score-title-link">${score.title}</a>
-        <span class="project-status-badge">${score.status}</span>
+        <span class="project-status-badge">${score.stage_label}</span>
         ${score.silent ? '<span class="project-status-badge" style="background: #999;">silent</span>' : ''}
       </div>
       <div class="project-score-gauge">

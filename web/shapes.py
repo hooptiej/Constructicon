@@ -537,7 +537,7 @@ def _to_project_option(project):
     dropdown itself from offering a choice guaranteed to be rejected).
     writeup_slug (#156) is also included so the backfill script can see
     which projects already have writeups."""
-    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"], "parent_id": project.get("parent_id"), "writeup_slug": project.get("writeup_slug"), "kind": project.get("kind") or "project", "activity": project.get("activity"), "stage": project.get("stage"), "stop_reason": project.get("stop_reason")}
+    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "parent_id": project.get("parent_id"), "writeup_slug": project.get("writeup_slug"), "kind": project.get("kind") or "project", "activity": project.get("activity"), "stage": project.get("stage"), "stop_reason": project.get("stop_reason")}
 
 
 # --- Blog Entries API ---

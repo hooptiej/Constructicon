@@ -120,7 +120,8 @@ the date and commit forward when you re-verify.
     (who did it), `errors.py` (`AppError` family), `besteffort.py` (logged, rate-limited non-fatal
     failures). See "Service layer" and "Actor and errors".
   - *Rules and policy (pure or near-pure):* `card_rules.py` (card enums, labels, validation, no DB),
-    `card_level.py` (the 0-5 curation pips), `card_payload.py` (slim item records for grids),
+    `card_level.py` (the 0-5 curation pips, and the one definition of the checks the Curator score
+    shares with them, #545), `card_payload.py` (slim item records for grids),
     `timeline.py` (effective-date resolution; `source_datetime_to_epoch`), `datefmt.py` (the one place
     a stored date becomes text, in Mountain Time, #544), `item_title.py` (`title_of`, #542),
     `markdown_render.py`, `roles.py` + `policy.py` (who may use a door / see an item; `access_log.py`
@@ -1262,7 +1263,8 @@ already ranks first), so it is the same field as the item page's DATES group.
 The dynamic app freezes into a self-contained static site (relative links, media bundled), which can
 be previewed in the app and pushed to a GitHub Pages repo. All of it is admin-only.
 - **Build** (`core/site_export.py` `build_site(config, out_dir=None)`, `POST /api/export/build`):
-  renders `web/export_templates/` for the chosen cards (default: `card_rules.export_included_by_default`)
+  renders `web/export_templates/` for the chosen cards (default: `card_rules.export_included_by_default`,
+  every in-progress card that isn't a collection, by its stage alone since #545)
   and `ready` blog entries, copies each item's media and thumbnail once, and returns a report with
   counts and `warnings`. What may leave the install is `policy.filter_exportable` (restricted and
   sensitive items never do, whoever asks), and only the current revision of a chain goes in. The
@@ -1303,6 +1305,23 @@ Two ideas share the nav rail's "Curator" tab and one queue:
   into ONE list grouped by card (order rules in its docstring). Only the owner's **Defer** / **Dismiss**
   is persisted (`curator_dismissals`, keyed by the item's `key`; a question can be deferred, never
   dismissed).
+- **One report card (#545, owner decisions 2026-10-17).** The Curator score and the card pips
+  (`core/card_level.py`) used to grade the same card differently. Now the checks they share are
+  defined once, in `card_level`: `check_cover`, `check_writeup` (the write-up has **>= 200
+  characters**, spaces not counted) and `check_dates` (**>= 80%** of the card's files, write-up
+  excluded, have a real date per `timeline.has_real_date`, or both the card's start and end are set).
+  `curator.score_project` calls them for `cover_image` / `writeup_body` / `content_dates`, and those
+  checklist rows carry the pips' `reason`, which is also the summary of the matching nudge
+  (`missing_writeup`, `missing_dates`). A new shared rule goes into `card_level`, never into both.
+  **The stage is the only status:** `curator.STAGE_APPLICABILITY` is keyed on `card_rules.STAGES`
+  (done / in use: every check; in progress: the timeline gap and the highlight excused; paused,
+  idea, stopped: silent), plus a reference collection (kind collection, provenance none or
+  referenced) is silent. Scores and the dashboard return `stage` / `stage_label`
+  (`projects_by_stage`), never a v1 word; a nudge's `status_weight` is 3 for done / in use, else 1;
+  the stale nudge (`stale_wip`, key unchanged) is for in-progress cards. The v1 adapters
+  (`card_rules.curator_status`, `export_status`, `cards.curator_status_for`, `STATUS_APPLICABILITY`,
+  the means-to-an-end scoring, `db.PROJECT_STATUSES`) are gone. Check with
+  `scripts/test_one_report_card_545.py`.
 - **Where it surfaces:** the **Curator tab in the nav rail** (`_nav_tabs.html`) opens the Curator drawer
   (`_nudges_drawer.html`, rendered by `static/js/curator-queue.js`); its count badge is
   `GET /api/curator/queue?summary=1` and refreshes on the `pending-decisions-changed` /
@@ -1652,10 +1671,12 @@ One generated file of every registered type and extension, to drop-test a new in
   #551 item 3 no read resolves anything: stale questions are left out of `list_open()` and resolved only
   by the explicit, logged `decisions.sweep_stale()` (see "Service layer").
 - **Card kind + status (V2, piece 1)** — `projects.kind` plus
-  `activity`/`stage`/`stop_reason` are the *live* status; legacy
-  `projects.status` is **frozen** (the static export's default card selection,
-  `card_rules.export_included_by_default`, #512, still reads it for a card whose stage never changed,
-  and the live stage once it has).
+  `activity`/`stage`/`stop_reason` are the *live* status, and the stage is the ONLY status (#545):
+  legacy `projects.status` is **frozen and retired**. No live code reads it (the Curator, the export,
+  every API / page / MCP read go by the stage; no read returns the old word). It is still written
+  with its default on create, and only the one-time v1 -> v2 migration ever read it. Dropping the
+  column is a separate step. A v1 word a caller SENDS (the old `status` form field, the MCP's
+  retired `set_project_status`) is still translated to a stage by `card_rules.legacy_to_status`.
   Rules live in `core/card_rules.py` (pure), operations in `core/cards.py`,
   every core write is logged with row images in `audit_log` via
   `core/changes.py`, and the v1 -> v2 mapping is `core/card_migration.py`

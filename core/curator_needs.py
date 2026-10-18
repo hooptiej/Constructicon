@@ -18,8 +18,7 @@ _UNMET_TO_NUDGE = {
     ("timeline", "no_large_gap"): ("timeline_gap", 4),
     ("connections", "related_projects"): ("weak_connections", 3),
     ("connections", "tags"): ("weak_connections", 3),  # Emit ONE per project even if both unmet
-    ("means-to-an-end", "linked"): ("weak_connections", 3),
-    ("oddball_bonus", "highlighted"): ("no_highlight", 3),  # only fires on complete/published (wip excuses it)
+    ("oddball_bonus", "highlighted"): ("no_highlight", 3),  # only fires on done / in use (in progress excuses it)
     # ("story", "provenance_diversity") is EXCLUDED — no nudge for it
 }
 
@@ -33,7 +32,7 @@ _EFFORT_RANK = {
     "confirm_automatch": 1,   # confirm a match
     "no_highlight": 1,        # one-click flag
     "missing_cover": 2,       # pick a cover image
-    "stale_wip": 2,           # one status decision
+    "stale_wip": 2,           # one stage decision
     "weak_connections": 2,    # add a tag / link
     "missing_dates": 3,       # date items
     "timeline_gap": 3,        # acknowledge / add footage
@@ -44,17 +43,12 @@ _EFFORT_RANK = {
 _DEFAULT_EFFORT = 3
 
 
-def _status_weight(status):
-    """Compute the status_weight used in priority ranking.
-    status is the normalized status from curator.score_project()."""
-    if status in ("complete", "published"):
-        return 3
-    elif status == "wip":
-        return 1
-    elif status == "means-to-an-end":
-        return 0.5
-    else:
-        return 1  # Fallback for unknown statuses
+def _stage_weight(stage):
+    """The weight a card's stage gives its nudges in priority ranking (the nudge's
+    `status_weight` field keeps its name). `stage` is curator.score_project()'s: a finished
+    card (done, in use) is about to be shown off, so its gaps rank higher (#545: keyed on the
+    stage, no longer the v1 status word)."""
+    return 3 if stage in ("done", "in_use") else 1
 
 
 def _nudge_key_for_project(kind, project_id):
@@ -81,8 +75,11 @@ def project_nudges(project, dismissed=None):
         return nudges
 
     project_id = project["id"]
-    project_status = score["status"]
-    weight = _status_weight(project_status)
+    stage = score["stage"]
+    weight = _stage_weight(stage)
+    # #545: the shared checks carry the same sentence the pips show ("Write-up has 120
+    # characters. Needs 200."); it becomes the nudge's summary, so both say the same thing.
+    reasons = {(c["dimension"], c["item"]): c["reason"] for c in score["checklist"] if c.get("reason")}
 
     # Emit nudges from unmet checks
     # Track which kinds we've emitted for this project to avoid duplicates
@@ -125,15 +122,15 @@ def project_nudges(project, dismissed=None):
             "target_id": project_id,
             "target_slug": project["slug"],
             "title": _title_for_nudge(kind, project),
-            "summary": f"{kind}: {project['title']}",
+            "summary": reasons.get(key) or f"{kind}: {project['title']}",
             "priority": priority,
             "base_impact": base_impact,
             "status_weight": weight,
             "action": action,
         })
 
-    # Stale WIP detector
-    if project_status == "wip":
+    # Stale detector: an in-progress card nothing has happened on in 90 days (kind stale_wip)
+    if stage == "in_progress":
         # #404: exclude the write-up doc — a today-saved write-up must not
         # make a stale WIP look freshly worked-on.
         items = curator.content_items(project, db.list_project_items(project_id))
@@ -154,7 +151,7 @@ def project_nudges(project, dismissed=None):
                         "target_type": "project",
                         "target_id": project_id,
                         "target_slug": project["slug"],
-                        "title": f"{project['title']} is stale (WIP)",
+                        "title": f"{project['title']} is stale (in progress)",
                         "summary": f"No activity in {int(days_since)} days",
                         "priority": priority,
                         "base_impact": base_impact,

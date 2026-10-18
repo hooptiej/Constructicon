@@ -257,11 +257,6 @@ CREATE INDEX IF NOT EXISTS idx_item_access_log_slug ON item_access_log(slug, at)
 # Loose (no DB CHECK), extensible — brand_role is freeform text, allows custom values.
 BRAND_ROLES = ["logo", "logotype", "icon", "color", "typography", "swag", "template-asset", "other"]
 
-# --- Project statuses (projects.status) — #341 ---
-# Controlled vocab for project lifecycle stage. Loose, no DB CHECK. Existing
-# rows have status='active' — treat as 'wip' (work in progress).
-PROJECT_STATUSES = ["wip", "complete", "shelved", "means-to-an-end", "abandoned", "failed", "idea", "published", "reference-only"]
-
 # --- Hobby statuses (blog_tags.hobby_status) — #360 ---
 # Controlled vocab for hobby activity. Only meaningful when is_hobby=1.
 # V2 cards 3.3: a two-value MANUAL switch. 'dormant'/'abandoned' are deprecated
@@ -883,8 +878,8 @@ def init_db(migrate=True):
         # --- V2 cards, piece 1 (docs/design/v2-cards.md 3.1, 3.2, 3.13) ---
         # kind: what sort of card this is (project/thing/action/family/collection/event).
         # No CHECK -- core/card_rules.validate_kind is the gate (same stance as media_type).
-        # activity/stage/stop_reason: the live status. Legacy projects.status is now
-        # FROZEN (the static export still reads it); live code reads stage.
+        # activity/stage/stop_reason: the live status. Legacy projects.status is
+        # FROZEN and retired (#545): nothing reads it; only the v1 migration did.
         for column, ddl_type in (
             ("kind", "TEXT NOT NULL DEFAULT 'project'"),
             ("activity", "TEXT"),
@@ -3372,7 +3367,7 @@ def _create_project(title, description="", cover_slug=None, status="active", tag
     kind/stage/stop_reason (V2 cards): default to a Project that is In progress
     (matching v1's default status='active'); validated by core/card_rules and a
     rule violation raises card_rules.CardError. The legacy `status` column keeps
-    its default and is otherwise frozen (the static export still reads it)."""
+    its default and is otherwise frozen; nothing reads it (#545)."""
     from . import card_rules, changes
     batch_id = batch_id or changes.new_batch_id()
     kind = card_rules.validate_kind(kind or card_rules.DEFAULT_KIND)
@@ -3587,14 +3582,13 @@ def get_project(id_or_slug):
         conn.close()
 
 
-def list_projects(status=None, kind=None, activity=None, stage=None):
-    """All projects, most-recently-updated first. `status` filters the FROZEN
-    legacy column (the static export relies on status="active"); kind/activity/
-    stage filter the live V2 columns."""
+def list_projects(kind=None, activity=None, stage=None):
+    """All projects, most-recently-updated first, optionally filtered on the live V2
+    columns. (#545: no filter on the frozen, retired `status` column.)"""
     conn = get_conn()
     try:
         clauses, args = [], []
-        for col, val in (("status", status), ("kind", kind), ("activity", activity), ("stage", stage)):
+        for col, val in (("kind", kind), ("activity", activity), ("stage", stage)):
             if val is not None:
                 clauses.append(f"{col} = ?")
                 args.append(val)

@@ -73,7 +73,7 @@ def api_get_hobby(request: Request, id_or_slug: str):
                 "id": p["id"],
                 "slug": p["slug"],
                 "title": p["title"],
-                "status": card_rules.curator_status(p),
+                "stage": p.get("stage"), "stage_label": card_rules.stage_label(p.get("stage")),
             }
             for p in projects
         ],
@@ -161,7 +161,7 @@ def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str 
             "id": p["id"],
             "slug": p["slug"],
             "title": p["title"],
-            "status": card_rules.curator_status(p),
+            "stage": p.get("stage"), "stage_label": card_rules.stage_label(p.get("stage")),
         }
         for p in projects
     ])
@@ -189,7 +189,7 @@ def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id:
             "id": p["id"],
             "slug": p["slug"],
             "title": p["title"],
-            "status": card_rules.curator_status(p),
+            "stage": p.get("stage"), "stage_label": card_rules.stage_label(p.get("stage")),
         }
         for p in projects
     ])

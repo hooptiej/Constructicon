@@ -768,11 +768,6 @@ def provisional_legacy_status(card):
     return None
 
 
-def curator_status_for(card):
-    """The v1-vocabulary status the Curator scores a card by (spec 4.1)."""
-    return card_rules.curator_status(card, provisional_legacy=provisional_legacy_status(card))
-
-
 def status_fields(card):
     """The live status fields in the shape every API/page returns, plus labels."""
     stage = card.get("stage")

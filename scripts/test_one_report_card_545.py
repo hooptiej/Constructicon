@@ -256,9 +256,9 @@ with actor.acting_as(actor.ACTOR_UI):
     cards.link(card("Good Card")["id"], card("Gap Card")["id"], "related")
     h = hobbies.create("Report Cards").data["hobby"]
     hobbies.add_card(h["id"], card("Good Card")["id"])
-r = client.get(f"/api/project/{card('Good Card')['slug']}/related")
+r = client.post(f"/api/project/{card('Good Card')['slug']}/related", data={"related_slug": card("Edge Card")["slug"]})
 rel = r.json() if r.status_code == 200 else None
-check("GET related: stage + stage_label, no status",
+check("POST related (answers the related list): stage + stage_label, no status",
       bool(rel) and all("stage" in p and "status" not in p for p in rel), (r.status_code, r.text[:300]))
 r = client.get(f"/api/hobby/{h['slug']}")
 hp = r.json().get("projects") if r.status_code == 200 else None

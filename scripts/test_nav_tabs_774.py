@@ -112,6 +112,10 @@ check("css: left rail pinned left, right rail pinned right",
 check("css: processing drawer slides from the right",
       re.search(r"\.proc-drawer \{[^}]*right: 0;[^}]*translateX\(100%\)", css) is not None)
 check("css: no leftover .proc-tab rules", not re.search(r"^\.proc-tab\b", css, re.M))
+# Owner (2026-10-18): no transparency on any rail tab; idle Processing stays fully opaque.
+nav_rules = re.findall(r"\.nav-(?:tab|rail)[^{]*\{[^}]*\}", css)
+check("css: no opacity on any rail tab rule", not any("opacity" in rule for rule in nav_rules),
+      [r[:80] for r in nav_rules if "opacity" in r])
 
 # 5. embed mode has no rails
 r = tok.get("/admin?embed=1")

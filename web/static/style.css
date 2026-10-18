@@ -184,7 +184,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 /* #520: every page's right gutter matches the detail pages (#515) so content clears the fixed
    right-hand tab rail (Upload/Blog/Export/...). Left padding unchanged. */
 .app-main { padding-right: 96px; }
-@media (max-width: 760px) { .app-main { padding-right: 60px; } }.page-title { font-size: 20px; font-weight: 500; margin: 0; }
+@media (max-width: 760px) { .app-main { padding-right: 60px; } }
+.page-title { font-size: 20px; font-weight: 500; margin: 0; }
 .page-subtitle { font-size: 13px; color: var(--text-2); margin: 4px 0 0; }
 .user-gallery-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
@@ -1982,10 +1983,10 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* #774: Processing (#388) is a rail tab now; it fades while nothing is in
-   flight (its script toggles .idle), as the old left-edge .proc-tab did. */
-.nav-tab { transition: background 0.2s ease, opacity 0.2s ease; }
-.nav-tab.idle { opacity: 0.5; }
+/* #774: Processing (#388) is a rail tab now. Unlike the old left-edge
+   .proc-tab it does NOT fade when idle (owner, 2026-10-18: no transparency on
+   the tabs): its script still toggles .idle, but busy vs idle shows only
+   through its badge, which hides when nothing is processing. */
 
 /* #774: the left rail mirrors the right one: the open edge tucks off the
    LEFT side, corners round on the right, the shadow falls the other way, the

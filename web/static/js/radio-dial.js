@@ -40,6 +40,10 @@ const DIAL_DEFAULTS = {
                         // (CSS --tuner-backlight; 0 = off; owner ask on PR #782)
   readoutHue: 173,      // the readout's colour, a hue (CSS --tuner-readout-hue): 173 = the owner's pick on
                         // PR #782, a cyan-teal (215 = the slider-thumb blue, 120 = phosphor green)
+  accentHue: 44,        // #785: the hazard-yellow accent's hue and lightness (CSS --accent-yellow-hue /
+  accentLight: 57,      // --accent-yellow-light): the needle, rail tab borders, active chip, Grid / List.
+                        // 44 / 57 = #E8B93A. The panel's ranges keep dark text on it and it on the
+                        // dark cards above WCAG AA (worst corner: 5.3:1 and 4.8:1).
 };
 
 // Month-tick slider notches: fine at the low end, where the owner tunes (PR #782), coarser above.
@@ -65,6 +69,8 @@ const DIAL_TUNABLES = [
   { key: 'glow', label: 'Outer glow', min: 0, max: 0.5, step: 0.01 },
   { key: 'backlight', label: 'Backlight', min: 0, max: 0.5, step: 0.01 },
   { key: 'readoutHue', label: 'Readout colour (hue)', min: 0, max: 360, step: 1 },
+  { key: 'accentHue', label: 'Accent colour (hue)', min: 30, max: 60, step: 1 },        // #785
+  { key: 'accentLight', label: 'Accent tint (lightness %)', min: 45, max: 70, step: 1 },  // #785
 ];
 
 const DIAL_DRAG_CLICK_PX = 3;   // a press that moves less than this isn't a drag
@@ -353,6 +359,9 @@ class RadioDial {
     theme.setProperty('--tuner-glow', String(this.tuning.glow));
     theme.setProperty('--tuner-backlight', String(this.tuning.backlight));
     theme.setProperty('--tuner-readout-hue', String(this.tuning.readoutHue));
+    // #785: the accent (needle and UI highlights share one hazard yellow, style.css :root).
+    theme.setProperty('--accent-yellow-hue', String(this.tuning.accentHue));
+    theme.setProperty('--accent-yellow-light', `${this.tuning.accentLight}%`);
     this._layout();
   }
 }

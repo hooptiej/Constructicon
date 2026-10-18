@@ -372,8 +372,13 @@ check("network error, nothing else to read: grey unsupported, the reason says ca
 ANSWERS["blocked11"] = fake.IpBlocked("blocked11")
 BLK = mkyt("blocked11", "x y z")
 ocr.run_ocr(BLK)
-check("YouTube blocking us: 'retry' with the reason", meta(BLK).get("transcript_status") == "retry"
-      and "blocking" in meta(BLK).get("transcript_note", ""), meta(BLK))
+check("YouTube rate-limiting us (IpBlocked, HTTP 429): 'retry' with the reason", meta(BLK).get("transcript_status") == "retry"
+      and "rate-limiting" in meta(BLK).get("transcript_note", ""), meta(BLK))
+ANSWERS["botCheck11b"] = fake.RequestBlocked("botCheck11b")
+BOT = mkyt("botCheck11b", "x y z")
+ocr.run_ocr(BOT)
+check("YouTube's bot check (RequestBlocked): 'retry' with the reason", meta(BOT).get("transcript_status") == "retry"
+      and "bot check" in meta(BOT).get("transcript_note", ""), meta(BOT))
 
 # backoff grows, then stops by itself
 m_ = {}
@@ -467,7 +472,8 @@ check("pass: due = queued + retry-now; not a future retry, a pending row or a re
 tess_before = TESS["calls"]
 n_list = len(CALLS["list"])
 result = transcripts.work_due(10)
-check("pass: worked each due row once, one at a time", result == {"tried": 4, "found": 3, "none": 1, "retry": 0}
+check("pass: worked each due row once, one at a time", result == {"tried": 4, "found": 3, "none": 1, "retry": 0,
+                                                                  "stopped": None}
       and len(CALLS["list"]) - n_list == 4, (result, CALLS["list"][n_list:]))
 check("pass: no OCR re-run (tesseract not called)", TESS["calls"] == tess_before)
 st = state(Q1)
@@ -483,6 +489,20 @@ check("pass: a due retry that now succeeds -> found, attempts reset",
       and "Duebot" in state(DUE)[3], meta(DUE))
 check("pass: the future retry is untouched", meta(FUT).get("transcript_status") == "retry" and "Futurebot" not in state(FUT)[3])
 check("pass: a second pass finds nothing due", transcripts.work_due(10)["tried"] == 0)
+
+# a block stops the pass early: the backlog waits instead of knocking on a closed door
+ANSWERS["block19"] = fake.IpBlocked("block19")
+ANSWERS["block20"] = [Track("English", "en", False, speech(33, "Laterbot"))]
+B1 = mkyt("block19", "Blocked one.", ocr_status="done", extra_meta={"transcript_status": "queued"})
+B2 = mkyt("block20", "Waits its turn.", ocr_status="done", extra_meta={"transcript_status": "queued"})
+n_list = len(CALLS["list"])
+result = transcripts.work_due(10)
+check("pass: YouTube blocking stops the pass after that row (the next one waits, still queued)",
+      result["tried"] == 1 and result["retry"] == 1 and result["stopped"] and CALLS["list"][n_list:] == ["block19"]
+      and meta(B2).get("transcript_status") == "queued" and meta(B1).get("transcript_status") == "retry", (result, CALLS["list"][n_list:]))
+result = transcripts.work_due(10)
+check("pass: the next pass carries on with the waiting row", result["tried"] == 1 and result["found"] == 1
+      and "Laterbot" in state(B2)[3], result)
 check("pass: the search index is in step", not db.check_search_index()["missing"] and not db.check_search_index()["stale"],
       db.check_search_index())
 

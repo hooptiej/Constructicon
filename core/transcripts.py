@@ -162,8 +162,15 @@ def _fetch_in_child(video_id, http_timeout):
             return {"outcome": NONE, "reason": "age-restricted: YouTube gives no captions without signing in"}
         if is_(e, "VideoUnplayable"):
             return {"outcome": NONE, "reason": f"YouTube won't play the video ({_short(e).splitlines()[0][:120]})"}
-        if is_(e, "RequestBlocked"):  # IpBlocked is a RequestBlocked
-            return {"outcome": RETRY, "reason": "YouTube is blocking caption requests from this server"}
+        if is_(e, "IpBlocked"):  # HTTP 429 on the caption download, or a captcha page
+            return {"outcome": RETRY, "blocked": True,
+                    "reason": "YouTube is rate-limiting caption requests from this server's address (HTTP 429)"}
+        if is_(e, "RequestBlocked"):
+            return {"outcome": RETRY, "blocked": True,
+                    "reason": "YouTube is blocking caption requests from this server (bot check)"}
+        if is_(e, "PoTokenRequired"):
+            return {"outcome": RETRY, "blocked": True,
+                    "reason": "YouTube wants a proof-of-origin token for these captions, which the library can't give"}
         if is_(e, "YouTubeRequestFailed"):
             return {"outcome": RETRY, "reason": "YouTube answered with an error"}
         name = type(e).__name__
@@ -224,7 +231,12 @@ def fetch(video_id, deadline=None):
         out = {"outcome": RETRY, "reason": str(e)}
     if not isinstance(out, dict) or out.get("outcome") not in (FOUND, NONE, RETRY):
         out = {"outcome": RETRY, "reason": "the caption fetch gave no answer"}
+    if out.get("blocked"):
+        _last_blocked[0] = time.monotonic()  # the background pass stops for now (work_due)
     return out
+
+
+_last_blocked = [0.0]  # when YouTube last refused us (blocked / rate-limited), monotonic seconds
 
 
 # --- outcome -> type_metadata fields ---------------------------------------------------------------
@@ -322,21 +334,27 @@ def refresh(slug):
 
 def work_due(limit=10, now=None):
     """One pass: up to `limit` rows queued for a first attempt or due a retry, one at a time
-    (each fetch takes the polite turn). {"tried": n, "found": n, "none": n, "retry": n}."""
+    (each fetch takes the polite turn). Stops early when YouTube blocks or rate-limits us, so a
+    backlog doesn't keep knocking (the row that hit it is retried on its own backoff; the rest
+    wait for the next pass). {"tried": n, "found": n, "none": n, "retry": n, "stopped": reason}."""
     from . import db
-    counts = {"tried": 0, FOUND: 0, NONE: 0, RETRY: 0}
+    counts = {"tried": 0, FOUND: 0, NONE: 0, RETRY: 0, "stopped": None}
     if not enabled():
         return counts
     types = _fetch_types()
     if not types:
         return counts
     for slug in db.list_due_text_fetches(types, time.time() if now is None else now, limit):
+        blocked_before = _last_blocked[0]
         status = refresh(slug)
         if status is None:
             continue
         counts["tried"] += 1
         if status in counts:
             counts[status] += 1
+        if _last_blocked[0] != blocked_before:
+            counts["stopped"] = "YouTube is blocking or rate-limiting caption requests; the rest wait for the next pass"
+            break
     return counts
 
 

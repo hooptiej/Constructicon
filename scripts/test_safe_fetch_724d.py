@@ -702,7 +702,9 @@ c.close()
 ran = db.run_pending_migrations()
 check("backfill: run by run_pending_migrations", ran == ["link_page_text_724d"], ran)
 check("backfill: recorded in schema_migrations", "link_page_text_724d" in db.applied_migrations())
-check("backfill: registered in MIGRATIONS, last", db.MIGRATIONS[-1][0] == "link_page_text_724d", db.MIGRATIONS[-1][0])
+_mig_names = [n for n, _ in db.MIGRATIONS]
+check("backfill: registered in MIGRATIONS, after part c's", "link_page_text_724d" in _mig_names
+      and _mig_names.index("link_page_text_724d") > _mig_names.index("text_sources_724c"), _mig_names[-3:])
 check("backfill: no network during the migration", len(NET.requests) == before_requests)
 rows = {r["slug"]: r for r in q("SELECT slug, ocr_status, ocr_started_at, type_metadata FROM capture_events")}
 check("backfill: the unsupported web link is pending, note gone, other keys kept",

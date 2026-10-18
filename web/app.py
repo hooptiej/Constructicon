@@ -235,7 +235,8 @@ async def _transcript_loop():
             result = await asyncio.to_thread(transcripts.work_due, TRANSCRIPT_BATCH)
             if result["tried"]:
                 print(f"transcripts: tried {result['tried']} video(s): {result['found']} found, "
-                      f"{result['none']} with no captions, {result['retry']} to retry later", flush=True)
+                      f"{result['none']} with no captions, {result['retry']} to retry later"
+                      + (f"; stopped early: {result['stopped']}" if result.get("stopped") else ""), flush=True)
         except Exception as e:
             print(f"transcript pass error: {e!r}", flush=True)
         await asyncio.sleep(TRANSCRIPT_INTERVAL_SECONDS)

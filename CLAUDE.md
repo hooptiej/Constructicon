@@ -946,7 +946,7 @@ fixture next to the certificate.
 ## Service layer (#541): one core module per domain
 
 **The rule: all writes go through `core/{items,membership,tags,cards,hobbies,blog,decisions,reset}.py`
-(plus `core/revisions.py` for revision chains, `core/install_config.py` and `core/users.py`); the raw writers in `core/db.py` are private
+(plus `core/revisions.py` for revision chains, `core/duplicates.py` for duplicate folding (#615), `core/install_config.py` and `core/users.py`); the raw writers in `core/db.py` are private
 (`_`-prefixed); `scripts/check_layering.py` enforces it.** Run `python scripts/check_layering.py`
 (no server, no DB; `--list` prints every db.py writer and its class) before every PR that touches
 `core/`, `web/` or `mcp_server/`. It fails when:
@@ -1093,6 +1093,27 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   `/admin` "Trash" shows count/size/oldest with a typed-phrase "Empty trash now" (`POST
   /api/trash/empty`, confirm `EMPTY TRASH`); MCP `constructicon_trash(action="list" | "empty")`. Delete and bulk delete answer with `batch_id`; the pages offer
   Undo (`web/static/js/undo-bar.js`). Check with `scripts/test_items_service.py` (throwaway DB).
+- **Duplicates (#615): `core/duplicates.py`.** Owner rule (2026-10-17, on the issue): a duplicate is a
+  BYTE-IDENTICAL stored file (same size + sha256), never a perceptual look-alike (PDF versions sharing
+  a cover page, the .eps and .png of a logo). `plan(actor)` is read-only: it sizes every un-redacted
+  stored file, hashes only same-size ones, and per group picks the survivor: copies with a real date
+  (`timeline.resolve_item_date`) from BEFORE Constructicon's first upload (`MIN(timestamp)`) first,
+  the earliest Mountain day wins; ties -> on more cards -> more metadata (description, caption, tags)
+  -> oldest upload. A copy with no real date, or one on/after the first upload, wins only when no copy
+  has an earlier real date. Groups with a copy the actor may not see (`policy.can_view`) are left out
+  and only counted; two rows sharing ONE stored file are skipped with the reason; an unreadable file is
+  listed under `unreadable`, never skipped silently; empty files are ignored. `apply(dry_run=True,
+  expect_trash=None)` is admin only and DRY-RUN BY DEFAULT: it re-plans inside one transaction, and
+  per group one imaged `duplicates_merge` row gives the survivor what the copies had and it lacks
+  (card memberships, tags in both stores, blank description / caption / provenance / agent notes /
+  brand role, the highlight / brand-asset / sensitive flags, related links, blog placements, and any
+  card cover, card write-up, hobby cover or blog cover that named a copy), then ONE `items.delete` of
+  every copy under the same batch (trash, 7 days). One `constructicon_undo(batch_id)` reverses it all.
+  `expect_trash` = the slugs a dry run listed; a fresh plan that differs refuses (409 `plan_changed`)
+  and writes nothing. No date is ever edited. Idempotent: a second run finds no groups. MCP
+  `constructicon_duplicates(action="plan" | "apply", dry_run, expect_trash)` (plan editor, apply
+  admin). Check: `scripts/test_duplicates_615.py` (throwaway DB: grouping, survivor rule,
+  inheritance, sensitive filter, dry run, refusals, apply, idempotence, the full undo, the upload guard).
 - Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),
   `test_hobbies_blog.py` (phase D: hobbies, both conversions, card create/Save, blog, the sweep;
   every write undone and the whole DB compared), `check_layering.py`. All run on a throwaway DB.
@@ -1704,6 +1725,11 @@ One generated file of every registered type and extension, to drop-test a new in
   identical contents, then the ` (n)` copy marker (higher n = later; no marker = older than (1)), then
   `source_modified_at`, then upload time, and `suggested_reason` names which one decided it. Not
   `capture_event_relations`: that one is symmetric and syncs tags/projects.
+  **#615: a byte-identical copy under ANOTHER name** (the same photo from Imgur, Facebook, the photo
+  library) is not a name candidate, so `revisions.identical_items(slug)` (same `file_size` from the DB,
+  then compared byte for byte) adds it to the same question with only the `same:<slug>` answer, and the
+  question reads "... is the same file as one already in the library. Keep one?" when there is no name
+  match at all. So renamed dupes no longer come back in silently.
   `scripts/test_revisions.py` runs on a throwaway DB, no server.
 
 - **Trash (#541 phase B)** — `trash(batch_id, slug, stored_filename, has_original, has_thumb,
@@ -1772,7 +1798,7 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
 Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
-`mcp_server/server.py`, exposing 55 tools like `constructicon_search`, `constructicon_get`,
+`mcp_server/server.py`, exposing 56 tools (#615 added `constructicon_duplicates`) like `constructicon_search`, `constructicon_get`,
 `constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
 `constructicon_card_files`, `constructicon_needs`, etc.
 (`mcp__constructicon-mcp__*` in a session with it configured). #68 tracked
@@ -2114,7 +2140,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_drop_columns_704` (the dead-column drop and its safeguard),
-    `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
+    `test_move_tags_590`, `test_revisions`, `test_duplicates_615` (duplicate folding), `test_bulk_decisions`, `test_provenance_options`,
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,

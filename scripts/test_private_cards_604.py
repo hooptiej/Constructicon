@@ -362,8 +362,10 @@ for who in ("OUT", "VW"):
     u2 = as_user(who, mcp.constructicon_undated, include_inherited=False)
     check(f"undated(include_inherited=false) as {who}: P's title appears nowhere", TITLE not in json.dumps(u2))
     acc = as_user(who, mcp.constructicon_undated, action="accept", slug=I_P, source="siblings")
-    check(f"undated(accept, P's file) as {who}: not_found, P not named",
-          (acc.get("error") or {}).get("code") == "not_found" and TITLE not in json.dumps(acc), acc)
+    # OUT (editor) passes the role check and gets the privacy 404; VW (viewer) is refused by role first.
+    want = "not_found" if who == "OUT" else "forbidden"
+    check(f"undated(accept, P's file) as {who}: {want}, P not named",
+          (acc.get("error") or {}).get("code") == want and TITLE not in json.dumps(acc), acc)
 # The second lock: even handed a row on P directly (no filter_visible), the entry never names P.
 row_p = db.get_by_slug(I_P)
 e_out = item_dates.listing_entry(row_p, access=policy.card_access(ACT["OUT"]))

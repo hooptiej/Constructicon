@@ -40,7 +40,7 @@ class El {
 let now = 0;
 let frames = [];
 const flushFrames = (n = 200) => { for (let i = 0; i < n && frames.length; i++) { now += 16; const f = frames; frames = []; f.forEach((cb) => cb(now)); } };
-const doc = { createElement: (t) => new El(t) };
+const doc = { createElement: (t) => new El(t), documentElement: new El('html') };
 const win = { addEventListener() {} };
 const ctx = vm.createContext({
   window: win, document: doc, console, setTimeout: () => 0, clearTimeout() {}, Math, Date, Number, String, Object, Array, JSON,
@@ -72,14 +72,16 @@ const ROWS = [
 ];
 
 // --- the shipped defaults: the owner's tuning on dev (PR #782 review) ---
-const OWNER = { visibleYears: 3, minPxPerYear: 30, monthTickMinPx: 2, tolerancePx: 5, readoutMax: 8, friction: 0.92,
-  snapStrength: 0.5, snapPx: 28, wheelSpeed: 0.1, glow: 0.33 };
+const OWNER = { visibleYears: 5, minPxPerYear: 30, monthTickMinPx: 2, tolerancePx: 5, readoutMax: 8, friction: 0.92,
+  falloff: 0.001, snapStrength: 0.5, snapPx: 28, wheelSpeed: 0.1, glow: 0, backlight: 0.36, readoutHue: 215 };
 ok("DIAL_DEFAULTS are the owner's values", Object.entries(OWNER).every(([k, v]) => RadioDial.DEFAULTS[k] === v),
   Object.keys(OWNER).filter((k) => RadioDial.DEFAULTS[k] !== OWNER[k]));
-ok('falloff and backlight keep their first defaults', RadioDial.DEFAULTS.falloff === 0.001 && RadioDial.DEFAULTS.backlight === 0.05);
 const shipped = mount(ROWS).dial;
-ok('as shipped: 3 years across 1000 px', Math.abs(shipped.pps * 3 * 365.2425 * 86400 - 1000) < 1e-6);
-ok('as shipped: month ticks show (a month is ~28 px, over the 2 px threshold)', shipped.ticks.innerHTML.includes('radio-dial-month'));
+ok('as shipped: 5 years across 1000 px', Math.abs(shipped.pps * 5 * 365.2425 * 86400 - 1000) < 1e-6);
+ok('as shipped: month ticks show (a month is ~17 px, over the 2 px threshold)', shipped.ticks.innerHTML.includes('radio-dial-month'));
+ok('readout colour has a hue slider', RadioDial.TUNABLES.some((t) => t.key === 'readoutHue' && t.min === 0 && t.max === 360));
+shipped.setTuning({ readoutHue: 120 });
+ok('the hue slider drives the shared --tuner-readout-hue on <html>, live', doc.documentElement.style['--tuner-readout-hue'] === '120');
 ok('as shipped: starts untuned', /untuned/.test(shipped.readout.innerHTML));
 
 // --- month-tick slider notches: fine at the low end (PR #782) ---
@@ -221,13 +223,13 @@ dial.setTuning({ falloff: RadioDial.DEFAULTS.falloff });
 
 // --- live tuning ---
 dial.setTuning({ glow: 0.3, visibleYears: 5 });
-ok('glow goes to the --dial-glow CSS variable', root.style['--dial-glow'] === '0.3');
+ok('glow goes to the shared --tuner-glow on <html>', doc.documentElement.style['--tuner-glow'] === '0.3');
 ok('backlight has a default and a slider', RadioDial.DEFAULTS.backlight > 0 && RadioDial.TUNABLES.some((t) => t.key === 'backlight' && t.max >= 0.4));
 dial.setTuning({ backlight: 0.42 });
-ok('backlight goes to the --dial-backlight CSS variable, live', root.style['--dial-backlight'] === '0.42');
-ok('backlight is separate from the outer glow', root.style['--dial-glow'] === '0.3');
+ok('backlight goes to the shared --tuner-backlight on <html>, live', doc.documentElement.style['--tuner-backlight'] === '0.42');
+ok('backlight is separate from the outer glow', doc.documentElement.style['--tuner-glow'] === '0.3');
 dial.setTuning({ backlight: 0 });
-ok('backlight 0 = off', root.style['--dial-backlight'] === '0');
+ok('backlight 0 = off', doc.documentElement.style['--tuner-backlight'] === '0');
 ok('visible span re-lays the band (5 years = 200 px per year)', Math.abs(dial.pps * 365.2425 * 86400 - 200) < 1e-6);
 ok('month ticks appear when a month is wide enough', dial.ticks.innerHTML.includes('radio-dial-month'));
 dial.setTuning({ visibleYears: 'nonsense', bogus: 3 });

@@ -1409,6 +1409,11 @@ already ranks first), so it is the same field as the item page's DATES group.
   key steps, stack grouping). Checks: `node scripts/test_timeline_drag.js` (the maths),
   `node scripts/test_timeline_drag_ui.js` (the widget against a fake DOM), `scripts/test_timeline_drag_593.py`
   (throwaway DB: write, undo, reset, roles, policy, span).
+- **Ruler labels thin out when they don't fit (PR #782):** every tick keeps its mark, but
+  `ProjectVideoTimeline.labelledTicks` labels only a calendar-friendly stride of them (quarters, halves, years;
+  a January or round decade kept when there is one) once labels at their estimated width would touch. Before
+  that, a two-year span (a label per month) or a ~60-day one (weekly) on a narrow panel ran together into one
+  line of text. Check: `node scripts/test_timeline_scale_labels_782.js` (20 spans x 6 widths).
 - **Undated items are off the axis (#725):** an item with no real date has no marker (its approximate date
   would only be this card's own range); the page says "N undated files not on the timeline". A reset that
   leaves an item with no real date takes its marker off and says so; the route answers `effective_date`
@@ -1422,7 +1427,7 @@ The home page's timeline is a horizontal dial across the top (`static/js/radio-d
 `static/js/radio-dial-math.js`), styled like the card page's tuner. It replaced the vertical left rail
 (`timeline-rail.js` and the `-shifted` layout offsets are gone). Data: the page's `timeline_projects`
 (every card with a real start, children included), embedded as a nonce'd JSON block.
-- **Behaviour (owner decisions on #775):** a fixed needle over a sliding band; 3 years visible by
+- **Behaviour (owner decisions on #775):** a fixed needle over a sliding band; 5 years visible by
   default (the owner's tuning on PR #782; #775 started at about a decade; fewer on a narrow screen, so
   every year label fits); drag (pointer events), wheel / trackpad and the
   arrow keys (Shift or PageUp/Down = a year, Home/End = the ends) slide it. One tick per card at its start.
@@ -1433,6 +1438,11 @@ The home page's timeline is a horizontal dial across the top (`static/js/radio-d
   falloff (a steady brake so a coast eases to a stop), snap, tick density, outer glow, internal backlight) plus the `--dial-*` CSS variables on `.radio-dial`. **The tuning panel**
   (`radio-dial-tuning.js`, live sliders, "Copy values") shows only on a dev instance (`CONSTRUCTICON_ENV=dev`)
   or with `/?tune=1` for an admin. Bake the owner's chosen numbers into `DIAL_DEFAULTS`.
+- **One colour scheme for both tuners (PR #782):** the `--tuner-*` variables on `:root` in `style.css`
+  (chassis, border, outer glow, inner backlight, readout hue and its derived blue + glow, needle/axis
+  yellow, phosphor green for the dial's band labels) are read by the home dial AND the card page's
+  timeline (`.project-video-timeline-*`, `.timeline-drag-readout`). Change a colour there, never in one
+  tuner's rules. The tuning panel's colour sliders write the base values onto `<html>`.
 - Empty, malformed or unloadable data shows a plain message in the chassis, never a blank bar.
 - Pass 2 (not built): start-to-end span bars and a per-year density glow; their empty layers
   (`.radio-dial-layer-spans`, `-density`) and no-op `_renderSpans` / `_renderDensity` are the hooks.

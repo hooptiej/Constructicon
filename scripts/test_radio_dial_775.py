@@ -161,16 +161,27 @@ for sel in (".radio-dial-needle", ".radio-dial-readout", ".radio-dial-static", "
 check("css: no dial rule scales or zooms a mark", not any(re.search(r"scale\(|zoom", body) for _, body in dial_rules),
       [s for s, b in dial_rules if re.search(r"scale\(|zoom", b)])
 check("css: no hover rule on a dial mark", not any(":hover" in s and re.search(r"radio-dial-(card|year|month)", s) for s, _ in dial_rules))
-check("css: glow is a variable", "--dial-glow" in css)
-rule_body = lambda sel: next((b for s, b in dial_rules if s.strip() == sel), "")  # noqa: E731
-check("css: backlight drives the chassis's inset wash",
-      re.search(r"inset[^;]*var\(--dial-backlight\)", rule_body(".radio-dial-chassis")) is not None, rule_body(".radio-dial-chassis"))
-check("css: backlight drives the lamp behind the band", "--dial-backlight" in rule_body(".radio-dial-window"))
+all_rules = re.findall(r"([^{}]+)\{([^}]*)\}", css)
+rule_body = lambda sel: next((b for s, b in all_rules if s.strip() == sel), "")  # noqa: E731
+theme = next((b for s, b in all_rules if s.strip() == ":root" and "--tuner-" in b), "")
+check("theme: one shared :root tuner theme", all(v in theme for v in (
+    "--tuner-chassis:", "--tuner-glow:", "--tuner-backlight:", "--tuner-readout-hue:", "--tuner-readout:",
+    "--tuner-readout-glow:", "--tuner-yellow:", "--tuner-shadow:")), theme[:200])
+check("theme: the readout colour derives from the hue", re.search(r"--tuner-readout:\s*hsl\(var\(--tuner-readout-hue\)", theme) is not None)
+check("css: no leftover per-dial colour variables", not re.search(r"--dial-(glow|backlight|readout|phosphor|yellow)", css))
+check("css: the dial's chassis uses the shared chassis colour and shadow",
+      "var(--tuner-chassis)" in rule_body(".radio-dial-chassis") and "var(--tuner-shadow)" in rule_body(".radio-dial-chassis"))
+check("css: shared shadow = outer glow + inset backlight",
+      re.search(r"--tuner-shadow:[^;]*var\(--tuner-glow\)[^;]*inset[^;]*var\(--tuner-backlight\)", theme) is not None)
+check("css: backlight drives the lamp behind the band", "--tuner-backlight" in rule_body(".radio-dial-window"))
 check("css: the readout sits on a plate that thickens with the backlight (legible at max)",
-      "--dial-backlight" in rule_body(".radio-dial-readout") and "z-index" in rule_body(".radio-dial-readout"))
+      "--tuner-backlight" in rule_body(".radio-dial-readout") and "z-index" in rule_body(".radio-dial-readout"))
+check("css: the readout and its card links use the shared readout colour",
+      "var(--tuner-readout)" in rule_body(".radio-dial-readout") and "var(--tuner-readout)" in rule_body(".radio-dial-station"))
+check("css: the band's year labels stay phosphor green", "var(--tuner-phosphor)" in rule_body(".radio-dial-year-label"))
 js_src = read("web/static/js/radio-dial.js")
-for var, key in (("--dial-glow", "glow"), ("--dial-backlight", "backlight")):
-    css_default = re.search(re.escape(var) + r":\s*([0-9.]+)", css)
+for var, key in (("--tuner-glow", "glow"), ("--tuner-backlight", "backlight"), ("--tuner-readout-hue", "readoutHue")):
+    css_default = re.search(re.escape(var) + r":\s*([0-9.]+)", theme)
     js_default = re.search(r"\b" + key + r":\s*([0-9.]+),", js_src)
     check(f"css: {var} default matches DIAL_DEFAULTS.{key}",
           bool(css_default and js_default) and float(css_default.group(1)) == float(js_default.group(1)),
@@ -183,5 +194,26 @@ check("js: no inline event handler strings", not re.search(r"\son[a-z]+=", js))
 # --- 6. the card page's tuner is its own thing ---------------------------------------------------------
 pvt = read("web/static/js/project-video-timeline.js")
 check("card tuner: still its own class, not using the dial", "class ProjectVideoTimeline" in pvt and "RadioDial" not in pvt)
+# PR #782: the card page's timeline wears the same colours, through the shared theme only.
+card_colour = {
+    ".project-video-timeline-panel": ("var(--tuner-chassis)", "var(--tuner-border)", "var(--tuner-shadow)"),
+    ".project-video-timeline-scale-line": ("var(--tuner-yellow)", "var(--tuner-yellow-glow)"),
+    ".project-video-timeline-scale-mark": ("var(--tuner-yellow)", "var(--tuner-tick-glow)"),
+    ".project-video-timeline-scale-label": ("var(--tuner-readout)", "var(--tuner-readout-glow)"),
+    ".project-video-timeline-event-pole": ("var(--tuner-yellow)", "var(--tuner-tick-glow)"),
+    ".project-video-timeline-event-time": ("var(--tuner-readout)", "var(--tuner-readout-glow)"),
+    ".timeline-drag-readout": ("var(--tuner-chassis)", "var(--tuner-readout)", "var(--tuner-readout-glow)"),
+}
+for sel, wants in card_colour.items():
+    body = rule_body(sel)
+    check(f"card tuner: {sel} colours come from the shared theme", body and all(w in body for w in wants),
+          [w for w in wants if w not in body])
+    check(f"card tuner: {sel} has no hard-coded green, yellow or chassis colour left",
+          not re.search(r"rgba\((166|232)|#0a0d12|#232a36|var\(--accent-hover\)|var\(--hazard-yellow\)", body), body.strip()[:160])
+check("card tuner: layout values unchanged (panel padding, scale/event offsets)",
+      "padding: 18px 26px 16px" in rule_body(".project-video-timeline-panel")
+      and "top: 8px" in rule_body(".project-video-timeline-scale-line")
+      and "height: 40px" in rule_body(".project-video-timeline-event-pole")
+      and "rotate(-65deg)" in rule_body(".project-video-timeline-event-time"))
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")

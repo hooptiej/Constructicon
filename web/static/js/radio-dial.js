@@ -24,7 +24,7 @@
 // Owner's tuning on dev, baked in (PR #782 review, 2026-10-18). Falloff and backlight are still the
 // first guesses (the owner hasn't tried them yet).
 const DIAL_DEFAULTS = {
-  visibleYears: 3,      // years visible at once (owner's pick; #775 started at "about a decade")
+  visibleYears: 5,      // years visible at once (owner's pick; #775 started at "about a decade")
   minPxPerYear: 30,     // never narrower than this per year, so every year label fits
   monthTickMinPx: 2,    // month minor ticks only when a month is at least this wide
   tolerancePx: 5,       // the readout names cards whose tick is within this many px of the needle
@@ -35,9 +35,11 @@ const DIAL_DEFAULTS = {
   snapStrength: 0.5,    // 0 = free needle; 1 = settles right onto the nearest card once still
   snapPx: 28,           // ... but only when that card is this close (px)
   wheelSpeed: 0.1,      // wheel / trackpad px -> dial px
-  glow: 0.33,           // outer glow around the chassis (CSS --dial-glow)
-  backlight: 0.05,      // internal backlight wash inside the chassis and behind the band
-                        // (CSS --dial-backlight; 0 = off; owner ask on PR #782)
+  glow: 0,              // outer glow around the chassis (CSS --tuner-glow; the owner turned it off)
+  backlight: 0.36,      // internal backlight wash inside the chassis and behind the band
+                        // (CSS --tuner-backlight; 0 = off; owner ask on PR #782)
+  readoutHue: 215,      // the readout's colour, a hue (CSS --tuner-readout-hue): 215 = the blue of the
+                        // browser's slider thumb, the owner's pick on PR #782 (120 = phosphor green)
 };
 
 // Month-tick slider notches: fine at the low end, where the owner tunes (PR #782), coarser above.
@@ -62,6 +64,7 @@ const DIAL_TUNABLES = [
   { key: 'wheelSpeed', label: 'Wheel speed', min: 0.1, max: 4, step: 0.1 },
   { key: 'glow', label: 'Outer glow', min: 0, max: 0.5, step: 0.01 },
   { key: 'backlight', label: 'Backlight', min: 0, max: 0.5, step: 0.01 },
+  { key: 'readoutHue', label: 'Readout colour (hue)', min: 0, max: 360, step: 1 },
 ];
 
 const DIAL_DRAG_CLICK_PX = 3;   // a press that moves less than this isn't a drag
@@ -344,8 +347,12 @@ class RadioDial {
     Object.keys(partial || {}).forEach((k) => {
       if (k in DIAL_DEFAULTS && isFinite(Number(partial[k]))) this.tuning[k] = Number(partial[k]);
     });
-    this.root.style.setProperty('--dial-glow', String(this.tuning.glow));
-    this.root.style.setProperty('--dial-backlight', String(this.tuning.backlight));
+    // Colours are the shared tuner theme (style.css :root, also read by the card page's timeline):
+    // set on <html> so its derived colours recompute and everything themed on this page follows.
+    const theme = document.documentElement.style;
+    theme.setProperty('--tuner-glow', String(this.tuning.glow));
+    theme.setProperty('--tuner-backlight', String(this.tuning.backlight));
+    theme.setProperty('--tuner-readout-hue', String(this.tuning.readoutHue));
     this._layout();
   }
 }

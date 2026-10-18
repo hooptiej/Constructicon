@@ -1101,6 +1101,27 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 }
 .lightbox-close:hover { border-color: var(--accent); }
 
+/* The tuner theme (#775, PR #782): ONE set of colours for both radio-tuner timelines, the home page's
+   dial (.radio-dial, radio-dial.js) and the card page's timeline (.project-video-timeline-panel). On
+   :root so the card page's floating drag readout gets them too, and so the dial's dev tuning panel
+   (which writes the base values onto <html>) shows what both will look like; the derived colours
+   below recompute from them. Owner's picks: readout blue (the browser's slider-thumb blue), backlight
+   0.36, outer glow off. */
+:root {
+  --tuner-chassis: #0a0d12;
+  --tuner-border: #232a36;
+  --tuner-glow: 0;            /* outer glow around the chassis (tuning panel: "Outer glow") */
+  --tuner-backlight: 0.36;    /* inner backlight wash (tuning panel: "Backlight"; 0 = off) */
+  --tuner-readout-hue: 215;   /* readout text hue (tuning panel: "Readout colour (hue)"; 120 = green) */
+  --tuner-readout: hsl(var(--tuner-readout-hue) 90% 64%);
+  --tuner-readout-glow: 0 0 4px hsl(var(--tuner-readout-hue) 90% 64% / 0.8), 0 0 12px hsl(var(--tuner-readout-hue) 90% 60% / 0.35);
+  --tuner-yellow: var(--hazard-yellow);   /* needle / axis / ticks */
+  --tuner-yellow-glow: 0 0 6px rgba(232, 185, 58, 0.7);
+  --tuner-tick-glow: 0 0 4px rgba(232, 185, 58, 0.5);
+  --tuner-phosphor: var(--accent-hover);  /* the dial's band labels and card ticks stay green */
+  --tuner-phosphor-glow: 0 0 4px rgba(166, 212, 119, 0.85), 0 0 12px rgba(166, 212, 119, 0.35);
+  --tuner-shadow: 0 0 28px rgba(166, 212, 119, var(--tuner-glow)), inset 0 0 46px rgba(166, 212, 119, var(--tuner-backlight));
+}
 /* #775 "Tune in to the past": the home page timeline as a sliding radio dial (radio-dial.js).
    Replaced the old vertical left rail (.timeline-rail, timeline-rail.js) and its -shifted layout
    offsets. Same look as the card page's tuner below (.project-video-timeline-panel): near-black
@@ -1110,24 +1131,18 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
    Feel values: CSS variables here, JS constants in radio-dial.js's DIAL_DEFAULTS (the dev tuning
    panel edits both live). */
 .radio-dial {
-  --dial-glow: 0.33;        /* outer glow around the chassis (tuning panel: "Outer glow") */
-  --dial-backlight: 0.05;     /* internal wash inside the chassis + behind the band ("Backlight"; 0 = off) */
   --dial-window-h: 66px;      /* the sliding window's height */
   --dial-axis-y: 28px;        /* the axis line, from the window's top */
   --dial-card-tick-h: 14px;   /* a card's tick, standing on the axis */
   --dial-year-tick-h: 18px;   /* a year's tick, centred on the axis */
   --dial-month-tick-h: 8px;
-  --dial-phosphor: var(--accent-hover);
-  --dial-phosphor-glow: 0 0 4px rgba(166, 212, 119, 0.85), 0 0 12px rgba(166, 212, 119, 0.35);
-  --dial-yellow-glow: 0 0 6px rgba(232, 185, 58, 0.7);
 }
 .radio-dial-chassis {
   padding: 10px 16px 10px;
-  background: #0a0d12;
-  border: 1px solid #232a36;
+  background: var(--tuner-chassis);
+  border: 1px solid var(--tuner-border);
   border-radius: 8px;
-  /* Outer glow, then the internal backlight: the card tuner's inset green wash, at 0.05 by default. */
-  box-shadow: 0 0 28px rgba(166, 212, 119, var(--dial-glow)), inset 0 0 46px rgba(166, 212, 119, var(--dial-backlight));
+  box-shadow: var(--tuner-shadow);  /* outer glow + inner backlight, shared with the card page */
 }
 .radio-dial-message {
   /* Empty, loading or failed (#775 item 9: never a blank bar). */
@@ -1135,8 +1150,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
   line-height: 1.45;
-  color: var(--dial-phosphor);
-  text-shadow: var(--dial-phosphor-glow);
+  color: var(--tuner-phosphor);
+  text-shadow: var(--tuner-phosphor-glow);
 }
 .radio-dial-window {
   position: relative;
@@ -1150,9 +1165,9 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   outline: none;
   /* The backlight's second half: a soft lamp behind the band, brightest at the needle. It is the
      window's own background, so the ticks, labels and needle all paint over it. */
-  background: radial-gradient(ellipse 60% 90% at 50% 45%, rgba(166, 212, 119, calc(var(--dial-backlight) * 1.4)), rgba(166, 212, 119, 0) 70%);
+  background: radial-gradient(ellipse 60% 90% at 50% 45%, rgba(166, 212, 119, calc(var(--tuner-backlight) * 1.4)), rgba(166, 212, 119, 0) 70%);
 }
-.radio-dial-window:focus-visible { box-shadow: 0 0 0 2px var(--hazard-yellow); }
+.radio-dial-window:focus-visible { box-shadow: 0 0 0 2px var(--tuner-yellow); }
 .radio-dial-window--dragging { cursor: grabbing; }
 .radio-dial-window::before,
 .radio-dial-window::after {
@@ -1187,8 +1202,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   left: 0;
   right: 0;
   height: 2px;
-  background: var(--hazard-yellow);
-  box-shadow: var(--dial-yellow-glow);
+  background: var(--tuner-yellow);
+  box-shadow: var(--tuner-yellow-glow);
 }
 .radio-dial-year {
   position: absolute;
@@ -1201,7 +1216,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .radio-dial-year-mark {
   width: 2px;
   height: var(--dial-year-tick-h);
-  background: var(--hazard-yellow);
+  background: var(--tuner-yellow);
   box-shadow: 0 0 4px rgba(232, 185, 58, 0.5);
 }
 .radio-dial-year-label {
@@ -1209,8 +1224,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   font-family: 'JetBrains Mono', monospace;
   font-size: 15px;
   line-height: 1.1;
-  color: var(--dial-phosphor);
-  text-shadow: var(--dial-phosphor-glow);
+  color: var(--tuner-phosphor);
+  text-shadow: var(--tuner-phosphor-glow);
   white-space: nowrap;
 }
 .radio-dial-month {
@@ -1227,7 +1242,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   width: 2px;
   height: var(--dial-card-tick-h);
   margin-left: -1px;
-  background: var(--dial-phosphor);
+  background: var(--tuner-phosphor);
   box-shadow: 0 0 3px rgba(166, 212, 119, 0.7);
 }
 .radio-dial-card--child { height: calc(var(--dial-card-tick-h) * 0.6); top: calc(var(--dial-axis-y) - var(--dial-card-tick-h) * 0.6); opacity: 0.75; }
@@ -1240,7 +1255,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   width: 2px;
   margin-left: -1px;
   z-index: 3;
-  background: var(--hazard-yellow);
+  background: var(--tuner-yellow);
   box-shadow: 0 0 8px rgba(232, 185, 58, 0.9), 0 0 2px rgba(232, 185, 58, 1);
   pointer-events: none;
 }
@@ -1250,11 +1265,11 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   top: 0;
   left: -5px;
   border: 6px solid transparent;
-  border-top-color: var(--hazard-yellow);
+  border-top-color: var(--tuner-yellow);
   border-bottom: 0;
 }
 .radio-dial-readout {
-  /* What's under the needle, phosphor green. Wraps on a narrow screen. */
+  /* What's under the needle, in the readout colour (blue by default, PR #782). Wraps on a narrow screen. */
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -1265,14 +1280,14 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   padding: 2px 8px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
-  color: var(--dial-phosphor);
-  text-shadow: var(--dial-phosphor-glow);
+  color: var(--tuner-readout);
+  text-shadow: var(--tuner-readout-glow);
   /* Keeps the text legible however high the backlight goes: a dark plate that thickens with it
      (invisible at the default, since it matches the chassis). */
   position: relative;
   z-index: 1;
   border-radius: 4px;
-  background: rgba(10, 13, 18, min(0.85, calc(var(--dial-backlight) * 1.8)));
+  background: rgba(10, 13, 18, min(0.85, calc(var(--tuner-backlight) * 1.8)));
 }
 .radio-dial-freq { font-size: 15px; font-weight: 600; letter-spacing: 0.04em; }
 .radio-dial-stations {
@@ -1284,9 +1299,9 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   padding: 0;
   list-style: none;
 }
-.radio-dial-station { color: var(--dial-phosphor); text-decoration: none; border-bottom: 1px dotted rgba(166, 212, 119, 0.5); }
+.radio-dial-station { color: var(--tuner-readout); text-decoration: none; border-bottom: 1px dotted hsl(var(--tuner-readout-hue) 90% 64% / 0.5); }
 .radio-dial-station:hover,
-.radio-dial-station:focus-visible { color: var(--text); border-bottom-color: var(--hazard-yellow); outline: none; }
+.radio-dial-station:focus-visible { color: var(--text); border-bottom-color: var(--tuner-yellow); outline: none; }
 .radio-dial-station-date { margin-left: 6px; opacity: 0.7; font-size: 12px; }
 .radio-dial-quiet,
 .radio-dial-more { opacity: 0.6; }
@@ -1390,15 +1405,17 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
    as its own distinct "timescale" instrument at a glance. */
 .project-video-timeline-panel {
   /* Old radio tuner look, per owner's request: near-black chassis, a
-     faint green backlight glow (ambient + a soft inset wash), a hazard-yellow
-     indicator line/needle for the axis, phosphor-green glowing readouts
-     for the dates -- see the scale-line/-label/event-time rules below. */
+     green backlight wash, a hazard-yellow indicator line/needle for the
+     axis, glowing readouts for the dates -- see the scale-line/-label/
+     event-time rules below. Since #775 (PR #782) every colour here comes
+     from the shared tuner theme (:root --tuner-*), the same set the home
+     page's dial uses: blue readouts, backlight 0.36, no outer glow. */
   margin-top: 10px;
   padding: 18px 26px 16px;
-  background: #0a0d12;
-  border: 1px solid #232a36;
+  background: var(--tuner-chassis);
+  border: 1px solid var(--tuner-border);
   border-radius: 8px;
-  box-shadow: 0 0 28px rgba(166, 212, 119, 0.10), inset 0 0 46px rgba(166, 212, 119, 0.05);
+  box-shadow: var(--tuner-shadow);  /* the shared tuner theme (#775): outer glow + inner backlight */
   /* Extra top/side padding plus a hard clip below give the diagonal time
      flags room to run at a steep angle without escaping the chassis --
      only a flag genuinely anchored at the very edge (the timeline's first
@@ -1466,8 +1483,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   left: 0;
   right: 0;
   height: 2px;
-  background: var(--hazard-yellow);
-  box-shadow: 0 0 6px rgba(232, 185, 58, 0.7);
+  background: var(--tuner-yellow);
+  box-shadow: var(--tuner-yellow-glow);
 }
 .project-video-timeline-scale-tick {
   position: absolute;
@@ -1480,14 +1497,14 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .project-video-timeline-scale-mark {
   width: 2px;
   height: 8px;
-  background: var(--hazard-yellow);
-  box-shadow: 0 0 4px rgba(232, 185, 58, 0.5);
+  background: var(--tuner-yellow);
+  box-shadow: var(--tuner-tick-glow);
 }
 .project-video-timeline-scale-label {
-  /* Phosphor-green glowing readout, like an old CRT/VFD tuner display. */
+  /* Glowing readout, like an old CRT/VFD tuner display: the shared tuner readout colour (#775). */
   font-size: 17.5px; /* 1.75x the original 10px, per owner's readability pass */
-  color: var(--accent-hover);
-  text-shadow: 0 0 4px rgba(166, 212, 119, 0.85), 0 0 12px rgba(166, 212, 119, 0.35);
+  color: var(--tuner-readout);
+  text-shadow: var(--tuner-readout-glow);
   font-family: 'JetBrains Mono', monospace;
   white-space: nowrap;
   margin-top: 2px;
@@ -1518,8 +1535,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   left: 50%;
   width: 2px;
   height: 40px;
-  background: var(--hazard-yellow); /* matches the scale needle/line -- reads as the same indicator reaching up to its readout */
-  box-shadow: 0 0 4px rgba(232, 185, 58, 0.6);
+  background: var(--tuner-yellow); /* matches the scale needle/line -- reads as the same indicator reaching up to its readout */
+  box-shadow: var(--tuner-tick-glow);
   transform: translateX(-50%);
 }
 .project-video-timeline-event-time {
@@ -1533,8 +1550,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   bottom: calc(100% + 40px);
   left: 50%;
   font-size: 15.75px; /* 1.75x the original 9px, per owner's readability pass */
-  color: var(--accent-hover); /* phosphor-green glowing readout, matching the ruler labels */
-  text-shadow: 0 0 4px rgba(166, 212, 119, 0.85), 0 0 12px rgba(166, 212, 119, 0.35);
+  color: var(--tuner-readout); /* glowing readout, matching the ruler labels (shared tuner theme) */
+  text-shadow: var(--tuner-readout-glow);
   font-family: 'JetBrains Mono', monospace;
   white-space: nowrap;
   transform-origin: bottom left;
@@ -1633,15 +1650,15 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   z-index: 60;
   display: none;
   padding: 5px 10px;
-  background: #0a0d12;
-  color: var(--accent-hover);
-  border: 1px solid var(--hazard-yellow);
+  background: var(--tuner-chassis);
+  color: var(--tuner-readout);
+  border: 1px solid var(--tuner-yellow);
   border-radius: 5px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
   white-space: nowrap;
   pointer-events: none;
-  text-shadow: 0 0 4px rgba(166, 212, 119, 0.7);
+  text-shadow: var(--tuner-readout-glow);
 }
 .timeline-drag-readout.visible { display: block; }
 .timeline-chooser {

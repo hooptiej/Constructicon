@@ -1507,6 +1507,19 @@ One generated file of every registered type and extension, to drop-test a new in
     file and found no text (`""`) settles `done` with empty text. The `ocr_unsupported_724` migration
     re-settled old `failed` rows that pass `nothing_to_read` (only those). Check with
     `scripts/test_ocr_unsupported_724.py`.
+    **#724 (c), more than one text source:** a type with `ObjectTypeSpec.text_sources_fn` (YouTube:
+    its stored `type_metadata.description`) gets that text in `extracted_text` too, so search finds
+    it: `core/text_sources.py` `combine()` puts each source with text under a header
+    ("Description:" ... then the picture's OCR text last, "Thumbnail text:" ...) and
+    `type_metadata.text_source` names the sources that gave text, `+`-joined in order
+    (`description`; part e's transcript will make it `description+transcript`). OCR text alone keeps
+    no header and no `text_source`, as before. No source text and no picture text = grey
+    `unsupported` ("video: no description or captions yet"); a thumbnail that can't be made or read
+    keeps the description, `done` with a warning `ocr_note`. A corrected description
+    (`items.update`) rebuilds the text in the same imaged change (`text_sources.resettle`, no OCR
+    re-run; the stored thumbnail section is recovered by `picture_text_of`), so one undo restores it.
+    The `text_sources_724c` migration did the same once for existing settled rows. Check with
+    `scripts/test_youtube_descriptions_724c.py`.
   - `redacted` — "file removed, metadata kept" (the detail page's "Remove
     file, keep info" button / `constructicon_redact`; since #541 `items.redact`
     holds the file in the trash with no expiry until the owner recovers it or
@@ -1660,6 +1673,8 @@ name the item has had, so a rename never makes the old filename unfindable; `cor
 picks only one of them to SHOW), the free-text `tags` column plus tag-tree tag names (`post_tags`),
 the titles of the cards it is on (`project_items`), the uploader's note (`description`) and
 `extracted_text`. Not indexed: `agent_notes` (an item's or its card's, #745), `type_metadata`, `provenance`, the slug.
+(A YouTube description, which lives in `type_metadata`, is searchable because #724 (c) copies it into
+`extracted_text`; see the `ocr_status` notes under "Data model".)
 
 - **Matching:** each run of letters/digits you type is a word-START match, all required ("tun
   gig" finds "Tuning the Gigabyte"); accents fold; case is ignored. Quotes, `*`, `-`, `:`, brackets

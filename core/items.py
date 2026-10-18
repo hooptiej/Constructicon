@@ -50,7 +50,7 @@ from pathlib import Path
 from datetime import datetime
 
 from . import captions, cards, changes, db, embedded_metadata, ingest, item_title, membership, object_types, physical_piece, provenance_options
-from . import parse_limits, paths, storage, thumbnails, timeline
+from . import parse_limits, paths, storage, text_sources, thumbnails, timeline
 from . import tags as tags_svc
 from .cards import Result
 from .errors import AppError, Conflict, InvalidInput, NotFound
@@ -182,6 +182,7 @@ def _plan_update(row, fields):
         merged = {**existing, **physical_piece.clean_fields(tm)}  # #425 keys; raises bad_physical_piece
         if merged != existing:
             cols["type_metadata"] = json.dumps(merged)
+            _plan_text_sources(row, merged, cols)
     if "provenance" in fields:
         cols["provenance"] = provenance_options.validate("file", fields["provenance"] or None,
                                                          current=row.get("provenance"))
@@ -202,6 +203,25 @@ def _plan_update(row, fields):
     if "agent_notes" in fields:  # #206 agent-only scratch notes (MCP set_agent_notes); None clears
         cols["agent_notes"] = fields["agent_notes"]
     return cols
+
+
+def _plan_text_sources(row, merged_meta, cols):
+    """#724 (c): a type_metadata edit can change one of the type's text sources (a YouTube
+    description corrected after OCR settled). Rebuild extracted_text from the sources plus the
+    picture text already stored (no OCR re-run) and write it in the SAME imaged update, so search
+    re-indexes and one undo restores the old text, text_source and lamp with the old description.
+    Only settled rows (text_sources.resettle); a pending run combines the sources itself."""
+    spec = object_types.get_object_type(row.get("media_type"))
+    if spec is None or not spec.ocr_capable or spec.text_sources_fn is None or row.get("redacted"):
+        return
+    new_row = {**row, "type_metadata": merged_meta}
+    change = text_sources.resettle(new_row, spec, object_types.ocr_unsupported_note(new_row, spec))
+    if change is None:
+        return
+    if change["status_changed"]:
+        cols["ocr_status"] = change["status"]
+    cols["extracted_text"] = change["text"]
+    cols["type_metadata"] = json.dumps(text_sources.resettled_meta(merged_meta, change))
 
 
 def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **fields):

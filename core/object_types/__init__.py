@@ -396,6 +396,17 @@ class ObjectTypeSpec:
     # description | page, the #724 convention). Unset: nothing is recorded. Text OCR'd from a
     # picture never carries this type's source (and clears a stale one).
     text_source: str = ""
+    # #724 (c): text the row already holds, beside the picture OCR reads: (row) -> [TextSource]
+    # (core/text_sources.py; e.g. a YouTube video's stored description). It reads only the row: no
+    # file, no network, so it runs in the web/MCP process, not a parser child. core/ocr.py
+    # concatenates these with the picture's OCR text under headed sections ("Description:" ...
+    # "Thumbnail text:" ...) and records the sources that gave text as type_metadata.text_source.
+    # A type with text sources settles 'unsupported' (its ocr_unsupported_note) when neither they
+    # nor the picture hold any text, and keeps the source text (with a warning note) when the
+    # picture can't be made or read. A change to the row's sources after OCR settled (a corrected
+    # description through items.update) is folded in by that same update, in its change-log row,
+    # so one undo puts the old text back too (text_sources.resettle, no OCR re-run).
+    text_sources_fn: object = None
 
 
 OBJECT_TYPES = {}

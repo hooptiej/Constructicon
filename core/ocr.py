@@ -57,7 +57,7 @@ from pathlib import Path
 import pytesseract
 from PIL import Image, ImageOps, ImageStat
 
-from . import db, object_types, parse_limits, similarity, storage, thumbnails
+from . import db, object_types, parse_limits, similarity, storage, text_sources, thumbnails
 
 OCR_TIMEOUT_SECONDS = 20  # a real screenshot should OCR in a few seconds; past 20s it's not worth the wait
 _OCR_CONCURRENCY = threading.BoundedSemaphore(int(os.environ.get("OCR_MAX_CONCURRENCY", "2")))  # leave headroom on a 4-core box so the app itself stays responsive
@@ -295,6 +295,28 @@ def _settle_without_picture(slug, row, spec, extracted, extract_error):
     db.set_ocr_status(slug, db.OCR_UNSUPPORTED, note=object_types.ocr_unsupported_note(row, spec))
 
 
+def _settle_with_sources(slug, row, spec, sources, picture_text="", reader_text="", note=None, failure=None):
+    """#724 (c): settle a type that declares text_sources_fn. Its sources (a YouTube description)
+    and the picture's OCR text are combined under headed sections (core/text_sources.py), with the
+    sources that gave text recorded as type_metadata.text_source. Text from the type's own file
+    reader, if it has one, goes first as "File text". `note` is a warning kept on a 'done' row (the
+    picture couldn't be made or read: the text is the sources' only). When nothing at all has text:
+    `failure` (a real error's reason) settles 'failed', else 'unsupported' with the type's note
+    ("video: no description or captions yet"), grey, never red."""
+    if reader_text:
+        sources = [text_sources.TextSource(spec.text_source or "file", "File text", reader_text)] + list(sources)
+    text, source = text_sources.combine(sources, picture_text)
+    if not text:
+        db.set_extracted_text(slug, "")
+        if failure:
+            db.set_ocr_status(slug, "failed", note=failure)
+        else:
+            db.set_ocr_status(slug, db.OCR_UNSUPPORTED, note=object_types.ocr_unsupported_note(row, spec))
+        return
+    db.set_extracted_text(slug, text, source=source)
+    db.set_ocr_status(slug, "done", note=note)
+
+
 def _run_ocr_pipeline(slug, row, spec):
     if is_blank_file(row):
         db.set_extracted_text(slug, "")
@@ -337,8 +359,19 @@ def _run_ocr_pipeline(slug, row, spec):
     # detail page and gallery show.
     image_path = _ocr_source_path(row, spec)
 
+    # #724 (c): text the row already holds (a YouTube description), combined with the picture's.
+    # When the picture can't be made or read, that text still settles the row 'done', with the
+    # reason as a warning note: the text is kept AND the problem is said.
+    sources = text_sources.type_sources(row, spec)
+    source_words = text_sources.labels_of(sources)
+
     if text is None:
         if image_path is None:
+            if spec.text_sources_fn is not None and source_words:
+                problem = failed_reader or (NO_PICTURE_NOTE if object_types.picture_expected(row, spec) else None)
+                _settle_with_sources(slug, row, spec, sources,
+                                     note=f"{problem}; the text is from the {source_words} only" if problem else None)
+                return
             _settle_without_picture(slug, row, spec, extracted, extract_error)
             return
         with OCR_SEMAPHORE:
@@ -352,7 +385,12 @@ def _run_ocr_pipeline(slug, row, spec):
                 # traceable. #724 (b2): the lamp says why (the reader's reason
                 # first: it is the root cause when both failed).
                 print(f"OCR failed for {slug}: {e!r}")
-                db.set_ocr_status(slug, "failed", note=failed_reader or _ocr_error_note(e, row, spec))
+                reason = failed_reader or _ocr_error_note(e, row, spec)
+                if spec.text_sources_fn is not None and source_words:
+                    _settle_with_sources(slug, row, spec, sources,
+                                         note=f"{reason}; the text is from the {source_words} only")
+                    return
+                db.set_ocr_status(slug, "failed", note=reason)
                 return
             _compute_similarity_signals(slug, image_path, text)
         if failed_reader:
@@ -362,6 +400,12 @@ def _run_ocr_pipeline(slug, row, spec):
             _compute_similarity_signals(slug, image_path, text)
 
     text = text.strip()
+    if spec.text_sources_fn is not None:
+        # #724 (c): reader text (if the type has a reader) or the picture's OCR text, plus the sources
+        _settle_with_sources(slug, row, spec, sources,
+                             picture_text="" if extracted else text, reader_text=text if extracted else "",
+                             note=done_note, failure=failed_reader)
+        return
     # #724: text the type's own reader returned records where it came from (type_metadata.text_source);
     # text OCR'd from a picture records none, and clears a stale one.
     db.set_extracted_text(slug, text, source=(spec.text_source or None) if extracted else None)

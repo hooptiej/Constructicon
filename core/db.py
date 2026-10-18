@@ -1210,6 +1210,53 @@ def _mig_reread_legacy_office_724b():
           flush=True)
 
 
+def _mig_text_sources_724c():
+    # #724 part c (owner decision 2026-10-17: descriptions first, free, no network): a YouTube
+    # video's stored description (type_metadata.description) becomes searchable extracted text,
+    # concatenated with the thumbnail's OCR text under headed sections, text_source 'description'.
+    # New rows get it from core/ocr.py; this re-settles the existing ones once, by the same rule
+    # (core/text_sources.resettle), for every type with a text_sources_fn (YouTube today):
+    # - a settled row ('done' / 'unsupported') whose sources hold text: extracted_text rebuilt, the
+    #   OCR text already stored kept as its "Thumbnail text:" section (never lost);
+    # - a settled row with no source text and no thumbnail text: 'unsupported' with the type's note
+    #   ("video: no description or captions yet", grey), part a's rule;
+    # - pending rows are left to their OCR run, 'failed' rows keep their real error until Retry,
+    #   redacted rows and rows with unreadable type_metadata JSON are left alone.
+    # No network, no OCR. Idempotent: resettle returns None for a row already settled this way, so a
+    # second run changes nothing. The FTS index follows through the UPDATE OF extracted_text trigger.
+    from . import object_types, text_sources
+    specs = {k: s for k, s in object_types.OBJECT_TYPES.items() if s.ocr_capable and s.text_sources_fn is not None}
+    if not specs:
+        return
+    conn = get_conn()
+    marks = ", ".join("?" for _ in specs)
+    rows = conn.execute(
+        "SELECT slug, media_type, filename, stored_filename, external_url, extracted_text, ocr_status, type_metadata "
+        f"FROM capture_events WHERE media_type IN ({marks}) AND ocr_status IN ('done', ?) "
+        "AND COALESCE(redacted, 0) = 0", (*specs, OCR_UNSUPPORTED)).fetchall()
+    combined = unsupported = 0
+    for r in rows:
+        row = dict(r)
+        try:
+            row["type_metadata"] = json.loads(row["type_metadata"] or "{}")
+        except ValueError:  # silent-ok: unreadable JSON: leave the row exactly as it is
+            continue
+        spec = specs[row["media_type"]]
+        change = text_sources.resettle(row, spec, object_types.ocr_unsupported_note(row, spec))
+        if change is None:
+            continue
+        meta = text_sources.resettled_meta(row["type_metadata"], change)
+        conn.execute("UPDATE capture_events SET extracted_text = ?, ocr_status = ?, type_metadata = ? WHERE slug = ?",
+                     (change["text"], change["status"], json.dumps(meta), row["slug"]))
+        if change["status"] == OCR_UNSUPPORTED:
+            unsupported += 1
+        else:
+            combined += 1
+    print(f"schema_migrations: text_sources_724c checked {len(rows)} settled row(s) of {sorted(specs)}: "
+          f"{combined} given their description text, {unsupported} re-settled as unsupported (no text at all)",
+          flush=True)
+
+
 def _mig_writeup_lead_596():
     # #596: fill the projects.writeup_lead cache (the card face's write-up excerpt) once for every
     # card that has a write-up. From then on the cards service keeps it in step with every write-up
@@ -1405,6 +1452,7 @@ MIGRATIONS = [
     ("search_index_543", _mig_search_index_543),
     ("ocr_unsupported_724", _mig_ocr_unsupported_724),
     ("reread_legacy_office_724b", _mig_reread_legacy_office_724b),
+    ("text_sources_724c", _mig_text_sources_724c),
 ]
 
 

@@ -123,7 +123,7 @@ def _has_large_gap(items):
         return True  # No gap to speak of, check passes
 
     # Compute effective dates using timeline resolution
-    dates = sorted([timeline.resolve_item_date(item) for item in items])
+    dates = sorted(timeline.real_dates(items))  # #725: undated items have no place on the line
 
     # Compute gaps between consecutive dates
     gaps = []

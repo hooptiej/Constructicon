@@ -69,19 +69,67 @@ def _date_made(row):
     return physical_piece.date_made_epoch(tm)
 
 
-def resolve_item_date(row):
-    """row is a capture_events dict (core.db.get_by_slug/_row_to_dict
-    shape). timestamp is NOT NULL in the schema, so this always resolves.
+# --- #725: only REAL dates count ------------------------------------------------------------
+# The upload time is when a row was created in Constructicon, never the content's date ("Import
+# date is not a birthday"). A file's own modified time counts only when it is from BEFORE the
+# install's first upload: one from after it is almost certainly a download / copy date. The cutoff
+# lives in the database (core/db.py first_upload_epoch, MIN(capture_events.timestamp)), so this pure
+# module asks a provider core.db registers at import (set_first_upload_provider). With no provider
+# (a unit test importing only this module) every file mtime counts, the pre-#725 behaviour for it.
+AUTO = object()          # "ask the provider": the default for every first_upload= argument below
+_first_upload_provider = None
 
-    source_modified_at (the uploaded file's own last-modified time,
-    already captured on upload -- see core.db.insert_upload) sits between
-    content_date and timestamp: better than timestamp (which is only ever
-    "when this row was created in Constructicon" -- an earlier bulk import
-    of old phone videos used the import moment for every row, confirmed
-    against real data where a video's own filename and source_modified_at
-    independently agreed on a 2021 date while timestamp read as
-    essentially "today"), but content_date -- when set -- is a more
-    deliberate, verified real-world date and should still win."""
+
+def set_first_upload_provider(fn):
+    """core.db registers its first_upload_epoch here (called once, at its import)."""
+    global _first_upload_provider
+    _first_upload_provider = fn
+
+
+def first_upload():
+    """The install's first upload (UTC unix seconds), or None (no provider, or no items yet)."""
+    return _first_upload_provider() if _first_upload_provider is not None else None
+
+
+def _cutoff(first_upload_arg):
+    return first_upload() if first_upload_arg is AUTO else first_upload_arg
+
+
+def mtime_is_real(mtime, first_upload_at):
+    """A file's own modified time is a real date only when it is from before the install's first
+    upload (#725). `first_upload_at` None (no items yet / no provider) = every mtime counts."""
+    if mtime is None:
+        return False
+    return first_upload_at is None or mtime < first_upload_at
+
+
+def date_source(row, first_upload=AUTO):
+    """Which rung of the chain dates this row: "hand" (display_date_override), "made" (#425 date
+    made), "content" (content_date: EXIF, a container date, a YouTube publish date, an accepted
+    guess), "file" (the file's own mtime, from before the first upload), or None (no real date)."""
+    if row.get("display_date_override") is not None:
+        return "hand"
+    if _date_made(row) is not None:
+        return "made"
+    if row.get("content_date") is not None:
+        return "content"
+    if mtime_is_real(row.get("source_modified_at"), _cutoff(first_upload)):
+        return "file"
+    return None
+
+
+def resolve_item_date(row, first_upload=AUTO):
+    """row is a capture_events dict (core.db.get_by_slug/_row_to_dict shape). Returns the item's
+    REAL date as UTC unix seconds, or None when it has none (#725: "Undated").
+
+    The chain: display_date_override (set by hand) -> date made (#425, a physical piece) ->
+    content_date (the content's own date: EXIF, a container date, a YouTube publish date, an
+    accepted date guess) -> source_modified_at (the file's own last-modified time) ONLY when it is
+    from before the install's first upload (see mtime_is_real). The upload time (`timestamp`) is
+    never the item's date: it is shown only as "Imported <date>". Every caller copes with None:
+    the card face says "Undated" (or the approximate range it inherits from its card,
+    core/item_dates.py), sorts put undated items last (date_sort_key), the timeline leaves them
+    off its axis, spans skip them. Pass `first_upload` to resolve a batch against one cutoff."""
     if row.get("display_date_override") is not None:
         return row["display_date_override"]
     # #425: a physical piece's own "date made" outranks content_date (a scan's creation time).
@@ -90,22 +138,30 @@ def resolve_item_date(row):
         return made
     if row.get("content_date") is not None:
         return row["content_date"]
-    if row.get("source_modified_at") is not None:
-        return row["source_modified_at"]
-    return row["timestamp"]
+    mtime = row.get("source_modified_at")
+    if mtime_is_real(mtime, _cutoff(first_upload)):
+        return mtime
+    return None
 
 
-def has_real_date(row):
-    """True if the row has a *real* content date — anything resolve_item_date
-    would use ahead of the bare upload timestamp (#406). An object dated only
-    via source_modified_at is still placed on the timeline with a real date, so
-    it must count as 'dated' for coverage; otherwise the Curator nags to date
-    things it already knows the date of (archive imports carry their real date
-    in source_modified_at, not content_date)."""
-    return (row.get("display_date_override") is not None
-            or _date_made(row) is not None
-            or row.get("content_date") is not None
-            or row.get("source_modified_at") is not None)
+def has_real_date(row, first_upload=AUTO):
+    """True if the row has a real date (resolve_item_date is not None): the Curator's date coverage
+    (#406) and card_level's dates pip count exactly the dates the cards show."""
+    return resolve_item_date(row, first_upload) is not None
+
+
+def date_sort_key(epoch, newest_first=False):
+    """A sort key that puts None (undated) LAST in either direction, for a plain ascending sort:
+    `sorted(xs, key=lambda x: date_sort_key(d(x), newest_first=True))`. Stable among the undated."""
+    if epoch is None:
+        return (1, 0.0)
+    return (0, -epoch if newest_first else epoch)
+
+
+def real_dates(items, first_upload=AUTO):
+    """The real dates of `items`, undated ones skipped (for min/max/median/gap maths)."""
+    cutoff = _cutoff(first_upload)
+    return [d for d in (resolve_item_date(i, cutoff) for i in items) if d is not None]
 
 
 def is_blank_writeup_document(item):
@@ -122,36 +178,49 @@ def is_blank_writeup_document(item):
     return not str((meta or {}).get("body") or "").strip()
 
 
-def resolve_project_span(project, items):
+def resolve_project_span(project, items, first_upload=AUTO):
     """project is a core.db projects dict. items is that project's
     capture_events rows (core.db.list_project_items shape) — may be empty.
-    Returns (start, end); an empty or single-moment project collapses to
-    start == end, deliberately, rather than a special-cased "no span" branch.
+    Returns (start, end) from REAL dates only (#725), or (None, None) when the card has none: no
+    item with a real date and no Timeline start/end override. Upload times, file mtimes from after
+    the install's first upload and the card's own created_at never count (they are not dates of the
+    work). A single-moment card collapses to start == end; a card with only one override set (and
+    nothing else real) collapses onto it.
+
+    The card's own Timeline start/end overrides (hand-set) win, as before. An undated item's
+    approximate date (inherited FROM this span, core/item_dates.py) is never an input here, so the
+    span can't feed on itself.
 
     The write-up document (project["writeup_slug"], when it's also one of
     `items` — #156 projects can include their write-up in project_items
     like any other member) is excluded from the span calculation. A
     write-up's own timestamp is whenever it was authored/generated, not
-    when the project's actual content happened — write-ups are being
-    machine-generated fresh for existing projects, which would otherwise
-    drag every project's effective_end to "whenever we wrote it up,"
-    masking the real chronology entirely.
+    when the project's actual content happened.
 
     #672: an EMPTY write-up document (a written post with no body, e.g. the blank write-up a card
     was born with, left behind when the card got a different write-up) is skipped too, whether
-    or not it is the current write-up: its only date is when the card was created."""
-    start_override = project.get("start_date_override")
-    end_override = project.get("end_date_override")
-    if start_override is not None and end_override is not None:
-        return start_override, end_override
-
+    or not it is the current write-up."""
+    if project.get("start_date_override") is not None and project.get("end_date_override") is not None:
+        return project["start_date_override"], project["end_date_override"]
     writeup_slug = project.get("writeup_slug")
     dated_items = [item for item in items
                    if item["slug"] != writeup_slug and not is_blank_writeup_document(item)]
-    item_dates = [resolve_item_date(item) for item in dated_items]
-    derived_start = min(item_dates) if item_dates else project["created_at"]
-    derived_end = max(item_dates) if item_dates else project["created_at"]
+    return span_from_dates(project, real_dates(dated_items, first_upload))
+
+
+def span_from_dates(project, item_dates):
+    """resolve_project_span's second half: the card's own start/end overrides over the span of
+    `item_dates` (its eligible items' REAL dates, already resolved). (None, None) when nothing.
+    core/item_dates.py uses it for every card at once from one query."""
+    start_override = project.get("start_date_override")
+    end_override = project.get("end_date_override")
+    derived_start = min(item_dates) if item_dates else None
+    derived_end = max(item_dates) if item_dates else None
 
     start = start_override if start_override is not None else derived_start
     end = end_override if end_override is not None else derived_end
+    if start is None:
+        start = end
+    if end is None:
+        end = start
     return start, end

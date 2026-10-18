@@ -55,7 +55,7 @@ from mcp.server.mcpserver import Image as McpImage, MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from core import access_log, actor as actor_ctx, policy, roles, users
-from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
+from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, item_dates, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
 from core import blog, changes, hobbies, membership, parse_limits, reset
@@ -215,6 +215,9 @@ ACTION_ROLES = {
     ("constructicon_update", None): E,
     ("constructicon_view", None): V,
     ("constructicon_set_caption", None): E,
+    ("constructicon_undated", "list"): V,        # #725: undated items and their date guesses
+    ("constructicon_undated", "accept"): E,      # one guess written as content_date (undoable)
+    ("constructicon_undated", "apply_auto"): E,  # every high-confidence guess, one batch (undoable)
     ("constructicon_set_agent_notes", "slug"): E,  # an item's private notes (#206)
     ("constructicon_set_agent_notes", "card"): E,  # a card's (#745); same rule as the item's
     ("constructicon_add_content", None): E,
@@ -517,7 +520,10 @@ def _to_public(row):
         "timestamp": row["timestamp"],
         "content_date": row.get("content_date"),
         "display_date_override": row.get("display_date_override"),
+        # #725: the REAL date or None (undated: the upload `timestamp` above is never the item's date);
+        # date_shown is what its card says ("≈ <range> · from <card>" when it inherits its card's range).
         "effective_date": timeline.resolve_item_date(row),
+        "date_shown": item_dates.item_date(row)["label"],
         # Curator (#341): provenance classification + highlight flag, so every
         # MCP object read (get_project items, search, list) carries them.
         "provenance": row.get("provenance"),
@@ -1123,6 +1129,55 @@ def constructicon_set_caption(slug: str, text: str, accept: bool = False) -> dic
 
 
 _DESTRUCTIVE = ToolAnnotations(destructiveHint=True)
+
+
+@mcp.tool(selector="action")
+def constructicon_undated(action: typing.Literal["list", "accept", "apply_auto"] = "list", slug: str | None = None,
+                          source: str | None = None, include_inherited: bool = True, read_files: bool = False,
+                          limit: int = 50, dry_run: bool = False) -> dict:
+    """Items with no REAL date (the upload time and a file mtime from after the install's first upload
+    are not dates), with date guesses, so you can date them.
+    "list" (default): {items, total, needs_date}. Each item: slug, name, type, filename, imported,
+      shows (what its card says: "Undated" or "≈ <range> · from <card>"), inherits (the card range it
+      borrows, or null), needs_date (true = no range to borrow, so it is in the Curator), guesses
+      [{date, epoch, source, confidence, evidence, auto, label}], best first. include_inherited=false
+      lists only the needs_date ones (a card's write-up never needs a date). read_files=true also reads each file's own embedded date
+      (slower: one parser process per file). limit 1..500.
+    "accept": write `slug`'s guess from `source` (filename | file_metadata | youtube | ocr_text |
+      siblings) as its content_date, source recorded. Returns {slug, batch_id, guess}.
+    "apply_auto": write every high-confidence guess (in-file evidence: filename, file_metadata,
+      youtube) to the undated items, ONE batch. Returns {applied, skipped, batch_id}; dry_run=true
+      writes nothing and lists what it would do.
+    Every write is undoable (constructicon_undo(batch_id)); an item that already has a real date is
+    never overwritten.
+    """
+    if action == "list":
+        if not 1 <= int(limit) <= 500:
+            raise InvalidInput("limit must be between 1 and 500.", code="bad_limit")
+        snap = item_dates.snapshot()
+        rows = policy.filter_visible(item_dates.undated_rows(include_inherited=include_inherited, snap=snap))
+        if not include_inherited:  # the Curator's set exactly (a card's write-up never needs a date)
+            rows = [r for r in rows if item_dates.needs_date(r, snap=snap)]
+        entries = [item_dates.listing_entry(r, read_file=read_files, snap=snap) for r in rows[:int(limit)]]
+        return {"items": entries, "total": len(rows), "needs_date": sum(1 for e in entries if e["needs_date"])}
+    if action == "accept":
+        if not slug or not source:
+            raise InvalidInput("accept needs slug and source.", code="bad_request")
+        policy.viewable_item(slug, message=f"No item {slug!r}.")
+        res = items.accept_date_guess(slug, source, dry_run=dry_run)
+        return {"slug": slug, "batch_id": None if dry_run else _written(res.batch_id), "guess": res.data["guess"],
+                **({"dry_run": True} if dry_run else {})}
+    if action == "apply_auto":
+        plan = item_dates.auto_plan(read_files=True)
+        visible = {r["slug"] for r in policy.filter_visible([r for r, _g in plan])}
+        plan = [(r, g) for r, g in plan if r["slug"] in visible]
+        if not plan:
+            return {"applied": [], "skipped": [], "batch_id": None, "message": "No undated item has a high-confidence guess."}
+        res = items.apply_dates([(r["slug"], g.epoch, item_dates.source_record(g)) for r, g in plan], dry_run=dry_run)
+        guesses = {r["slug"]: g.as_dict() for r, g in plan}
+        return {"applied": [{"slug": s, **guesses[s]} for s in res.data["applied"]], "skipped": res.data["skipped"],
+                "batch_id": None if dry_run else _written(res.batch_id), **({"dry_run": True} if dry_run else {})}
+    raise InvalidInput(f"Unknown action {action!r}: use list, accept or apply_auto.")
 
 
 def _redact(slug):

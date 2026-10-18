@@ -456,6 +456,11 @@ def transaction(dry_run=False, timeout=30):
         real.close()
 
 
+def in_transaction():
+    """True inside a transaction() on this thread (#725: derived-data caches skip uncommitted state)."""
+    return getattr(_ambient, "tx", None) is not None
+
+
 @contextmanager
 def read_session():
     """(#524) One shared connection for a read-heavy computation. get_conn() opens and closes
@@ -503,6 +508,34 @@ def change_fingerprint():
         except OSError:
             out.append(None)
     return tuple(out)
+
+
+# --- #725: the install's first upload (timeline's cutoff for "real" file mtimes) ---------------
+# core/timeline.py counts a file's own modified time as a real date only when it is from before the
+# install's first upload. That is MIN(capture_events.timestamp): derived, never stored, so a fresh
+# install and every throwaway test DB get their own. Cached per DB file until anything is written
+# (change_fingerprint), so a grid of 2,000 rows costs two stat() calls per row, not a query.
+_first_upload_cache = {"key": None, "value": None}
+_first_upload_lock = threading.Lock()
+
+
+def first_upload_epoch():
+    """The install's first upload (UTC unix seconds), or None while it holds no items."""
+    key = (str(DB_PATH), change_fingerprint())
+    with _first_upload_lock:
+        if _first_upload_cache["key"] == key and key[1] is not None:
+            return _first_upload_cache["value"]
+    conn = get_conn()
+    try:
+        value = conn.execute("SELECT MIN(timestamp) FROM capture_events").fetchone()[0]
+    finally:
+        conn.close()
+    with _first_upload_lock:
+        _first_upload_cache.update(key=key, value=value)
+    return value
+
+
+timeline.set_first_upload_provider(first_upload_epoch)
 
 
 class _DryRunRollback(Exception):
@@ -1476,6 +1509,29 @@ def _mig_ownership_backfill_604():
 # owner's own cards; they moved to scripts/archive/ (already recorded in schema_migrations on the
 # owner's installs, so dropping them from this list changes nothing there; fresh installs never
 # run them). v2c_1/2/5 are generic (legacy status, hobby vocabulary, reference-only cards).
+def _mig_date_guess_backfill_725():
+    # #725: undated items (no real date: the upload time and a post-install file mtime don't count)
+    # get the high-confidence date guesses (core/date_guess.py: a date in the file name, the file's
+    # own embedded date such as a PDF CreationDate or a container date, a stored YouTube publish
+    # date) as content_date, with the source recorded, as ONE undoable batch (core/items.py
+    # apply_dates, op item_date_guess, actor migration). No network: nothing is fetched. Idempotent:
+    # fill-only, so a second run finds those items dated and skips them. The rest stay undated:
+    # they inherit their card's range, or the Curator shows them as needs_date.
+    from . import actor as actor_ctx, item_dates, items
+    with actor_ctx.acting_as(actor_ctx.ACTOR_MIGRATION):
+        plan = item_dates.auto_plan(read_files=True)
+        by_source = {}
+        for _row, g in plan:
+            by_source[g.source] = by_source.get(g.source, 0) + 1
+        if plan:
+            res = items.apply_dates([(r["slug"], g.epoch, item_dates.source_record(g)) for r, g in plan])
+            applied, batch = len(res.data["applied"]), res.batch_id
+        else:
+            applied, batch = 0, None
+    print(f"schema_migrations: date_guess_backfill_725 dated {applied} undated item(s) from in-file evidence "
+          f"{by_source} (batch {batch}; undo it with POST /api/changes/<batch>/undo)", flush=True)
+
+
 def _mig_search_index_543():
     # #543: fills the FTS5 search index for every item already in the DB (new/changed items are
     # kept current by the triggers from here on). Idempotent: 'rebuild' discards and re-creates the
@@ -1506,6 +1562,7 @@ MIGRATIONS = [
     ("text_sources_724c", _mig_text_sources_724c),
     ("link_page_text_724d", _mig_link_page_text_724d),
     ("transcripts_724e", _mig_transcripts_724e),
+    ("date_guess_backfill_725", _mig_date_guess_backfill_725),
 ]
 
 
@@ -3717,8 +3774,8 @@ def list_project_items(project_id):
 
     Ordered by each item's real-world chronology (#300): the same
     effective-date chain core/timeline.py's resolve_item_date establishes
-    for the Timeline feature (display_date_override → content_date →
-    source_modified_at → timestamp), oldest first, so the project page
+    for the Timeline feature (display_date_override → date made → content_date →
+    a pre-install source_modified_at; #725: undated items last), oldest first, so the project page
     reads as the project actually happened rather than in the order things
     were filed. Resolved in Python rather than inlined into SQL so there's
     exactly one implementation of that chain. The SQL still orders by
@@ -3742,7 +3799,9 @@ def list_project_items(project_id):
             (project_id,),
         ).fetchall()
         items = [_row_to_dict(r) for r in rows]
-        items.sort(key=timeline.resolve_item_date)
+        cutoff = timeline.first_upload()
+        # #725: undated items (no real date) go last, in sort_order (the sort is stable).
+        items.sort(key=lambda i: timeline.date_sort_key(timeline.resolve_item_date(i, cutoff)))
         if memo is not None:
             memo[("items", project_id)] = items
             return list(items)
@@ -5051,10 +5110,9 @@ def hobby_flags(tag_id, now=None):
         last = None
         for p in projects:
             items = list_project_items(p["id"])
-            dated = [i for i in items if i["slug"] != p.get("writeup_slug")]
-            if not dated and p.get("end_date_override") is None:
+            end = timeline.resolve_project_span(p, items)[1]  # #725: None when nothing real
+            if end is None:
                 continue
-            end = timeline.resolve_project_span(p, items)[1]
             last = end if last is None else max(last, end)
         conn = get_conn()
         try:
@@ -5065,6 +5123,8 @@ def hobby_flags(tag_id, now=None):
             conn.close()
         for r in rows:
             d = timeline.resolve_item_date(_row_to_dict(r))
+            if d is None:
+                continue  # #725: an undated item says nothing about when the hobby was touched
             last = d if last is None else max(last, d)
         if last is not None:
             days = int((now - last) // 86400)
@@ -5206,6 +5266,60 @@ def first_card_titles():
             "WHERE pi.rowid IN (SELECT MIN(rowid) FROM project_items GROUP BY post_slug)")}
     finally:
         conn.close()
+
+
+# --- #725: the reads behind core/item_dates.py (an undated item's approximate date) ----------
+_DATE_COLS = ("ce.slug, ce.media_type, ce.sensitive, ce.redacted, ce.timestamp, ce.content_date, "
+              "ce.display_date_override, ce.source_modified_at, "
+              "CASE WHEN json_valid(ce.type_metadata) THEN json_extract(ce.type_metadata, '$.date_made') END AS date_made")
+
+
+def date_lending_rows():
+    """#725: (cards, links) for every card's REAL-dated range in ONE pass. `cards`: id, slug,
+    title, writeup_slug and the Timeline start/end overrides of every card. `links`: one row per
+    card membership with the item's date columns only (never its text or embedding): project_id,
+    `link_order` (project_items.rowid: the first one per item is the card it was first filed into,
+    as db.first_card_titles), the date columns, `date_made` (type_metadata.date_made) and
+    `blank_doc` (an empty written post, #672: never part of a span)."""
+    conn = get_conn()
+    try:
+        cards = [dict(r) for r in conn.execute(
+            "SELECT id, slug, title, writeup_slug, start_date_override, end_date_override FROM projects")]
+        links = [dict(r) for r in conn.execute(
+            f"SELECT pi.project_id, pi.rowid AS link_order, {_DATE_COLS}, "
+            "CASE WHEN ce.media_type = 'document' AND json_valid(ce.type_metadata) "
+            "THEN trim(COALESCE(json_extract(ce.type_metadata, '$.body'), '')) = '' ELSE 0 END AS blank_doc "
+            "FROM project_items pi JOIN capture_events ce ON ce.slug = pi.post_slug")]
+        return cards, links
+    finally:
+        conn.close()
+
+
+def item_date_rows():
+    """#725: the date columns (as date_lending_rows) of every non-redacted item, for finding the
+    undated ones without loading every row's text."""
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(f"SELECT {_DATE_COLS} FROM capture_events ce WHERE ce.redacted = 0")]
+    finally:
+        conn.close()
+
+
+def get_by_slugs(slugs):
+    """Full item rows (the get_by_slug shape) for `slugs`, in the order given; unknown slugs are
+    left out. Read in chunks (SQLite's parameter limit)."""
+    slugs = list(dict.fromkeys(slugs))
+    found = {}
+    conn = get_conn()
+    try:
+        for i in range(0, len(slugs), 500):
+            chunk = slugs[i:i + 500]
+            marks = ",".join("?" for _ in chunk)
+            for r in conn.execute(f"SELECT * FROM capture_events WHERE slug IN ({marks})", chunk):
+                found[r["slug"]] = _row_to_dict(r)
+    finally:
+        conn.close()
+    return [found[s] for s in slugs if s in found]
 
 
 def hobby_shows_physical_piece(hobby_id):

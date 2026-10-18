@@ -426,12 +426,61 @@ if WRITE_GOLDEN:
 # ---- 1 + 2. alias parity and the new call ----------------------------------------------------------------
 print("--- 1/2. every alias: same JSON as before, and the new call does the same ---")
 GOLD = json.load(open(GOLDEN, encoding="utf-8"))["results"]
+
+
+MASKED_725 = ("effective_date", "effective_start", "effective_end")
+
+
+def golden_view(label, value):
+    """What the golden comparison compares (see mask_725). Two scenarios also changed on purpose in #725:
+    the nudge list is ordered by each card's most recent REAL date (a card with none falls back to its
+    created_at, no longer an upload time), so list_needs compares as a set (sorted by key); and the queue
+    gained `needs_date` items (an undated file with no card range to borrow), so curation_queue compares
+    without them (empty groups dropped, counts recomputed)."""
+    value = mask_725(value)
+    if label == "list_needs" and isinstance(value, list):
+        return sorted(value, key=lambda n: n.get("nudge_key", ""))
+    if label == "curation_queue" and isinstance(value, dict) and "groups" in value:
+        out = dict(value)
+        removed = 0
+        for section in ("groups", "deferred"):
+            kept = []
+            for g in value.get(section, []):
+                its = [i for i in g["items"] if i.get("kind") != "needs_date"]
+                removed += len(g["items"]) - len(its)
+                if its:
+                    kept.append({**g, "items": its})
+            out[section] = kept
+        c = dict(value.get("counts") or {})
+        n_open = sum(len(g["items"]) for g in out["groups"])
+        c["needs"] = c.get("needs", 0) - (c.get("open", 0) - n_open)
+        c["open"] = n_open
+        c["deferred"] = sum(len(g["items"]) for g in out["deferred"])
+        out["counts"] = c
+        return out
+    return value
+
+
+def mask_725(value):
+    """#725 changed what an item's `effective_date` is (its REAL date, or null when undated, never the
+    upload time) and a card's `effective_start` / `effective_end` (real dates only, null when it has
+    none, never its created_at), and added `date_shown`, after this golden was written by the pre-#746
+    server (which no longer exists, so it can't be re-captured). For the golden comparison only, both
+    sides mask those fields; the "new call: same answer" checks below still compare the full current
+    answers."""
+    if isinstance(value, dict):
+        return {k: ("<date>" if k in MASKED_725 else mask_725(v)) for k, v in value.items() if k != "date_shown"}
+    if isinstance(value, list):
+        return [mask_725(v) for v in value]
+    return value
+
+
 aliases_seen = set()
 for label, alias, akw, new, nkw, read in SCEN:
     aliases_seen.add("constructicon_" + alias)
     restore()
     got = as_json(call(alias, **akw))
-    check(f"alias {label}: same JSON as before #746", got == GOLD.get(label),
+    check(f"alias {label}: same JSON as before #746", golden_view(label, got) == golden_view(label, GOLD.get(label)),
           f"got {json.dumps(got)[:300]} want {json.dumps(GOLD.get(label))[:300]}")
     after_alias = dump_db()
     restore()
@@ -461,7 +510,8 @@ print("--- 3. tools/list hides aliases, tools/call answers them, each alias call
 restore()
 listed = asyncio.run(S.mcp.list_tools())
 names = {t.name for t in listed}
-check("tools/list: 55 tools", len(names) == 55, len(names))
+# #746 folded 108 into 55; #725 added constructicon_undated (56).
+check("tools/list: 56 tools", len(names) == 56, len(names))
 check("tools/list: no alias listed", not (names & set(S._HIDDEN_ALIASES)), sorted(names & set(S._HIDDEN_ALIASES)))
 SNAPNAMES = json.load(open(os.path.join(HERE, "data", "mcp_tool_names_700.json"), encoding="utf-8"))["names"]
 check("tools/list equals scripts/data/mcp_tool_names_700.json", sorted(names) == sorted(SNAPNAMES),
@@ -629,7 +679,7 @@ finally:
 # ---- 8. the (tool, action) -> role table -----------------------------------------------------------------
 print("--- 8. who may run which (tool, action) ---")
 visible = {n for n in S._TOOL_FUNCS if n not in S._ALIAS_OF}
-check("55 visible tool functions", len(visible) == 55, len(visible))
+check("56 visible tool functions (#746's 55 + #725's constructicon_undated)", len(visible) == 56, len(visible))
 check("every visible tool has its role rows (startup refuses otherwise)",
       all(any(k[0] == n for k in S.ACTION_ROLES) for n in visible))
 check("permanent actions need admin",

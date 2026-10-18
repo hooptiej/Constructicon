@@ -20,7 +20,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import actor as actor_ctx, card_rules, changes, datefmt, db, item_title, markdown_render, timeline
+from . import actor as actor_ctx, card_rules, changes, datefmt, db, item_dates, item_title, markdown_render, timeline
 from .card_rules import CardError
 from .errors import AppError, InvalidInput
 
@@ -1919,8 +1919,8 @@ def _file_summary(card, items):
     by_type = {}
     for f in files:
         by_type[f.get("media_type") or "unknown"] = by_type.get(f.get("media_type") or "unknown", 0) + 1
-    dates = [timeline.resolve_item_date(f) for f in files]
-    return {"total": len(files), "by_type": by_type,
+    dates = timeline.real_dates(files)  # #725: undated files have no say in the span
+    return {"total": len(files), "by_type": by_type, "undated": len(files) - len(dates),
             "earliest": min(dates) if dates else None, "latest": max(dates) if dates else None}
 
 
@@ -2148,13 +2148,29 @@ def _day_label(ts):
     return datefmt.day(ts)
 
 
+def _by_real_date(rows):
+    """[(real date or None, row)], earliest first, undated last (#725; stable, so they keep their
+    list order)."""
+    cutoff = timeline.first_upload()
+    dated = [(timeline.resolve_item_date(r, cutoff), r) for r in rows]
+    return sorted(dated, key=lambda p: timeline.date_sort_key(p[0]))
+
+
+def _pile_span(dated):
+    """A pile's `Mon YYYY - Mon YYYY` from its REAL dates; "Undated" when it has none (#725)."""
+    real = [ts for ts, _r in dated if ts is not None]
+    return date_range_label(real[0], real[-1]) if real else item_dates.UNDATED_LABEL
+
+
 def _asset_card(r, ts, spec, card_row, thumb_fn):
-    """One file's face (file_face) for a pile or a fan on `card_row`'s page."""
+    """One file's face (file_face) for a pile or a fan on `card_row`'s page. `ts` is its real date
+    or None (#725): an undated file's date line is what core/item_dates.py says it shows."""
     title = item_title.title_of(r)
     text = next((t for t in (r.get("content_description"), r.get("description")) if t and t != title), "")
     name = r.get("filename") or ""
     ext = name.rpartition(".")[2] if "." in name else ""
-    return file_face(slug=r["slug"], title=title, dates=_day_label(ts), type_line=spec.label,
+    dates = _day_label(ts) if ts is not None else item_dates.item_date(r)["label"]
+    return file_face(slug=r["slug"], title=title, dates=dates, type_line=spec.label,
                      cover_url=thumb_fn(r) if thumb_fn else None,
                      href=f"/object/{r['slug']}?from=project:{card_row['slug']}",
                      stacked=card_row["title"], text=text, stat=ext.upper())
@@ -2171,11 +2187,11 @@ def project_pile(card, items=None, thumb_fn=None):
         items = db.list_project_items(row["id"])
     if not items:
         return None
-    dated = sorted(((timeline.resolve_item_date(r), r) for r in items), key=lambda p: p[0])
+    dated = _by_real_date(items)
     shown = dated[:STACK_FAN_MAX]
     cards = [_asset_card(r, ts, object_types.get_object_type(r.get("media_type") or "unknown"), row, thumb_fn)
              for ts, r in shown]
-    return {"count": len(items), "span": date_range_label(dated[0][0], dated[-1][0]),
+    return {"count": len(items), "span": _pile_span(dated),
             "cards": cards, "more": max(0, len(items) - len(cards))}
 
 
@@ -2329,12 +2345,12 @@ def file_stacks(card, items=None, thumb_fn=None):
     piles = []
     for mt, rows in by_type.items():
         spec = object_types.get_object_type(mt)
-        dated = sorted(((timeline.resolve_item_date(r), r) for r in rows), key=lambda p: p[0])
+        dated = _by_real_date(rows)
         shown = dated[:STACK_FAN_MAX]
         cards = [_asset_card(r, ts, spec, row, thumb_fn) for ts, r in shown]
         piles.append({
             "media_type": mt, "label": spec.label, "count": len(rows),
-            "span": date_range_label(dated[0][0], dated[-1][0]),
+            "span": _pile_span(dated),
             "cards": cards, "more": max(0, len(rows) - len(cards)),
         })
     piles.sort(key=lambda p: (-p["count"], p["label"]))

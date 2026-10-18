@@ -12,6 +12,8 @@
                       stay expanded across reloads
          accept       resolve the question with its suggested key(s)
          choose       show the options; the form's submit resolves with the picked key(s)
+         accept-date  (#725) a needs_date item's "Use <date>": POST /api/image/{slug}/date-guess with
+                      its source; the answer's batch_id offers Undo
          defer / bring-back / dismiss
        Resolve uses POST /api/pending-decisions/{id}/resolve, the same route the project page's strip uses.
    Updates are announced through an aria-live region; every control is a real button, link or form. */
@@ -151,6 +153,21 @@
       }
     }
 
+    async function acceptDate(item) {
+      busy(item, true);
+      fail(item, '');
+      try {
+        var data = await post('/api/image/' + encodeURIComponent(item.dataset.cqItem) + '/date-guess',
+                              { source: item.dataset.cqSource || '' });
+        var msg = 'Dated ' + (data.date_display || '') + '. It is out of the queue.';
+        if (data.batch_id && window.showUndoBar) window.showUndoBar(msg, data.batch_id, null);
+        changed(msg, item);
+      } catch (e) {
+        busy(item, false);
+        fail(item, (e && e.message) || 'Network error.');
+      }
+    }
+
     async function simple(item, url, msg, param) {
       busy(item, true);
       fail(item, '');
@@ -187,6 +204,8 @@
         var keys = [];
         try { keys = JSON.parse(item.dataset.cqSuggested || '[]'); } catch (x) { keys = []; }
         resolve(item, keys);
+      } else if (action === 'accept-date') {
+        acceptDate(item);
       } else if (action === 'choose') {
         var form = item.querySelector('.cq-chooser');
         if (!form) return;

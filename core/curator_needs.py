@@ -138,10 +138,9 @@ def project_nudges(project, dismissed=None):
         # make a stale WIP look freshly worked-on.
         items = curator.content_items(project, db.list_project_items(project_id))
         if items:  # Only check if there are items
-            most_recent_date = max(
-                timeline.resolve_item_date(item) for item in items
-            )
-            days_since = (time.time() - most_recent_date) / (24 * 3600)
+            real = timeline.real_dates(items)  # #725: an undated item says nothing about recency
+            most_recent_date = max(real) if real else None
+            days_since = (time.time() - most_recent_date) / (24 * 3600) if real else 0
             if days_since > 90:
                 kind = "stale_wip"
                 nudge_key = _nudge_key_for_project(kind, project_id)
@@ -183,8 +182,9 @@ def _sort_key(nudge, recency_cache=None):
         # Find the most recent project item date
         project = db.get_project(nudge["target_id"])
         items = curator.content_items(project, db.list_project_items(nudge["target_id"]))
-        if items:
-            recency = -max(timeline.resolve_item_date(item) for item in items)
+        real = timeline.real_dates(items)  # #725: real dates only
+        if real:
+            recency = -max(real)
         else:
             recency = -project["created_at"]
         if recency_cache is not None:

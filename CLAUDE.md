@@ -121,7 +121,10 @@ the date and commit forward when you re-verify.
     failures). See "Service layer" and "Actor and errors".
   - *Rules and policy (pure or near-pure):* `card_rules.py` (card enums, labels, validation, no DB),
     `card_level.py` (the 0-5 curation pips), `card_payload.py` (slim item records for grids),
-    `timeline.py` (effective-date resolution; `source_datetime_to_epoch`), `datefmt.py` (the one place
+    `timeline.py` (an item's REAL date or None, card spans from real dates only, #725;
+    `source_datetime_to_epoch`), `item_dates.py` (what date an item SHOWS: real, inherited from its
+    card "≈ ... · from <card>", or Undated; the undated items' guesses, #725), `date_guess.py` (the pure
+    date guesser, #725), `datefmt.py` (the one place
     a stored date becomes text, in Mountain Time, #544), `item_title.py` (`title_of`, #542),
     `markdown_render.py`, `roles.py` + `policy.py` (who may use a door / see an item; `access_log.py`
     records opens of sensitive items), `physical_piece.py` (made-by-hand item fields).
@@ -214,8 +217,12 @@ the date and commit forward when you re-verify.
   (artist/album/track/year/genre); and, since #265, **`content_date`** —
   an image's EXIF `DateTimeOriginal` (Pillow, `core/object_types/image.py`)
   and a video's container `creation_time` (ffprobe,
-  `core/object_types/video.py`), gated by a plausibility window (1980 to
-  now) that drops metadata sentinels like QuickTime's 1904 epoch. Naive
+  `core/object_types/video.py`) (#725: and a PDF's own `CreationDate`,
+  `core/object_types/pdf.py`), gated by a plausibility window (1980 to
+  now) that drops metadata sentinels like QuickTime's 1904 epoch. #725: a
+  row that still has no real date then takes a date written in its FILE
+  NAME (`core/date_guess.py` `from_filename`), recorded in
+  `type_metadata.content_date_source` (see "Dates" below). Naive
   source dates go through `core/timeline.py`'s
   `source_datetime_to_epoch` (the Mountain Time convention below).
   Strictly fill-only-missing — never overwrites a value already on the
@@ -1210,16 +1217,17 @@ matching the V2 mockup's Card template:
   static on a phone (wrapped it is ~5 lines). Check with
   `scripts/test_item_grid_553.py` (throwaway DB: the four pages, viewers, every bulk action from a
   non-/unfiled grid with change log + undo, 1,050 gallery rows) and `node scripts/test_item_grid_553.js`.
-- **Grid sort: the date on the card, or the upload time (#622).** Every item grid (home Files, /unfiled,
+- **Grid sort: the date on the card, or the upload time (#622, #725).** Every item grid (home Files, /unfiled,
   the user gallery, hobby loose objects) has the same Sort menu, `templates/_item_sort_options.html`:
   **Date: newest** (`date_newest`, the default) / **Date: oldest** (`date_oldest`), **Uploaded: newest** /
   **Uploaded: oldest** (`newest` / `oldest`, upload time, their pre-#622 meaning, kept for old links and
   API callers) and **A–Z** (`az`). "Date" is the date the card shows: the payload's `card_date_epoch`
-  (`web/shapes.py`, the same `timeline.resolve_item_date` value `card_date` is the label of, so the order
-  and the dates on the cards can't disagree). **No content date is not a special case:** the resolver
-  falls back to the file's own modified time, then the upload time, and the card shows that date, so the
-  item sorts where its card's date says. Ties on the card date go by upload time (same direction), then
-  keep the list's order (stable). One sorter, `static/js/item-sort.js` (`ItemSort.sorted(items, name)`,
+  (`web/shapes.py`, from `core/item_dates.py` `item_date`, the same value `card_date` is the label of, so
+  the order and the dates on the cards can't disagree). **#725: the upload time is never the card date.**
+  `card_date_epoch` is the item's REAL date, else the start of the range it inherits from its card,
+  else **null = undated, which sorts LAST in both directions** (by upload time among themselves).
+  Ties on the card date go by upload time (same direction), then keep the list's order (stable). The
+  JS treats a payload with no `card_date_epoch` key at all (cached from before #622) as its upload time. One sorter, `static/js/item-sort.js` (`ItemSort.sorted(items, name)`,
   `ItemSort.wire(select, onChange)`; loaded by `_item_grid.html` with `?v=static_version`): since #553
   every grid passes the name to `GET /api/items/grid`, where `files_feed.SORTS` uses the same keys
   (`ItemSort.sorted` has no page caller left; the tests keep the two in step). **To add a sort:** one entry in `files_feed.SORTS`, the same in
@@ -1255,7 +1263,66 @@ already ranks first), so it is the same field as the item page's DATES group.
   key steps, stack grouping). Checks: `node scripts/test_timeline_drag.js` (the maths),
   `node scripts/test_timeline_drag_ui.js` (the widget against a fake DOM), `scripts/test_timeline_drag_593.py`
   (throwaway DB: write, undo, reset, roles, policy, span).
+- **Undated items are off the axis (#725):** an item with no real date has no marker (its approximate date
+  would only be this card's own range); the page says "N undated files not on the timeline". A reset that
+  leaves an item with no real date takes its marker off and says so; the route answers `effective_date`
+  null. A sub-card with no real dates draws no block, and a card with none shows "No real dates yet" for
+  its start / end.
 - Not built: dragging the axis end caps to set the card's Timeline start/end, dragging a whole stack.
+
+## Dates: real, approximate, undated (#725, "Import date is not a birthday")
+
+Owner, 2026-10-17: stop using the import date for anything but the import date. **An item's date is
+REAL or it is nothing.** `core/timeline.py` `resolve_item_date(row)` returns, in order: the
+display-date override (set by hand), the date made (#425), `content_date` (EXIF, a container or PDF date,
+a YouTube publish date, an accepted guess), the file's own mtime (`source_modified_at`) **only when it is
+from before the install's first upload** (`db.first_upload_epoch()` = `MIN(capture_events.timestamp)`,
+derived, cached until the DB changes; a later mtime is a download / copy date), else **None**. The upload
+time (`timestamp`) is shown only as **"Imported <date>"** (the item page's header and DATES group).
+`has_real_date` = not None (Curator coverage and the dates pip). `date_sort_key` puts None last;
+`real_dates(items)` skips them.
+- **Card spans** (`resolve_project_span`) are built from real dates only; the card's own Timeline
+  start/end overrides win; an ongoing card's open end ("... - now") stays. A card with nothing real and no
+  overrides has span **(None, None)**, not its `created_at` (faces show no date line, the gallery rail
+  leaves it off, the DATES group says "No real dates yet").
+- **What an item SHOWS** is `core/item_dates.py` `item_date(row)`: the real date; else, **when its card
+  has a real-dated range, that range, approximately: "≈ Nov 2019 - Jul 2021 · from Desk Build"**; else
+  **"Undated"**. Derived at read time, NEVER stored as `content_date`, and never an input to any span (spans
+  read real dates only, so no circularity). **The lending card is the one the item was first filed into**
+  (lowest `project_items.rowid`, the same card the file face's "Stacked · <card>" names), not the union of
+  its cards. The lent range counts only non-sensitive, non-redacted items (the same for every viewer, so it
+  can't hint that a hidden item exists), plus the card's overrides. One query for every card
+  (`db.date_lending_rows`), cached by `db.change_fingerprint` (never across an open transaction). The grids'
+  `card_date` / `card_date_epoch` (the range START for an inherited one, null for undated), file faces on
+  a card's piles, MCP `date_shown` all read it.
+- **The Curator's `needs_date`** (`core/curation_queue.py`, from `item_dates.needs_date_rows()`): one need
+  per item with no real date AND no range to borrow (on a card with no real dates: grouped under that card;
+  on no card: the "Undated files" group), never for a card's write-up (it documents the card; spans skip
+  it for the same reason). It carries `item_slug` (the queue hides it from anyone who can't
+  see the item) and its best guess as a one-click **"Use <date>"** (`POST /api/image/{slug}/date-guess`,
+  editor, `items.accept_date_guess`: one imaged row, op `item_date_guess`, `batch_id` for Undo; refusals
+  `already_dated` 409, `no_such_guess` 400, `bad_source` 400). Key `need:needs_date:<slug>`.
+- **The guesser** (`core/date_guess.py`, pure; `scripts/test_date_guess_725.py`): each guess has a source,
+  a confidence and its evidence. **Auto** (high, the evidence is in the file): `filename` (IMG_20190512_...,
+  2019-05-12, 20190512, "Screenshot ... at 14.30.22", a 10/13-digit unix timestamp when it is the name's
+  only long number; Facebook id runs never match), `file_metadata` (the type's `embedded_metadata_fn` date:
+  EXIF, container, a PDF's CreationDate, ...), `youtube` (a stored `type_metadata.published_at`; nothing is
+  fetched). **Suggested** (a click): `ocr_text` (a date in the extracted text: medium when it is the only
+  one, else low) and `siblings` (median of the card's other real dates, low). Ranked filename > file_metadata
+  > youtube > ocr_text > siblings. Naive dates are Mountain Time; a guess outside 1980..now is dropped.
+- **Writes:** `items.apply_dates([(slug, epoch, record)])` writes guesses as `content_date` plus
+  `type_metadata.content_date_source` = `{source, confidence, evidence, guessed: true, accepted: auto |
+  by_hand}`, ONE imaged row (op `item_date_guess`) for the batch, **fill-only** (an item that has a real date
+  is skipped, listed in `skipped`). New uploads take the filename date at upload (`embedded_metadata`, raw
+  pipeline write, same record). The migration **`date_guess_backfill_725`** ran the auto guesses once over
+  the archive (no network, one batch as actor `migration`, idempotent; undo the batch to take it back).
+- **MCP:** `constructicon_undated(action="list" | "accept" | "apply_auto", ...)`: list the undated items with
+  what they show, the range they borrow, `needs_date` and their guesses (`read_files=true` adds the file's
+  own embedded date); accept one guess; apply every auto guess as one batch (`dry_run`). Role rows: list
+  viewer, accept / apply_auto editor.
+- Checks: `scripts/test_undated_725.py` (throwaway DB: the owner's real-dates-only card, the lending rules,
+  needs_date, accept / undo / refusals, apply_dates, the migration, uploads, pages, the MCP tool),
+  `test_timeline_dates.py`, `test_card_date_sort_622.py`, `node scripts/test_item_sort_622.js`.
 
 ## Static export, preview and publish
 
@@ -1303,6 +1370,8 @@ Two ideas share the nav rail's "Curator" tab and one queue:
   into ONE list grouped by card (order rules in its docstring). Only the owner's **Defer** / **Dismiss**
   is persisted (`curator_dismissals`, keyed by the item's `key`; a question can be deferred, never
   dismissed).
+- **`needs_date` (#725):** a file with no real date and no card range to borrow, one need per item, with its
+  best date guess as a one-click "Use <date>" (see "Dates" above).
 - **Where it surfaces:** the **Curator tab in the nav rail** (`_nav_tabs.html`) opens the Curator drawer
   (`_nudges_drawer.html`, rendered by `static/js/curator-queue.js`); its count badge is
   `GET /api/curator/queue?summary=1` and refreshes on the `pending-decisions-changed` /
@@ -1480,7 +1549,9 @@ One generated file of every registered type and extension, to drop-test a new in
     the content's *own* description/title (e.g. a YouTube video's real
     title). Similarly `timestamp` (capture/upload time) vs. `content_date`
     (the content's own real-world date). These pairs are easy to confuse —
-    check which one a given piece of code actually means.
+    check which one a given piece of code actually means. **#725: `timestamp` is never an item's
+    date** (only "Imported <date>"); a guessed `content_date` records where it came from in
+    `type_metadata.content_date_source`. See "Dates".
   - `display_name` — optional per-object override of the item's title (the badge icon is always
     the type's `badge_icon`; the per-object `icon` override went in #704). **An item's title (#542) is
     `core/item_title.py` `title_of(row)` and nothing else:** `display_name` →
@@ -1822,6 +1893,9 @@ configuration gap for that session, not evidence the server itself is gone.
     columns too; the raw row images stay in the change log (MCP `list_changes`, admin `/api/audit-log`),
     as for item notes, so undo still restores them. Never indexed for search, never exported.
     Check: `scripts/test_card_agent_notes_745.py`.
+  - **Undated items (#725):** `constructicon_undated(action="list" | "accept" | "apply_auto")` lists the
+    items with no real date and their date guesses, accepts one guess, or applies every in-file guess as one
+    batch (see "Dates" above). A 56th tool, added after #746's count.
   - **The whole-archive wipe** is `constructicon_delete(everything=true, confirm="DELETE EVERYTHING")`:
     both keys or nothing (either alone, or with another target, is refused); `delete`, `redact` and
     `trash` carry `destructiveHint`.
@@ -2618,6 +2692,10 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
   `content_date`.** Easy to grab the wrong one of each pair — they mean
   different things (uploader metadata vs. the content's own
   description/date). See the `capture_events` notes above.
+- **An item can be undated (#725).** `timeline.resolve_item_date` returns None when nothing real
+  exists, and `resolve_project_span` returns (None, None) for a card with no real dates: sort with
+  `timeline.date_sort_key`, take min/max over `timeline.real_dates(...)`, and show
+  `item_dates.item_date(row)["label"]`. Never fall back to `timestamp` or `created_at`.
 - **Backfilling a `content_date` from a naive/timezone-less real-world
   date (EXIF `DateTimeOriginal`, a blog post's "Jul 31, 2017" with no
   time) — interpret it as Mountain Time (`America/Denver`, DST-aware via

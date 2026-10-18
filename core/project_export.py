@@ -12,7 +12,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from core import card_rules, db, policy, storage
+from core import card_rules, db, policy, storage, timeline
 
 
 def export_project(project_id_or_slug):
@@ -71,8 +71,9 @@ def export_project(project_id_or_slug):
             "content_description": item.get("content_description"),
             "tags": [tag["name"] for tag in db.list_tags_for_post(item["slug"])],
             "type_metadata": item.get("type_metadata"),
-            "timestamp": item.get("timestamp"),
+            "timestamp": item.get("timestamp"),  # the upload time ("Imported"), never the item's date (#725)
             "content_date": item.get("content_date"),
+            "effective_date": timeline.resolve_item_date(item),  # #725: the REAL date, or null = undated
             "source_modified_at": item.get("source_modified_at"),
             "external_url": item.get("external_url"),
         }

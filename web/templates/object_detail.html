@@ -183,7 +183,9 @@
         <p class="title-edit-error" id="object-title-error" style="display:none" role="alert"></p>
         <div class="detail-meta" style="margin-top:8px">
           <span>Source: {{ item.source_display }}</span>
-          <span>{{ item.uploaded_at_display }}</span>
+          {# #725: the upload time is only ever "Imported <date>", never the item's date. #}
+          <span>Imported {{ item.uploaded_at_display }}</span>
+          <span>Date: {{ item.date_shown }}</span>
         </div>
       </div>
       {% if item.redacted %}
@@ -313,7 +315,10 @@
       {# ---- DATES: effective date + the timeline date override ---- #}
       {% set dates_view %}
       <dl class="dp-rows">
-        <div class="dp-row"><dt>Effective date</dt><dd>{{ item.effective_date_display }} <span class="dp-muted">({{ 'set by hand' if item.display_date_override else 'from the file' }})</span></dd></div>
+        {# #725: the REAL date and which rung gave it; else the card range it inherits, or Undated. #}
+        {% set src_labels = {'hand': 'set by hand', 'made': 'date made', 'content': 'from the content', 'file': "the file's own date"} %}
+        <div class="dp-row"><dt>Date</dt><dd>{% if item.date_source %}{{ item.effective_date_display }} <span class="dp-muted">({{ src_labels[item.date_source] }}{% if item.content_date_source and item.date_source == 'content' %}, guessed from {{ item.content_date_source.source | replace('_', ' ') }}: {{ item.content_date_source.evidence }}{% endif %})</span>{% else %}{{ item.date_shown }} <span class="dp-muted">(no real date: the upload time is not one)</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Imported</dt><dd>{{ item.uploaded_at_display }}</dd></div>
       </dl>
       {% endset %}
       {% set dates_edit %}
@@ -323,7 +328,7 @@
           <input class="input" type="datetime-local" id="timeline-date-input" name="display_date" value="{{ item.display_date_override_input or '' }}" style="width:auto">
           <button type="button" class="dp-btn" id="timeline-date-reset">Reset</button>
         </div>
-        <p class="dp-note">{% if item.display_date_override %}Manually set.{% else %}Computed: {{ item.effective_date_display }}{% endif %}</p>
+        <p class="dp-note">{% if item.display_date_override %}Manually set.{% elif item.date_source %}Computed: {{ item.effective_date_display }}{% else %}No real date yet ({{ item.date_shown }}). Set one here.{% endif %}</p>
       </div>
       {% endset %}
 

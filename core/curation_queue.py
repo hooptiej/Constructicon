@@ -9,6 +9,10 @@ Three kinds of item used to live in three places. They are one queue now:
             Can be deferred or dismissed.
   need      a computed card/hobby need (core/cards.py list_needs_decision: missing
             provenance, blank write-up, untyped link, hobby flags ...). Same as a nudge.
+            #725: also `needs_date`, one per FILE with no real date and no card range to
+            inherit (core/item_dates.py needs_date_rows), with its best date guess as the
+            one-click "Use <date>" (POST /api/image/{slug}/date-guess). Grouped under the card
+            it is on (a card with no real dates of its own), else under "Undated files".
 
 Nothing here stores items: questions are stored by their own table, nudges and needs are
 derived every time. The only thing this module's callers persist is the owner's Defer /
@@ -31,12 +35,13 @@ import threading
 import time
 from urllib.parse import quote
 
-from . import actor as actor_ctx, cards, curator_needs, db, decisions, install_config, item_title, policy, roles
+from . import actor as actor_ctx, cards, curator_needs, datefmt, date_guess, db, decisions, install_config, item_dates, item_title, policy, roles
 from .errors import InvalidInput
 
 TYPE_QUESTION = "question"
 TYPE_NUDGE = "nudge"
 TYPE_NEED = "need"
+NEED_DATE = "needs_date"  # #725: a file with no real date and no card range to inherit
 
 # The details-panel group (templates/_details_group.html) whose Edit button fixes each kind
 # of item. `None` = no single group applies, so Fix just opens the card.
@@ -216,6 +221,30 @@ def _need_item(r):
     }
 
 
+def _date_need_item(e):
+    """#725: one needs_date entry (core/item_dates.py needs_date_rows) as a queue item. It carries
+    `item_slug` (for_actor hides an item the asker can't see) and, with a guess, `accept_source`:
+    the template's "Use <date>" button posts it to POST /api/image/{slug}/date-guess."""
+    row, guess, card = e["row"], e["guess"], e["card"]
+    slug = row["slug"]
+    where = (f"It is on {card['title']}, which has no real dates either, so there is no range to borrow."
+             if card else "It is on no card, so there is no range to borrow.")
+    suggestion = None
+    if guess is not None:
+        suggestion = {"picks": [guess.source],
+                      "labels": [f"{datefmt.day(guess.epoch)}, from {date_guess.SOURCE_LABELS[guess.source]}"],
+                      "reason": guess.evidence}
+    return {
+        "type": TYPE_NEED, "key": f"need:{NEED_DATE}:{slug}", "id": None, "kind": NEED_DATE,
+        "label": f"{item_title.title_of(row)} has no date",
+        "detail": f"Imported {datefmt.day(row.get('timestamp'))}, which is not its date. {where}",
+        "suggested": suggestion, "confidence": guess.confidence if guess else None,
+        "group": "dates", "href": f"/object/{quote(slug, safe='')}?edit=dates", "fix_label": "Set the date",
+        "deferred": False, "dismissible": True, "item_slug": slug,
+        "accept_source": guess.source if guess else None,
+    }
+
+
 def _item_sort(item):
     if item["type"] == TYPE_QUESTION:
         return (0, _CONFIDENCE_RANK.get(item.get("confidence"), 0), item["id"] or 0, "")
@@ -258,6 +287,8 @@ def _group_order(g):
         return (1, 0 if g["activity"] == "active" else 1, 0, g["title"].lower())
     if g["type"] == "uploads":
         return (2, 0, 0, "")
+    if g["type"] == "undated":
+        return (2, 1, 0, "")
     return (3, 0, 0, "")
 
 
@@ -382,6 +413,25 @@ def build_queue(card=None, hobby=None):
         elif hobby_row or not card_row:
             hs = r.get("hobby_slug")
             put(f"hobby:{hs}", _hobby_group(hs), item)
+
+    # #725: needs_date, a file with no real date and no card range to borrow (not on a hobby's slice)
+    if not hobby_row:
+        for e in item_dates.needs_date_rows():
+            if card_row and (e["card"] is None or e["card"]["slug"] != card_row["slug"]):
+                continue
+            # An item-level entry: only for an actor who may see the item. The card / hobby slices are
+            # built as the asker (project page strip, group expand) and never pass through for_actor;
+            # the shared whole queue is built as system and for_actor filters it per asker.
+            if not policy.can_view(e["row"]):
+                continue
+            item = _date_need_item(e)
+            if item["key"] in dismissed:
+                continue
+            c = (card_row or db.get_project(e["card"]["slug"])) if e["card"] else None
+            if c is not None:
+                put(f"card:{c['slug']}", _card_group(c), item)
+            else:
+                put("undated", _plain_group("undated", "undated", "Undated files", "/unfiled"), item)
 
     open_by, deferred_by = {}, {}
     for gid, item in items:

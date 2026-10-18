@@ -194,6 +194,7 @@ MCP_TOOLS = {
     "constructicon_update": (I, "the item it changed"),
     "constructicon_list_needs_caption": (I, "items needing a caption (alias; captions.needs_caption)"),
     "constructicon_set_caption": (I, "the item it changed"),
+    "constructicon_undated": (I, "undated items and their guesses (filter_visible); the items it dated (#725)"),
     "constructicon_redact": (I, "the item it changed (items.redact / unredact / recover / delete_redacted_file)"),
     "constructicon_unredact": (I, "alias"),
     "constructicon_recover_redacted": (I, "alias"),

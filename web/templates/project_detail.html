@@ -42,6 +42,10 @@
     <div class="project-video-timeline" id="project-video-timeline"></div>
   </div>
   {% endif %}
+  {% if timeline_undated %}
+  {# #725: items with no real date are left off the axis, and the page says so. #}
+  <p class="dp-note project-timeline-undated">{{ timeline_undated }} undated file{{ '' if timeline_undated == 1 else 's' }} not on the timeline. Each one shows this card's range as its approximate date; give one a real date in its DATES group, or drag it in once it has one.</p>
+  {% endif %}
 
   <div class="dp-hero">
     <div class="dp-hero-left">
@@ -472,8 +476,10 @@
     function afterSave({ event, result, reset }) {
       refreshDates(result.span);
       if (!result.batch_id) return;
-      const when = MountainTime.formatDate(result.effective_date);
-      const msg = reset
+      const when = result.effective_date === null ? null : MountainTime.formatDate(result.effective_date);
+      const msg = when === null
+        ? `"${event.label}" has no real date now, so it left the timeline (it shows this card's range as an approximate date).`
+        : reset
         ? `"${event.label}" is back on its computed date (${when}).`
         : `"${event.label}" re-dated to ${when}. The date is now set by hand.`;
       window.showUndoBar(msg, result.batch_id, (how) => { if (how === 'undone') window.location.reload(); });

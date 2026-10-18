@@ -268,7 +268,6 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "slug": child["slug"],
             "title": child["title"],
             "description": child.get("description"),
-            "status": child.get("status"),
             "kind": child.get("kind") or "project",
             "stage": child.get("stage"),
             "stage_label": card_rules.stage_label(child.get("stage")),

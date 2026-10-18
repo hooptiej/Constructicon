@@ -105,8 +105,8 @@ def api_curator_dashboard(request: Request):
     """Curator Stage 2 dashboard: aggregate project health scoring.
 
     Returns:
-        - projects_by_status: count per effective status
-        - average_health: average score of LIVE projects (wip/complete/published)
+        - projects_by_stage: count of cards per stage label
+        - average_health: average score of LIVE cards (in progress, done, in use)
         - gap_buckets: counts of projects failing each specific check
         - unfiled_count: count of capture_events not in any project
         - all_project_scores: detailed scoring for every project
@@ -127,7 +127,8 @@ def api_curator_list_needs(request: Request, kind: str | None = None, limit: int
         - target_id, target_slug: project id/slug or None for global nudges
         - title, summary: human-readable text
         - priority: computed score (base_impact * status_weight)
-        - base_impact, status_weight: components of priority
+        - base_impact, status_weight: components of priority (status_weight comes from the
+          card's stage: 3 for done / in use, else 1)
         - action: descriptor dict for UI/agent to interpret
 
     Optional query params:

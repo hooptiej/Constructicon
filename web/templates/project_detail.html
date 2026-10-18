@@ -70,7 +70,7 @@
       {% set _applicable = project_score.checklist | rejectattr('excused') | list %}
       {% set _passed = _applicable | selectattr('passed') | list %}
       {% if project_score.silent %}
-      <span class="project-health-badge" title="Status '{{ project_score.status }}' is not scored by the Curator" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#6E6B57">
+      <span class="project-health-badge" title="{{ project_score.stage_label }}: not scored by the Curator" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#6E6B57">
         <span style="width:9px;height:9px;border-radius:50%;background:#B9B4A0"></span>not scored
       </span>
       {% else %}

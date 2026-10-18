@@ -611,9 +611,6 @@ def _to_public_project(project):
         "slug": project["slug"],
         "title": project["title"],
         "description": project["description"],
-        # Legacy v1 status: frozen (the static export still reads it). The live
-        # status is kind / activity / stage / stop_reason below.
-        "status": project["status"],
         **cards.status_fields(project),
         **cards.whereabouts_fields(project),
         "cover_slug": project.get("cover_slug"),
@@ -1752,7 +1749,7 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
 @mcp.tool()
 def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREVIEW_CHARS) -> dict | None:
     """One card in full: its fields and live status (kind, activity, stage, stop_reason + labels,
-    needs_input; `status` is the frozen v1 word), items (with tags; text previews), cover, write-up
+    needs_input), items (with tags; text previews), cover, write-up
     (whole), open_decisions, families / members / children, links (both directions), its face
     text (synopsis, flavor, writeup_lead, face_text, face_text_source) and agent_notes (your private
     notes, from constructicon_set_agent_notes(card=...); null when none). For a read-before-change

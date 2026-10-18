@@ -439,7 +439,8 @@ def api_export_project(project_id: str):
 def _related_projects_public(slug):
     """Trim shape for the project-detail Related-projects widget (#408)."""
     return [
-        {"slug": p["slug"], "title": p["title"], "status": card_rules.curator_status(p)}
+        {"slug": p["slug"], "title": p["title"], "stage": p.get("stage"),
+         "stage_label": card_rules.stage_label(p.get("stage"))}
         for p in db.list_related_projects(slug)
     ]
 

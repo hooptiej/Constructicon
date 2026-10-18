@@ -1283,6 +1283,31 @@ def _mig_link_page_text_724d():
           f"and summary", flush=True)
 
 
+def _mig_transcripts_724e():
+    # #724 part e (owner decision 2026-10-17: transcripts through youtube-transcript-api): every
+    # existing row of a type with a network text source (YouTube today, ObjectTypeSpec.text_fetch_fn)
+    # that has never had a transcript attempt is marked type_metadata.transcript_status = 'queued'.
+    # No network here and no OCR re-run: web's _transcript_loop (web/app.py) works the queued rows a
+    # few per pass, one fetch at a time (core/transcripts.py), and folds each result into the row's
+    # stored text (core/text_sources.resettle). Rows that already have a transcript_status (an OCR
+    # run since part e landed), redacted rows and rows with unreadable type_metadata are left alone.
+    # Idempotent: recorded once in schema_migrations, and a second run finds no row without a status.
+    from . import object_types
+    types = [k for k, s in object_types.OBJECT_TYPES.items() if getattr(s, "text_fetch_fn", None) is not None]
+    if not types:
+        return
+    conn = get_conn()
+    marks = ", ".join("?" for _ in types)
+    cur = conn.execute(
+        "UPDATE capture_events SET type_metadata = json_set(CASE WHEN COALESCE(type_metadata, '') = '' THEN '{}' "
+        "ELSE type_metadata END, '$.transcript_status', 'queued') "
+        f"WHERE media_type IN ({marks}) AND COALESCE(redacted, 0) = 0 "
+        "AND (COALESCE(type_metadata, '') = '' OR (json_valid(type_metadata) AND json_type(type_metadata) = 'object' "
+        "AND json_extract(type_metadata, '$.transcript_status') IS NULL))", types)
+    print(f"schema_migrations: transcripts_724e queued {cur.rowcount} row(s) of {sorted(types)} for a transcript "
+          f"attempt (fetched in the background, one at a time)", flush=True)
+
+
 def _mig_writeup_lead_596():
     # #596: fill the projects.writeup_lead cache (the card face's write-up excerpt) once for every
     # card that has a write-up. From then on the cards service keeps it in step with every write-up
@@ -1480,6 +1505,7 @@ MIGRATIONS = [
     ("reread_legacy_office_724b", _mig_reread_legacy_office_724b),
     ("text_sources_724c", _mig_text_sources_724c),
     ("link_page_text_724d", _mig_link_page_text_724d),
+    ("transcripts_724e", _mig_transcripts_724e),
 ]
 
 
@@ -2527,6 +2553,74 @@ def set_extracted_text(slug, text, source=None):
         conn.execute(f"UPDATE capture_events SET extracted_text = ?, {meta_sql} WHERE slug = ?",
                      (text, *meta_args, slug))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def set_text_source_fields(slug, fields, resettle=False):
+    """#724 (e): pipeline bookkeeping for a type's network text source (a YouTube transcript,
+    core/transcripts.py): merge `fields` into type_metadata ({key: value}, None removes the key),
+    in one transaction that re-reads the row first (so a concurrent write to another key isn't
+    lost). With `resettle`, a row whose OCR has settled also gets its extracted_text / text_source
+    / ocr_status rebuilt from its type's sources and the picture text already stored
+    (core/text_sources.resettle, no OCR re-run), and an 'unsupported' row's ocr_note follows the
+    type's current reason ("no captions"). A pending row is left to its OCR run, a 'failed' row
+    keeps its error until Retry, unreadable JSON is left alone. Returns the resettle change (or
+    None)."""
+    from . import object_types, text_sources
+    with transaction() as tx:
+        r = tx.conn.execute(
+            "SELECT slug, media_type, filename, stored_filename, external_url, extracted_text, ocr_status, "
+            "type_metadata FROM capture_events WHERE slug = ?", (slug,)).fetchone()
+        if r is None:
+            return None
+        row = dict(r)
+        try:
+            meta = json.loads(row["type_metadata"] or "{}")
+        except ValueError:  # silent-ok: unreadable JSON is never overwritten; the caller's fetch is dropped
+            print(f"set_text_source_fields: {slug} has unreadable type_metadata; left as it is", flush=True)
+            return None
+        if not isinstance(meta, dict):
+            return None
+        for key, value in (fields or {}).items():
+            if value is None:
+                meta.pop(key, None)
+            else:
+                meta[key] = value
+        row["type_metadata"] = meta
+        change = None
+        text, status = row["extracted_text"], row["ocr_status"]
+        if resettle:
+            spec = object_types.get_object_type(row.get("media_type"))
+            change = text_sources.resettle(row, spec, object_types.ocr_unsupported_note(row, spec))
+            if change is not None:
+                meta = text_sources.resettled_meta(meta, change)
+                text, status = change["text"], change["status"]
+            if status == OCR_UNSUPPORTED:
+                meta["ocr_note"] = object_types.ocr_unsupported_note({**row, "type_metadata": meta}, spec)
+        tx.conn.execute("UPDATE capture_events SET extracted_text = ?, ocr_status = ?, type_metadata = ? WHERE slug = ?",
+                        (text, status, json.dumps(meta), slug))
+        return change
+
+
+def list_due_text_fetches(media_types, now, limit):
+    """#724 (e): slugs of rows of `media_types` waiting for a network text fetch: transcript_status
+    'queued' (never tried), or 'retry' with transcript_retry_at passed. Not redacted, not pending
+    OCR (that run fetches itself). Oldest-due first."""
+    if not media_types:
+        return []
+    marks = ", ".join("?" for _ in media_types)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT slug FROM capture_events WHERE media_type IN ({marks}) AND COALESCE(redacted, 0) = 0 "
+            "AND COALESCE(ocr_status, '') != 'pending' AND json_valid(type_metadata) AND ("
+            "json_extract(type_metadata, '$.transcript_status') = 'queued' OR "
+            "(json_extract(type_metadata, '$.transcript_status') = 'retry' "
+            " AND json_extract(type_metadata, '$.transcript_retry_at') <= ?)) "
+            "ORDER BY COALESCE(json_extract(type_metadata, '$.transcript_retry_at'), 0), id LIMIT ?",
+            (*media_types, now, int(limit))).fetchall()
+        return [r["slug"] for r in rows]
     finally:
         conn.close()
 

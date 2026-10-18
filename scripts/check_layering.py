@@ -90,6 +90,7 @@ PUBLIC_WRITERS = {
     "insert_content": "ingest pipeline: a new file-less item row (YouTube link, authored document)",
     "set_ocr_status": "OCR pipeline state (queue, watchdog, retry)",
     "set_extracted_text": "OCR pipeline result",
+    "set_text_source_fields": "#724 (e): OCR pipeline state for a fetched text source (a YouTube transcript) + its resettled text",
     "set_perceptual_hash": "similarity pipeline",
     "set_embedding": "similarity pipeline (a BLOB; never imaged)",
     "enqueue_caption": "caption queue (#549: MCP enqueues)",

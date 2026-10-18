@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths
+from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths, transcripts
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
 from web import auth as web_auth, body_limit, content_security, hobby_paths, proxy_trust, request_guard
 from web.common import _STATIC_DIR
@@ -219,6 +219,28 @@ async def _trash_purge_loop():
         await asyncio.sleep(TRASH_PURGE_INTERVAL_SECONDS)
 
 
+TRANSCRIPT_INTERVAL_SECONDS = 120  # #724 (e): a pass every 2 min...
+TRANSCRIPT_BATCH = 10              # ...of at most 10 videos, one fetch at a time
+
+
+async def _transcript_loop():
+    """#724 (e), the OCR watchdog's style: YouTube rows queued for a transcript attempt (the
+    transcripts_724e backfill) or due a retry (a network error, a timeout, YouTube blocking) are
+    tried a few per pass, one at a time (core/transcripts.work_due: polite turn, 20 s hard deadline
+    each), and each result is folded into the row's text without re-running OCR. Nothing runs while
+    CONSTRUCTICON_TRANSCRIPTS=off. Runs as `system` (asyncio.to_thread copies this task's context)."""
+    await asyncio.sleep(90)  # let boot and the OCR self-heal settle first
+    while True:
+        try:
+            result = await asyncio.to_thread(transcripts.work_due, TRANSCRIPT_BATCH)
+            if result["tried"]:
+                print(f"transcripts: tried {result['tried']} video(s): {result['found']} found, "
+                      f"{result['none']} with no captions, {result['retry']} to retry later", flush=True)
+        except Exception as e:
+            print(f"transcript pass error: {e!r}", flush=True)
+        await asyncio.sleep(TRANSCRIPT_INTERVAL_SECONDS)
+
+
 def _sweep_stale_decisions():
     """#551 item 3: questions that can't be answered any more (their object, card or candidates
     are gone) are resolved by this explicit, logged, undoable sweep, never by a GET. Reads already
@@ -291,6 +313,7 @@ def _startup_as_system():
     asyncio.create_task(_caption_selfheal_loop())
     asyncio.create_task(_trash_purge_loop())
     asyncio.create_task(_decision_sweep_loop())
+    asyncio.create_task(_transcript_loop())
 
 
 # --- Routers (#547) ---

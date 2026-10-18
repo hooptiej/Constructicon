@@ -296,6 +296,14 @@ def _polite_turn(delay):
         _turn_lock.release()
 
 
+def polite_turn():
+    """The same one-at-a-time turn and pause (CONSTRUCTICON_LINK_FETCH_DELAY_SECONDS) for an
+    outbound request that doesn't go through fetch() (#724 e: a YouTube transcript, which
+    youtube-transcript-api fetches itself). Raises TimedOut (transient) when the turn doesn't come
+    within TURN_WAIT_SECONDS. A context manager."""
+    return _polite_turn(polite_delay())
+
+
 # --- the fetch ------------------------------------------------------------------------------------
 
 def _type_ok(mime, accept):

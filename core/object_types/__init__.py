@@ -389,7 +389,7 @@ class ObjectTypeSpec:
     # and no picture to OCR): core/ocr.py settles it ocr_status='unsupported' with this note in
     # type_metadata.ocr_note, shown grey as "Not compatible with OCR: <note>". A str for the whole
     # type, or a dict {extension: note} for a type spanning several formats (a key "" is the
-    # type-wide fallback). Unset: "<label>: no readable text".
+    # type-wide fallback), or a function (row) -> str (#724 e). Unset: "<label>: no readable text".
     ocr_unsupported_note: object = ""
     # #724: where text_extract_fn's text comes from, recorded as type_metadata.text_source when
     # core/ocr.py stores text it returned (one of ocr | text_layer | office | transcript |
@@ -407,6 +407,14 @@ class ObjectTypeSpec:
     # description through items.update) is folded in by that same update, in its change-log row,
     # so one undo puts the old text back too (text_sources.resettle, no OCR re-run).
     text_sources_fn: object = None
+    # #724 (e): text that has to be FETCHED over the network (a YouTube video's transcript):
+    # (row) -> {type_metadata key: value or None (remove)} or None (nothing to fetch / turned off).
+    # core/ocr.py calls it in the OCR thread before combining text_sources_fn's sources, stores the
+    # result (db.set_text_source_fields) and text_sources_fn then reads it from the row; web's
+    # background pass (core/transcripts.work_due) calls it again for rows queued or due a retry.
+    # It must bound itself (a hard deadline, polite pacing) and never raise for a network problem:
+    # a failed fetch is a field saying "retry", never an OCR failure, and never removes text.
+    text_fetch_fn: object = None
 
 
 OBJECT_TYPES = {}
@@ -737,6 +745,8 @@ def ocr_unsupported_note(row, spec=None):
     when the type gives a dict), e.g. "web link: no readable text yet"."""
     spec = spec or get_object_type(row.get("media_type"))
     note = spec.ocr_unsupported_note
+    if callable(note):  # #724 (e): a reason that depends on the row (YouTube: "no captions" once known)
+        note = note(row)
     if isinstance(note, dict):
         note = note.get(file_extension(row.get("filename") or row.get("stored_filename") or "")) or note.get("")
     return note or f"{spec.label.lower()}: no readable text"

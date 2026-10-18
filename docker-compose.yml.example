@@ -81,6 +81,12 @@ services:
       # - CONSTRUCTICON_LINK_FETCH=off
       #   Seconds between page fetches (default 2), so a backfill of many links never bursts a site.
       # - CONSTRUCTICON_LINK_FETCH_DELAY_SECONDS=2
+      #   #724 e: a YouTube video's OCR (and a background pass for the backlog and retries) asks
+      #   YouTube for its captions through youtube-transcript-api (an unofficial endpoint), with a
+      #   hard 20 s deadline, one fetch at a time (the delay above), noise like [Music] removed.
+      #   On by default; "off" for an offline install (stored transcripts stay searchable). Set it
+      #   on the MCP service too if MCP uploads should skip it.
+      # - CONSTRUCTICON_TRANSCRIPTS=off
       # #687: captions come from the `ollama` sidecar below (compose profile `captions`).
       # The model is ONE value for the app and the sidecar's first-start pull: set
       # CAPTION_OLLAMA_MODEL in .env (default moondream). An install that runs without the

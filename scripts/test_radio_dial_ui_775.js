@@ -73,7 +73,7 @@ const ROWS = [
 
 // --- the shipped defaults: the owner's tuning on dev (PR #782 review) ---
 const OWNER = { visibleYears: 5, minPxPerYear: 30, monthTickMinPx: 2, tolerancePx: 5, readoutMax: 8, friction: 0.92,
-  falloff: 0.001, snapStrength: 0.5, snapPx: 28, wheelSpeed: 0.1, glow: 0, backlight: 0.36, readoutHue: 215 };
+  falloff: 0.001, snapStrength: 0.5, snapPx: 28, wheelSpeed: 0.1, glow: 0, backlight: 0.36, readoutHue: 173 };
 ok("DIAL_DEFAULTS are the owner's values", Object.entries(OWNER).every(([k, v]) => RadioDial.DEFAULTS[k] === v),
   Object.keys(OWNER).filter((k) => RadioDial.DEFAULTS[k] !== OWNER[k]));
 const shipped = mount(ROWS).dial;

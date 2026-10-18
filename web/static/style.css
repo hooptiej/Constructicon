@@ -1112,7 +1112,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   --tuner-border: #232a36;
   --tuner-glow: 0;            /* outer glow around the chassis (tuning panel: "Outer glow") */
   --tuner-backlight: 0.36;    /* inner backlight wash (tuning panel: "Backlight"; 0 = off) */
-  --tuner-readout-hue: 215;   /* readout text hue (tuning panel: "Readout colour (hue)"; 120 = green) */
+  --tuner-readout-hue: 173;   /* readout text hue (tuning panel: "Readout colour (hue)"; 120 = green) */
   --tuner-readout: hsl(var(--tuner-readout-hue) 90% 64%);
   --tuner-readout-glow: 0 0 4px hsl(var(--tuner-readout-hue) 90% 64% / 0.8), 0 0 12px hsl(var(--tuner-readout-hue) 90% 60% / 0.35);
   --tuner-yellow: var(--hazard-yellow);   /* needle / axis / ticks */

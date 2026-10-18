@@ -38,8 +38,8 @@ const DIAL_DEFAULTS = {
   glow: 0,              // outer glow around the chassis (CSS --tuner-glow; the owner turned it off)
   backlight: 0.36,      // internal backlight wash inside the chassis and behind the band
                         // (CSS --tuner-backlight; 0 = off; owner ask on PR #782)
-  readoutHue: 215,      // the readout's colour, a hue (CSS --tuner-readout-hue): 215 = the blue of the
-                        // browser's slider thumb, the owner's pick on PR #782 (120 = phosphor green)
+  readoutHue: 173,      // the readout's colour, a hue (CSS --tuner-readout-hue): 173 = the owner's pick on
+                        // PR #782, a cyan-teal (215 = the slider-thumb blue, 120 = phosphor green)
 };
 
 // Month-tick slider notches: fine at the low end, where the owner tunes (PR #782), coarser above.

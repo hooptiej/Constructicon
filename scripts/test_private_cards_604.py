@@ -339,6 +339,40 @@ check("export: P and C left out with a warning, O kept",
       and any("private" in w for w in rep.get("warnings", [])), rep.get("warnings"))
 check("export: the file on both O and P is not published (private wins)", "zebracorn-both-notes" not in blob)
 
+# ---- 6. undated items never name a private card (#725 x #604) -----------------------------------
+print("--- 6. constructicon_undated and private cards ---")
+from core import item_dates, items  # noqa: E402
+I_PD = upload("OW", "zebracorn-dated-notes.txt", "dated, so P has a range to lend")
+check("OW files the dated file onto P", file_onto("OW", I_PD, P["id"]).status_code == 200)
+with actor.acting_as(actor.ACTOR_SCRIPT):
+    items.update(I_PD, content_date=1388534400)  # 2014-01-01: P now has a real-dated range
+check("precondition: P is private, hidden from OUT, visible to OW",
+      not policy.can_view_card(db.get_project(P["id"]), ACT["OUT"])
+      and policy.can_view_card(db.get_project(P["id"]), ACT["OW"]))
+TITLE = P["title"]
+u_ow = as_user("OW", mcp.constructicon_undated)
+ent = {e["slug"]: e for e in u_ow.get("items", [])}
+check("undated as OW (owner): P's undated file borrows P's range and names P",
+      I_P in ent and TITLE in ent[I_P]["shows"] and (ent[I_P]["inherits"] or {}).get("card_title") == TITLE, ent.get(I_P))
+for who in ("OUT", "VW"):
+    u = as_user(who, mcp.constructicon_undated)
+    blob = json.dumps(u)
+    check(f"undated as {who}: P's files are not listed and P's title appears nowhere",
+          isinstance(u, dict) and "items" in u and TITLE not in blob and I_P not in blob and I_C not in blob, blob[:300])
+    u2 = as_user(who, mcp.constructicon_undated, include_inherited=False)
+    check(f"undated(include_inherited=false) as {who}: P's title appears nowhere", TITLE not in json.dumps(u2))
+    acc = as_user(who, mcp.constructicon_undated, action="accept", slug=I_P, source="siblings")
+    check(f"undated(accept, P's file) as {who}: not_found, P not named",
+          (acc.get("error") or {}).get("code") == "not_found" and TITLE not in json.dumps(acc), acc)
+# The second lock: even handed a row on P directly (no filter_visible), the entry never names P.
+row_p = db.get_by_slug(I_P)
+e_out = item_dates.listing_entry(row_p, access=policy.card_access(ACT["OUT"]))
+check("listing_entry for OUT's access: the range stays, P is not named in shows / inherits / guesses",
+      TITLE not in json.dumps(e_out) and e_out["shows"].startswith(item_dates.APPROX)
+      and e_out["inherits"] is not None and e_out["inherits"]["card_title"] is None, e_out)
+e_ow = item_dates.listing_entry(row_p, access=policy.card_access(ACT["OW"]))
+check("listing_entry for OW's access names P", TITLE in e_ow["shows"], e_ow["shows"])
+
 print()
 print(("FAILED: " + ", ".join(FAILS)) if FAILS else "ALL PASS")
 sys.exit(1 if FAILS else 0)

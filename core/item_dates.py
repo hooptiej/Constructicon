@@ -178,15 +178,17 @@ def sibling_dates(row, snap=None):
     return snap["cards"][cid]["title"], list(snap["dates"].get(cid, []))
 
 
-def guesses_for(row, read_file=False, snap=None):
+def guesses_for(row, read_file=False, snap=None, name_card=True):
     """The ranked date guesses for one row. `read_file` also reads the file's own embedded date
     through its type's embedded_metadata_fn (a parser child process per file: the backfill and the
-    MCP's apply, not a page load)."""
+    MCP's apply, not a page load). `name_card=False` leaves the card's title out of the evidence."""
     from . import embedded_metadata  # lazy: it imports the type registry
     file_date = None
     if read_file:
         file_date = embedded_metadata.plausible_content_date(embedded_metadata.extract(row).get("content_date"))
     card_title, dates = sibling_dates(row, snap)
+    if not name_card:
+        card_title = None
     return date_guess.guesses(row, file_metadata_date=file_date, sibling_dates=dates, card_title=card_title)
 
 
@@ -237,10 +239,18 @@ def needs_date_rows():
     return out
 
 
-def listing_entry(row, read_file=False, snap=None):
-    """One undated item as the MCP lists it."""
+def listing_entry(row, read_file=False, snap=None, access=None):
+    """One undated item as the MCP lists it, for the current actor. A card the actor may not see
+    (#604: private, itself or above) is never named: not in `shows`, `inherits` or a guess's
+    evidence. The caller filters the rows through policy.filter_visible first, so this is the second
+    lock (a visible item's cards are all visible today); `access` is policy.card_access()."""
     snap = snap or snapshot()
     info = item_date(row, snap)
+    cid = snap["first"].get(row["slug"])
+    name_card = cid is None or policy.can_view_card(cid, access=access)
+    if not name_card and info["approx"]:
+        info = {**info, "card_slug": None, "card_title": None,
+                "label": f"{APPROX} {range_label(info['start'], info['end'])}"}
     return {
         "slug": row["slug"], "name": item_title.title_of(row), "type": row.get("media_type") or "image",
         "filename": row.get("filename"), "imported": datefmt.day(row.get("timestamp")),
@@ -249,5 +259,5 @@ def listing_entry(row, read_file=False, snap=None):
                       "start": timeline.epoch_to_local(info["start"]).date().isoformat(),
                       "end": timeline.epoch_to_local(info["end"]).date().isoformat()} if info["approx"] else None),
         "needs_date": needs_date(row, info, snap),
-        "guesses": [g.as_dict() for g in guesses_for(row, read_file=read_file, snap=snap)],
+        "guesses": [g.as_dict() for g in guesses_for(row, read_file=read_file, snap=snap, name_card=name_card)],
     }

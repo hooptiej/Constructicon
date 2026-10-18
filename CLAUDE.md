@@ -1465,7 +1465,9 @@ time (`timestamp`) is shown only as **"Imported <date>"** (the item page's heade
 - **MCP:** `constructicon_undated(action="list" | "accept" | "apply_auto", ...)`: list the undated items with
   what they show, the range they borrow, `needs_date` and their guesses (`read_files=true` adds the file's
   own embedded date); accept one guess; apply every auto guess as one batch (`dry_run`). Role rows: list
-  viewer, accept / apply_auto editor.
+  viewer, accept / apply_auto editor. **Never names a card the caller can't see (#604):** the list goes
+  through `policy.filter_visible`, and `item_dates.listing_entry(row, access=...)` drops a hidden lending
+  card's title from `shows`, `inherits` and the guesses' evidence (checked in `test_private_cards_604.py`).
 - Checks: `scripts/test_undated_725.py` (throwaway DB: the owner's real-dates-only card, the lending rules,
   needs_date, accept / undo / refusals, apply_dates, the migration, uploads, pages, the MCP tool),
   `test_timeline_dates.py`, `test_card_date_sort_622.py`, `node scripts/test_item_sort_622.js`.
@@ -2068,7 +2070,7 @@ configuration gap for that session, not evidence the server itself is gone.
     Check: `scripts/test_card_agent_notes_745.py`.
   - **Undated items (#725):** `constructicon_undated(action="list" | "accept" | "apply_auto")` lists the
     items with no real date and their date guesses, accepts one guess, or applies every in-file guess as one
-    batch (see "Dates" above). A 56th tool, added after #746's count.
+    batch (see "Dates" above). Added after #746's count, like `constructicon_sharing` and `constructicon_duplicates`.
   - **The whole-archive wipe** is `constructicon_delete(everything=true, confirm="DELETE EVERYTHING")`:
     both keys or nothing (either alone, or with another target, is refused); `delete`, `redact` and
     `trash` carry `destructiveHint`.

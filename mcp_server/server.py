@@ -1175,7 +1175,8 @@ def constructicon_undated(action: typing.Literal["list", "accept", "apply_auto"]
         rows = policy.filter_visible(item_dates.undated_rows(include_inherited=include_inherited, snap=snap))
         if not include_inherited:  # the Curator's set exactly (a card's write-up never needs a date)
             rows = [r for r in rows if item_dates.needs_date(r, snap=snap)]
-        entries = [item_dates.listing_entry(r, read_file=read_files, snap=snap) for r in rows[:int(limit)]]
+        access = policy.card_access()  # #604: never name a card the caller can't see
+        entries = [item_dates.listing_entry(r, read_file=read_files, snap=snap, access=access) for r in rows[:int(limit)]]
         return {"items": entries, "total": len(rows), "needs_date": sum(1 for e in entries if e["needs_date"])}
     if action == "accept":
         if not slug or not source:

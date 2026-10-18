@@ -20,14 +20,17 @@ Covers:
   * caps: declared and streamed size, the whole-fetch deadline (a slow stream, a slow DNS), a
     timeout and a connection error are transient; content type (text/html and xhtml only)
   * HTTP answers: a Cloudflare-style 403 / 503 challenge and a plain 403 -> "site blocks fetching",
-    404 permanent, 429 / 5xx transient; an honest User-Agent, identity encoding
+    404 / 410 broken (not transient), 429 / 5xx transient; truncate=True reads the first
+    max_bytes; an honest User-Agent, identity encoding
   * one fetch at a time with a pause between (the polite turn)
   * title / meta extraction (url.page_summary): title, description, og:title, og:description,
     deduplicated, entities, whitespace, caps, a <title> inside an inline <svg>, charsets, and
     malformed HTML (unclosed title, broken tags, garbage bytes)
   * the url type end to end (ocr.run_ocr): done with "Page title:" / "Page summary:" text and
     text_source 'page' (and a search hit); blocked / refused / not HTML / no title -> grey
-    'unsupported' with the reason; a timeout -> 'failed' "try OCR again", and Retry then reads it;
+    'unsupported' with the reason; a page over 2 MB is read to the cap (title in the first chunk ->
+    done, none -> grey "no title or summary found"); a dead link (404) -> RED 'failed' "dead link, or
+    a private page this server can't see", Retry re-fetches; a timeout -> 'failed' "try OCR again";
     fetching turned off -> grey; no address -> grey
   * thumbnails._from_fetch (YouTube thumbnails) goes through the same guard
   * the link_page_text_724d backfill: re-queues failed / unsupported web links once (no network),
@@ -323,6 +326,14 @@ e = fetch_error("http://big.example/stream", max_bytes=50_000)
 check("a streamed body past the cap is cut off (no Content-Length)", isinstance(e, safe_fetch.TooLarge), e)
 r = safe_fetch.fetch("http://big.example/stream", max_bytes=200_000)
 check("a streamed body under the cap is read whole", len(r.body) == 4096 * 40, len(r.body))
+r = safe_fetch.fetch("http://big.example/stream", max_bytes=50_000, truncate=True)
+check("truncate=True: an over-cap stream gives exactly the first max_bytes, marked truncated",
+      len(r.body) == 50_000 and r.truncated, (len(r.body), r.truncated))
+r = safe_fetch.fetch("http://big.example/declared", truncate=True)
+check("truncate=True: a declared Content-Length over the cap is read up to the cap, not refused",
+      len(r.body) == safe_fetch.MAX_BYTES and r.truncated, (len(r.body), r.truncated))
+r = safe_fetch.fetch("http://big.example/stream", max_bytes=200_000, truncate=True)
+check("truncate=True: an under-cap body is not marked truncated", not r.truncated and len(r.body) == 4096 * 40)
 
 NET.routes[("big.example", "/slow")] = lambda req: httpx.Response(
     200, headers={"content-type": "text/html"}, stream=Chunks([b"<p>z</p>"] * 20, pause=0.1))
@@ -382,13 +393,18 @@ e = fetch_error("http://t.example/403")
 check("a plain 403 -> site blocks fetching (HTTP 403)", isinstance(e, safe_fetch.Blocked) and str(e) == "site blocks fetching (HTTP 403)", e)
 NET.routes[("t.example", "/404")] = html("<title>Not found</title>", 404)
 e = fetch_error("http://t.example/404")
-check("404 -> page not found, not transient", isinstance(e, safe_fetch.HttpStatus) and not e.transient and "not found" in str(e), e)
+check("404 -> page not found, not transient, broken", isinstance(e, safe_fetch.HttpStatus) and not e.transient
+      and e.broken and str(e) == "page not found (HTTP 404): dead link, or a private page this server can't see", e)
+NET.routes[("t.example", "/410")] = html("", 410)
+e = fetch_error("http://t.example/410")
+check("410 -> broken too", isinstance(e, safe_fetch.HttpStatus) and e.broken and "HTTP 410" in str(e), e)
 NET.routes[("t.example", "/429")] = html("", 429)
 e = fetch_error("http://t.example/429")
 check("429 -> transient", isinstance(e, safe_fetch.HttpStatus) and e.transient, e)
 NET.routes[("t.example", "/502")] = html("", 502)
 e = fetch_error("http://t.example/502")
 check("502 -> transient, 'try again later'", isinstance(e, safe_fetch.HttpStatus) and e.transient and "try again" in str(e), e)
+check("a 502 is not broken (transient instead)", e.transient and not e.broken, e)
 check("exactly one request per blocked page (no retry, no bypass attempt)",
       sum(1 for q in NET.requests if q.url.path == "/cf403") == 1, len(NET.requests))
 
@@ -546,6 +562,36 @@ BARE = mklink("bare_link", "https://files.example/bare")
 ocr.run_ocr(BARE)
 st, note, *_ = state(BARE)
 check("a page with no title or summary -> grey with that reason", st == "unsupported" and note == "web link: the page has no title or summary", (st, note))
+
+FILLER = b"<p>" + b"filler words " * 200_000 + b"</p>"  # ~2.6 MB, well past the 2 MB cap
+NET.routes[("files.example", "/huge")] = html(b"<html><head><title>Huge page (Hooplarge)</title>"
+                                               b'<meta name="description" content="Big but titled."></head><body>'
+                                               + FILLER + b"</body></html>")
+HUGE = mklink("huge_link", "https://files.example/huge")
+ocr.run_ocr(HUGE)
+st, note, text, src = state(HUGE)
+check("a page over 2 MB with its title in the first chunk -> done (first 2 MB read, not refused)",
+      st == "done" and not note and "Huge page (Hooplarge)" in (text or "") and "Big but titled." in text and src == "page",
+      (st, note, text))
+NET.routes[("files.example", "/huge-untitled")] = html(b"<html><body>" + FILLER + b"<title>too late</title></body></html>")
+HUGE2 = mklink("huge_untitled_link", "https://files.example/huge-untitled")
+ocr.run_ocr(HUGE2)
+st, note, *_ = state(HUGE2)
+check("a page over 2 MB with no title in its first 2 MB -> grey 'no title or summary found'",
+      st == "unsupported" and note == "web link: no title or summary found in the first 2,000,000 bytes", (st, note))
+
+NET.routes[("files.example", "/gone")] = html("<title>Page not found</title>", 404)
+GONE = mklink("gone_link", "https://files.example/gone")
+ocr.run_ocr(GONE)
+st, note, *_ = state(GONE)
+check("a dead link (404) -> RED failed, worded honestly (dead or private)",
+      st == "failed" and note == "web link: page not found (HTTP 404): dead link, or a private page this server can't see", (st, note))
+NET.routes[("files.example", "/gone")] = html("<title>Back from the dead</title>")
+db.set_ocr_status(GONE, "pending")  # Retry
+ocr.run_ocr(GONE)
+st, note, text, _src = state(GONE)
+check("Retry on the dead link re-fetches (now up -> done, note gone)", st == "done" and not note and "Back from the dead" in text,
+      (st, note, text))
 
 NET.routes[("files.example", "/flaky")] = raises(httpx.ConnectTimeout)
 FL = mklink("flaky_link", "https://files.example/flaky")

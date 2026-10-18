@@ -23,9 +23,15 @@ its <title>, <meta name="description"> and og:title / og:description with the st
 (core/text_sources.combine; type_metadata.text_source 'page'). How it settles:
 - a title or summary -> 'done' with that text;
 - the site blocks fetching (cults3d.com's Cloudflare challenge), the guard refuses the address
-  (private / loopback / odd port / not http), not an HTML page, too large, page not found, or a
-  page with no title or summary -> grey 'unsupported' with the reason ("web link: site blocks
-  fetching (HTTP 403 challenge)"): NotCompatibleFile, nothing to retry;
+  (private / loopback / odd port / not http), not an HTML page, or a page with no title or summary
+  -> grey 'unsupported' with the reason ("web link: site blocks fetching (HTTP 403 challenge)"):
+  NotCompatibleFile, nothing to retry;
+- a page over 2 MB is not refused: its first 2 MB are read and parsed (the title and meta are in
+  <head>; owner decision on PR #754); nothing found there -> grey "no title or summary found in the
+  first 2,000,000 bytes";
+- a dead link (HTTP 404 / 410) -> red 'failed' (owner: "Red, it's broken"), worded honestly: "page
+  not found (HTTP 404): dead link, or a private page this server can't see" (GitHub answers 404 for
+  a private repo); Retry re-fetches;
 - a timeout, an unreachable site, HTTP 429 / 5xx -> 'failed' with a "try OCR again" reason
   (UnreadableFile): those can pass, and Retry runs the fetch again.
 Nothing is ever done to get past a bot check.
@@ -137,18 +143,22 @@ def page_text(row):
     if not safe_fetch.enabled():
         raise NotCompatibleFile("web link: page fetching is turned off on this install")
     try:
-        page = safe_fetch.fetch(url)
+        page = safe_fetch.fetch(url, truncate=True)  # owner: over 2 MB, read the first 2 MB (title/meta are in <head>)
     except safe_fetch.FetchError as e:
+        reason = str(e)
         if e.transient:
-            reason = str(e)
             raise UnreadableFile(f"web link: {reason}" + ("" if "try again" in reason else "; try OCR again")) from None
-        raise NotCompatibleFile(f"web link: {e}") from None
+        if getattr(e, "broken", False):  # owner: a dead link is red ("it's broken"); Retry still re-fetches
+            raise UnreadableFile(f"web link: {reason}") from None
+        raise NotCompatibleFile(f"web link: {reason}") from None
     titles, summaries = page_summary(page.body, page.charset)
     text, _source = text_sources.combine([
         text_sources.TextSource("page", "Page title", "\n".join(titles)),
         text_sources.TextSource("page", "Page summary", "\n".join(summaries)),
     ])
     if not text:
+        if page.truncated:
+            raise NotCompatibleFile(f"web link: no title or summary found in the first {safe_fetch.MAX_BYTES:,} bytes")
         raise NotCompatibleFile("web link: the page has no title or summary")
     return text
 

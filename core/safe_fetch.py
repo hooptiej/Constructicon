@@ -93,12 +93,15 @@ class TooLarge(FetchError):
 
 
 class HttpStatus(FetchError):
-    """Any other non-success answer (404, 410, 429, 5xx...)."""
+    """Any other non-success answer (404, 410, 429, 5xx...). `broken`: the address answers but the page
+    isn't there (404 / 410): a dead link, or a private page this server can't see. Not transient
+    (retrying now won't help), but a real fault, so the page reader shows it red."""
 
-    def __init__(self, message, status, transient=False):
+    def __init__(self, message, status, transient=False, broken=False):
         super().__init__(message)
         self.status = status
         self.transient = transient
+        self.broken = broken
 
 
 class TimedOut(FetchError):
@@ -117,6 +120,7 @@ class FetchResult:
     charset: str         # from the Content-Type header, "" when it names none
     body: bytes
     hops: list = field(default_factory=list)  # every address fetched, in order
+    truncated: bool = False  # only with truncate=True: the body is the first max_bytes, the rest unread
 
 
 def enabled():
@@ -327,7 +331,8 @@ def _status_error(resp):
     if code == 429:
         return HttpStatus("the site asked us to slow down (HTTP 429); try again later", code, transient=True)
     if code in (404, 410):
-        return HttpStatus(f"page not found (HTTP {code})", code)
+        return HttpStatus(f"page not found (HTTP {code}): dead link, or a private page this server can't see",
+                          code, broken=True)
     if code >= 500:
         return HttpStatus(f"the site had an error (HTTP {code}); try again later", code, transient=True)
     return HttpStatus(f"the site answered HTTP {code}", code)
@@ -340,7 +345,7 @@ def _remaining(deadline, timeout):
     return left
 
 
-def _one_hop(u, deadline, timeout, accept, max_bytes, headers):
+def _one_hop(u, deadline, timeout, accept, max_bytes, headers, truncate=False):
     """Fetch `u` once (no redirects): (redirect target URL or None, FetchResult or None)."""
     host = u.raw_host.decode("ascii")
     scheme = u.scheme.lower()
@@ -380,32 +385,41 @@ def _one_hop(u, deadline, timeout, accept, max_bytes, headers):
                 raise WrongType(f"not {what}: {mime or 'no content type'}" if tuple(accept) != HTML_TYPES
                                 else f"not {what} ({mime or 'no content type'})")
             declared = resp.headers.get("content-length", "")
-            if declared.isdigit() and int(declared) > max_bytes:
+            if not truncate and declared.isdigit() and int(declared) > max_bytes:
                 raise TooLarge(f"too large ({int(declared):,} bytes, over the {max_bytes:,} byte cap)")
             body = bytearray()
+            truncated = False
             try:
                 for chunk in resp.iter_bytes():
                     body += chunk
                     if len(body) > max_bytes:
-                        raise TooLarge(f"too large (over the {max_bytes:,} byte cap)")
+                        if not truncate:
+                            raise TooLarge(f"too large (over the {max_bytes:,} byte cap)")
+                        # #724 d owner decision: keep the first max_bytes and stop reading (the cap
+                        # stays a hard read limit; a page's title and meta are in its <head>)
+                        del body[max_bytes:]
+                        truncated = True
+                        break
                     _remaining(deadline, timeout)
             except httpx.TimeoutException:
                 raise TimedOut(f"timed out after {timeout:g} s") from None
             except httpx.HTTPError as e:
                 raise Unreachable(f"the connection to {host} broke ({type(e).__name__}); try again") from None
             return None, FetchResult(url=str(u), status=resp.status_code, content_type=mime, charset=charset,
-                                     body=bytes(body))
+                                     body=bytes(body), truncated=truncated)
         finally:
             resp.close()
 
 
 def fetch(url, *, accept=HTML_TYPES, max_bytes=MAX_BYTES, timeout=TIMEOUT_SECONDS,
-          max_redirects=MAX_REDIRECTS, headers=None, polite=True):
+          max_redirects=MAX_REDIRECTS, headers=None, polite=True, truncate=False):
     """GET `url` through the guard (see the module docstring) and return a FetchResult, or raise a
     FetchError with the plain reason. `accept`: the media types allowed (an entry ending in "/" is
     a prefix, e.g. "image/"). `headers` adds to (never replaces Host on) the request headers.
     `polite`: take the one-fetch-at-a-time turn with a pause (the page reader; a thumbnail of a
-    fixed image host passes False)."""
+    fixed image host passes False). `truncate`: a body over `max_bytes` isn't refused; the first
+    `max_bytes` are returned (`FetchResult.truncated`) and the rest is never read (the page reader:
+    the title and meta live in <head>). Without it, an over-cap body raises TooLarge."""
     u = check_url(url)
     try:  # an IP literal is refused at once, without waiting for the polite turn
         literal = ipaddress.ip_address(u.raw_host.decode("ascii"))
@@ -418,7 +432,7 @@ def fetch(url, *, accept=HTML_TYPES, max_bytes=MAX_BYTES, timeout=TIMEOUT_SECOND
         hops = []
         for _ in range(max_redirects + 1):
             hops.append(str(u))
-            target, result = _one_hop(u, deadline, timeout, tuple(accept), max_bytes, headers)
+            target, result = _one_hop(u, deadline, timeout, tuple(accept), max_bytes, headers, truncate)
             if result is not None:
                 result.hops = hops
                 return result

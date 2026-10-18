@@ -1528,9 +1528,13 @@ One generated file of every registered type and extension, to drop-test a new in
     `meta name=description` and `og:title` / `og:description` (stdlib `html.parser`, deduplicated,
     capped) as "Page title:" / "Page summary:" sections, `text_source` `page`. Settles: text -> `done`;
     the site blocks fetching (cults3d.com's Cloudflare 403 challenge: 16 of prod's 18 links), the guard
-    refuses the address, not HTML, too large, 404, no title/summary, or fetching turned off -> grey
-    `unsupported` with the reason ("web link: site blocks fetching (HTTP 403 challenge)"); a timeout, an
-    unreachable site, HTTP 429/5xx -> `failed` "...; try OCR again" (Retry re-fetches). Nothing tries
+    refuses the address, not HTML, no title/summary, or fetching turned off -> grey `unsupported` with
+    the reason ("web link: site blocks fetching (HTTP 403 challenge)"); a page over 2 MB is read to
+    the cap and parsed (`fetch(truncate=True)`; nothing in the first 2 MB -> grey "no title or summary
+    found in the first 2,000,000 bytes"); a dead link, HTTP 404/410 -> RED `failed` "page not found
+    (HTTP 404): dead link, or a private page this server can't see" (owner, PR #754: "Red, it's
+    broken"; GitHub answers 404 for a private repo); a timeout, an unreachable site, HTTP 429/5xx ->
+    `failed` "...; try OCR again". Retry re-fetches any of them. Nothing tries
     to get past a bot check. The `link_page_text_724d` migration re-queued existing `failed` /
     `unsupported` url rows to `pending` once (web's startup self-heal re-runs them; the fetches go one
     at a time). Check with `scripts/test_safe_fetch_724d.py`.
@@ -1545,7 +1549,8 @@ One generated file of every registered type and extension, to drop-test a new in
     so the certificate is still checked; one client per hop, `trust_env=False`), so DNS rebinding
     can't slip through; follows redirects **by hand** (max 5), re-checking scheme, port and the
     resolved IP on every hop; caps the body (2 MB, counted while streaming, `Accept-Encoding:
-    identity`), the whole fetch (10 s shared by DNS, connect and reads) and the content type
+    identity`; over it = `TooLarge`, or with `truncate=True` the first 2 MB and the rest never read),
+    the whole fetch (10 s shared by DNS, connect and reads) and the content type
     (text/html, application/xhtml+xml by default; thumbnails ask for `image/`). The page reader sends
     an honest User-Agent (`Constructicon/<version> (...)`); thumbnails keep their Chrome-style UA
     (#284, Imgur). `polite=True` (the page reader) takes a per-container one-at-a-time turn (a lock

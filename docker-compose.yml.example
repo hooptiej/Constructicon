@@ -75,6 +75,12 @@ services:
       # - CONSTRUCTICON_CSP=
       #   Diagnose a page the CSP breaks: send it as Content-Security-Policy-Report-Only instead.
       # - CONSTRUCTICON_CSP_REPORT_ONLY=1
+      #   #724 d: a web link's OCR fetches its page's title and summary through core/safe_fetch.py
+      #   (public addresses only, 2 MB / 10 s, one fetch at a time). "off" for an offline install:
+      #   links then settle grey "page fetching is turned off on this install".
+      # - CONSTRUCTICON_LINK_FETCH=off
+      #   Seconds between page fetches (default 2), so a backfill of many links never bursts a site.
+      # - CONSTRUCTICON_LINK_FETCH_DELAY_SECONDS=2
       # #687: captions come from the `ollama` sidecar below (compose profile `captions`).
       # The model is ONE value for the app and the sidecar's first-start pull: set
       # CAPTION_OLLAMA_MODEL in .env (default moondream). An install that runs without the

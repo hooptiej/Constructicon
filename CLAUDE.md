@@ -1567,7 +1567,12 @@ One generated file of every registered type and extension, to drop-test a new in
     a **hard 20 s deadline** on the library's whole run (a parse_limits child killed at the deadline,
     `parse_limits.call(seconds=)`; no sandbox = an abandoned daemon thread), safe_fetch's one-at-a-time
     `polite_turn()` (shared with page fetches and their delay), `CONSTRUCTICON_TRANSCRIPTS=off` (default
-    on; `_testenv.isolate()` sets it off). Manual captions over auto-generated, English first, any language
+    on; `_testenv.isolate()` sets it off; **the home prod install runs it off** until YouTube stops 429ing
+    the NAS, owner on PR #756). Off = nothing fetched, a video with no status yet is marked `queued` (the
+    backlog waits for it to be turned on), and the "Captions" line says "transcripts are turned off on
+    this install". **Web only:** the MCP process never fetches (`transcripts.queue_only()`,
+    `CONSTRUCTICON_ROLE=mcp`, like captions): its OCR runs mark the video `queued` (a Retry OCR there
+    re-queues, so web asks again). Manual captions over auto-generated, English first, any language
     recorded (`transcript_language`, `transcript_kind`). Noise filter: bracketed tags, sound words in
     parentheses, music notes, filler-only snippets ("foreign", "um") dropped; under 30 real words = none.
     `transcript_status`: `found`; `none` (no captions, captions off, only noise, video unavailable:
@@ -1575,7 +1580,7 @@ One generated file of every registered type and extension, to drop-test a new in
     timeout, YouTube blocking or rate-limiting: reason in `transcript_note`, backoff 15 min doubling to a
     day, stops by itself after 8 tries; NEVER sets OCR failed and never removes text or an earlier
     transcript); `queued`. The object page's properties show a "Captions" line. Retries and the backlog:
-    web's `_transcript_loop` (every 2 min, up to 10 rows, one at a time, `transcripts.work_due`) works
+    web's `_transcript_loop` (every 5 min, up to 3 rows, one at a time, `transcripts.work_due`) works
     `queued` / due `retry` rows and folds each result into the stored text without OCR (resettle); a block
     stops the pass early. The `transcripts_724e` migration queued existing YouTube rows (no network).
     Seen live 2026-10-17: YouTube answered HTTP 429 to the caption download from the NAS address for some

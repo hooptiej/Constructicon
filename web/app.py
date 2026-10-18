@@ -219,8 +219,8 @@ async def _trash_purge_loop():
         await asyncio.sleep(TRASH_PURGE_INTERVAL_SECONDS)
 
 
-TRANSCRIPT_INTERVAL_SECONDS = 120  # #724 (e): a pass every 2 min...
-TRANSCRIPT_BATCH = 10              # ...of at most 10 videos, one fetch at a time
+TRANSCRIPT_INTERVAL_SECONDS = 300  # #724 (e), owner on PR #756 ("slower"): a pass every 5 min...
+TRANSCRIPT_BATCH = 3               # ...of at most 3 videos, one fetch at a time, stopping at a block
 
 
 async def _transcript_loop():

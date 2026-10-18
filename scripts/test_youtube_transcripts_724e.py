@@ -406,10 +406,23 @@ n_list = len(CALLS["list"])
 OFF = mkyt("offSwitch12", "Offline install.")
 ocr.run_ocr(OFF)
 check("off: YouTube is never asked", len(CALLS["list"]) == n_list, CALLS["list"][n_list:])
-check("off: no transcript fields written, the description still settles",
-      not any(k.startswith("transcript") for k in meta(OFF)) and state(OFF)[:3] == ("done", None, "description"), meta(OFF))
+check("off: the new video is marked queued (so turning it on later works the backlog), nothing else written",
+      {k: v for k, v in meta(OFF).items() if k.startswith("transcript")} == {"transcript_status": "queued"}
+      and state(OFF)[:3] == ("done", None, "description"), meta(OFF))
+check("off: the Captions line says transcripts are turned off (not silent)",
+      youtube.get_properties(db.get_by_slug(OFF)).get("Captions") == "not fetched: transcripts are turned off on this install",
+      youtube.get_properties(db.get_by_slug(OFF)))
+check("off: a retry row says it's off, with its last reason",
+      youtube.get_properties(db.get_by_slug(NET)).get("Captions", "").startswith(
+          "not fetched: transcripts are turned off on this install (last try: couldn't reach YouTube"),
+      youtube.get_properties(db.get_by_slug(NET)))
+before_found = dict(meta(FOUND))
+ocr.run_ocr(FOUND)  # a Retry OCR while off leaves a found transcript exactly as it is
+check("off: an existing status is left alone (found stays found, its text kept)", meta(FOUND) == before_found
+      and "Zwiebelkuchen" in state(FOUND)[3], meta(FOUND))
 check("off: stored transcripts stay searchable", hits("Zwiebelkuchen") == [FOUND])
-check("off: the background pass does nothing", transcripts.work_due(10)["tried"] == 0)
+check("off: the background pass does nothing (queued rows stay queued)", transcripts.work_due(10)["tried"] == 0
+      and meta(OFF).get("transcript_status") == "queued")
 
 # ============================================================================================
 # 6. the background pass (web's _transcript_loop) and the backfill
@@ -533,6 +546,46 @@ if SANDBOX and parse_limits.sandbox_available():
     print(f"   real library, no network: {out}")
 else:
     print("SKIP sandbox checks (no parser sandbox on this platform: the thread deadline above covered it)")
+
+# ============================================================================================
+# 8. web loop only: the MCP process never fetches (owner, PR #756). Last: importing the MCP server
+#    sets CONSTRUCTICON_ROLE=mcp for this whole process.
+# ============================================================================================
+os.environ["CONSTRUCTICON_PARSE_SANDBOX"] = "off"
+sys.modules["youtube_transcript_api"] = fake
+transcripts.DEADLINE_SECONDS = 20.0
+turn_on()  # transcripts ON: the MCP role alone must stop the fetch
+try:
+    from mcp_server import server as mcp_server  # noqa: E402
+except Exception as e:  # MCP stack not importable here: the box run covers it
+    mcp_server = None
+    print(f"SKIP MCP checks (mcp_server import failed: {e!r})")
+if mcp_server is not None:
+    mcp_server._run_in_thread = lambda fn, *a: None  # the test runs OCR itself, below
+    ANSWERS["mcpUpload21"] = [Track("English", "en", False, speech(36, "Mcpwagon"))]
+    n_list = len(CALLS["list"])
+    out = mcp_server.constructicon_add_content(media_type="youtube",
+                                               external_url="https://www.youtube.com/watch?v=mcpUpload21",
+                                               content_description="Uploaded over MCP")
+    mslug = out.get("slug") if isinstance(out, dict) else None
+    check("mcp: constructicon_add_content created the YouTube item", bool(mslug), out)
+    if mslug:
+        if db.get_by_slug(mslug)["ocr_status"] == "pending":
+            ocr.run_ocr(mslug)  # the OCR run the MCP process would start in its thread
+        m = meta(mslug)
+        check("mcp: an MCP upload of a YouTube link ends up QUEUED (not 'none'), YouTube not asked",
+              m.get("transcript_status") == "queued" and len(CALLS["list"]) == n_list, (m, CALLS["list"][n_list:]))
+        check("mcp: OCR is not failed", db.get_by_slug(mslug)["ocr_status"] in ("done", "unsupported"),
+              db.get_by_slug(mslug)["ocr_status"])
+        check("mcp: the web pass sees it as due", mslug in db.list_due_text_fetches(["youtube"], time.time(), 100))
+        none_slug = BARE  # a 'none' row: a Retry OCR through the MCP re-queues it, so web asks again
+        ocr.run_ocr(none_slug)
+        check("mcp: a Retry OCR of a 'none' video re-queues it (owner: ask again)",
+              meta(none_slug).get("transcript_status") == "queued" and len(CALLS["list"]) == n_list, meta(none_slug))
+        os.environ["CONSTRUCTICON_ROLE"] = "web"  # now act as the web process's background pass
+        result = transcripts.work_due(10)
+        check("mcp: web's pass then fetches the MCP upload", meta(mslug).get("transcript_status") == "found"
+              and "Mcpwagon" in state(mslug)[3] and result["found"] >= 1, (result, meta(mslug)))
 
 ctx.__exit__(None, None, None)
 print()

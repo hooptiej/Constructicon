@@ -84,8 +84,11 @@ services:
       #   #724 e: a YouTube video's OCR (and a background pass for the backlog and retries) asks
       #   YouTube for its captions through youtube-transcript-api (an unofficial endpoint), with a
       #   hard 20 s deadline, one fetch at a time (the delay above), noise like [Music] removed.
-      #   On by default; "off" for an offline install (stored transcripts stay searchable). Set it
-      #   on the MCP service too if MCP uploads should skip it.
+      #   On by default; "off" for an offline install (stored transcripts stay searchable, new
+      #   videos wait as "queued" and the object page says "transcripts are turned off on this
+      #   install"; turn it back on and the background pass works the backlog).
+      #   THE HOME PROD INSTALL RUNS WITH THIS OFF until YouTube stops answering the NAS with
+      #   HTTP 429 (owner, PR #756). Uncomment to turn it off:
       # - CONSTRUCTICON_TRANSCRIPTS=off
       # #687: captions come from the `ollama` sidecar below (compose profile `captions`).
       # The model is ONE value for the app and the sidecar's first-start pull: set
@@ -193,6 +196,10 @@ services:
       # #561 / #467 step 2: the same install token file as the web service. Required: with roles
       # enforced the MCP refuses to start without one. Clients send Authorization: Bearer <token>.
       - CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token
+      # #724 e: the MCP never fetches YouTube transcripts (owner, PR #756: "web loop only"). The code
+      # already enforces it (core/transcripts.queue_only: an MCP upload is marked "queued" and the
+      # web service's background pass fetches it); this line says so where an installer looks.
+      - CONSTRUCTICON_TRANSCRIPTS=off
     command: python -m mcp_server.server
     depends_on:
       - constructicon-web

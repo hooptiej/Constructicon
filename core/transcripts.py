@@ -22,8 +22,13 @@ one at a time), which stores the result and rebuilds the row's text without re-r
 - polite pacing: the fetch takes core/safe_fetch.py's one-at-a-time turn (shared with page
   fetches, with `CONSTRUCTICON_LINK_FETCH_DELAY_SECONDS` between them), and the worker does a few
   rows per pass;
-- an off switch: `CONSTRUCTICON_TRANSCRIPTS=off` (default on). Off = nothing is fetched (stored
-  transcripts stay searchable); scripts/_testenv.py sets it, so no test reaches YouTube.
+- an off switch: `CONSTRUCTICON_TRANSCRIPTS=off` (default on; the home prod install runs with it
+  off until YouTube stops answering the NAS with HTTP 429, owner on PR #756). Off = nothing is
+  fetched, a new video is marked `queued` (so turning it on later works the backlog), stored
+  transcripts stay searchable, and the "Captions" line says "transcripts are turned off on this
+  install". scripts/_testenv.py sets it, so no test reaches YouTube;
+- web only (owner, PR #756): the MCP process never fetches (`queue_only`, CONSTRUCTICON_ROLE=mcp);
+  its OCR runs mark the video `queued` for web's pass.
 
 **What is stored** (type_metadata, all `transcript*` keys):
 - `transcript_status`: `found` | `none` (settled: no captions, captions off, only noise, the video
@@ -68,6 +73,16 @@ FIELDS = ("transcript", "transcript_status", "transcript_language", "transcript_
 
 def enabled():
     return os.environ.get("CONSTRUCTICON_TRANSCRIPTS", "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+OFF_NOTE = "transcripts are turned off on this install"
+
+
+def queue_only():
+    """True in the MCP process (CONSTRUCTICON_ROLE=mcp, set by mcp_server/server.py; owner, PR #756:
+    "web loop only"). It never fetches: an OCR run there marks the video `queued`, and web's
+    background pass does the fetching. The same switch core/captions.py uses (#549)."""
+    return os.environ.get("CONSTRUCTICON_ROLE", "").strip().lower() == "mcp"
 
 
 # --- the noise filter ------------------------------------------------------------------------------
@@ -297,9 +312,20 @@ def fields_for(outcome, meta, now=None):
 
 def fetch_fields(row, video_id, now=None):
     """The type's text_fetch_fn body: one attempt for `row` (whose video is `video_id`), as
-    type_metadata changes. None when transcripts are off (nothing fetched, nothing changed)."""
-    if not enabled() or not video_id:
+    type_metadata changes. Nothing is fetched:
+    - in the MCP process (queue_only): the video is marked `queued` (also on a Retry OCR of a
+      found / none / retry row, so the web pass asks again; a stored transcript is kept);
+    - with transcripts turned off: a video with no status yet is marked `queued`, so turning them on
+      later works the backlog; any other status is left as it is (None)."""
+    if not video_id:
         return None
+    meta = row.get("type_metadata") or {}
+    meta = meta if isinstance(meta, dict) else {}
+    if queue_only():
+        return {"transcript_status": QUEUED, "transcript_retry_at": None, "transcript_attempts": None,
+                "transcript_note": None}
+    if not enabled():
+        return None if meta.get("transcript_status") else {"transcript_status": QUEUED}
     outcome = fetch(video_id)
     fields = fields_for(outcome, row.get("type_metadata") or {}, now)
     if outcome.get("outcome") == RETRY:
@@ -363,6 +389,11 @@ def describe(meta):
     meta = meta if isinstance(meta, dict) else {}
     status = meta.get("transcript_status")
     note = meta.get("transcript_note")
+    on = enabled()
+    if not on and status in (None, QUEUED, RETRY):  # owner, PR #756: the off state is said, not silent
+        last = f" (last try: {note})" if status == RETRY and note else ""
+        held = "; an earlier transcript is kept" if meta.get("transcript") else ""
+        return f"not fetched: {OFF_NOTE}{last}{held}"
     if status == FOUND:
         lang = meta.get("transcript_language") or meta.get("transcript_language_code") or "unknown language"
         kind = "auto-generated" if meta.get("transcript_kind") == "auto" else "manual"
@@ -379,5 +410,5 @@ def describe(meta):
         held = " (an earlier transcript is kept)" if meta.get("transcript") else ""
         return f"not fetched yet: {note or 'will try again'}{held}"
     if status == QUEUED:
-        return "waiting to be fetched" if enabled() else "not fetched: transcripts are turned off on this install"
+        return "waiting to be fetched" + (" again (an earlier transcript is kept)" if meta.get("transcript") else "")
     return None

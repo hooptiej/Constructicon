@@ -207,7 +207,8 @@ def _plan_group(key, rows, cutoff):
         "trash": [_face(d) for d in dropped],
         "dates_differ": len({f["day"] for f in facts}) > 1,
         "has_post_constructicon_copy": any(f["date"] is not None and not f["early"] for f in facts),
-        "on_several_cards": len({c["id"] for f in facts for c in f["cards"]}) > 1,
+        "copies_on_cards": sum(1 for f in facts if f["cards"]),
+        "spans_several_cards": len({c["id"] for f in facts for c in f["cards"]}) > 1,
         "inherit": {
             "cards": [{"id": cid, "title": t} for cid, t in new_cards.items()],
             "tags": new_tag_names, "free_text_tags": new_free,
@@ -255,7 +256,8 @@ def _build(actor=None):
         "groups_same_date": sum(1 for g in groups if not g["dates_differ"]),
         "groups_dates_differ": sum(1 for g in groups if g["dates_differ"]),
         "groups_with_post_constructicon_copy": sum(1 for g in groups if g["has_post_constructicon_copy"]),
-        "groups_on_several_cards": sum(1 for g in groups if g["on_several_cards"]),
+        "groups_with_several_copies_on_cards": sum(1 for g in groups if g["copies_on_cards"] > 1),
+        "groups_spanning_several_cards": sum(1 for g in groups if g["spans_several_cards"]),
         "groups_touching_revision_chains": sum(1 for g in groups if g["in_revision_chain"]),
         "skipped_groups": len(skipped),
         "hidden_groups": hidden,
@@ -376,7 +378,8 @@ def summary_text(built):
              "By type: " + ", ".join(f"{k} {v}" for k, v in s["trash_by_type"].items()),
              f"{s['groups_same_date']} groups have the same date on every copy, {s['groups_dates_differ']} differ, "
              f"{s['groups_with_post_constructicon_copy']} have a copy dated after Constructicon's first upload "
-             f"({s['first_upload']}); {s['groups_on_several_cards']} span more than one card."]
+             f"({s['first_upload']}); {s['groups_with_several_copies_on_cards']} have more than one copy on a card, "
+             f"{s['groups_spanning_several_cards']} span more than one card."]
     if s["skipped_groups"] or s["unreadable_files"] or s["hidden_groups"]:
         lines.append(f"Left alone: {s['skipped_groups']} groups (see skipped), {s['unreadable_files']} unreadable "
                      f"files, {s['hidden_groups']} groups you may not see.")

@@ -183,6 +183,10 @@ check("red: inherits Card Alpha, the wix-import tag, the imgur chip and the desc
       and "wix-import" in red["inherit"]["tags"] and "imgur" in red["inherit"]["free_text_tags"]
       and "description" in red["inherit"]["fields"], red.get("inherit"))
 check("red: post-Constructicon copy flagged, dates differ", red["has_post_constructicon_copy"] and red["dates_differ"])
+check("card counts: red has 3 copies on cards spanning 2 cards; summary agrees",
+      red["copies_on_cards"] == 3 and red["spans_several_cards"]
+      and P["summary"]["groups_with_several_copies_on_cards"] == 2 and P["summary"]["groups_spanning_several_cards"] == 2,
+      (red.get("copies_on_cards"), P["summary"]))
 blue = G.get("b_two") or {}
 check("blue: same day, more cards wins", "more cards" in blue.get("why", "") and not blue["dates_differ"], blue.get("why"))
 check("blue: survivor inherits the sensitive flag", "sensitive" in blue["inherit"]["flags"], blue.get("inherit"))

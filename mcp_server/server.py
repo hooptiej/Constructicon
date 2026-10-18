@@ -1375,7 +1375,7 @@ def constructicon_empty_trash(confirm: str) -> dict:
 @mcp.tool(selector="action", annotations=_DESTRUCTIVE)
 def constructicon_duplicates(action: typing.Literal["plan", "apply"] = "plan", dry_run: bool = True,
                              expect_trash: list[str] | None = None) -> dict:
-    """Byte-identical duplicate files (#615): the same stored bytes under several items.
+    """Byte-identical duplicate files: the same stored bytes under several items.
     "plan" (default, read-only): {summary, summary_text, groups: [{sha256, size_bytes, keep, why,
       trash: [{slug, title, filename, date, cards, ...}], inherit: {cards, tags, free_text_tags,
       fields, flags}, in_revision_chain}], skipped, unreadable}. The survivor is the copy with the

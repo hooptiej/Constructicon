@@ -3,7 +3,7 @@
      nothing is marked |safe. -#}
 {% macro item_row(i) -%}
 <li class="cq-item{% if i.deferred %} cq-item-deferred{% endif %}" data-cq-key="{{ i.key }}" data-cq-type="{{ i.type }}"{% if i.id %} data-cq-id="{{ i.id }}"{% endif %}
-    data-cq-multi="{{ 1 if i.multi else 0 }}" data-cq-param="{{ i.answer_param or 'choice' }}" data-cq-suggested='{{ (i.suggested.picks if i.suggested else []) | tojson }}'>
+    data-cq-multi="{{ 1 if i.multi else 0 }}" data-cq-param="{{ i.answer_param or 'choice' }}" data-cq-suggested='{{ (i.suggested.picks if i.suggested else []) | tojson }}'{% if i.accept_source %} data-cq-item="{{ i.item_slug }}" data-cq-source="{{ i.accept_source }}"{% endif %}>
   <div class="cq-item-main">
     <span class="cq-tag cq-tag-{{ i.type }}">{{ 'Question' if i.type == 'question' else ('Nudge' if i.type == 'nudge' else 'Need') }}</span>
     <div class="cq-item-text">
@@ -22,6 +22,7 @@
         {% if i.suggested and i.suggested.picks %}<button type="button" class="dp-btn dp-btn-primary" data-cq-action="accept">Accept</button>{% endif %}
         <button type="button" class="dp-btn" data-cq-action="choose" aria-expanded="false">Choose&hellip;</button>
       {% endif %}
+      {% if i.accept_source %}<button type="button" class="dp-btn dp-btn-primary" data-cq-action="accept-date" title="Write this date as the file's date (one undoable change)">Use {{ i.suggested.labels[0].split(',')[0] }}</button>{% endif %}
       {% if i.type != 'question' or i.kind in ('project_match', 'retype', 'item_supersedes') %}
         <a class="dp-btn" href="{{ i.href }}">{{ i.fix_label }}</a>
       {% endif %}

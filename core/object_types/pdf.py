@@ -199,6 +199,27 @@ def get_properties(row):
         return {}
 
 
+def get_embedded_metadata(path):
+    """ObjectTypeSpec.embedded_metadata_fn (#725): the PDF's own CreationDate as content_date
+    ({} when it has none, or on any failure). Read once at upload (core/embedded_metadata.py
+    fill_missing, which gates it as plausible and never overwrites), and by the date guesser
+    (core/item_dates.py) as in-file evidence for an undated PDF. A date with no offset is Mountain
+    Time (core/date_guess.py parse_pdf_date)."""
+    from .. import date_guess  # lazy: keeps this module's import graph as it was
+    try:
+        doc = _open(path)
+        if doc is None:
+            return {}
+        try:
+            created = date_guess.parse_pdf_date((doc.metadata or {}).get("creationDate"))
+        finally:
+            doc.close()
+    except Exception as e:
+        print(f"PDF creation date read failed for {path}: {e!r}")
+        return {}
+    return {"content_date": created} if created is not None else {}
+
+
 from . import _preview
 
 
@@ -220,6 +241,7 @@ register(ObjectTypeSpec(
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,
     properties_fn=get_properties,
+    embedded_metadata_fn=get_embedded_metadata,  # #725: the PDF's CreationDate -> content_date
     badge_icon="\U0001F4C4",
     badge_text="PDF",
 ))

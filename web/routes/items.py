@@ -11,10 +11,10 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from core import access_log, besteffort, captions, db, ingest, item_title, items, membership, object_types, ocr, parse_limits, revisions, similarity, storage, thumbnails
-from core import tags as tags_svc, timeline
+from core import item_dates, tags as tags_svc, timeline
 from web import content_security, files_feed
 from web.common import from_request_thread
-from web.shapes import _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
+from web.shapes import _friendly_date, _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
 from core import policy, roles
 from core.errors import AppError
 from core.object_types import code as code_type
@@ -556,6 +556,20 @@ def api_update_image(
     return JSONResponse(_to_public(row))
 
 
+@router.post("/api/image/{slug}/date-guess")
+def api_accept_date_guess(slug: str, source: str = Form(...)):
+    """(#725) The Curator's one-click "Use <date>" on a needs_date item: write the item's date guess
+    from `source` (filename | file_metadata | youtube | ocr_text | siblings) as its content_date,
+    with the source recorded. Editor (the router default). One imaged change-log row; `batch_id`
+    feeds the Undo bar. Refusals say why and change nothing: 409 `already_dated` (it has a real
+    date by now), 400 `no_such_guess` (no guess from that source any more), 400 `bad_source`."""
+    policy.viewable_item(slug)  # 404 if missing or not viewable
+    res = items.accept_date_guess(slug, source)
+    return JSONResponse({"ok": True, "slug": slug, "batch_id": res.batch_id, "applied": res.data["applied"],
+                         "date": res.data["guess"]["date"], "source": source,
+                         "date_display": _friendly_date(res.data["guess"]["epoch"])})
+
+
 @router.post("/api/image/{slug}/date")
 def api_set_item_date(slug: str, display_date: float | None = Form(None), reset: bool = Form(False),
                       project: str | None = Form(None)):
@@ -575,7 +589,8 @@ def api_set_item_date(slug: str, display_date: float | None = Form(None), reset:
     res = items.set_display_date(slug, epoch)
     out = {"ok": True, "slug": slug, "batch_id": res.batch_id if res.data["changed"] else None,
            "changed": res.data["changed"], "effective_date": res.data["effective_date"],
-           "effective_date_display": _friendly_datetime(res.data["effective_date"]),
+           # #725: None when a reset leaves the item with no real date (it shows as undated)
+           "effective_date_display": _friendly_datetime(res.data["effective_date"]) or item_dates.UNDATED_LABEL,
            "set_by_hand": res.data["set_by_hand"]}
     if project:
         card = db.get_project(project)
@@ -584,7 +599,8 @@ def api_set_item_date(slug: str, display_date: float | None = Form(None), reset:
         rows, _ = _split_revisions(policy.filter_visible(db.list_project_items(card["id"])), False)
         start, end = timeline.resolve_project_span(card, rows)
         out["span"] = {"start": start, "end": end,
-                       "start_display": _friendly_datetime(start), "end_display": _friendly_datetime(end),
+                       "start_display": _friendly_datetime(start) or item_dates.NO_SPAN_LABEL,
+                       "end_display": _friendly_datetime(end) or item_dates.NO_SPAN_LABEL,
                        "start_by_hand": card.get("start_date_override") is not None,
                        "end_by_hand": card.get("end_date_override") is not None}
     return JSONResponse(out)

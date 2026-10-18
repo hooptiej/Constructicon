@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from pathlib import Path
 
-from core import card_rules, cards, curation_queue, curator, db, install_config, item_title, markdown_render, object_types, revisions, timeline
+from core import card_rules, cards, curation_queue, curator, db, install_config, item_dates, item_title, markdown_render, object_types, revisions, timeline
 from core import hobbies, physical_piece, provenance_options
 from core import hobby_label as hobby_label_rules
 from core.db import BRAND_ROLES
@@ -85,7 +85,7 @@ def _home_context(request, hobby, ref, rev):
                 "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
                 "card": cards.file_face(
                     slug=None, title=title, href=f"/object/{row['slug']}",
-                    dates=cards.date_range_label(timeline.resolve_item_date(row), None),
+                    dates=item_dates.item_date(row)["label"],  # #725: real, "≈ ... · from <card>", or Undated
                     cover_url=f"/f/{row['slug']}/thumb" if has_thumb else None,
                     type_line=spec.label if spec else media_type),
             })
@@ -113,7 +113,8 @@ def _home_context(request, hobby, ref, rev):
     # children, with an is_child flag) in date order -- deliberately built
     # from all_projects, not the top-level-only `projects` local above that
     # #149 scoped to the grid.
-    timeline_projects = [_to_timeline_project(p) for p in all_projects]
+    # #725: a card with no real dates has no place on the rail (its span is None, not its created_at)
+    timeline_projects = [t for t in (_to_timeline_project(p) for p in all_projects) if t["effective_start"] is not None]
     # V2 cards (8.2): every card once. Unfiltered, a family/collection member is
     # represented by its family's card (members N) instead of repeating as a tile; a
     # hobby- or reference-filtered view shows members individually. The featured card is
@@ -205,17 +206,23 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
     # it's documentation of the project, generated whenever someone got
     # around to writing it up. Still a normal browsable item in the grid
     # above, just not a timeline event.
-    timeline_items = [
-        {
+    # #725: an item with no REAL date is left off the axis (an approximate date is the card's own
+    # range, so a marker would only say "somewhere in here"); the page says how many were left off.
+    timeline_items, timeline_undated = [], 0
+    for r in raw_items:
+        if r["slug"] == project.get("writeup_slug"):
+            continue
+        when = timeline.resolve_item_date(r)
+        if when is None:
+            timeline_undated += 1
+            continue
+        timeline_items.append({
             "slug": r["slug"],
             "thumb_url": f"/f/{r['slug']}/thumb" if _has_thumbnail(r) and not r.get("redacted") else None,
             "title": item_title.title_of(r),
-            "effective_date": timeline.resolve_item_date(r),
+            "effective_date": when,
             "set_by_hand": r.get("display_date_override") is not None,  # #593: shown on the marker
-        }
-        for r in raw_items
-        if r["slug"] != project.get("writeup_slug")
-    ]
+        })
     # Horizontal in-page timeline (distinct from the gallery's vertical
     # rail): sub-projects render as blocks (they're spans), this project's
     # own items render as point events -- each child needs its own
@@ -236,22 +243,24 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "kind": "item",
             "superseded": raw["slug"] in older_slugs,
             "sort_date": effective_date,
-            "date_display": _friendly_date(effective_date),
+            # #725: an undated item reads "Undated" (its approximate date would only repeat this card's range)
+            "date_display": _friendly_date(effective_date) if effective_date is not None else item_dates.UNDATED_LABEL,
             "writeup_capable": object_types.can_be_writeup(raw),
             **public,
         })
     for child in child_projects:
         child_items = policy.filter_visible(db.list_project_items(child["id"]))  # #557
         child_start, child_end = timeline.resolve_project_span(child, child_items)
-        timeline_children.append({
-            "id": child["id"],
-            "slug": child["slug"],
-            "title": child["title"],
-            "effective_start": child_start,
-            "effective_end": child_end,
-        })
-        start_display = _friendly_date(child_start)
-        end_display = _friendly_date(child_end)
+        if child_start is not None:  # #725: a sub-card with no real dates has no block to draw
+            timeline_children.append({
+                "id": child["id"],
+                "slug": child["slug"],
+                "title": child["title"],
+                "effective_start": child_start,
+                "effective_end": child_end,
+            })
+        start_display = _friendly_date(child_start) if child_start is not None else item_dates.UNDATED_LABEL
+        end_display = _friendly_date(child_end) if child_end is not None else item_dates.UNDATED_LABEL
         grid_entries.append({
             "kind": "project",
             "sort_date": child_start,
@@ -268,7 +277,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "item_count": len(child_items),
             "date_display": start_display if start_display == end_display else f"{start_display} – {end_display}",
         })
-    grid_entries.sort(key=lambda entry: entry["sort_date"])
+    grid_entries.sort(key=lambda entry: timeline.date_sort_key(entry["sort_date"]))  # #725: undated last
 
     # Curator Stage 2: per-project health score
     project_score = curator.score_project(project)
@@ -299,9 +308,10 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "writeup_body": writeup_body,
             "start_date_input": _datetime_local_value(project.get("start_date_override")),
             "end_date_input": _datetime_local_value(project.get("end_date_override")),
-            "effective_start_display": _friendly_datetime(effective_start),
-            "effective_end_display": _friendly_datetime(effective_end),
+            "effective_start_display": _friendly_datetime(effective_start) or item_dates.NO_SPAN_LABEL,  # #725
+            "effective_end_display": _friendly_datetime(effective_end) or item_dates.NO_SPAN_LABEL,
             "timeline_items": timeline_items,
+            "timeline_undated": timeline_undated,  # #725: items left off the axis (no real date)
             "timeline_children": timeline_children,
             # #593: dragging a marker re-dates an item, an editor's door (the route enforces it too).
             "timeline_can_edit": roles.at_least(roles.role_of(actor_ctx.current_actor()), roles.EDITOR),

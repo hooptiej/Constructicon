@@ -92,7 +92,9 @@ client = _testenv.client(webapp.app)
 RENAMED = mk("renamedone", "IMG_0001.png", description=NOTE)
 CAPTIONED = mk("captioned1", "IMG_0002.png", description=NOTE)
 NOTEONLY = mk("noteonly01", "IMG_0003.png", description=NOTE)
-items.update(RENAMED, display_name="Tension Biped, one leg standing", content_description="A walker on a bench")
+# #725: a real date, so it has a marker on the project timeline (an undated item is off the axis)
+items.update(RENAMED, display_name="Tension Biped, one leg standing", content_description="A walker on a bench",
+             content_date=1500000000.0)
 items.update(CAPTIONED, content_description="Caption wins over filename")
 NAME = "Tension Biped, one leg standing"
 

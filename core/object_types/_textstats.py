@@ -72,6 +72,21 @@ def read_text(path, max_chars):
         return f.read(max_chars)
 
 
+def read_text_for_search(path, max_chars):
+    """#724 (b2): a plain-text reader's text_extract_fn body (code, data, text, markdown): read_text,
+    stripped. Bad bytes are replaced (a text file with odd bytes is still text), so only a real read
+    error (I/O, permissions) gets here, and it is raised as UnreadableFile ("corrupt or unreadable
+    .<ext>: ...", core/ocr.py: failed), never turned into "" (= read, and empty)."""
+    from . import unreadable
+    try:
+        return read_text(path, max_chars).strip()
+    except MemoryError:
+        raise
+    except Exception as e:
+        print(f"Text extraction failed for {path}: {e!r}")
+        raise unreadable(path, e) from e
+
+
 def read_head_lines(path, max_lines, max_chars):
     """The start of a text file for a capped preview (#607): (text, lines_shown, cut) where `cut`
     says the file goes on past what is returned. Stops at whichever of `max_lines` lines or

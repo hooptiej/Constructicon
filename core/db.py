@@ -1863,10 +1863,12 @@ def set_ocr_status(slug, status, note=None):
 
     #724: `note` is the plain reason for status 'unsupported' (stored as type_metadata.ocr_note,
     shown as "Not compatible with OCR: <note>"); 'failed' may carry one too (a corrupt file says
-    so: "corrupt or unreadable .doc: ..."); any other status, or no note, clears a stale note."""
+    so: "corrupt or unreadable .doc: ..."); and (b2) so may 'done', when the text came with a
+    warning (the reader failed and OCR read the picture instead, or only part of the file could
+    be read). 'pending', or no note, clears a stale note."""
     if status == OCR_UNSUPPORTED and not note:
         raise ValueError("ocr_status 'unsupported' needs a note saying why")
-    note_sql, note_args = _ocr_note_sql(note if status in (OCR_UNSUPPORTED, "failed") else None)
+    note_sql, note_args = _ocr_note_sql(note if status in (OCR_UNSUPPORTED, "failed", "done") else None)
     conn = get_conn()
     try:
         if status == "pending":

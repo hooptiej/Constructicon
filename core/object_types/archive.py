@@ -10,9 +10,9 @@ Both formats are handled via stdlib (zipfile) and a pure-Python 7z library
 (py7zr), requiring no new system packages. No visual thumbnail concept —
 archives are NONE-sourced, same as written posts.
 
-Best-effort, same as every other type's text_extract_fn in this codebase: a
-corrupt/unreadable archive returns "" rather than raising, so a bad upload
-never breaks the upload response or the OCR background task.
+A bad upload never breaks the upload response or the OCR background task, but
+a corrupt archive is not "no text" (#724 b2): the listing raises
+UnreadableFile ("corrupt or unreadable .zip: ..."), which core/ocr.py reports.
 """
 
 from pathlib import Path
@@ -69,11 +69,12 @@ def _clean_name(name):
     return name[:MAX_NAME_CHARS]
 
 
-def scan_tar(path):
+def scan_tar(path, errors=None):
     """Read member headers of a .tar/.tar.gz/.tgz -> (names, stats). Never
     extracts, never opens a member, caps members and time. Raises only if the
     archive can't be opened at all; a stream that breaks midway keeps what was
-    read so far."""
+    read so far (stats["damaged"]), and the error is appended to `errors` when
+    the caller passes a list (#724 b2: the text reader reports it)."""
     names = []
     stats = {"entries": 0, "folders": 0, "links": 0, "uncompressed": 0,
              "truncated": False, "damaged": False}
@@ -103,6 +104,8 @@ def scan_tar(path):
         except (tarfile.TarError, EOFError, OSError, UnicodeError) as e:
             print(f"Tar listing stopped early for {path}: {e!r}")
             stats["damaged"] = True
+            if errors is not None:
+                errors.append(e)
     return names, stats
 
 
@@ -115,33 +118,45 @@ def _stored_path(row):
 
 
 def extract_file_list(path):
-    """Newline-joined list of member filenames in the archive at `path`, or
-    "" on any failure (corrupt archive, wrong format, missing file, py7zr not
-    installed)."""
+    """Newline-joined list of member filenames in the archive at `path`; "" for
+    an archive that opens and is empty (or a format this type doesn't list).
+
+    #724 (b2): never "" for a broken archive. A zip / 7z / tar that can't be
+    opened raises UnreadableFile ("corrupt or unreadable .zip: File is not a zip
+    file"); a tar whose stream breaks partway raises it with the names read so
+    far as partial_text (core/ocr.py keeps them as the text, with the warning);
+    7z with py7zr missing raises NotCompatibleFile (grey: this install can't
+    list .7z)."""
     if not path:
         return ""
+    from . import NotCompatibleFile, UnreadableFile, unreadable
 
     ext = Path(path).suffix.lower()
 
     try:
         if is_tar_name(path):
-            names, _stats = scan_tar(path)
-            return "\n".join(names)
+            errors = []
+            names, _stats = scan_tar(path, errors)
+            listing = "\n".join(names)
+            if errors:  # the stream broke partway: keep what was listed, and say so
+                raise unreadable(path, errors[0], partial_text=listing)
+            return listing
         if ext == ".zip":
             with zipfile.ZipFile(path, "r") as zf:
                 names, _truncated = _capped_names(info.filename for info in zf.infolist())
                 return "\n".join(names) if names else ""
-        elif ext == ".7z":
+        if ext == ".7z":
             if py7zr is None:
-                return ""
+                raise NotCompatibleFile("7z archive: the 7z reader isn't installed here")
             with py7zr.SevenZipFile(path, "r") as zf:
                 names, _truncated = _capped_names(zf.getnames())
                 return "\n".join(names) if names else ""
-        else:
-            return ""
+        return ""
+    except (MemoryError, UnreadableFile):
+        raise  # already says why (NotCompatibleFile is an UnreadableFile too)
     except Exception as e:
         print(f"Archive listing failed for {path}: {e!r}")
-        return ""
+        raise unreadable(path, e) from e
 
 
 def extract_text_for_row(row):

@@ -1988,6 +1988,18 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
    the tabs): its script still toggles .idle, but busy vs idle shows only
    through its badge, which hides when nothing is processing. */
 
+/* #779: a tab the user's role can't use stays visible, greyed out (fully
+   desaturated, NOT translucent: the owner banned transparency on the tabs).
+   Clicking it shows .nav-locked-msg instead of opening anything. */
+.nav-tab-locked { filter: grayscale(1); cursor: not-allowed; }
+.nav-locked-msg {
+  position: fixed; z-index: 60; max-width: 260px; padding: 10px 12px;
+  background: var(--card); border: 1px solid var(--border-strong); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+  color: var(--text); font-size: 12.5px; line-height: 1.4;
+}
+.nav-locked-msg[hidden] { display: none; }
+
 /* #774: the left rail mirrors the right one: the open edge tucks off the
    LEFT side, corners round on the right, the shadow falls the other way, the
    label reads top-to-bottom, and the badge sits on the screen-edge side.

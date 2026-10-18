@@ -1,3 +1,5 @@
+{#- #779: The blog builder is for editors and up (the server refuses anyone below on its routes). Below that the nav rail shows its tab greyed and explains it, and none of this markup or script is sent. -#}
+{% if has_role("editor") %}
 <!-- Blog builder (#313 stage 3) — self-contained drawer with nested pickers for
      projects and objects. Vanilla JS IIFE, matching _upload_drawer.html pattern.
      Dispatches "constructicon:blog-entry-saved" custom event on successful save
@@ -419,3 +421,4 @@
   });
 })();
 </script>
+{% endif %}

@@ -1,3 +1,5 @@
+{#- #779: Uploading is for editors and up (the server refuses anyone below on its routes). Below that the nav rail shows its tab greyed and explains it, and none of this markup or script is sent. -#}
+{% if has_role("editor") %}
 <div class="drawer-backdrop" id="drawer-backdrop"></div>
 <div class="upload-drawer" id="upload-drawer">
   <div class="upload-drawer-header">
@@ -126,3 +128,4 @@
   });
 })();
 </script>
+{% endif %}

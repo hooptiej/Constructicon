@@ -6,7 +6,7 @@ This module is the single source of truth for what nudges exist and how to rank 
 """
 
 import time
-from core import curator, db, timeline
+from core import curator, db, policy, timeline
 
 
 # Mapping of (dimension, item) from scoring.py's unmet checks to nudge kinds and base impacts
@@ -210,7 +210,8 @@ def list_needs():
     dismissed = db.list_active_curator_dismissals()
 
     # --- Per-project detectors ---
-    all_projects = db.list_projects()
+    # #604 step 3: not the private cards the actor isn't on (the cached queue runs as system: all).
+    all_projects = policy.filter_visible_cards(db.list_projects())
 
     for project in all_projects:
         nudges.extend(project_nudges(project, dismissed))

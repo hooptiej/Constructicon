@@ -5,6 +5,7 @@
 {% from "_details_group.html" import dp_group %}
 {% from "_hobby_nodes.html" import project_nodes %}
 {% from "_card_text.html" import about_view, about_edit, about_script %}
+{% from "_sharing.html" import sharing_panel %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
@@ -145,6 +146,9 @@
         {{ dp_group("status", "STATUS", status_view, status_edit) }}
         {{ dp_group("identity", "IDENTITY", identity_view, identity_edit) }}
         {{ dp_group("settings", "SETTINGS", settings_view, settings_edit) }}
+        {# #604 step 3: Private + members, changed in place (static/js/sharing.js) #}
+        {% set sharing_v %}{{ sharing_panel(hobby_sharing, hobby_label.one_lc) }}{% endset %}
+        {{ dp_group("sharing", "SHARING", sharing_v, editable=false) }}
         {{ dp_group("dates", "DATES", dates_view, editable=false) }}
       </div>
     </div>
@@ -237,6 +241,7 @@
 
 {# undo-bar.js, item-sort.js: loaded by the file grid's include above (#553) #}
 <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
+<script src="/static/js/sharing.js?v={{ static_version('js/sharing.js') }}" defer></script>
 <script nonce="{{ csp_nonce() }}">
 (function () {
   const DP = window.DetailsPanel;

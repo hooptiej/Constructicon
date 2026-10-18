@@ -8,8 +8,9 @@ Exposes MCP tools for uploading, managing, tagging, and organizing media
 in a Constructicon instance. Runs as a sidecar alongside constructicon-web.
 
 Conventions shared by every tool (#560, #548; enforced by the `@mcp.tool()` wrapper below):
-  * Actor: each call runs as the "mcp" actor (core/actor.py), so the change log records
-    "mcp" without any tool passing it.
+  * Actor: each call runs as the "mcp" actor (core/actor.py) when it came with the install token,
+    or as "user:<name>" when it came with that user's own MCP token (#604 step 5,
+    mcp_server/auth.py), so the change log records who without any tool passing it.
   * Errors: a refusal comes back as {"ok": false, "error": {"code", "message"[, "details"]}}
     (an isError tool result), with the same codes the HTTP API uses. Not found is an
     error too: a getter or setter whose target doesn't exist returns code "not_found"
@@ -58,7 +59,7 @@ from core import access_log, actor as actor_ctx, policy, roles, users
 from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, item_dates, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
-from core import blog, changes, hobbies, membership, parse_limits, reset
+from core import blog, changes, hobbies, membership, parse_limits, reset, sharing
 from core import besteffort, install_config
 from core import hobby_label as hobby_label_rules
 from core import tags as tags_svc
@@ -133,7 +134,8 @@ Conventions for every tool:
 - Errors: a refusal is an error result {"ok": false, "error": {"code", "message", "details"?}}, with the HTTP API's codes, and nothing is written. A missing target is "not_found" (never null/false); bad input is "bad_request" unless a more specific code applies; "forbidden" says who may do it and why.
 - Undo: every write is logged with row images and returns "batch_id" (null when nothing changed). One call is one batch: constructicon_undo(batch_id) reverses all of it; constructicon_list_changes shows the log. A tool that takes batch_id joins an earlier call's batch.
 - dry_run=true answers as the write would and writes nothing. constructicon_bulk_edit, constructicon_resolve_decisions and constructicon_retype_links are dry-run by DEFAULT.
-- Visibility: sensitive and restricted items are admin-only (or their uploader's). A hidden item reads as not_found; a write that names one is refused as forbidden, saying why.
+- Visibility: sensitive and restricted items are admin-only (or their uploader's). Private cards and hobbies (and everything under them) are seen only by admins, their owner and their members; constructicon_sharing manages that. A hidden item or card reads as not_found; a write that names a hidden item is refused as forbidden, saying why.
+- Identity: the install token acts as the admin; a personal MCP token (made in the web app under Account > MCP tokens) acts as that user, with their role and what they can see.
 - Text: a tool returning many items sends a ~300-character preview of each one's extracted_text, plus extracted_text_chars and extracted_text_truncated (text_chars=0..5000 where offered). constructicon_get(slug) returns one item's whole text.
 - Dates: an ISO date or datetime with no offset is Mountain Time (America/Denver); unix seconds also work.
 - Selector tools take action= (or view=, which=, direction=); each value is listed with what it returns.
@@ -171,10 +173,19 @@ def _error_payload(exc):
     return None
 
 
+def _request_actor():
+    """#604 step 5: who this call runs as. A request that came with a per-user MCP token runs as
+    that user (`user:<name>`: their role, what they may see, the change log names them); the install
+    token (and a direct in-process call) runs as `mcp` (admin)."""
+    from mcp_server import auth as mcp_auth  # stdlib-only module, imported here to keep startup order
+    ident = mcp_auth.current_identity()
+    return ident["actor"] if ident else actor_ctx.ACTOR_MCP
+
+
 def _call_as_mcp(fn, args, kwargs, need_role=None):
     """(True, result) or (False, error payload). `need_role` (#746, ACTION_ROLES): the role the
     caller must hold for this (tool, action); checked first, as the actor the call runs as."""
-    with actor_ctx.acting_as(actor_ctx.ACTOR_MCP):
+    with actor_ctx.acting_as(_request_actor()):
         try:
             if need_role is not None:
                 _require_role(need_role)
@@ -187,12 +198,14 @@ def _call_as_mcp(fn, args, kwargs, need_role=None):
 
 
 def _require_role(need):
-    """#746: refuse (403 forbidden) unless the acting actor holds `need` or above. Today every MCP
-    call runs as `mcp` (admin), so this never refuses; it is the per-(tool, action) gate that
-    per-user MCP tokens (#604 step 5) will rely on."""
-    have = roles.role_of(actor_ctx.current_actor())
+    """#746: refuse (403 forbidden) unless the acting actor holds `need` or above. The install token
+    runs as `mcp` (admin), so it is never refused; a per-user token (#604 step 5) runs as its user."""
+    who = actor_ctx.current_actor()
+    have = roles.role_of(who)
     if not roles.at_least(have, need):
-        raise errors.AppError("forbidden", f"This needs the {need} role; you have {have}.", status=403)
+        raise errors.AppError("forbidden", f"Nothing was done: this needs the {need} role, and {who} has {have}. "
+                                           f"Ask an admin to change your role, or use a token of someone who has it.",
+                              status=403)
 
 
 # --- #746: who may run which (tool, action) ---------------------------------------------------
@@ -259,6 +272,11 @@ ACTION_ROLES = {
     ("constructicon_family", "remove"): E,
     ("constructicon_nest", "nest"): E,
     ("constructicon_nest", "unnest"): E,
+    ("constructicon_sharing", "get"): V,
+    ("constructicon_sharing", "users"): E,
+    ("constructicon_sharing", "set_private"): E,  # core/sharing.py then allows only the owner or an admin
+    ("constructicon_sharing", "add_member"): E,
+    ("constructicon_sharing", "remove_member"): E,
     ("constructicon_link", "add"): E,
     ("constructicon_link", "remove"): E,
     ("constructicon_link", "retype"): E,
@@ -627,7 +645,7 @@ def _to_public_project(project):
 
 def _to_public_blog_entry(entry):
     """Full detail shape for a blog entry, including hydrated projects and items."""
-    projects = db.list_entry_projects(entry["id"])
+    projects = policy.filter_visible_cards(db.list_entry_projects(entry["id"]))  # #604 step 3
     items = policy.filter_visible(db.list_entry_items(entry["id"]))  # #557
     return {
         "id": entry["id"],
@@ -1508,7 +1526,8 @@ def constructicon_list_projects(kind: str | None = None, activity: str | None = 
     collection | event), activity (active | inactive), stage (in_progress | in_use | idea | paused |
     done | stopped). Each card has its status fields and labels, and needs_input (an open question).
     """
-    return [_to_public_project(p) for p in db.list_projects(kind=kind, activity=activity, stage=stage)]
+    return [_to_public_project(p) for p in  # #604 step 3: not the private cards this caller isn't on
+            policy.filter_visible_cards(db.list_projects(kind=kind, activity=activity, stage=stage))]
 
 
 @mcp.tool()
@@ -1592,7 +1611,7 @@ def constructicon_update_project(project_id: str | int | None = None, title: str
     ref = card if card is not None else project_id
     card_warnings = []
     project = db.get_project(ref)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {ref!r}.")
     f = _fields_arg(fields, CARD_FIELDS, "constructicon_update_project")
     if "force_kind" in f and not kind:
@@ -1656,7 +1675,7 @@ def constructicon_update_project(project_id: str | int | None = None, title: str
 
 def _add_to_project(slug, project_id):
     policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
-    if db.get_project(project_id) is None:
+    if not policy.can_view_card(db.get_project(project_id)):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {project_id!r}.")
     membership.add_files(project_id, [slug], **membership.UI_EFFECTS)  # #541 phase C: same flags as the web
     return [_to_public_project(p) for p in db.list_projects_for_post(slug)]
@@ -1665,7 +1684,7 @@ def _add_to_project(slug, project_id):
 def _remove_from_project(slug, project_id):
     policy.viewable_rows([slug])  # #709: missing = not_found, not visible = forbidden (says why)
     project = db.get_project(project_id)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {project_id!r}.")
     membership.remove_files(project["id"], [slug])  # membership only: tags and cover stay
     return [_to_public_project(p) for p in db.list_projects_for_post(slug)]
@@ -1699,7 +1718,7 @@ def constructicon_card_files(card: str | int, slugs: list[str],
     if isinstance(slugs, str):
         raise InvalidInput("slugs must be a list of item slugs.")
     project = db.get_project(card)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {card!r}.")
     if not missing_ok:
         policy.viewable_rows(slugs)  # #709: unknown = not_found, hidden = forbidden (says why), before any write
@@ -1727,7 +1746,7 @@ def constructicon_remove_from_project(slug: str, project_id: str | int) -> list[
 @mcp.tool(alias_of=("constructicon_card_files", "add"))
 def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) -> list[dict]:
     project = db.get_project(project_id)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {project_id!r}.")
     result = membership.add_files(project["id"], slugs, missing_ok=True, **membership.UI_EFFECTS)
     return [_to_public_listed(db.get_by_slug(slug)) for slug in slugs if slug in result.data["slugs"]]
@@ -1736,7 +1755,7 @@ def constructicon_add_items_to_project(project_id: str | int, slugs: list[str]) 
 @mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_words: bool | None = None) -> dict | None:
     project = db.get_project(project_id)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {project_id!r}.")
     # #541 phase D: membership (no side effects, as before) + the owner-words mark + writeup_slug
     # are one transaction and one batch.
@@ -1757,7 +1776,7 @@ def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREV
     """
     chars = text_chars_arg(text_chars)
     project = db.get_project(id_or_slug)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {id_or_slug!r}.")
 
     # Get the project items (#557: the item policy decides what the card shows)
@@ -1796,7 +1815,9 @@ def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREV
         # V2 cards 3.8: typed links, both directions, with labels.
         "links": cards.list_links(project["slug"]),
         "children": [{"id": c["id"], "slug": c["slug"], "title": c["title"]}
-                     for c in db.list_child_projects(project["id"])],
+                     for c in policy.filter_visible_cards(db.list_child_projects(project["id"]))],
+        # #604 step 3: private or open, inherited from where, owner, members (constructicon_sharing).
+        "sharing": sharing.state("card", project["id"]),
         # #596: the face text (synopsis, flavor, the cached write-up lead, what the face shows).
         **cards.text_fields(project),
         # #745: the card's private agent notes. Only this read (and set_agent_notes) returns them.
@@ -1813,7 +1834,7 @@ def constructicon_list_hobbies() -> list[dict]:
     recent_project | null), cover_project, picked_cover_slug, picked_cover_unavailable}.
     flags are computed, never stored: inactive_with_active_work, active_untouched (~2 years)."""
     out = []
-    for h in db.list_hobbies():
+    for h in policy.filter_visible_hobbies(db.list_hobbies()):  # #604 step 3
         f = cards.hobby_fields(h)
         out.append({
             "id": f["id"],
@@ -1838,7 +1859,7 @@ def constructicon_create_hobby(name: str, status: str = "active") -> dict:
 
 def _convert_card_to_hobby(project_slug, dry_run):
     project = db.get_project(project_slug)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {project_slug!r}.")
     result = hobbies.convert_from_card(project["id"], dry_run=dry_run)
     hobby = result.data["hobby"]
@@ -1923,7 +1944,7 @@ def constructicon_card_hobby(card: str | int, hobby: str | int, action: typing.L
 
 def _hobby_or_404(hobby):
     row = db.get_hobby(hobby)
-    if row is None:
+    if row is None or not policy.can_view_hobby(row):  # #604 step 3: hidden = missing
         raise NotFound(f"No hobby {hobby!r}.")
     return row
 
@@ -1971,18 +1992,18 @@ def constructicon_update_hobby(hobby: str | int, status: str | None = None, grou
 @mcp.tool(alias_of=("constructicon_card_hobby", "add"))
 def constructicon_add_project_to_hobby(project_slug: str, hobby_slug: str) -> dict | None:
     project = db.get_project(project_slug)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {project_slug!r}.")
 
     hobby = db.get_hobby(hobby_slug)
-    if hobby is None:
+    if hobby is None or not policy.can_view_hobby(hobby):  # #604 step 3: hidden = missing
         raise NotFound(f"No hobby {hobby_slug!r}.")
 
     hobbies.add_card(hobby["id"], project["id"])  # logged + undoable (V2 cards 3.13, #541)
 
     # Return the updated hobby
     updated_hobby = db.get_hobby(hobby["id"])
-    projects = db.list_projects_for_hobby(hobby["id"])
+    projects = policy.filter_visible_cards(db.list_projects_for_hobby(hobby["id"]))  # #604 step 3
 
     return {
         "id": updated_hobby["id"],
@@ -1996,7 +2017,7 @@ def constructicon_add_project_to_hobby(project_slug: str, hobby_slug: str) -> di
 @mcp.tool(alias_of=("constructicon_update_hobby", None))
 def constructicon_set_hobby_status(hobby_slug: str, status: str) -> dict | None:
     hobby = db.get_hobby(hobby_slug)
-    if hobby is None:
+    if hobby is None or not policy.can_view_hobby(hobby):  # #604 step 3: hidden = missing
         raise NotFound(f"No hobby {hobby_slug!r}.")
     result = cards.set_hobby_activity(hobby["id"], status)
     updated = cards.hobby_fields(db.get_hobby(hobby["id"]))
@@ -2016,7 +2037,7 @@ def constructicon_set_hobby_status(hobby_slug: str, status: str) -> dict | None:
 @mcp.tool(alias_of=("constructicon_update_hobby", None))
 def constructicon_set_hobby_code(hobby_slug: str, group_code: str) -> dict | None:
     hobby = db.get_hobby(hobby_slug)
-    if hobby is None:
+    if hobby is None or not policy.can_view_hobby(hobby):  # #604 step 3: hidden = missing
         raise NotFound(f"No hobby {hobby_slug!r}.")
     result = cards.set_group_code(hobby["id"], group_code)
     updated = db.get_hobby(hobby["id"])
@@ -2151,7 +2172,7 @@ def constructicon_set_blog_entry_items(slug: str, items: list[dict]) -> dict | N
 @mcp.tool()
 def constructicon_list_tags() -> list[dict]:
     """The tag tree: root tags, each with nested `children`."""
-    return db.list_tag_tree()
+    return policy.filter_tag_tree(db.list_tag_tree())  # #604 step 3: no private card / hobby names
 
 
 @mcp.tool()
@@ -2313,7 +2334,7 @@ def constructicon_list_brand_assets() -> list[dict]:
 
 @mcp.tool(alias_of=("constructicon_update_project", None))
 def constructicon_set_project_status(id_or_slug: str, status: str) -> dict | None:
-    if db.get_project(id_or_slug) is None:
+    if not policy.can_view_card(db.get_project(id_or_slug)):  # #604 step 3: hidden = missing
         raise NotFound(f"No card {id_or_slug!r}.")
     legacy = card_rules.legacy_to_status(status)
     warnings = list(legacy["warnings"])
@@ -2412,6 +2433,53 @@ def constructicon_add_to_family(family: str | int, member: str | int, dry_run: b
 @mcp.tool(alias_of=("constructicon_family", "remove"))
 def constructicon_remove_from_family(family: str | int, member: str | int, dry_run: bool = False) -> dict:
     return cards.remove_from_family(family, member, dry_run=dry_run).to_dict()
+
+
+# --- Private cards and hobbies: who else may see them ---
+
+@mcp.tool(selector="action")
+def constructicon_sharing(action: typing.Literal["get", "set_private", "add_member", "remove_member", "users"] = "get",
+                          card: str | int | None = None, hobby: str | int | None = None,
+                          private: bool | None = None, user: str | int | None = None,
+                          role: typing.Literal["viewer", "editor"] | None = None, dry_run: bool = False) -> dict | list:
+    """Private cards and hobbies. Cards and hobbies are open to everyone signed in unless ticked
+    private; then only admins, the owner (its creator) and its members see it and everything under it
+    (nested cards, family members, a hobby's cards and loose files). Give exactly one of card= or hobby=
+    (id or slug), except for action="users".
+    action: "get" (default) -> {private (ticked here), effective (here or above), inherited_from
+    [{kind, id, title, slug}], owner, members [{user_id, username, name, role, capped}], can_manage};
+    "set_private" (private=true|false); "add_member" (user=id or username, role=viewer|editor,
+    default viewer; adding again changes the role); "remove_member" (user=); "users" -> the people
+    you can add [{id, username, name, role}]. The writes return {ok, changes, warnings, batch_id,
+    sharing} and only the owner or an admin may make them (forbidden otherwise). A viewer member only
+    looks; an editor member may change the card and its files. The install role is the ceiling: a
+    viewer can't be made an editor (role_ceiling). Example: constructicon_sharing(action="add_member",
+    card="desk-build", user="sam", role="editor")."""
+    if action == "users":
+        _only_for('action="users"', card=(card, None), hobby=(hobby, None), private=(private, None),
+                  user=(user, None), role=(role, None), dry_run=(dry_run, False))
+        return sharing.user_choices()
+    if (card is None) == (hobby is None):
+        raise InvalidInput("Give exactly one of card= or hobby=.")
+    kind, target = ("card", card) if card is not None else ("hobby", hobby)
+    if action == "get":
+        _only_for('action="get"', private=(private, None), user=(user, None), role=(role, None),
+                  dry_run=(dry_run, False))
+        return sharing.state(kind, target)
+    if action == "set_private":
+        _only_for('action="set_private"', user=(user, None), role=(role, None))
+        if private is None:
+            raise InvalidInput('action="set_private" needs private=true or private=false.')
+        return sharing.set_private(kind, target, private, dry_run=dry_run).to_dict()
+    _only_for(f'action="{action}"', private=(private, None))
+    if user in (None, ""):
+        raise InvalidInput(f'action="{action}" needs user= (a user id or username; action="users" lists them).')
+    if action == "add_member":
+        return sharing.add_member(kind, target, user, role or "viewer", dry_run=dry_run).to_dict()
+    if action == "remove_member":
+        _only_for('action="remove_member"', role=(role, None))
+        return sharing.remove_member(kind, target, user, dry_run=dry_run).to_dict()
+    raise InvalidInput(f"Unknown action {action!r}: use get, set_private, add_member, remove_member or users.")
 
 
 # --- Typed links (V2 cards 3.8) ---
@@ -2961,7 +3029,7 @@ if __name__ == "__main__":
     except mcp_auth.TokenConfigError as exc:
         sys.exit(f"constructicon-mcp: refusing to start: {exc}")
     if _token:
-        print("constructicon-mcp: bearer token auth ENABLED (install token = role admin, actor mcp)", flush=True)
+        print("constructicon-mcp: bearer token auth ENABLED (install token = role admin, actor mcp; per-user tokens act as their user)", flush=True)
     elif roles.ENFORCE:
         # #467 step 2: roles are enforced, so an MCP without a token would be an open admin door.
         # Refuse to start (a crash-looping container is loud; a server that 401s everything looks

@@ -46,7 +46,9 @@ Collecting):
   card, its write-up and its memberships.
 """
 
-from . import actor as actor_ctx, card_rules, cards, changes, db, membership, users
+import time
+
+from . import actor as actor_ctx, card_rules, cards, changes, db, membership, policy, users
 from . import tags as tags_svc
 from .card_rules import CardError
 from .cards import Result
@@ -107,6 +109,37 @@ def _unmark(log, tag_id):
                               (tag_id,)).fetchall():
         log.delete("project_hobbies", {"project_id": r["project_id"], "hobby_tag_id": tag_id})
     log.update("blog_tags", {"id": tag_id}, {"is_hobby": 0, "hobby_status": None, "group_code": None})
+
+
+def _carry_privacy(log, from_kind, from_id, to_kind, to_id, private, owner):
+    """#604 step 3: a conversion keeps who may see the thing. The new card / hobby gets the old one's
+    Private tick, its owner (so the owner isn't locked out of their own private card) and its member
+    list; the old member rows go."""
+    members = db.share_members(from_kind, from_id)
+    if not private and not members:
+        return
+    if to_kind == policy.HOBBY:
+        key = {"hobby_tag_id": to_id}
+        cur = log.get("hobby_settings", key)
+        if cur is None:
+            log.insert("hobby_settings", key, {"private": int(private), "created_by_user_id": owner})
+        else:
+            fields = {"private": 1} if private else {}
+            if cur.get("created_by_user_id") is None and owner is not None:
+                fields["created_by_user_id"] = owner
+            if fields:
+                log.update("hobby_settings", key, fields)
+    else:
+        fields = {"private": 1} if private else {}
+        if owner is not None:
+            fields["created_by_user_id"] = owner
+        if fields:
+            log.update("projects", {"id": to_id}, fields)
+    for m in members:
+        log.delete("share_members", {"target_kind": from_kind, "target_id": from_id, "user_id": m["user_id"]})
+        key = {"target_kind": to_kind, "target_id": to_id, "user_id": m["user_id"]}
+        if log.get("share_members", key) is None:
+            log.insert("share_members", key, {"role": m["role"], "added_at": m.get("added_at") or time.time()})
 
 
 def _homes_pointing_at(conn, hobby_id):
@@ -302,6 +335,8 @@ def convert_from_card(card, *, dry_run=False, actor=None, batch_id=None):
             for slug in item_slugs:
                 tags_svc.link(log, slug, tag["id"])
             membership.write_items(log, row["id"], (), item_slugs)
+            _carry_privacy(log, policy.CARD, row["id"], policy.HOBBY, tag["id"],
+                           bool(fresh.get("private")), fresh.get("created_by_user_id"))
             log.delete("projects", {"id": row["id"]})
         rows = db.get_change_rows(batch_id=batch_id)
         hobby = db.get_hobby(tag["id"])
@@ -375,6 +410,9 @@ def convert_to_card(hobby, kind, title=None, into_hobby=None, *, dry_run=False, 
             homes = _homes_pointing_at(log.conn, hob["id"])
             for c in homes:
                 log.update("projects", {"id": c["id"]}, {"home_kind": "card", "home_ref": new["id"]})
+            hp = db.hobby_privacy(hob["id"])
+            _carry_privacy(log, policy.HOBBY, hob["id"], policy.CARD, new["id"], bool(hp["private"]),
+                           hp["created_by_user_id"])
             _unmark(log, hob["id"])  # also drops every member's project_hobbies row
         rows = db.get_change_rows(batch_id=batch_id)
     return Result(True, _flat(rows), made.warnings, batch_id, dry_run,

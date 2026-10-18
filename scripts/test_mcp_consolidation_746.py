@@ -475,12 +475,27 @@ def mask_725(value):
     return value
 
 
+# Schema added AFTER the golden file was written: a new column shows up in row images, a new table in
+# delete-all's counts. Leave those keys out of the comparison (the golden file stays the pre-#746 record).
+ADDED_SINCE_746 = {"private",        # #604 step 3: projects.private, hobby_settings.private
+                   "share_members"}  # #604 step 3: delete-all clears the member lists
+
+
+def _strip_added(value):
+    if isinstance(value, dict):
+        return {k: _strip_added(v) for k, v in value.items() if k not in ADDED_SINCE_746}
+    if isinstance(value, list):
+        return [_strip_added(v) for v in value]
+    return value
+
+
 aliases_seen = set()
 for label, alias, akw, new, nkw, read in SCEN:
     aliases_seen.add("constructicon_" + alias)
     restore()
-    got = as_json(call(alias, **akw))
-    check(f"alias {label}: same JSON as before #746", golden_view(label, got) == golden_view(label, GOLD.get(label)),
+    got = _strip_added(as_json(call(alias, **akw)))
+    check(f"alias {label}: same JSON as before #746",
+          golden_view(label, got) == golden_view(label, _strip_added(GOLD.get(label))),
           f"got {json.dumps(got)[:300]} want {json.dumps(GOLD.get(label))[:300]}")
     after_alias = dump_db()
     restore()
@@ -510,8 +525,8 @@ print("--- 3. tools/list hides aliases, tools/call answers them, each alias call
 restore()
 listed = asyncio.run(S.mcp.list_tools())
 names = {t.name for t in listed}
-# #746 folded 108 into 55; #725 added constructicon_undated (56).
-check("tools/list: 56 tools", len(names) == 56, len(names))
+# #746 folded 108 into 55; #725 added constructicon_undated, #604 constructicon_sharing (57).
+check("tools/list: 57 tools", len(names) == 57, len(names))
 check("tools/list: no alias listed", not (names & set(S._HIDDEN_ALIASES)), sorted(names & set(S._HIDDEN_ALIASES)))
 SNAPNAMES = json.load(open(os.path.join(HERE, "data", "mcp_tool_names_700.json"), encoding="utf-8"))["names"]
 check("tools/list equals scripts/data/mcp_tool_names_700.json", sorted(names) == sorted(SNAPNAMES),
@@ -679,7 +694,8 @@ finally:
 # ---- 8. the (tool, action) -> role table -----------------------------------------------------------------
 print("--- 8. who may run which (tool, action) ---")
 visible = {n for n in S._TOOL_FUNCS if n not in S._ALIAS_OF}
-check("56 visible tool functions (#746's 55 + #725's constructicon_undated)", len(visible) == 56, len(visible))
+check("57 visible tool functions (#746's 55 + #725's constructicon_undated + #604's constructicon_sharing)",
+      len(visible) == 57, len(visible))
 check("every visible tool has its role rows (startup refuses otherwise)",
       all(any(k[0] == n for k in S.ACTION_ROLES) for n in visible))
 check("permanent actions need admin",

@@ -1,0 +1,46 @@
+{#- #604 step 3: the Private checkbox and member list for a card or a hobby ("shared by default,
+    private with a check box on the card"). `s` is core.sharing.state(...); `noun` is what to call
+    it ("card", or the install's hobby word). static/js/sharing.js wires it up (no inline script). -#}
+{% macro sharing_panel(s, noun) -%}
+<div class="cx-sharing" data-kind="{{ s.kind }}" data-target="{{ s.id }}" data-noun="{{ noun }}"
+     data-can-manage="{{ '1' if s.can_manage else '0' }}">
+  <label class="cx-sharing-toggle">
+    <input type="checkbox" class="cx-sharing-private"{% if s.private %} checked{% endif %}{% if not s.can_manage %} disabled{% endif %}>
+    Private
+  </label>
+  <p class="cx-sharing-note dp-muted">
+    {%- if s.inherited_from -%}
+      Private · inherited from
+      {% for i in s.inherited_from %}<a href="{{ hobby_label.url(i.slug) if i.kind == 'hobby' else '/project/' ~ i.slug }}">{{ i.title }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.
+      Unticking it here can't make it more open than that.
+    {%- elif s.private -%}
+      Only admins, the owner and the members below can see this {{ noun }} and everything in it.
+    {%- else -%}
+      Everyone signed in can see this {{ noun }}. Tick Private to choose who can.
+    {%- endif -%}
+  </p>
+  <p class="cx-sharing-owner dp-muted">Owner: {% if s.owner %}{{ s.owner.name }}{% else %}Admin (no user recorded){% endif %}
+    {%- if not s.can_manage %} · only the owner or an admin can change who sees it{% endif %}</p>
+  <div class="cx-sharing-members"{% if not s.private %} hidden{% endif %}>
+    <ul class="cx-sharing-list">
+      {% for m in s.members %}
+      <li data-user="{{ m.user_id }}"><span class="cx-sharing-name">{{ m.name }}</span>
+        <span class="cx-sharing-role">{{ m.role }}{% if m.capped %} (a viewer on this install, so only looks){% endif %}</span></li>
+      {% else %}
+      <li class="cx-sharing-empty dp-muted">No members yet.</li>
+      {% endfor %}
+    </ul>
+    {% if s.can_manage %}
+    <div class="cx-sharing-add">
+      <label>Add <select class="cx-sharing-user" aria-label="Person to add"><option value="">Loading people…</option></select></label>
+      <label>as <select class="cx-sharing-newrole" aria-label="Their role on this {{ noun }}">
+        <option value="viewer">viewer (looks only)</option>
+        <option value="editor">editor (can change it)</option>
+      </select></label>
+      <button type="button" class="dp-btn cx-sharing-addbtn">Add</button>
+    </div>
+    {% endif %}
+  </div>
+  <p class="cx-sharing-error dp-error" role="alert"></p>
+</div>
+{%- endmacro %}

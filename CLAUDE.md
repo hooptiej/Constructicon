@@ -436,6 +436,11 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   the policy fail the check below).
 - **Since #603** "restricted" = sensitive: a restricted type OR an item flagged "This is sensitive",
   visible to admins AND the item's uploader (`can_view`), see "Ownership and sensitive items" below.
+- **Since #604 step 3** the policy also decides CARDS and HOBBIES: a private card / hobby (and
+  everything under it) is hidden from everyone but admins, its owner and its members, and `can_view`
+  hides an item on a hidden card (see "Private cards and hobbies" below). A card door asks
+  `policy.can_view_card` / `filter_visible_cards` (or resolves its card through `cards.get_card`);
+  `check_policy_doors.py` rule 5.
 - **Writes refuse what the caller can't see (#709), in the service op itself**, so web, MCP and any
   future per-user token are covered: `policy.viewable_rows(slugs, missing_ok=...)` for a set
   (`items.delete`, `unrelate`, `membership.add_files` / `remove_files`, `tags.merge_item_tags`; bulk
@@ -866,13 +871,15 @@ containers (`sudo docker restart <web> <mcp>`), update every client. **Lost admi
 Check with `scripts/test_auth_step2.py` (throwaway DB: the whole matrix per role and for the token,
 mounts, `next`, the decision queue, the MCP refusing to start, no secrets
 in the audit log). Later (not built): HTTPS itself (the app is ready for a TLS proxy since #646, see
-"Behind a reverse proxy"), per-user MCP tokens.
+"Behind a reverse proxy"). Per-user MCP tokens are built (#604 step 5): see "Per-user MCP tokens" below.
 
 ## Ownership and sensitive items (#604 build steps 1-2, #603)
 
 Owner decisions 2026-10-07 (#604 "Decided" table + settled follow-ups). Step 1 records who made what;
-step 2 is the per-item "This is sensitive" switch, its first consumer. Private cards, card members,
-edit rules by owner and per-user MCP tokens are #604 steps 3-5 (not built).
+step 2 is the per-item "This is sensitive" switch, its first consumer. Private cards and card members
+(step 3) and per-user MCP tokens (step 5) are the next two sections. Step 4 (the edit rules) is built only
+inside private cards (a viewer member only looks, see "Private cards and hobbies"); the owner-only rule
+for OPEN cards is not built (owner questions on PR for #604 steps 3-5).
 
 **Ownership (step 1).** A users.id, set at WRITE time from the actor context
 (`users.user_id_for_actor`): a signed-in user's id; NULL for the install token, the MCP, scripts, the
@@ -928,7 +935,7 @@ string) + `sensitive_at`. Written only by `items.set_sensitive(slugs, on)`: ONE 
   candidate the actor can't see isn't offered), revision chains (a hidden revision shows as "(an item
   you can't see)"), and the **Curator queue**: its shared cache is now built as `system` (the whole
   queue) and filtered per actor on read (`curation_queue.for_actor`; file questions carry `item_slug`).
-  The MCP acts as admin (install token) until per-user tokens (#604 step 5).
+  The MCP acts as admin with the install token, and as the user with a per-user token (#604 step 5).
 - **Admin's list** (Admin > "Sensitive items", `GET /api/restricted`, MCP `list_restricted`): restricted
   types AND flagged items, each with `reason` ("type: Certificate" / "marked by Jason K. on ...") and
   how often it was opened.
@@ -951,10 +958,125 @@ the full matrix per door, who may flip it, undo, bulk, the upload-time flag, a r
 uploader, the captioning agent, exports and the view log. `test_role_policy.py` covers a flagged
 fixture next to the certificate.
 
+## Private cards and hobbies (#604 build step 3; parts of step 4)
+
+Owner decisions: the #604 table and follow-ups (2026-10-07), and 2026-10-17 ("shared by default,
+private with a check box on the card"). **Cards and hobbies are open** (every signed-in user sees them
+and their items) **unless ticked Private.**
+- **Who sees a private card or hobby:** admins (signed-in admins, the install token, scripts, the
+  system), its **owner** (`created_by_user_id`, #604 step 1; NULL = admin-owned, so admins only) and its
+  **members** (`share_members`, viewer or editor; the member still needs an install role). Everyone else
+  gets 404 `not_found` on every door, exactly as if it didn't exist.
+- **Inherited downward** along every grouping edge: a hobby -> its cards (`project_hobbies`), a card ->
+  its nested parts (`projects.parent_id`), a family / collection -> its members (`family_members`). A card
+  is visible only when the actor may see EVERY private node above it and itself (an AND): unticking a
+  child can't make it more open than its parent, and a private child with its own list is closed to the
+  parent's members who aren't on it. Families count as an edge on purpose (owner question on the PR).
+  Since a hidden node hides everything under it, everything ABOVE a visible card is visible too.
+- **Items:** hidden when ANY card holding them is hidden ("private wins", follow-up 1), or when tagged
+  directly with a hidden hobby (its loose objects). The uploader is not exempt (owner question on the PR).
+  Unfiled items stay visible to everyone signed in. **Hotlinks are unchanged:** `/f/<slug>` and its
+  thumbnail stay public for an ordinary item even inside a private card (owner rule: the link is the
+  deliberate share); `policy.require_file` applies only the sensitive rule.
+- **Schema:** `projects.private`, `hobby_settings.private` (0/1, ADD COLUMN at boot, default 0: no data
+  migration), `share_members(target_kind card|hobby, target_id, user_id, role viewer|editor, added_at)`
+  (in `IMAGE_TABLE_KEYS`, cleared by delete-all), all in `core/db.py`.
+- **Policy (`core/policy.py`):** `card_access(actor)` -> an `Access` (the hidden card ids and hobby ids;
+  empty for an admin or when nothing is private, which costs one cheap query); `can_view_card`,
+  `can_view_hobby`, `require_card_view`, `filter_visible_cards`, `filter_visible_hobbies`,
+  `filter_tag_tree` (a hidden card's linked tag and a hidden hobby's tag leave the tag tree),
+  `outsider_access()` (everything under any private node). `can_view` / `filter_visible` /
+  `viewable_rows` / `sql_browse_clause` apply it to items, so search, browse, the file grids and every
+  item door follow. `access_scope(actor)` works the Access out once for a block (a list filter); keep
+  calls to `policy.can_view(item, actor)` positional so tests can still monkeypatch it.
+- **Doors:** pages (home, card, hobby, /hobbies, the item breadcrumb), the card / hobby APIs, the Curator
+  queue (`for_actor` drops hidden card / hobby groups and options naming hidden cards or files), the
+  decision queue, card needs and nudges, `cards.family_fields` / `list_links` / `resolve_home` (a manual
+  home naming a hidden card is passed over) / `explain_card`, blog entries' card lists, MCP
+  `list_projects`, `get_project`, `list_hobbies`, `list_tags`, every card tool (through `cards.get_card` /
+  `get_hobby` / `membership.get_card`, which refuse a hidden card as `not_found`).
+  `scripts/check_policy_doors.py` rule 5 lists them (`CARD_DOORS`).
+- **The change log:** a non-admin reads only change rows that touch nothing hidden from them
+  (`sharing.visible_change_rows`, used by `cards.list_changes`: MCP `list_changes`), and can't undo one
+  (`sharing.check_undo_allowed`, from `cards.undo`). Undoing a sharing change needs the owner or an admin.
+- **The write guard (step 4, inside private cards only): `policy.check_write`, called by
+  `db.insert_change_log` for EVERY logged write** (so every service op, the undo and any future door).
+  Inside private territory only an admin, the owner or an **editor** member may change a card, its
+  nesting / families / hobbies / links, or a file on it; a **viewer** member only looks (follow-up 4).
+  A viewer member may still file and edit their OWN uploads there (follow-up 2: "the item's owner or an
+  editor of that private card"). Refused: 403 `forbidden`, `details.reason` `private_view_only`, naming
+  the card when the actor can see it; the transaction rolls back, nothing is written. **Open cards are
+  unchanged** (any editor may change them, as before): the owner-only rule for open cards, and which ops
+  count as "editing", are owner questions (#604 step 4).
+- **Writes (`core/sharing.py`, a service module):** `state(kind, target)`, `set_private(kind, target, on)`,
+  `add_member(kind, target, user, role)` (adding again changes the role), `remove_member(...)`; each one
+  imaged change-log row (`share_private`, `share_member_add`, `share_member_remove`), undoable, `dry_run`.
+  **Only the owner (holding the editor role) or an admin** (follow-ups 4 and 6; `policy.can_manage_sharing`),
+  else 403 saying who can; a hidden target is 404. **Role ceiling** (follow-up 8): making an install
+  viewer a card editor is refused (400 `role_ceiling`, says how to fix it); a member whose install role
+  later drops shows `capped`. Members stay listed while Private is unticked (ticking it again restores
+  them). Warnings, never silent: unticking a card that still inherits privacy names the parent.
+- **Keeping things private through reshaping:** `cards.delete_card` drops the card's member rows (undo
+  restores them) and warns when its files / nested cards come out from under a private card;
+  `merge_cards` refuses a private card into a card that isn't (409 `privacy_conflict`); a part split out
+  of a private card is private with the same members; card <-> hobby conversions carry the tick, the
+  owner and the members over. The static site export publishes nothing under a private card or hobby
+  (skipped with a warning; owner question on the PR whether an admin may publish one on purpose); the
+  project zip follows the actor's view.
+- **UI:** the card page and the hobby page get a SHARING group (`templates/_sharing.html`,
+  `static/js/sharing.js`): the **Private** checkbox; ticking it reveals the member list right there (add a
+  person as viewer or editor, change a role, remove); "Private · inherited from <parent>" when it comes
+  from above. Read-only (with who can change it) for everyone but the owner and admins. Every change
+  offers Undo; a refusal shows the server's message and puts the checkbox back.
+- **Routes:** `GET /api/sharing/{card|hobby}/{id or slug}` (viewer), `POST .../private` (`private=true|false`),
+  `POST .../members` (`user`, `role`), `POST .../members/remove` (`user`) (editor, then the owner rule),
+  `GET /api/sharing/users` (editor: the people you can add). **MCP:** `constructicon_sharing(action=get |
+  set_private | add_member | remove_member | users, card= | hobby=, private=, user=, role=, dry_run=)`;
+  `get_project` / `explain_card` carry `sharing`.
+- **Not done:** the heir when a user is disabled or deleted (follow-up 5; their member rows stay and
+  match nobody once deleted), an admin view of every private card; counts ("N nested", a hobby's
+  project count) may still include hidden cards (numbers only, never names).
+- Check with `scripts/test_private_cards_604.py` (throwaway DB: the whole owner / editor member / viewer
+  member / outsider / viewer / admin / token matrix per door, inheritance, the write guard, undo, the
+  export) and `check_policy_doors.py` rule 5.
+
+## Per-user MCP tokens (#604 build step 5)
+
+Owner decision 2026-10-17: **several named tokens per user** ("windows claude", "mac claude"), each
+revocable on its own in Account, stored hashed like sessions; the MCP acts as that user. The install
+token stays the admin key for scripts and ops.
+- **Model (`core/mcp_tokens.py`, a service module; table `mcp_tokens(id, user_id, name, token_hash UNIQUE,
+  created_at, rotated_at, last_used_at)`):** a token is `ctu_` + 32 random bytes (urlsafe); only its
+  sha256 is stored. The secret is in the ANSWER to create / rotate, once, and is never logged, imaged or
+  stored (request bodies carry only the name). Up to 20 per user (409 `too_many_tokens`), names unique per
+  user in any case (409 `token_name_taken`, 400 `bad_token_name`). Each op is one change-log row with a
+  `details` summary (`mcp_token_create` / `_rotate` / `_revoke`; never the secret), not imaged, so undo
+  refuses it. `last_used_at` is written at most every 10 minutes. Kept by delete-all (`reset.KEPT_TABLES`);
+  a deleted user's tokens go with them (`db._delete_user`); a disabled user's are refused until re-enabled.
+- **Who:** every signed-in user (viewer and up) manages ONLY their own tokens; the install token / MCP
+  (no user) get 403 `not_signed_in`. An admin can't see or revoke someone else's (owner question).
+- **Web:** Account page (`/account/password`, the header's name link), section "My MCP tokens"
+  (`static/js/account-tokens.js`): make (shows the secret once plus the client config line), rotate
+  (confirm), revoke (confirm). API (viewer, JSON bodies): `GET /api/account/mcp-tokens`, `POST
+  /api/account/mcp-tokens` `{name}`, `POST /api/account/mcp-tokens/{id}/rotate`, `.../revoke`.
+- **MCP (`mcp_server/auth.py`):** the install token still runs as `mcp` (admin). A Bearer value starting
+  `ctu_` is looked up (`mcp_tokens.authenticate`, off the event loop); valid -> the request's identity
+  (`auth.IDENTITY`, a ContextVar) and the tool wrapper (`server._call_as_mcp`) runs the tool as
+  `user:<name>`: ACTION_ROLES applies their role (a viewer's token can't write), the item and card policy
+  apply (they see what they see), and the change log names them. Refused (revoked, rotated, unknown, a
+  disabled or deleted user, no role) = 401 with a message saying what to do; a lookup that fails (DB) =
+  503 saying the token couldn't be checked. Client config: the same `headers` block with the user's token.
+- **The web API with a user token:** not accepted (the web's `Authorization: Bearer` is the install
+  token only; a `ctu_` value there is 401 `invalid_token`). Owner question.
+- Check with `scripts/test_mcp_user_tokens_604.py` (throwaway DB: the account API, the secret never at
+  rest, authenticate's refusals, the middleware, and real tool calls through the streamable-HTTP app as a
+  user: a card they create is theirs, a viewer can't write, a private card is not_found).
+
 ## Service layer (#541): one core module per domain
 
 **The rule: all writes go through `core/{items,membership,tags,cards,hobbies,blog,decisions,reset}.py`
-(plus `core/revisions.py` for revision chains, `core/install_config.py` and `core/users.py`); the raw writers in `core/db.py` are private
+(plus `core/revisions.py` for revision chains, `core/install_config.py`, `core/users.py`, and since #604
+`core/sharing.py` (private cards / members) and `core/mcp_tokens.py` (per-user MCP tokens)); the raw writers in `core/db.py` are private
 (`_`-prefixed); `scripts/check_layering.py` enforces it.** Run `python scripts/check_layering.py`
 (no server, no DB; `--list` prints every db.py writer and its class) before every PR that touches
 `core/`, `web/` or `mcp_server/`. It fails when:
@@ -1709,7 +1831,8 @@ One generated file of every registered type and extension, to drop-test a new in
   hobby's tag), so tagging into a project also surfaces it via ordinary tag browsing. The link is the
   id, **not** the name: nothing renames the tag when the card is retitled (or the reverse), so the two
   names drift (7 of 75 prod cards had, per #552) and older cards have `tag_id` NULL.
-  `agent_notes` (#745) is the card's private agent scratch field: never in a row `core/db.py` hands
+  `private` (#604 step 3, 0/1) ticks the card private; its members are `share_members` (see "Private
+  cards and hobbies"). `agent_notes` (#745) is the card's private agent scratch field: never in a row `core/db.py` hands
   out, read only by `db.get_card_agent_notes` (see the MCP section, "Agent notes on cards").
 - **`project_items`** — many-to-many join, `(project_id, post_slug,
   sort_order)`, with a manual `sort_order` for deliberate (non-chronological)
@@ -1864,7 +1987,7 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
 Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
-`mcp_server/server.py`, exposing 55 tools like `constructicon_search`, `constructicon_get`,
+`mcp_server/server.py`, exposing 56 tools (55 after #746, plus `constructicon_sharing`, #604) like `constructicon_search`, `constructicon_get`,
 `constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
 `constructicon_card_files`, `constructicon_needs`, etc.
 (`mcp__constructicon-mcp__*` in a session with it configured). #68 tracked
@@ -1936,8 +2059,9 @@ configuration gap for that session, not evidence the server itself is gone.
     `outputSchema`** (`structured_output=False`): results are the JSON text (an empty list is `[]`).
   - **Who may run what: `ACTION_ROLES`** in `server.py`, one row per `(tool, action)` (viewer for reads,
     editor for curation, admin for anything permanent or install-wide). The wrapper checks it on every
-    call (an alias uses the row of the call it stands for). The MCP is one admin identity today, so
-    nothing is refused yet; it is the gate per-user MCP tokens (#604 step 5) will rely on. Startup
+    call (an alias uses the row of the call it stands for). The install token is admin, so it is never
+    refused; a per-user MCP token (#604 step 5) runs as its user, and this table refuses what their role
+    doesn't allow (403 forbidden naming the role). Startup
     refuses a visible tool or selector value with no row.
   - **Adding or changing a tool:** add its `ACTION_ROLES` row(s), classify it in
     `scripts/check_policy_doors.py` `MCP_TOOLS` (rule 4 covers EVERY MCP tool and alias: opens | items |
@@ -2000,9 +2124,9 @@ runs that app via uvicorn itself, same host/port).
   `{"type":"http","url":"http://<host>:8100/mcp","headers":{"Authorization":"Bearer <token>"}}`
 - **Rotate:** `python3 -m core.manage.mcp_token generate <file> --force`, restart BOTH containers (web
   and MCP), update every client's `headers`. Old token stops working at the restart.
-- **Identity:** one install token = one identity: role **admin** (owner decision 2026-10-07), actor
-  `mcp`, so the agent sees restricted items (the policy's admin role). Per-user MCP tokens are a
-  later step (hook comment in `auth.py`).
+- **Identity:** the install token = role **admin** (owner decision 2026-10-07), actor `mcp`, so the
+  agent sees restricted items (the policy's admin role). A **per-user token** (`ctu_...`, #604 step 5)
+  acts as its user instead: see "Per-user MCP tokens" (after "Ownership and sensitive items").
 
 ## Install config (#562, groundwork for #467)
 
@@ -2213,7 +2337,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,
-    `test_ownership_sensitive`, `test_bulk_visibility_709`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
+    `test_ownership_sensitive`, `test_bulk_visibility_709`, `test_private_cards_604`, `test_mcp_user_tokens_604`,
+    `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,
     `check_policy_doors`, `test_manage_634` (the `core/manage/` tools, their actor, the stubs);
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,

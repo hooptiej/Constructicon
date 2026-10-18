@@ -10,7 +10,7 @@ from urllib.parse import unquote, quote
 import anyio.from_thread
 from fastapi.templating import Jinja2Templates
 
-from core import besteffort, db, install_config, item_title, markdown_render, object_types, storage, users
+from core import besteffort, db, install_config, item_title, markdown_render, object_types, policy, storage, users
 from core import version as version_info
 from web import auth as web_auth
 from web import security_headers
@@ -126,7 +126,7 @@ def _build_breadcrumbs(from_param, current_item_name):
         # Extract project slug and look up the project
         project_slug = from_param[8:]  # Remove "project:" prefix
         project = db.get_project(project_slug)
-        if project:
+        if project and policy.can_view_card(project):  # #604 step 3: never name a hidden private card
             breadcrumbs.append({"label": "Home", "href": "/"})
             # No dedicated projects index route, so Projects links to home
             breadcrumbs.append({"label": "Projects", "href": "/"})

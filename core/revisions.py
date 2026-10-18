@@ -335,6 +335,27 @@ def candidates_for(slug):
     return out
 
 
+def identical_items(slug):
+    """(#615) Existing items whose stored file is byte-for-byte the same as this item's, whatever
+    their names: the copy of a photo that came in again from another road (Imgur, Facebook, the
+    photo library) under another filename. Current (not superseded), un-redacted, same file size
+    first (cheap, from the DB), then compared byte for byte. Oldest upload first."""
+    row = db.get_by_slug(slug)
+    if row is None or row.get("redacted") or not row.get("stored_filename") or not row.get("file_size"):
+        return []
+    fwd, _back = _maps()
+    conn = db.get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT slug, filename, display_name, content_description, media_type, timestamp, source_modified_at, "
+            "stored_filename, file_size FROM capture_events "
+            "WHERE slug != ? AND redacted = 0 AND file_size = ? AND stored_filename IS NOT NULL "
+            "ORDER BY timestamp ASC, id ASC", (slug, row["file_size"])).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows if r["slug"] not in fwd and same_file(row, dict(r))]
+
+
 def queue_replace_question(slug):
     """Queues "Does this replace ...?" for a freshly uploaded file, if anything matches.
     Returns the decision id, or None (no match, or this file was already asked about).
@@ -347,7 +368,11 @@ def queue_replace_question(slug):
     time) and `suggested_reason` says which one decided it."""
     row = db.get_by_slug(slug)
     cands = candidates_for(slug)
-    if not cands:
+    # #615: a byte-identical copy under ANOTHER name is not a name candidate, so it is added here
+    # with only the "same file: keep one" answer (it can't be a revision of itself).
+    named = {c["slug"] for c in cands}
+    twins = [t for t in identical_items(slug) if t["slug"] not in named]
+    if not cands and not twins:
         return None
     title = _display(row)
     _fwd, back = _maps()
@@ -363,6 +388,10 @@ def queue_replace_question(slug):
             identical.append(c)
             options.append({"key": SAME_PREFIX + c["slug"],
                             "label": f"It's the same file: keep one (this upload goes to the trash; {name} stays)"})
+    for t in twins:
+        identical.append(t)
+        options.append({"key": SAME_PREFIX + t["slug"],
+                        "label": f"It's the same file: keep one (this upload goes to the trash; {item_title.title_of(t)} stays)"})
     options.append({"key": NONE_KEY, "label": "No, it's a separate file"})
     suggested = reason = confidence = None
     if identical:
@@ -380,9 +409,12 @@ def queue_replace_question(slug):
             suggested, reason, confidence = REVERSE_PREFIX + c["slug"], f"The other file is the later one: {why}.", "medium"
         else:
             reason = None
+    question = (f"Does “{title}” replace an earlier file?" if cands
+                else f"“{title}” is the same file as one already in the library. Keep one?")
     payload = {
-        "schema": 2, "question": f"Does “{title}” replace an earlier file?", "options": options,
-        "candidate_slugs": [c["slug"] for c in cands], "stem": normalize_stem(row["filename"]),
+        "schema": 2, "question": question, "options": options,
+        "candidate_slugs": [c["slug"] for c in cands] + [t["slug"] for t in twins],
+        "stem": normalize_stem(row["filename"]) if row.get("filename") else None,
         "suggested": suggested, "suggested_reason": reason, "confidence": confidence,
     }
     return db.queue_decision_once(KIND_ITEM_SUPERSEDES, slug, payload)

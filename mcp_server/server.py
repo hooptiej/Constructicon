@@ -56,7 +56,7 @@ from mcp.server.mcpserver import Image as McpImage, MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from core import access_log, actor as actor_ctx, policy, roles, users
-from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, errors, ingest, item_dates, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
+from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, duplicates, errors, ingest, item_dates, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
 from core import blog, changes, hobbies, membership, parse_limits, reset, sharing
@@ -246,6 +246,8 @@ ACTION_ROLES = {
     ("constructicon_delete", "everything"): A,  # the whole archive, permanent
     ("constructicon_trash", "list"): A,
     ("constructicon_trash", "empty"): A,  # permanent
+    ("constructicon_duplicates", "plan"): E,   # #615: read-only, filtered per actor (policy.can_view)
+    ("constructicon_duplicates", "apply"): A,  # #615: trashes copies library-wide (undoable)
     ("constructicon_item_tags", "attach"): E,
     ("constructicon_item_tags", "detach"): E,
     ("constructicon_related", "add"): E,
@@ -1438,6 +1440,32 @@ def constructicon_list_trash() -> dict:
 @mcp.tool(alias_of=("constructicon_trash", "empty"))
 def constructicon_empty_trash(confirm: str) -> dict:
     return _empty_trash(confirm)
+
+
+@mcp.tool(selector="action", annotations=_DESTRUCTIVE)
+def constructicon_duplicates(action: typing.Literal["plan", "apply"] = "plan", dry_run: bool = True,
+                             expect_trash: list[str] | None = None) -> dict:
+    """Byte-identical duplicate files: the same stored bytes under several items.
+    "plan" (default, read-only): {summary, summary_text, groups: [{sha256, size_bytes, keep, why,
+      trash: [{slug, title, filename, date, cards, ...}], inherit: {cards, tags, free_text_tags,
+      fields, flags}, in_revision_chain}], skipped, unreadable}. The survivor is the copy with the
+      earliest real date from before Constructicon's first upload (ties: more cards, more metadata,
+      older upload).
+    "apply": folds every group into its survivor (it inherits the copies' cards, tags, blank text
+      fields, flags, related links, covers) and trashes the copies (7-day undo), ONE batch.
+      DRY-RUN BY DEFAULT (dry_run=false writes). expect_trash = the slugs a dry run listed: if
+      the fresh plan differs it refuses (plan_changed) and writes nothing. Admin only.
+      -> {ok, dry_run, batch_id, changes, trashed, kept, expires_at, summary, groups}.
+    """
+    if action == "plan":
+        _only_for('action="plan"', dry_run=(dry_run, True), expect_trash=(expect_trash, None))
+        built = duplicates.plan()
+        return {**built, "summary_text": duplicates.summary_text(built)}
+    if action == "apply":
+        res = duplicates.apply(dry_run=dry_run, expect_trash=expect_trash).to_dict()
+        res["summary_text"] = duplicates.summary_text(res)
+        return res
+    raise InvalidInput(f"Unknown action {action!r}: use plan or apply.")
 
 
 @mcp.tool()

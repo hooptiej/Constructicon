@@ -36,6 +36,7 @@ SERVICE_MODULES = {
     "core/decisions.py": "answering questions + the explicit stale sweep (phase D)",
     "core/reset.py": "the one delete-all (phase C)",
     "core/revisions.py": "revision chains (#477) and their questions",
+    "core/duplicates.py": "byte-identical duplicates folded into one survivor (#615)",
     "core/install_config.py": "install identity: owner, site title, publish targets (#562)",
     "core/users.py": "user accounts, passwords and sessions (#467 step 1)",
     "core/mcp_tokens.py": "per-user MCP tokens: create, rotate, revoke, sign-in by token (#604 step 5)",

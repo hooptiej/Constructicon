@@ -13,10 +13,144 @@ chain (filename/content_description/slug) shows only the bare random slug on the
 page title/breadcrumb, with no visible trace of the URL the owner actually pasted.
 This pre_store_fn seeded the URL itself as the description — no title-fetch API,
 just "the URL is better than nothing" behavior.
+
+#724 part d (owner decision 2026-10-17, "Title + summary, safe fetch"): the link's page gives its
+searchable text. `page_text` (the type's text_extract_fn, so it runs in a parse_limits child like
+every reader) fetches the page through core/safe_fetch.py (the SSRF guard: public addresses only,
+pinned, redirects re-checked, 2 MB / 10 s, text/html only, one polite fetch at a time) and reads
+its <title>, <meta name="description"> and og:title / og:description with the stdlib HTML parser
+(no new dependency, +0 MB), deduplicated, as "Page title:" / "Page summary:" sections
+(core/text_sources.combine; type_metadata.text_source 'page'). How it settles:
+- a title or summary -> 'done' with that text;
+- the site blocks fetching (cults3d.com's Cloudflare challenge), the guard refuses the address
+  (private / loopback / odd port / not http), not an HTML page, too large, page not found, or a
+  page with no title or summary -> grey 'unsupported' with the reason ("web link: site blocks
+  fetching (HTTP 403 challenge)"): NotCompatibleFile, nothing to retry;
+- a timeout, an unreachable site, HTTP 429 / 5xx -> 'failed' with a "try OCR again" reason
+  (UnreadableFile): those can pass, and Retry runs the fetch again.
+Nothing is ever done to get past a bot check.
 """
 
+import re
+from html.parser import HTMLParser
 from urllib.parse import urlparse
-from . import register, ObjectTypeSpec, ThumbnailSource, PreStore, IngestCandidate, _preview
+from . import register, ObjectTypeSpec, ThumbnailSource, PreStore, IngestCandidate, NotCompatibleFile, UnreadableFile, _preview
+from .. import safe_fetch, text_sources
+
+TITLE_MAX_CHARS = 300
+SUMMARY_MAX_CHARS = 1000
+_COLLECT_MAX_CHARS = 4000  # an unclosed <title> can't swallow the whole page
+_META_KEYS = ("description", "og:title", "og:description")
+_META_CHARSET = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9._:-]+)""", re.I)
+
+
+class _PageMeta(HTMLParser):
+    """The page's first <title> (not one inside an inline <svg>) and its description / og: meta."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.title_parts = []
+        self.title_len = 0
+        self.in_title = False
+        self.title_done = False
+        self.svg_depth = 0
+        self.meta = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "svg":
+            self.svg_depth += 1
+        elif tag == "title" and not self.title_done and not self.svg_depth:
+            self.in_title = True
+        elif tag == "meta":
+            a = {(k or "").lower(): (v or "") for k, v in attrs}
+            key = (a.get("name") or a.get("property") or "").strip().lower()
+            content = a.get("content", "").strip()
+            if key in _META_KEYS and content and key not in self.meta:
+                self.meta[key] = content
+
+    def handle_endtag(self, tag):
+        if tag == "svg" and self.svg_depth:
+            self.svg_depth -= 1
+        elif tag == "title" and self.in_title:
+            self.in_title = False
+            self.title_done = True
+
+    def handle_data(self, data):
+        if self.in_title and self.title_len < _COLLECT_MAX_CHARS:
+            self.title_parts.append(data)
+            self.title_len += len(data)
+
+
+def _tidy(text, limit):
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _dedupe(values, also_against=()):
+    """Drop empties, repeats, and a value already contained in one kept before it (case-folded)."""
+    kept = []
+    for v in values:
+        if not v:
+            continue
+        low = v.casefold()
+        if any(low == k.casefold() or low in k.casefold() for k in list(kept) + list(also_against)):
+            continue
+        kept.append(v)
+    return kept
+
+
+def _decode(body, charset):
+    names = [charset] if charset else []
+    m = _META_CHARSET.search(body[:4096])
+    if m:
+        names.append(m.group(1).decode("ascii", "replace"))
+    for name in names + ["utf-8"]:
+        try:
+            return body.decode(name, errors="replace")
+        except LookupError:  # silent-ok: an unknown charset name falls through to the next guess
+            continue
+    return body.decode("utf-8", errors="replace")
+
+
+def page_summary(body, charset=""):
+    """(titles, summaries) read from an HTML page's bytes: tidied, capped, deduplicated. Malformed
+    markup gives whatever was read before the parser gave up."""
+    parser = _PageMeta()
+    try:
+        parser.feed(_decode(body, charset))
+        parser.close()
+    except Exception as e:  # malformed markup: keep what was read before it
+        print(f"web link: HTML parse stopped early: {e!r}")
+    title = _tidy("".join(parser.title_parts), TITLE_MAX_CHARS)
+    titles = _dedupe([title, _tidy(parser.meta.get("og:title"), TITLE_MAX_CHARS)])
+    summaries = _dedupe([_tidy(parser.meta.get("description"), SUMMARY_MAX_CHARS),
+                         _tidy(parser.meta.get("og:description"), SUMMARY_MAX_CHARS)], also_against=titles)
+    return titles, summaries
+
+
+def page_text(row):
+    """#724 (d) text_extract_fn: the link's page title and summary, fetched through the guard. See
+    the module docstring for how each outcome settles. None only when the row has no address."""
+    url = (row.get("external_url") or "").strip()
+    if not url:
+        return None
+    if not safe_fetch.enabled():
+        raise NotCompatibleFile("web link: page fetching is turned off on this install")
+    try:
+        page = safe_fetch.fetch(url)
+    except safe_fetch.FetchError as e:
+        if e.transient:
+            reason = str(e)
+            raise UnreadableFile(f"web link: {reason}" + ("" if "try again" in reason else "; try OCR again")) from None
+        raise NotCompatibleFile(f"web link: {e}") from None
+    titles, summaries = page_summary(page.body, page.charset)
+    text, _source = text_sources.combine([
+        text_sources.TextSource("page", "Page title", "\n".join(titles)),
+        text_sources.TextSource("page", "Page summary", "\n".join(summaries)),
+    ])
+    if not text:
+        raise NotCompatibleFile("web link: the page has no title or summary")
+    return text
 
 
 def url_pre_store(candidate: IngestCandidate) -> PreStore:
@@ -80,7 +214,9 @@ register(ObjectTypeSpec(
     capture_fn=None,  # TODO(future issue): screenshot the page
     preview_fn=preview,
     properties_fn=get_properties,
+    text_extract_fn=page_text,  # #724 (d): the page's title + summary, through core/safe_fetch.py
+    text_source="page",
     badge_icon="\U0001F517",
     badge_text="WEB",
-    ocr_unsupported_note="web link: no readable text yet",  # #724: no page capture or text fetch yet
+    ocr_unsupported_note="web link: no page address to read",  # #724: only when the row has no external_url
 ))

@@ -49,6 +49,14 @@ from PIL import Image  # noqa: E402
 from core import actor, card_payload, db, ingest, object_types, ocr, paths, thumbnails  # noqa: E402
 _testenv.assert_isolated()
 
+# #724 part d gave web links a page fetch (a text reader), so a link is no longer "nothing to read".
+# This file pins part a's rules for a type with nothing to read, so it uses the web link as it was
+# before part d: no text reader, part a's note. (scripts/test_safe_fetch_724d.py covers the fetch.)
+import dataclasses  # noqa: E402
+object_types.OBJECT_TYPES["url"] = dataclasses.replace(
+    object_types.OBJECT_TYPES["url"], text_extract_fn=None, text_source="",
+    ocr_unsupported_note="web link: no readable text yet")
+
 FAILS = []
 
 

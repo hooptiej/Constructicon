@@ -1099,7 +1099,8 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   stored file, hashes only same-size ones, and per group picks the survivor: copies with a real date
   (`timeline.resolve_item_date`) from BEFORE Constructicon's first upload (`MIN(timestamp)`) first,
   the earliest Mountain day wins; ties -> on more cards -> more metadata (description, caption, tags)
-  -> oldest upload. A copy with no real date, or one on/after the first upload, wins only when no copy
+  -> a clean file name over a copy marker (`AlbertusMT.otf` over `AlbertusMT (1).otf`;
+  `duplicates.has_copy_marker`: "(n)", "- Copy", "copy 2", "Copy of") -> oldest upload. A copy with no real date, or one on/after the first upload, wins only when no copy
   has an earlier real date. Groups with a copy the actor may not see (`policy.can_view`) are left out
   and only counted; two rows sharing ONE stored file are skipped with the reason; an unreadable file is
   listed under `unreadable`, never skipped silently; empty files are ignored. `apply(dry_run=True,

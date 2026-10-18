@@ -8,8 +8,9 @@ The owner's rule (2026-10-17, binding, see the issue's comments):
   2. The survivor: a copy whose card date (timeline.resolve_item_date) is on or after Constructicon's
      first upload is "probably the incorrect one", so copies with a real date from BEFORE the first
      upload come first; among those the EARLIEST date wins (compared by Mountain-Time day). Ties go to
-     the copy on more cards, then the one with more metadata (description, caption, tags), then the
-     oldest upload. A copy with no real date (#725) or a post-first-upload date only wins when no copy
+     the copy on more cards, then the one with more metadata (description, caption, tags), then a
+     clean file name over one with a copy marker ("AlbertusMT.otf" beats "AlbertusMT (1).otf"; owner,
+     2026-10-18), then the oldest upload. A copy with no real date (#725) or a post-first-upload date only wins when no copy
      has an earlier real date.
   3. The survivor INHERITS what the dropped copies had and it lacks: card memberships, tags in both
      stores (post_tags and the free-text chips), description / caption / provenance / agent notes
@@ -38,6 +39,8 @@ reason, and the group it might have belonged to is planned without it.
 
 import hashlib
 import json
+import os
+import re
 import time
 
 from . import cards, changes, datefmt, db, item_title, items, membership, paths, policy, roles, timeline
@@ -138,9 +141,26 @@ def _facts(row, cutoff):
     }
 
 
+# Copy markers a browser, OS or user adds to a second copy's file name: "name (1).ext",
+# "name - Copy.ext", "name copy 2.ext", "Copy of name.ext". Matched on the name without its extension.
+_COPY_MARKERS = (
+    re.compile(r"\s*\(\d+\)$"),                          # "AlbertusMT (1)", "photo(2)"
+    re.compile(r"[\s_-]+copy(?:\s*\d+)?$", re.IGNORECASE),  # "name copy", "name - Copy", "name copy 2"
+    re.compile(r"^copy\s+of\s+", re.IGNORECASE),            # "Copy of name"
+)
+
+
+def has_copy_marker(filename):
+    """True when a file name carries a copy marker such as "(1)", " - Copy" or "Copy of"."""
+    stem = os.path.splitext(os.path.basename(filename or ""))[0].strip()
+    return any(rx.search(stem) for rx in _COPY_MARKERS)
+
+
 def _rank_key(f):
     # bucket 0 = a real date before the first upload; 1 = no real date, or one on/after it.
+    # On a full tie a clean file name beats one with a copy marker, before upload order (owner, 2026-10-18).
     return (0 if f["early"] else 1, f["day"] or "9999-99-99", -len(f["cards"]), -f["metadata"],
+            1 if has_copy_marker(f["row"].get("filename")) else 0,
             f["row"].get("timestamp") or 0, f["slug"])
 
 
@@ -157,6 +177,8 @@ def _why(survivor, runner_up):
         return f"same date; on more cards ({len(s['cards'])} vs {len(r['cards'])})"
     if s["metadata"] != r["metadata"]:
         return f"same date and cards; more description/caption/tags ({s['metadata']} vs {r['metadata']})"
+    if has_copy_marker(r["row"].get("filename")) and not has_copy_marker(s["row"].get("filename")):
+        return f"same date, cards and metadata; clean file name (the other is a copy: {r['row'].get('filename')})"
     return "same date, cards and metadata; uploaded first"
 
 

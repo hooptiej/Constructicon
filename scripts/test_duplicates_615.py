@@ -280,6 +280,52 @@ with actor.acting_as(actor.ACTOR_MCP):
     mk("u_other", png((1, 2, 3)), "unrelated.png")
     check("no question for a file with no twin and no name match", revisions.queue_replace_question("u_other") is None)
 
+# ---- clean-name tie-break (owner, 2026-10-18) -----------------------------------------------
+print("--- clean name beats a copy marker on a full tie ---")
+for name, want in [("AlbertusMT.otf", False), ("AlbertusMT (1).otf", True), ("tempest_tm193 (1).pdf", True),
+                   ("tempest_tm193.pdf", False), ("photo(2).jpg", True), ("photo - Copy.jpg", True),
+                   ("photo copy 2.jpg", True), ("Copy of photo.jpg", True), ("photocopy.jpg", False),
+                   ("copy.png", False), ("IMG_0001.JPG", False), ("2019 (draft).pdf", False), (None, False)]:
+    check(f"has_copy_marker({name!r}) is {want}", duplicates.has_copy_marker(name) is want)
+
+
+def fake(slug, filename, ts, day="2014-05-13", early=True, cards_=0, metadata=0):
+    return {"slug": slug, "row": {"filename": filename, "timestamp": ts}, "day": day, "date": 1 if day else None,
+            "early": early, "cards": [{}] * cards_, "metadata": metadata}
+
+
+def winner(*fs):
+    return sorted(fs, key=duplicates._rank_key)[0]["slug"]
+
+
+check("AlbertusMT.otf beats AlbertusMT (1).otf even when the marked copy was uploaded first",
+      winner(fake("a1", "AlbertusMT (1).otf", 100), fake("a0", "AlbertusMT.otf", 200)) == "a0")
+check("tempest_tm193.pdf beats tempest_tm193 (1).pdf even when the marked copy was uploaded first",
+      winner(fake("t1", "tempest_tm193 (1).pdf", 100), fake("t0", "tempest_tm193.pdf", 200)) == "t0")
+check("the reason names the clean file name",
+      "clean file name" in duplicates._why(fake("a0", "AlbertusMT.otf", 200), fake("a1", "AlbertusMT (1).otf", 100)))
+check("a real earlier date still outranks a clean name",
+      winner(fake("d1", "font (1).otf", 200, day="2010-01-01"), fake("d0", "font.otf", 100, day="2012-01-01")) == "d1")
+check("a real pre-Constructicon date outranks a clean name with no real date",
+      winner(fake("e1", "font (1).otf", 200), fake("e0", "font.otf", 100, day=None, early=False)) == "e1")
+check("more cards still outrank a clean name",
+      winner(fake("c1", "font (1).otf", 200, cards_=2), fake("c0", "font.otf", 100, cards_=1)) == "c1")
+check("more metadata still outranks a clean name",
+      winner(fake("m1", "font (1).otf", 200, metadata=3), fake("m0", "font.otf", 100)) == "m1")
+check("two clean names (or two marked) fall back to upload order",
+      winner(fake("u1", "a.otf", 200), fake("u0", "b.otf", 100)) == "u0"
+      and winner(fake("v1", "a (1).otf", 200), fake("v0", "a (2).otf", 100)) == "v0")
+
+ALB = png((10, 20, 30))
+with actor.acting_as(actor.ACTOR_MCP):
+    mk("alb_marked", ALB, "AlbertusMT (1).otf", ts=FIRST + 500)   # uploaded first
+    mk("alb_clean", ALB, "AlbertusMT.otf", ts=FIRST + 600)
+    PA = duplicates.plan()
+ga = [g for g in PA["groups"] if {g["keep"]["slug"]} | {t["slug"] for t in g["trash"]} == {"alb_marked", "alb_clean"}]
+check("plan: the clean AlbertusMT.otf survives, the earlier-uploaded (1) copy goes to the trash",
+      len(ga) == 1 and ga[0]["keep"]["slug"] == "alb_clean" and [t["slug"] for t in ga[0]["trash"]] == ["alb_marked"],
+      ga)
+
 print()
 if FAILS:
     print("FAILED: " + ", ".join(FAILS))

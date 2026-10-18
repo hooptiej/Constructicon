@@ -407,6 +407,12 @@ def fetch(url, *, accept=HTML_TYPES, max_bytes=MAX_BYTES, timeout=TIMEOUT_SECOND
     `polite`: take the one-fetch-at-a-time turn with a pause (the page reader; a thumbnail of a
     fixed image host passes False)."""
     u = check_url(url)
+    try:  # an IP literal is refused at once, without waiting for the polite turn
+        literal = ipaddress.ip_address(u.raw_host.decode("ascii"))
+    except ValueError:  # silent-ok: a host name; it is resolved and checked inside the turn
+        literal = None
+    if literal is not None and address_refusal(literal):
+        raise Refused(f"refused: {address_refusal(literal)} ({literal})")
     with _polite_turn(polite_delay() if polite else 0):
         deadline = time.monotonic() + timeout
         hops = []

@@ -14,6 +14,7 @@ from datetime import datetime
 from markupsafe import Markup, escape
 
 from .. import besteffort
+from ..text_sources import TextSource
 from . import register, ObjectTypeSpec, ThumbnailSource, MetadataField, TypeAction
 
 log = logging.getLogger("constructicon.youtube")
@@ -171,6 +172,15 @@ def preview(ctx):
     return Markup(html)
 
 
+def text_sources(row):
+    """#724 (c) text_sources_fn: the video's stored description (type_metadata.description, from
+    the YouTube Data API: scripts/full_youtube_channel_sync.py or POST /api/content), searchable as
+    its extracted text beside the thumbnail's OCR text. No network: only what the row holds. Part
+    (e) adds the transcript here as a second TextSource."""
+    description = (row.get("type_metadata") or {}).get("description")
+    return [TextSource("description", "Description", description if isinstance(description, str) else "")]
+
+
 def _fetch_real_date(row):
     """Action handler for 'fetch-real-date': re-fetch the real publishedAt
     from the YouTube Data API and update content_date."""
@@ -220,6 +230,7 @@ register(ObjectTypeSpec(
     preview_fn=preview,
     properties_fn=get_properties,
     external_link_label="Watch on YouTube ↗",
-    ocr_unsupported_note="video: no thumbnail or captions to read",  # #724
+    ocr_unsupported_note="video: no description or captions yet",  # #724 (c): nothing in either, nor on the thumbnail
+    text_sources_fn=text_sources,  # #724 (c): the stored description is searchable text
     actions=(TypeAction("fetch-real-date", "Fetch real date", _fetch_real_date),),
 ))

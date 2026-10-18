@@ -37,8 +37,10 @@
 {% include "_hobbies_drawer.html" %}
 {% include "_nudges_drawer.html" %}
 {% include "_admin_drawer.html" %}
-{% include "_processing_drawer.html" %}
+{# #774: nav tabs first: the Processing tab (#proc-tab) is a NAV_TABS entry
+   that _processing_drawer.html's script looks up when it runs. #}
 {% include "_nav_tabs.html" %}
+{% include "_processing_drawer.html" %}
 <div class="app-version" title="Constructicon version (#508)">{% set _v = app_version() %}{{ "v" ~ _v if _v[0].isdigit() else _v }}</div>
 {% endif %}
 </body>

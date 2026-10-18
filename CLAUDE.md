@@ -1675,7 +1675,7 @@ One generated file of every registered type and extension, to drop-test a new in
   legacy `projects.status` is **frozen and retired**. No live code reads it (the Curator, the export,
   every API / page / MCP read go by the stage; no read returns the old word). It is still written
   with its default on create, and only the one-time v1 -> v2 migration ever read it. Dropping the
-  column is a separate step. A v1 word a caller SENDS (the old `status` form field, the MCP's
+  column is a separate step (#760). A v1 word a caller SENDS (the old `status` form field, the MCP's
   retired `set_project_status`) is still translated to a stage by `card_rules.legacy_to_status`.
   Rules live in `core/card_rules.py` (pure), operations in `core/cards.py`,
   every core write is logged with row images in `audit_log` via

@@ -21,28 +21,38 @@
 
 // Every feel value in one place (#775: "expose them ... with a live tuning slider on dev"). The dev
 // tuning panel (radio-dial-tuning.js) edits these live through RadioDial#setTuning.
+// Owner's tuning on dev, baked in (PR #782 review, 2026-10-18). Falloff and backlight are still the
+// first guesses (the owner hasn't tried them yet).
 const DIAL_DEFAULTS = {
-  visibleYears: 10,     // years visible at once ("about a decade")
-  minPxPerYear: 64,     // never narrower than this per year, so every year label fits
-  monthTickMinPx: 9,    // month minor ticks only when a month is at least this wide
-  tolerancePx: 10,      // the readout names cards whose tick is within this many px of the needle
-  readoutMax: 4,        // names listed before "+N more"
+  visibleYears: 3,      // years visible at once (owner's pick; #775 started at "about a decade")
+  minPxPerYear: 30,     // never narrower than this per year, so every year label fits
+  monthTickMinPx: 2,    // month minor ticks only when a month is at least this wide
+  tolerancePx: 5,       // the readout names cards whose tick is within this many px of the needle
+  readoutMax: 8,        // names listed before "+N more"
   friction: 0.92,       // inertia after a flick: share of speed kept per frame (0 = stops dead)
   falloff: 0.001,       // plus a steady braking (px/ms per ms) so the coast eases to a stop instead
                         // of drifting slowly and cutting off (owner feedback on PR #782; 0 = none)
-  snapStrength: 0,      // 0 = free needle; 1 = settles right onto the nearest card once still
-  snapPx: 24,           // ... but only when that card is this close (px)
-  wheelSpeed: 1,        // wheel / trackpad px -> dial px
-  glow: 0.10,           // outer glow around the chassis (CSS --dial-glow)
+  snapStrength: 0.5,    // 0 = free needle; 1 = settles right onto the nearest card once still
+  snapPx: 28,           // ... but only when that card is this close (px)
+  wheelSpeed: 0.1,      // wheel / trackpad px -> dial px
+  glow: 0.33,           // outer glow around the chassis (CSS --dial-glow)
   backlight: 0.05,      // internal backlight wash inside the chassis and behind the band
                         // (CSS --dial-backlight; 0 = off; owner ask on PR #782)
 };
+
+// Month-tick slider notches: fine at the low end, where the owner tunes (PR #782), coarser above.
+// A slider with `values` moves through this list by index; the value shown and stored is exact.
+const MONTH_TICK_NOTCHES = [
+  ...Array.from({ length: 15 }, (_, i) => 0.25 * (i + 1)),   // 0.25 .. 3.75 in 0.25 steps
+  ...Array.from({ length: 8 }, (_, i) => 4 + 0.5 * i),       // 4 .. 7.5 in 0.5 steps
+  ...Array.from({ length: 33 }, (_, i) => 8 + i),            // 8 .. 40 in 1 px steps
+];
 
 // The sliders the dev tuning panel offers, in order.
 const DIAL_TUNABLES = [
   { key: 'visibleYears', label: 'Visible span (years)', min: 2, max: 40, step: 1 },
   { key: 'minPxPerYear', label: 'Min px per year', min: 30, max: 160, step: 1 },
-  { key: 'monthTickMinPx', label: 'Month ticks from (px per month)', min: 2, max: 40, step: 1 },
+  { key: 'monthTickMinPx', label: 'Month ticks from (px per month)', min: 0.25, max: 40, values: MONTH_TICK_NOTCHES },
   { key: 'tolerancePx', label: 'Readout tolerance (px)', min: 1, max: 60, step: 1 },
   { key: 'readoutMax', label: 'Names before "+N more"', min: 1, max: 12, step: 1 },
   { key: 'friction', label: 'Inertia (0 = none)', min: 0, max: 0.98, step: 0.01 },

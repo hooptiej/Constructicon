@@ -1110,7 +1110,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
    Feel values: CSS variables here, JS constants in radio-dial.js's DIAL_DEFAULTS (the dev tuning
    panel edits both live). */
 .radio-dial {
-  --dial-glow: 0.10;          /* outer glow around the chassis (tuning panel: "Outer glow") */
+  --dial-glow: 0.33;        /* outer glow around the chassis (tuning panel: "Outer glow") */
   --dial-backlight: 0.05;     /* internal wash inside the chassis + behind the band ("Backlight"; 0 = off) */
   --dial-window-h: 66px;      /* the sliding window's height */
   --dial-axis-y: 28px;        /* the axis line, from the window's top */

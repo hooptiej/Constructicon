@@ -34,29 +34,42 @@
     const rows = panel.querySelector('.radio-dial-tune-rows');
     const status = panel.querySelector('.radio-dial-tune-status');
     const inputs = {};
+    // A tunable with `values` is a notched slider (PR #782: fine steps where the owner tunes): the
+    // range input moves through the list by index, and the exact listed value is shown and applied.
+    const notch = (t, value) => {
+      let best = 0;
+      t.values.forEach((v, i) => { if (Math.abs(v - value) < Math.abs(t.values[best] - value)) best = i; });
+      return best;
+    };
+    const show = (k, value) => {
+      const t = inputs[k].t;
+      inputs[k].input.value = String(t.values ? notch(t, value) : value);
+      inputs[k].out.textContent = String(value);
+    };
     window.RadioDial.TUNABLES.forEach((t) => {
       const row = document.createElement('label');
       row.className = 'radio-dial-tune-row';
       const name = document.createElement('span');
       name.textContent = t.label;
       const input = document.createElement('input');
-      Object.assign(input, { type: 'range', min: t.min, max: t.max, step: t.step });
-      input.value = String(dial.tuning[t.key]);
+      if (t.values) Object.assign(input, { type: 'range', min: 0, max: t.values.length - 1, step: 1 });
+      else Object.assign(input, { type: 'range', min: t.min, max: t.max, step: t.step });
       const out = document.createElement('output');
-      out.textContent = input.value;
       input.addEventListener('input', () => {
-        out.textContent = input.value;
-        dial.setTuning({ [t.key]: input.value });
+        const value = t.values ? t.values[Number(input.value)] : Number(input.value);
+        out.textContent = String(value);
+        dial.setTuning({ [t.key]: value });
         save(dial.tuning);
       });
       row.append(name, input, out);
       rows.appendChild(row);
-      inputs[t.key] = { input, out };
+      inputs[t.key] = { input, out, t };
+      show(t.key, dial.tuning[t.key]);
     });
     panel.querySelector('[data-act="reset"]').addEventListener('click', () => {
       clear();
       dial.setTuning(defaults);
-      Object.keys(inputs).forEach((k) => { inputs[k].input.value = String(defaults[k]); inputs[k].out.textContent = String(defaults[k]); });
+      Object.keys(inputs).forEach((k) => show(k, defaults[k]));
       status.textContent = 'Back to the built-in defaults.';
     });
     panel.querySelector('[data-act="copy"]').addEventListener('click', async () => {

@@ -1422,8 +1422,9 @@ The home page's timeline is a horizontal dial across the top (`static/js/radio-d
 `static/js/radio-dial-math.js`), styled like the card page's tuner. It replaced the vertical left rail
 (`timeline-rail.js` and the `-shifted` layout offsets are gone). Data: the page's `timeline_projects`
 (every card with a real start, children included), embedded as a nonce'd JSON block.
-- **Behaviour (owner decisions on #775):** a fixed needle over a sliding band; about a decade visible
-  (fewer on a narrow screen, so every year label fits); drag (pointer events), wheel / trackpad and the
+- **Behaviour (owner decisions on #775):** a fixed needle over a sliding band; 3 years visible by
+  default (the owner's tuning on PR #782; #775 started at about a decade; fewer on a narrow screen, so
+  every year label fits); drag (pointer events), wheel / trackpad and the
   arrow keys (Shift or PageUp/Down = a year, Home/End = the ends) slide it. One tick per card at its start.
   **Browse only:** it never scrolls or filters the cards. Starts **untuned** (needle mid-range, the readout
   shows static); once moved, the readout names the cards within a few px of the needle, with dates and

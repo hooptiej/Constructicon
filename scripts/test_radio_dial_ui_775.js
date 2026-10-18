@@ -71,8 +71,36 @@ const ROWS = [
   row('recent', 'Recent project', day(2024, 12, 24)),
 ];
 
-// --- untuned start ---
+// --- the shipped defaults: the owner's tuning on dev (PR #782 review) ---
+const OWNER = { visibleYears: 3, minPxPerYear: 30, monthTickMinPx: 2, tolerancePx: 5, readoutMax: 8, friction: 0.92,
+  snapStrength: 0.5, snapPx: 28, wheelSpeed: 0.1, glow: 0.33 };
+ok("DIAL_DEFAULTS are the owner's values", Object.entries(OWNER).every(([k, v]) => RadioDial.DEFAULTS[k] === v),
+  Object.keys(OWNER).filter((k) => RadioDial.DEFAULTS[k] !== OWNER[k]));
+ok('falloff and backlight keep their first defaults', RadioDial.DEFAULTS.falloff === 0.001 && RadioDial.DEFAULTS.backlight === 0.05);
+const shipped = mount(ROWS).dial;
+ok('as shipped: 3 years across 1000 px', Math.abs(shipped.pps * 3 * 365.2425 * 86400 - 1000) < 1e-6);
+ok('as shipped: month ticks show (a month is ~28 px, over the 2 px threshold)', shipped.ticks.innerHTML.includes('radio-dial-month'));
+ok('as shipped: starts untuned', /untuned/.test(shipped.readout.innerHTML));
+
+// --- month-tick slider notches: fine at the low end (PR #782) ---
+const monthSlider = RadioDial.TUNABLES.find((t) => t.key === 'monthTickMinPx');
+const notches = (monthSlider && monthSlider.values) || [];
+ok('month-tick slider is notched', notches.length > 0);
+ok('notches go down to 0.5 or lower', notches[0] <= 0.5, notches[0]);
+ok('quarter-px notches below 4', [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3.75].every((v) => notches.includes(v)));
+ok('notches only ever rise', notches.every((v, i) => i === 0 || v > notches[i - 1]));
+ok('the default is a notch, the top is 40', notches.includes(RadioDial.DEFAULTS.monthTickMinPx) && notches.at(-1) === 40);
+const fine = mount(ROWS).dial;
+fine.setTuning({ visibleYears: 40, minPxPerYear: 30, monthTickMinPx: 0.25 });
+const fineMonths = (fine.ticks.innerHTML.match(/radio-dial-month/g) || []).length;
+ok('at the lowest notch every month gets a tick and positions stay finite',
+  fineMonths === 26 * 11 && !/NaN|Infinity/.test(fine.ticks.innerHTML), fineMonths);
+
+// --- untuned start (the checks below pin the original decade-wide baseline so their px maths hold) ---
+const BASE = { visibleYears: 10, minPxPerYear: 64, monthTickMinPx: 9, tolerancePx: 10, readoutMax: 4,
+  snapStrength: 0, snapPx: 24, wheelSpeed: 1, glow: 0.1 };
 const { root, chassis, dial } = mount(ROWS);
+dial.setTuning(BASE);
 ok('builds the window, band, needle and readout', ['radio-dial-window', 'radio-dial-band', 'radio-dial-needle', 'radio-dial-readout'].every((c) => chassis.qa(c).length === 1));
 ok('pass 2 layers are in the band, empty', chassis.qa('radio-dial-layer-spans').length === 1 && chassis.qa('radio-dial-layer-density').length === 1);
 ok('the needle starts mid-range', dial.needle === (day(1999, 1, 1) + day(2024, 12, 24)) / 2);
@@ -83,7 +111,7 @@ ok('a year tick and label for every year 1999..2025', Array.from({ length: 27 },
 ok('one tick per card', (ticks.match(/class="radio-dial-card/g) || []).length === 4);
 ok('the child card gets the child tick', (ticks.match(/radio-dial-card--child/g) || []).length === 1);
 ok('no month ticks at a decade per 1000 px', !ticks.includes('radio-dial-month'));
-ok('a decade across 1000 px = 100 px per year', Math.abs(dial.pps * RadioDial.DEFAULTS.visibleYears * 365.2425 * 86400 - 1000) < 1e-6);
+ok('a decade across 1000 px = 100 px per year', Math.abs(dial.pps * BASE.visibleYears * 365.2425 * 86400 - 1000) < 1e-6);
 
 // --- drag tunes in: dragging the band left moves forward in time ---
 const before = dial.needle;
@@ -132,7 +160,7 @@ ok('a sideways trackpad swipe uses deltaX (left = back in time)', dial.needle < 
 // --- snapping: off by default, pulls onto the nearest card when on ---
 dial._setNeedle(day(2005, 6, 1) + 20 * 86400);  // ~5.5 px from Desk build
 dial._settle(); flushFrames();
-ok('snap off by default: the needle stays where it was left', dial.needle === day(2005, 6, 1) + 20 * 86400);
+ok('snap strength 0: the needle stays where it was left', dial.needle === day(2005, 6, 1) + 20 * 86400);
 dial.setTuning({ snapStrength: 1, snapPx: 24 });
 dial._settle(); flushFrames();
 ok('snap on: settles onto the nearest card', Math.abs(dial.needle - day(2005, 6, 1)) < 1, (dial.needle - day(2005, 6, 1)) / 86400);

@@ -127,7 +127,9 @@ the date and commit forward when you re-verify.
     records opens of sensitive items), `physical_piece.py` (made-by-hand item fields).
   - *The upload pipeline:* `ingest.py` (one pipeline for web and MCP uploads), `automatch.py`
     (filename-based project/tag matching, queues `project_match`), `embedded_metadata.py`,
-    `thumbnails.py`, `ocr.py`, `similarity.py`, `captions.py`.
+    `thumbnails.py`, `ocr.py`, `similarity.py`, `captions.py`, `text_sources.py` (#724 c), and
+    `safe_fetch.py` (#724 d: **the one way the app fetches a web address it was given**, see
+    "Outbound fetches" under "Data model"; never call `httpx.get` / `urllib` on a stored URL directly).
   - *Curator:* `curator.py` (completeness scoring), `curator_needs.py` (derived nudges),
     `curation_queue.py` (the one queue). See "Decisions and the Curator".
   - *Install, files, export:* `paths.py`, `storage.py`, `backup.py`, `install_token.py`, `version.py`,
@@ -1421,7 +1423,8 @@ One generated file of every registered type and extension, to drop-test a new in
   type, thumbnail, text, object page, `/f/` disposition, raw view, content date, and a temporary VIEWER
   account's view: restricted items must 404), then deletes exactly its own slugs and empties the trash only
   when it held nothing else. `--keep` leaves the items. Verdict line `ALL PASS: ...` / `FAILED: ...`.
-- **Known findings it shows:** legacy `.doc/.ppt` and web links end OCR "not compatible" (grey,
+- **Known findings it shows:** the web link (`https://example.com/`) reads its page title with network
+  and settles grey "web link: ..." without (#724 d); legacy `.doc/.ppt` end OCR "not compatible" (grey,
   `ocr_status='unsupported'`, #724 part a: the sampler's `.doc/.ppt` are stubs, not real Word 97 /
   PowerPoint 97 files, so the part b readers find nothing to read; a real one gets its text, see
   `scripts/test_legacy_office_724b.py`); an encrypted Office file reads "not compatible: encrypted: can't
@@ -1499,7 +1502,7 @@ One generated file of every registered type and extension, to drop-test a new in
     not an OCR type). **#724: `failed` is only a real error** (tesseract or the pipeline raised, a
     text reader raised, the stored file is missing, a picture that should exist couldn't be made).
     `unsupported` = nothing OCR can read (no text source and no picture expected:
-    `object_types.nothing_to_read` / `picture_expected`; a web link, a legacy .doc/.ppt whose reader
+    `object_types.nothing_to_read` / `picture_expected`; a legacy .doc/.ppt whose reader
     returns None), with the plain reason in `type_metadata.ocr_note` (the type's
     `ocr_unsupported_note`, str or `{ext: note}`); `db.set_ocr_status(slug, 'unsupported', note=...)`
     writes both, any other status clears the note. Shown grey ("Not compatible with OCR: <note>")
@@ -1520,6 +1523,42 @@ One generated file of every registered type and extension, to drop-test a new in
     re-run; the stored thumbnail section is recovered by `picture_text_of`), so one undo restores it.
     The `text_sources_724c` migration did the same once for existing settled rows. Check with
     `scripts/test_youtube_descriptions_724c.py`.
+    **#724 (d), web links read their page:** `url`'s `text_extract_fn` (`url.page_text`, in a parse
+    child like every reader) fetches the page through `core/safe_fetch.py` and stores its `<title>`,
+    `meta name=description` and `og:title` / `og:description` (stdlib `html.parser`, deduplicated,
+    capped) as "Page title:" / "Page summary:" sections, `text_source` `page`. Settles: text -> `done`;
+    the site blocks fetching (cults3d.com's Cloudflare 403 challenge: 16 of prod's 18 links), the guard
+    refuses the address, not HTML, no title/summary, or fetching turned off -> grey `unsupported` with
+    the reason ("web link: site blocks fetching (HTTP 403 challenge)"); a page over 2 MB is read to
+    the cap and parsed (`fetch(truncate=True)`; nothing in the first 2 MB -> grey "no title or summary
+    found in the first 2,000,000 bytes"); a dead link, HTTP 404/410 -> RED `failed` "page not found
+    (HTTP 404): dead link, or a private page this server can't see" (owner, PR #754: "Red, it's
+    broken"; GitHub answers 404 for a private repo); a timeout, an unreachable site, HTTP 429/5xx ->
+    `failed` "...; try OCR again". Retry re-fetches any of them. Nothing tries
+    to get past a bot check. The `link_page_text_724d` migration re-queued existing `failed` /
+    `unsupported` url rows to `pending` once (web's startup self-heal re-runs them; the fetches go one
+    at a time). Check with `scripts/test_safe_fetch_724d.py`.
+    **Outbound fetches (#724 d, `core/safe_fetch.py`).** A stored URL is untrusted input (it could aim
+    the server at the NAS, the router or a metadata address), so `safe_fetch.fetch(url, accept=,
+    max_bytes=, timeout=, headers=, polite=)` is the only fetch path (the page reader, and
+    `thumbnails._from_fetch` for YouTube thumbnails). It allows http/https on ports 80/443 only, no
+    credentials in the link; resolves the host itself and refuses ANY non-public answer (RFC 1918 incl.
+    10/8, loopback, link-local incl. 169.254.169.254, CGNAT 100.64/10, multicast, unspecified,
+    reserved, IPv6 ULA / site-local / link-local, and the IPv4 inside IPv4-mapped / 6to4 / NAT64);
+    **pins the checked IP** for the connection (request to the IP, real name in `Host` and as TLS SNI,
+    so the certificate is still checked; one client per hop, `trust_env=False`), so DNS rebinding
+    can't slip through; follows redirects **by hand** (max 5), re-checking scheme, port and the
+    resolved IP on every hop; caps the body (2 MB, counted while streaming, `Accept-Encoding:
+    identity`; over it = `TooLarge`, or with `truncate=True` the first 2 MB and the rest never read),
+    the whole fetch (10 s shared by DNS, connect and reads) and the content type
+    (text/html, application/xhtml+xml by default; thumbnails ask for `image/`). The page reader sends
+    an honest User-Agent (`Constructicon/<version> (...)`); thumbnails keep their Chrome-style UA
+    (#284, Imgur). `polite=True` (the page reader) takes a per-container one-at-a-time turn (a lock
+    file in the temp dir, so parse children share it) with `CONSTRUCTICON_LINK_FETCH_DELAY_SECONDS`
+    (default 2) between fetches. Every refusal/failure is a `FetchError` with a plain reason and a
+    `transient` flag. `CONSTRUCTICON_LINK_FETCH=off` turns page fetching off for an install;
+    `_testenv.isolate()` sets it, so no test reaches the internet unless it turns it on with fakes
+    (`safe_fetch._getaddrinfo` / `_transport`).
   - `redacted` — "file removed, metadata kept" (the detail page's "Remove
     file, keep info" button / `constructicon_redact`; since #541 `items.redact`
     holds the file in the trash with no expiry until the owner recovers it or

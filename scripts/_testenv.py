@@ -77,6 +77,10 @@ def isolate(prefix="test-", db_name="test.db"):
     os.environ["CONSTRUCTICON_EXPORTS_DIR"] = os.path.join(tmp, "exports")
     os.makedirs(os.environ["CONSTRUCTICON_STORAGE_DIR"], exist_ok=True)
     os.makedirs(os.environ["CONSTRUCTICON_EXPORTS_DIR"], exist_ok=True)
+    # #724 (d): a web link's OCR fetches its page. A test never reaches the internet by accident:
+    # page fetching is off (grey "turned off on this install") unless the test turns it on with
+    # its fetches faked (scripts/test_safe_fetch_724d.py).
+    os.environ["CONSTRUCTICON_LINK_FETCH"] = "off"
     use_token()
     assert_isolated()
     return tmp

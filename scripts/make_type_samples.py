@@ -1129,8 +1129,10 @@ class Content:
 CONTENT = [
     Content("youtube-link", "youtube", {"external_url": "https://www.youtube.com/watch?v=jNQXAC9IVRw"},
             thumbnail="network", text="network", shows="embedded player; thumbnail fetched from YouTube (needs network)"),
-    Content("web-page-link", "url", {"external_url": "https://example.com/constructicon-type-sampler"},
-            thumbnail=False, text=False, shows="link card with the URL as its title (no capture yet, so OCR reads 'not compatible', grey, #724)"),
+    Content("web-page-link", "url", {"external_url": "https://example.com/"},
+            thumbnail=False, text="network",
+            shows="link card with the URL as its title; OCR reads the page's title and summary through the guarded "
+                  "fetch (needs network; offline it settles grey with the reason, #724 d)"),
     Content("written-post", "document", {
         "media_type": "document", "content_description": "Constructicon type sampler written post (#720)",
         "type_metadata": json.dumps({"body": f"# {MARK}: written post\n\nA post made by the drop test."})},

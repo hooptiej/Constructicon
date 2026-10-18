@@ -1257,6 +1257,32 @@ def _mig_text_sources_724c():
           flush=True)
 
 
+def _mig_link_page_text_724d():
+    # #724 part d (owner decision 2026-10-17, "Title + summary, safe fetch"): web links read their
+    # page's title and summary now (core/object_types/url.py page_text, through core/safe_fetch.py).
+    # The url rows that settled before it ('unsupported' "web link: no readable text yet" from part
+    # a, or 'failed' on an install where part a found them first) go back to 'pending' once (fresh
+    # ocr_started_at, stale ocr_note removed); web's startup self-heal, right after init_db, re-runs
+    # OCR on every pending row. The fetches themselves are polite: core/safe_fetch.py lets one page
+    # fetch run at a time per container with a pause between them (CONSTRUCTICON_LINK_FETCH_DELAY_
+    # SECONDS, default 2), so a backfill of many links to one site never bursts. No network here.
+    # Rows with no external_url, redacted rows and every other type are left alone. Idempotent:
+    # recorded once in schema_migrations; a second run would only re-queue rows a fetch settled the
+    # same way again.
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug FROM capture_events WHERE media_type = 'url' AND ocr_status IN ('failed', ?) "
+        "AND COALESCE(redacted, 0) = 0 AND COALESCE(TRIM(external_url), '') != ''",
+        (OCR_UNSUPPORTED,)).fetchall()
+    note_sql, _ = _ocr_note_sql(None)
+    now = time.time()
+    for r in rows:
+        conn.execute(f"UPDATE capture_events SET ocr_status = 'pending', ocr_started_at = ?, {note_sql} WHERE slug = ?",
+                     (now, r["slug"]))
+    print(f"schema_migrations: link_page_text_724d re-queued {len(rows)} web link row(s) to read their page title "
+          f"and summary", flush=True)
+
+
 def _mig_writeup_lead_596():
     # #596: fill the projects.writeup_lead cache (the card face's write-up excerpt) once for every
     # card that has a write-up. From then on the cards service keeps it in step with every write-up
@@ -1453,6 +1479,7 @@ MIGRATIONS = [
     ("ocr_unsupported_724", _mig_ocr_unsupported_724),
     ("reread_legacy_office_724b", _mig_reread_legacy_office_724b),
     ("text_sources_724c", _mig_text_sources_724c),
+    ("link_page_text_724d", _mig_link_page_text_724d),
 ]
 
 

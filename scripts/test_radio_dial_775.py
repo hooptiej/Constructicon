@@ -162,6 +162,19 @@ check("css: no dial rule scales or zooms a mark", not any(re.search(r"scale\(|zo
       [s for s, b in dial_rules if re.search(r"scale\(|zoom", b)])
 check("css: no hover rule on a dial mark", not any(":hover" in s and re.search(r"radio-dial-(card|year|month)", s) for s, _ in dial_rules))
 check("css: glow is a variable", "--dial-glow" in css)
+rule_body = lambda sel: next((b for s, b in dial_rules if s.strip() == sel), "")  # noqa: E731
+check("css: backlight drives the chassis's inset wash",
+      re.search(r"inset[^;]*var\(--dial-backlight\)", rule_body(".radio-dial-chassis")) is not None, rule_body(".radio-dial-chassis"))
+check("css: backlight drives the lamp behind the band", "--dial-backlight" in rule_body(".radio-dial-window"))
+check("css: the readout sits on a plate that thickens with the backlight (legible at max)",
+      "--dial-backlight" in rule_body(".radio-dial-readout") and "z-index" in rule_body(".radio-dial-readout"))
+js_src = read("web/static/js/radio-dial.js")
+for var, key in (("--dial-glow", "glow"), ("--dial-backlight", "backlight")):
+    css_default = re.search(re.escape(var) + r":\s*([0-9.]+)", css)
+    js_default = re.search(r"\b" + key + r":\s*([0-9.]+),", js_src)
+    check(f"css: {var} default matches DIAL_DEFAULTS.{key}",
+          bool(css_default and js_default) and float(css_default.group(1)) == float(js_default.group(1)),
+          (css_default and css_default.group(1), js_default and js_default.group(1)))
 js = read("web/static/js/radio-dial.js")
 check("js: feel values in one DIAL_DEFAULTS block", "const DIAL_DEFAULTS = {" in js
       and all(k in js for k in ("visibleYears", "friction", "snapStrength", "monthTickMinPx", "glow")))

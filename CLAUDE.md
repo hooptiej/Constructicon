@@ -1428,8 +1428,8 @@ The home page's timeline is a horizontal dial across the top (`static/js/radio-d
   **Browse only:** it never scrolls or filters the cards. Starts **untuned** (needle mid-range, the readout
   shows static); once moved, the readout names the cards within a few px of the needle, with dates and
   links, capped with "+N more". **Marks never grow or zoom** (the old rail's hover-zoom was a time sink).
-- **Feel values** live in one place: `DIAL_DEFAULTS` in `radio-dial.js` (span, tolerance, inertia, snap,
-  tick density, glow) plus the `--dial-*` CSS variables on `.radio-dial`. **The tuning panel**
+- **Feel values** live in one place: `DIAL_DEFAULTS` in `radio-dial.js` (span, tolerance, inertia and its
+  falloff (a steady brake so a coast eases to a stop), snap, tick density, outer glow, internal backlight) plus the `--dial-*` CSS variables on `.radio-dial`. **The tuning panel**
   (`radio-dial-tuning.js`, live sliders, "Copy values") shows only on a dev instance (`CONSTRUCTICON_ENV=dev`)
   or with `/?tune=1` for an admin. Bake the owner's chosen numbers into `DIAL_DEFAULTS`.
 - Empty, malformed or unloadable data shows a plain message in the chassis, never a blank bar.

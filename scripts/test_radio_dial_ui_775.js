@@ -159,9 +159,47 @@ dial.win.fire('pointerup', { pointerId: 3, clientX: 470 });
 const stopped = dial.needle; flushFrames();
 ok('friction 0 = stops dead', dial.needle === stopped && stopped > atNoInertia);
 
+// --- falloff (owner feedback on PR #782): a steady brake so the coast eases to a stop ---
+// The same flick (1 px/ms, band moving right = back in time) from the same spot, frame by frame.
+const coastRun = (falloff) => {
+  dial.setTuning({ friction: 0.92, falloff });
+  dial._setNeedle(day(2012, 1, 1));
+  frames = [];
+  dial._coast(1.0);
+  const needles = [dial.needle], speeds = [];
+  let n = 0;
+  while (frames.length && n < 2000) { flushFrames(1); needles.push(dial.needle); speeds.push(dial.coastSpeed); n++; }
+  return { n, needles, speeds, done: frames.length === 0 };
+};
+ok('falloff has a default, above 0', RadioDial.DEFAULTS.falloff > 0, RadioDial.DEFAULTS.falloff);
+ok('falloff is on the tuning panel', RadioDial.TUNABLES.some((t) => t.key === 'falloff'));
+const free = coastRun(0), braked = coastRun(RadioDial.DEFAULTS.falloff);
+const px = (r) => ((r.needles[0] - r.needles.at(-1)) * dial.pps).toFixed(0);
+console.log(`info: a 1 px/ms flick coasts ${free.n} frames / ${px(free)} px with no falloff, ${braked.n} frames / ${px(braked)} px with the default`);
+ok('with falloff the coast ends sooner (fewer frames)', braked.n < free.n, [braked.n, free.n]);
+ok('... and travels less far', (braked.needles[0] - braked.needles.at(-1)) < (free.needles[0] - free.needles.at(-1)));
+ok('... but a flick still coasts (not killed)', braked.n > 5 && braked.needles[0] - braked.needles.at(-1) > 0, braked.n);
+const monotonic = (xs) => xs.every((x, i) => i === 0 || x <= xs[i - 1]);
+ok('the needle never reverses during the coast', monotonic(braked.needles) && monotonic(free.needles));
+ok('speed never changes sign', braked.speeds.every((s) => s >= 0), braked.speeds.filter((s) => s < 0));
+ok('speed only ever drops', braked.speeds.every((s, i) => i === 0 || s <= braked.speeds[i - 1]));
+ok('the coast ends at rest (speed 0, no frame pending)', braked.done && braked.speeds.at(-1) === 0);
+const steps = braked.needles.slice(1).map((x, i) => braked.needles[i] - x);
+ok('it eases out: the last step is tiny (no jump at the stop)', steps.at(-1) * dial.pps < 1, steps.at(-1) * dial.pps);
+ok('steps shrink toward the stop', monotonic(steps), steps.map((s) => +(s * dial.pps).toFixed(2)));
+const heavy = coastRun(0.01);
+ok('a heavier falloff stops sooner still', heavy.n < braked.n && heavy.done, [heavy.n, braked.n]);
+dial.setTuning({ falloff: RadioDial.DEFAULTS.falloff });
+
 // --- live tuning ---
 dial.setTuning({ glow: 0.3, visibleYears: 5 });
 ok('glow goes to the --dial-glow CSS variable', root.style['--dial-glow'] === '0.3');
+ok('backlight has a default and a slider', RadioDial.DEFAULTS.backlight > 0 && RadioDial.TUNABLES.some((t) => t.key === 'backlight' && t.max >= 0.4));
+dial.setTuning({ backlight: 0.42 });
+ok('backlight goes to the --dial-backlight CSS variable, live', root.style['--dial-backlight'] === '0.42');
+ok('backlight is separate from the outer glow', root.style['--dial-glow'] === '0.3');
+dial.setTuning({ backlight: 0 });
+ok('backlight 0 = off', root.style['--dial-backlight'] === '0');
 ok('visible span re-lays the band (5 years = 200 px per year)', Math.abs(dial.pps * 365.2425 * 86400 - 200) < 1e-6);
 ok('month ticks appear when a month is wide enough', dial.ticks.innerHTML.includes('radio-dial-month'));
 dial.setTuning({ visibleYears: 'nonsense', bogus: 3 });

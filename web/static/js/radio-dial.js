@@ -28,10 +28,14 @@ const DIAL_DEFAULTS = {
   tolerancePx: 10,      // the readout names cards whose tick is within this many px of the needle
   readoutMax: 4,        // names listed before "+N more"
   friction: 0.92,       // inertia after a flick: share of speed kept per frame (0 = stops dead)
+  falloff: 0.001,       // plus a steady braking (px/ms per ms) so the coast eases to a stop instead
+                        // of drifting slowly and cutting off (owner feedback on PR #782; 0 = none)
   snapStrength: 0,      // 0 = free needle; 1 = settles right onto the nearest card once still
   snapPx: 24,           // ... but only when that card is this close (px)
   wheelSpeed: 1,        // wheel / trackpad px -> dial px
-  glow: 0.10,           // chassis backlight intensity (CSS --dial-glow)
+  glow: 0.10,           // outer glow around the chassis (CSS --dial-glow)
+  backlight: 0.05,      // internal backlight wash inside the chassis and behind the band
+                        // (CSS --dial-backlight; 0 = off; owner ask on PR #782)
 };
 
 // The sliders the dev tuning panel offers, in order.
@@ -42,10 +46,12 @@ const DIAL_TUNABLES = [
   { key: 'tolerancePx', label: 'Readout tolerance (px)', min: 1, max: 60, step: 1 },
   { key: 'readoutMax', label: 'Names before "+N more"', min: 1, max: 12, step: 1 },
   { key: 'friction', label: 'Inertia (0 = none)', min: 0, max: 0.98, step: 0.01 },
+  { key: 'falloff', label: 'Falloff (braking)', min: 0, max: 0.01, step: 0.0005 },
   { key: 'snapStrength', label: 'Snap strength (0 = free)', min: 0, max: 1, step: 0.05 },
   { key: 'snapPx', label: 'Snap reach (px)', min: 2, max: 120, step: 1 },
   { key: 'wheelSpeed', label: 'Wheel speed', min: 0.1, max: 4, step: 0.1 },
-  { key: 'glow', label: 'Backlight glow', min: 0, max: 0.5, step: 0.01 },
+  { key: 'glow', label: 'Outer glow', min: 0, max: 0.5, step: 0.01 },
+  { key: 'backlight', label: 'Backlight', min: 0, max: 0.5, step: 0.01 },
 ];
 
 const DIAL_DRAG_CLICK_PX = 3;   // a press that moves less than this isn't a drag
@@ -223,10 +229,13 @@ class RadioDial {
 
   _stopAnim() { if (this._anim) cancelAnimationFrame(this._anim); this._anim = null; }
 
-  // Inertia after a flick: velocity in px/ms of band movement, decayed by `friction` per ~16 ms frame.
+  // Inertia after a flick: velocity in px/ms of band movement, decayed by `friction` per ~16 ms frame,
+  // then braked by a constant `falloff` (px/ms²). The friction alone leaves a long slow tail that ends
+  // abruptly at a threshold; the falloff runs the speed down to exactly 0, so the coast eases out.
+  // It never reverses: a frame whose braking would cross zero ends the coast there.
   _coast(velocity) {
     this._stopAnim();
-    const friction = this.tuning.friction;
+    const friction = this.tuning.friction, falloff = Math.max(0, this.tuning.falloff || 0);
     if (!friction || Math.abs(velocity) < DIAL_MIN_FLICK) { this._settle(); return; }
     let v = velocity, last = performance.now();
     const step = (now) => {
@@ -234,7 +243,16 @@ class RadioDial {
       const before = this.needle;
       this._setNeedle(this.M.needleAfterDrag(this.needle, v * dt, this.pps, this.rng));
       v *= Math.pow(friction, dt / 16);
-      if (Math.abs(v) < DIAL_MIN_FLICK / 2 || this.needle === before) { this._anim = null; this._settle(); return; }
+      let stopped;
+      if (falloff > 0) {
+        const brake = falloff * dt;
+        stopped = Math.abs(v) <= brake;  // speed reaches 0 this frame: stop, no sign flip
+        if (!stopped) v -= Math.sign(v) * brake;
+      } else {
+        stopped = Math.abs(v) < DIAL_MIN_FLICK / 2;  // friction only: the old threshold
+      }
+      this.coastSpeed = stopped ? 0 : v;  // read by the UI test (#782 falloff)
+      if (stopped || this.needle === before) { this._anim = null; this._settle(); return; }
       this._anim = requestAnimationFrame(step);
     };
     this._anim = requestAnimationFrame(step);
@@ -317,6 +335,7 @@ class RadioDial {
       if (k in DIAL_DEFAULTS && isFinite(Number(partial[k]))) this.tuning[k] = Number(partial[k]);
     });
     this.root.style.setProperty('--dial-glow', String(this.tuning.glow));
+    this.root.style.setProperty('--dial-backlight', String(this.tuning.backlight));
     this._layout();
   }
 }

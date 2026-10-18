@@ -81,6 +81,9 @@ def isolate(prefix="test-", db_name="test.db"):
     # page fetching is off (grey "turned off on this install") unless the test turns it on with
     # its fetches faked (scripts/test_safe_fetch_724d.py).
     os.environ["CONSTRUCTICON_LINK_FETCH"] = "off"
+    # #724 (e): likewise a YouTube video's OCR asks YouTube for its captions: off in every test
+    # unless the test turns it on with the library faked (scripts/test_youtube_transcripts_724e.py).
+    os.environ["CONSTRUCTICON_TRANSCRIPTS"] = "off"
     use_token()
     assert_isolated()
     return tmp

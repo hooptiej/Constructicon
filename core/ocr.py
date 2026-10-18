@@ -317,6 +317,30 @@ def _settle_with_sources(slug, row, spec, sources, picture_text="", reader_text=
     db.set_ocr_status(slug, "done", note=note)
 
 
+def _fetch_type_text(slug, row, spec):
+    """#724 (e): run the type's text_fetch_fn (a YouTube transcript: core/transcripts.py, polite and
+    under a hard deadline), store what it returns in type_metadata and return the row with it.
+    Never raises: a fetch problem is recorded by the hook itself as a retry status; a bug in the
+    hook is printed and OCR carries on with the row as it was (its existing text is untouched)."""
+    if spec.text_fetch_fn is None:
+        return row
+    try:
+        fields = spec.text_fetch_fn(row)
+        if not fields:
+            return row
+        db.set_text_source_fields(slug, fields)
+    except Exception as e:
+        print(f"text fetch failed for {slug} (OCR carries on without it): {e!r}")
+        return row
+    meta = dict(row.get("type_metadata") or {}) if isinstance(row.get("type_metadata"), dict) else {}
+    for key, value in fields.items():
+        if value is None:
+            meta.pop(key, None)
+        else:
+            meta[key] = value
+    return {**row, "type_metadata": meta}
+
+
 def _run_ocr_pipeline(slug, row, spec):
     if is_blank_file(row):
         db.set_extracted_text(slug, "")
@@ -358,6 +382,10 @@ def _run_ocr_pipeline(slug, row, spec):
     # and independently for perceptual hashing / just being a thing the
     # detail page and gallery show.
     image_path = _ocr_source_path(row, spec)
+
+    # #724 (e): text that has to be fetched first (a YouTube transcript) is fetched now and stored
+    # in the row's type_metadata, so the sources below read it. A failed fetch never fails OCR.
+    row = _fetch_type_text(slug, row, spec)
 
     # #724 (c): text the row already holds (a YouTube description), combined with the picture's.
     # When the picture can't be made or read, that text still settles the row 'done', with the

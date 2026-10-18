@@ -335,14 +335,16 @@ def _env_snapshot():
     return {k: v for k, v in os.environ.items() if k.startswith(_ENV_PREFIXES) or k in _ENV_NAMES}
 
 
-def call(fn, *args, kind=BACKGROUND, what="parse", key=None, wait=None):
+def call(fn, *args, kind=BACKGROUND, what="parse", key=None, wait=None, seconds=None):
     """Run ``fn(*args)`` under the ``kind`` budget and return its result (or raise what it raised).
 
     ``what`` names the step for logs and the object page ("thumbnail", "properties", ...).
     ``key`` (the stored filename, or the slug of a file-less item) turns on remembering: a
     limit hit is raised again at once, without running anything, until it expires or
     ``forget(key)`` clears it. ``wait``: seconds to wait for a free slot (default: forever for
-    BACKGROUND, the timeout for VIEW), else ``LimitExceeded("busy")``.
+    BACKGROUND, the timeout for VIEW), else ``LimitExceeded("busy")``. ``seconds`` replaces the
+    budget's wall-clock timeout for this one call (#724 e: a transcript fetch's hard 20 s deadline);
+    the child is killed when it runs out, whatever the code inside it was doing.
 
     ``fn`` and ``args`` must pickle (module-level functions, plain data). Inside a child, or
     with the sandbox off, ``fn`` simply runs here.
@@ -354,6 +356,8 @@ def call(fn, *args, kind=BACKGROUND, what="parse", key=None, wait=None):
     if _IN_CHILD or not sandbox_available():
         return fn(*args)
     b = budget(kind)
+    if seconds is not None and seconds > 0:
+        b = Budget(seconds, b.memory_mb, b.concurrency)
     if wait is None and kind == VIEW:
         wait = b.seconds
     sem = _slot(kind, b.concurrency)

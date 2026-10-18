@@ -3,6 +3,8 @@
 // One slider per RadioDial.TUNABLES entry, applied live through dial.setTuning. Values are remembered
 // in this browser only (localStorage, best effort) and "Copy values" puts them on the clipboard as
 // JSON, so the owner can hand the numbers back to bake into DIAL_DEFAULTS in radio-dial.js.
+// #785: the accent yellow's hue and tint are tunables too (accentHue / accentLight), so they get a
+// slider each and ride along in Reset and Copy values; bake them into style.css :root as well.
 (function () {
   const STORE_KEY = 'constructicon.radioDial.tuning';
 

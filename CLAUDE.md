@@ -1443,12 +1443,21 @@ The home page's timeline is a horizontal dial across the top (`static/js/radio-d
   yellow, phosphor green for the dial's band labels) are read by the home dial AND the card page's
   timeline (`.project-video-timeline-*`, `.timeline-drag-readout`). Change a colour there, never in one
   tuner's rules. The tuning panel's colour sliders write the base values onto `<html>`.
+- **The accent is hazard yellow (#785, was lavender):** ONE set on `:root`: `--accent-yellow-hue` /
+  `--accent-yellow-light` build `--hazard-yellow` (= the needle's `--tuner-yellow`), and `--highlight`,
+  `-hover`, `-ink` (dark text on any yellow fill), `-tint`, `-glow`, `-muted` / `-muted-edge` (resting card
+  edges, the card page's timeline blocks) derive from it. No `--purple*` is left; the V2 card faces' own
+  kind colours (Project / Family frames) stay. The tuning panel's "Accent colour (hue)" / "Accent tint"
+  sliders nudge it (home page only, while the panel is open); bake a pick into `:root` AND `DIAL_DEFAULTS`.
+- **Page gutters (#784):** `--rail-gutter` (rail width + breathing room, 64px) pads `.app-main` and
+  `.app-header` on BOTH sides, so every page shares one centred content box; under 760px the right gutter
+  stays rail-wide (60px) and the left is 20px (`--rail-gutter-left`). Don't re-pad `.app-main` per page.
 - Empty, malformed or unloadable data shows a plain message in the chassis, never a blank bar.
 - Pass 2 (not built): start-to-end span bars and a per-year density glow; their empty layers
   (`.radio-dial-layer-spans`, `-density`) and no-op `_renderSpans` / `_renderDensity` are the hooks.
 - Checks: `node scripts/test_radio_dial_775.js` (maths), `node scripts/test_radio_dial_ui_775.js` (the
   widget against a fake DOM), `scripts/test_radio_dial_775.py` (the rendered page, the rail gone, who sees
-  the tuning panel).
+  the tuning panel), `scripts/test_gutters_accent_784_785.py` (the gutters and the accent, static).
 
 ## Dates: real, approximate, undated (#725, "Import date is not a birthday")
 
@@ -2416,6 +2425,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
     `test_timeline_drag_ui` (`.js`), `test_radio_dial_775` (`.py` and `.js`) with `test_radio_dial_ui_775` (`.js`),
+    `test_gutters_accent_784_785` (even gutters, the yellow accent, its contrast and tuning slider),
     `check_item_cards`, `check_curator_queue` (live);
   - housekeeping and bundles: `test_attic_546` (dead code and CSS stay gone), `check_dead_code`
     (#546: the reference scan, **report only**, never fails: module-level functions, classes and

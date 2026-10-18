@@ -73,7 +73,8 @@ const ROWS = [
 
 // --- the shipped defaults: the owner's tuning on dev (PR #782 review) ---
 const OWNER = { visibleYears: 5, minPxPerYear: 30, monthTickMinPx: 2, tolerancePx: 5, readoutMax: 8, friction: 0.92,
-  falloff: 0.001, snapStrength: 0.5, snapPx: 28, wheelSpeed: 0.1, glow: 0, backlight: 0.36, readoutHue: 173 };
+  falloff: 0.001, snapStrength: 0.5, snapPx: 28, wheelSpeed: 0.1, glow: 0, backlight: 0.36, readoutHue: 173,
+  accentHue: 44, accentLight: 57 };  // #785: the hazard-yellow accent (#E8B93A)
 ok("DIAL_DEFAULTS are the owner's values", Object.entries(OWNER).every(([k, v]) => RadioDial.DEFAULTS[k] === v),
   Object.keys(OWNER).filter((k) => RadioDial.DEFAULTS[k] !== OWNER[k]));
 const shipped = mount(ROWS).dial;
@@ -82,6 +83,12 @@ ok('as shipped: month ticks show (a month is ~17 px, over the 2 px threshold)', 
 ok('readout colour has a hue slider', RadioDial.TUNABLES.some((t) => t.key === 'readoutHue' && t.min === 0 && t.max === 360));
 shipped.setTuning({ readoutHue: 120 });
 ok('the hue slider drives the shared --tuner-readout-hue on <html>, live', doc.documentElement.style['--tuner-readout-hue'] === '120');
+// #785: the accent yellow has a hue and a tint slider, pushed live to the shared :root variables.
+ok('accent has a hue slider and a tint slider', ['accentHue', 'accentLight'].every((k) => RadioDial.TUNABLES.some((t) => t.key === k)));
+shipped.setTuning({ accentHue: 50, accentLight: 60 });
+ok('the accent sliders drive --accent-yellow-hue / --accent-yellow-light on <html>, live',
+  doc.documentElement.style['--accent-yellow-hue'] === '50' && doc.documentElement.style['--accent-yellow-light'] === '60%');
+shipped.setTuning({ accentHue: 44, accentLight: 57 });
 ok('as shipped: starts untuned', /untuned/.test(shipped.readout.innerHTML));
 
 // --- month-tick slider notches: fine at the low end (PR #782) ---

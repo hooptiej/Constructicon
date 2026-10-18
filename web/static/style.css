@@ -1,7 +1,8 @@
 /* --- Constructicons palette ---
    Reference: the classic Devastator-forming Constructicons (Scrapper,
    Mixmaster, Scavenger, Long Haul, Hook, Bonecrusher) — construction-vehicle
-   yellow-green body color, deep purple accents, black/dark-grey chassis,
+   yellow-green body color, hazard-yellow accents (deep purple until #785),
+   black/dark-grey chassis,
    yellow/black hazard stripes used sparingly as an accent motif rather than
    as wallpaper. Kept dark-chassis-first so it still reads as a readable
    portfolio site, not a toy page. */
@@ -21,15 +22,43 @@
   --accent: #87C549;
   --accent-hover: #A6D477;
   --icon-muted: #3F4530;
-  --hazard-yellow: #E8B93A;
+  /* #785: the hazard yellow is built from a hue and a lightness so the dev tuning panel
+     (radio-dial-tuning.js, "Accent colour") can nudge it by eye. Defaults = #E8B93A, the
+     dial's needle; the needle (--tuner-yellow) and the UI accent below share this one token. */
+  --accent-yellow-hue: 44;
+  --accent-yellow-light: 57%;
+  --hazard-yellow: hsl(var(--accent-yellow-hue) 79% var(--accent-yellow-light));
   --hazard-black: #17150F;
   --hazard-stripe: #889B55;
   --hazard-red: #E24B4A;
   --hazard-red-soft: #C97A5E;
   --warn: #BA7517;
-  --purple: #5B2E78;
-  --purple-hover: #744096;
-  --purple-bright: #8A4FAE;
+  /* #785: the UI accent (was the three lavender purple variables): rail tab
+     borders, the active chip, the Grid / List toggle, card edges, the card page's timeline
+     blocks. ONE set, all from --hazard-yellow. A yellow fill always takes --highlight-ink
+     (dark) text; yellow on the dark chassis passes WCAG AA (>= 4.5:1 on --card). */
+  --highlight: var(--hazard-yellow);
+  --highlight-hover: hsl(var(--accent-yellow-hue) 85% calc(var(--accent-yellow-light) + 10%));
+  --highlight-ink: var(--hazard-black);
+  --highlight-tint: hsl(var(--accent-yellow-hue) 79% var(--accent-yellow-light) / 0.16);
+  --highlight-glow: hsl(var(--accent-yellow-hue) 79% var(--accent-yellow-light) / 0.4);
+  /* Muted dark yellow: resting card edges and the card page's timeline blocks, where full
+     yellow would fight the tuner's yellow axis. Cream --text on it is 6.5:1. */
+  --highlight-muted: hsl(var(--accent-yellow-hue) 55% 24%);
+  --highlight-muted-edge: hsl(var(--accent-yellow-hue) 60% 40%);
+  /* #784: symmetric page gutters that clear BOTH tab rails (#774). A rail tab is ~37px wide
+     (3px border + 9px padding + 16px icon + 9px padding); the gutter adds breathing room, which
+     lands on 64px: the old 32px left / 96px right (#520) split down the middle. Under 760px
+     the rails merge into one right rail: the right gutter stays rail-sized, the left one small. */
+  --rail-width: 40px;
+  --rail-gutter: calc(var(--rail-width) + 24px);
+  --rail-gutter-left: var(--rail-gutter);
+}
+@media (max-width: 760px) {
+  :root {
+    --rail-gutter: calc(var(--rail-width) + 20px);
+    --rail-gutter-left: 20px;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -146,7 +175,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 
 /* --- App shell (upload/gallery) --- */
 .app-header {
-  height: 56px; padding: 0 32px; display: flex; align-items: center; justify-content: space-between;
+  /* #784: the same gutters as .app-main, so the header sits on the page's centred content box. */
+  height: 56px; padding: 0 var(--rail-gutter) 0 var(--rail-gutter-left); display: flex; align-items: center; justify-content: space-between;
   border-bottom: 1px solid var(--border);
 }
 /* Hazard-stripe underline for the header bar — the one place the motif runs
@@ -180,11 +210,13 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   border: none; cursor: pointer; padding: 0;
 }
 
-.app-main { padding: 32px; display: flex; flex-direction: column; gap: 22px; }
-/* #520: every page's right gutter matches the detail pages (#515) so content clears the fixed
-   right-hand tab rail (Upload/Blog/Export/...). Left padding unchanged. */
-.app-main { padding-right: 96px; }
-@media (max-width: 760px) { .app-main { padding-right: 60px; } }
+/* #784: equal left and right gutters on every page (was #520's 96px right / 32px left), from
+   --rail-gutter in :root, so the dial, the header and the Projects / Files columns share one
+   centred content box. The rail tabs may still overlap the edge a touch (owner: "flavor"). */
+.app-main {
+  padding: 32px var(--rail-gutter) 32px var(--rail-gutter-left);
+  display: flex; flex-direction: column; gap: 22px;
+}
 .page-title { font-size: 20px; font-weight: 500; margin: 0; }
 .page-subtitle { font-size: 13px; color: var(--text-2); margin: 4px 0 0; }
 .user-gallery-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
@@ -257,7 +289,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   padding: 7px 10px; font-size: 12px; color: var(--text-2); cursor: pointer;
 }
 .tag-suggestion-item:hover, .tag-suggestion-item.active {
-  background: var(--purple); color: var(--text);
+  background: var(--highlight); color: var(--highlight-ink);  /* #785: dark text on the yellow */
 }
 .tag-suggestion-empty { padding: 7px 10px; font-size: 11px; color: var(--text-3); font-style: italic; }
 .chip {
@@ -525,17 +557,17 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .gallery-drawer-tab {
   position: fixed; top: 50%; right: 0; z-index: 46; transform: translateY(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 8px;
-  background: var(--purple); border: 1px solid var(--border-stronger); border-right: none;
+  background: var(--highlight); border: 1px solid var(--border-stronger); border-right: none;
   border-radius: 10px 0 0 10px; padding: 14px 9px; cursor: pointer;
   box-shadow: -2px 2px 10px rgba(0,0,0,0.35); transition: background 0.2s ease;
 }
-.gallery-drawer-tab:hover, .gallery-drawer-tab.active { background: var(--purple-hover); }
+.gallery-drawer-tab:hover, .gallery-drawer-tab.active { background: var(--highlight-hover); }
 .gallery-drawer-avatar {
   width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--hazard-black);
   display: flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; flex-shrink: 0;
 }
 .gallery-drawer-name {
-  writing-mode: vertical-rl; transform: rotate(180deg); font-size: 11px; color: var(--text);
+  writing-mode: vertical-rl; transform: rotate(180deg); font-size: 11px; color: var(--highlight-ink);
   letter-spacing: 0.3px; max-height: 130px; overflow: hidden; text-overflow: ellipsis;
 }
 .gallery-drawer {
@@ -842,7 +874,11 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 }
 .layout-toggle-btn:last-child { border-right: none; }
 .layout-toggle-btn:hover { color: var(--text); }
-.layout-toggle-btn.active { background: var(--purple); color: var(--text); }
+/* #785: the active half is a yellow fill with dark text; focus is a ring inside the button (the
+   toggle clips its children), dark on the yellow half so it never vanishes into it. */
+.layout-toggle-btn.active { background: var(--highlight); color: var(--highlight-ink); }
+.layout-toggle-btn:focus-visible { outline: 2px solid var(--highlight); outline-offset: -3px; }
+.layout-toggle-btn.active:focus-visible { outline-color: var(--highlight-ink); }
 
 /* --- #56: Projects-primary / Unfiled-secondary home page hierarchy --- */
 .sort-control { display: flex; align-items: center; gap: 8px; }
@@ -968,16 +1004,18 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   font-size: 10.5px; color: var(--text-2); background: var(--chip); border: 1px solid var(--border-strong);
   padding: 4px 9px; border-radius: 100px; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex-shrink: 0;
 }
-.tag-chip:hover { color: var(--text); border-color: var(--purple-bright); }
-.tag-chip.active { color: var(--text); background: var(--purple); border-color: var(--purple-bright); }
+.tag-chip:hover { color: var(--text); border-color: var(--highlight); }
+/* #785: the active chip ('All' and friends) is a yellow fill with dark text. */
+.tag-chip.active { color: var(--highlight-ink); background: var(--highlight); border-color: var(--highlight); font-weight: 600; }
+.tag-chip:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }
 /* #370: pill-scope-toggle removed (pills now hobby-based, not project-tag based) */
 
 .project-card {
   background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
   display: flex; flex-direction: column; color: inherit; text-decoration: none;
-  border-top: 3px solid var(--purple);
+  border-top: 3px solid var(--highlight-muted);  /* #785: muted yellow at rest, full on hover */
 }
-.project-card:hover { border-color: var(--border-stronger); border-top-color: var(--purple-bright); color: inherit; }
+.project-card:hover { border-color: var(--border-stronger); border-top-color: var(--highlight); color: inherit; }
 /* Style rule: project cards are landscape 4:3 (vs. object-type/gallery
    cards, which are portrait 3:4). */
 .project-cover { height: auto; aspect-ratio: 4 / 3; background: var(--surface); display: flex; align-items: center; justify-content: center; overflow: hidden; }
@@ -1004,7 +1042,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
   display: flex; flex-direction: column; color: inherit; text-decoration: none;
 }
-.project-item-card:hover { border-color: var(--purple-bright); color: inherit; }
+.project-item-card:hover { border-color: var(--highlight); color: inherit; }
 .project-item-thumb { height: 110px; background: var(--surface); display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .project-item-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .project-item-body { padding: 11px; display: flex; flex-direction: column; gap: 5px; }
@@ -1018,35 +1056,35 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   transition: all 0.2s ease;
 }
 .project-cover-selector:hover, .project-writeup-selector:hover {
-  border-color: var(--purple-bright); background: var(--surface);
+  border-color: var(--highlight); background: var(--surface);
 }
 .project-cover-selector:checked, .project-writeup-selector:checked {
-  background: var(--purple-bright); border-color: var(--purple-bright);
-  box-shadow: 0 0 8px rgba(138, 79, 174, 0.4);
+  background: var(--highlight); border-color: var(--highlight);
+  box-shadow: 0 0 8px var(--highlight-glow);
 }
 .project-cover-selector:checked::after, .project-writeup-selector:checked::after {
-  content: '✓'; color: white; font-weight: bold; font-size: 14px;
+  content: '✓'; color: var(--highlight-ink); font-weight: bold; font-size: 14px;  /* #785: dark on yellow */
 }
 .media-type-pill {
   font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.3px; padding: 1px 7px; border-radius: 100px;
   background: var(--hazard-yellow); color: var(--hazard-black); font-weight: 600; display: inline-block;
 }
 /* #300: a sub-project rendered as a card inside the parent's item grid.
-   Same purple top edge .project-card uses on the home page (it IS a
+   Same top edge .project-card uses on the home page (it IS a
    project, so it gets the project color), a slightly different ground
-   (--surface vs the item cards' --card), and a labelled pill reusing the
-   archived-status pill's purple tint values — nothing outside the :root
-   palette. */
+   (--surface vs the item cards' --card), and a labelled pill in the
+   accent's tint — nothing outside the :root palette. #785: the accent is
+   hazard yellow now (was purple). */
 .project-subproject-card {
   background: var(--surface);
-  border-top: 3px solid var(--purple);
+  border-top: 3px solid var(--highlight-muted);
 }
-.project-subproject-card:hover { border-color: var(--border-stronger); border-top-color: var(--purple-bright); }
+.project-subproject-card:hover { border-color: var(--border-stronger); border-top-color: var(--highlight); }
 .project-subproject-card .project-item-thumb { height: 107px; }
 .project-subproject-label {
   align-self: flex-start;
   font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.4px; padding: 1px 7px; border-radius: 100px;
-  background: rgba(116,64,150,0.18); color: var(--purple-bright); border: 1px solid rgba(138,79,174,0.4);
+  background: var(--highlight-tint); color: var(--highlight); border: 1px solid var(--highlight-glow);
   font-weight: 600;
 }
 .project-subproject-desc {
@@ -1116,8 +1154,9 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   --tuner-readout: hsl(var(--tuner-readout-hue) 90% 64%);
   --tuner-readout-glow: 0 0 4px hsl(var(--tuner-readout-hue) 90% 64% / 0.8), 0 0 12px hsl(var(--tuner-readout-hue) 90% 60% / 0.35);
   --tuner-yellow: var(--hazard-yellow);   /* needle / axis / ticks */
-  --tuner-yellow-glow: 0 0 6px rgba(232, 185, 58, 0.7);
-  --tuner-tick-glow: 0 0 4px rgba(232, 185, 58, 0.5);
+  /* #785: the glows follow the accent hue / tint too (the tuning panel's "Accent colour"). */
+  --tuner-yellow-glow: 0 0 6px hsl(var(--accent-yellow-hue) 79% var(--accent-yellow-light) / 0.7);
+  --tuner-tick-glow: 0 0 4px hsl(var(--accent-yellow-hue) 79% var(--accent-yellow-light) / 0.5);
   --tuner-phosphor: var(--accent-hover);  /* the dial's band labels and card ticks stay green */
   --tuner-phosphor-glow: 0 0 4px rgba(166, 212, 119, 0.85), 0 0 12px rgba(166, 212, 119, 0.35);
   --tuner-shadow: 0 0 28px rgba(166, 212, 119, var(--tuner-glow)), inset 0 0 46px rgba(166, 212, 119, var(--tuner-backlight));
@@ -1454,8 +1493,10 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   top: 0;
   height: 32px;
   box-sizing: border-box;
-  background: var(--purple);
-  border: 2px solid var(--purple-hover);
+  /* #785: muted dark yellow, not full yellow: the blocks sit right under the tuner's yellow
+     axis, and full-yellow blocks would read as part of it. Cream text on it is 6.5:1. */
+  background: var(--highlight-muted);
+  border: 2px solid var(--highlight-muted-edge);
   border-radius: 5px;
   color: var(--text);
   font-size: 12px;
@@ -2008,11 +2049,11 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   background:
     linear-gradient(rgba(23,21,15,0.62), rgba(23,21,15,0.62)),
     repeating-linear-gradient(-45deg, var(--hazard-stripe) 0 14px, var(--hazard-black) 14px 28px);
-  /* Purple stroke (#345) — each tab is its own folder tab: full 3px purple
-     outline (no right edge, it tucks off the page), rounded on both left
+  /* Accent stroke (#345; hazard yellow since #785, was purple) — each tab is its own folder
+     tab: full 3px outline (no right edge, it tucks off the page), rounded on both left
      corners, with a gap between tabs (see .nav-tabs-list) so they read as
      separate folder tabs rather than one button bar. */
-  border: 3px solid var(--purple-bright); border-right: none;
+  border: 3px solid var(--highlight); border-right: none;
   border-radius: 12px 0 0 12px;
   padding: 12px 9px; cursor: pointer; transition: background 0.2s ease;
   box-shadow: -2px 2px 10px rgba(0,0,0,0.35);
@@ -2060,7 +2101,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
    the right rail's look. */
 @media (min-width: 761px) {
   .nav-rail-left .nav-tab {
-    border: 3px solid var(--purple-bright); border-left: none;
+    border: 3px solid var(--highlight); border-left: none;
     border-radius: 0 12px 12px 0;
     box-shadow: 2px 2px 10px rgba(0,0,0,0.35);
   }

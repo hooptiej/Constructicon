@@ -1926,10 +1926,18 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
    Replaces mixed header buttons/links. Styled after .gallery-drawer-tab.
    Tabs can be drawer-openers or navigate links. Drawer-opener tabs hide
    if their trigger element doesn't exist on the page. */
+/* #774: two rails from one tab list (NAV_TABS in _nav_tabs.html): each
+   <ul class="nav-rail nav-rail-left|right"> is pinned to its own edge. The
+   <nav class="nav-rails"> wrapper has no box of its own on wide screens; below
+   760px it becomes the one right rail and the two lists stack inside it, left
+   list first (see the @media block after the tab styles). */
 .nav-rail {
-  position: fixed; top: 50%; right: 0; z-index: 45; transform: translateY(-50%);
-  display: flex; flex-direction: column;
+  position: fixed; top: 50%; z-index: 45; transform: translateY(-50%);
 }
+.nav-rail-right { right: 0; }
+.nav-rail-left { left: 0; }
+/* Every tab on that side hid itself (no drawer triggers on this page). */
+.nav-rail-empty { display: none; }
 
 .nav-tabs-list {
   display: flex; flex-direction: column; align-items: stretch; gap: 10px;
@@ -1973,6 +1981,50 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   writing-mode: vertical-rl; transform: rotate(180deg); font-size: 10px;
   color: var(--text); letter-spacing: 0.3px; max-height: 80px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* #774: Processing (#388) is a rail tab now. Unlike the old left-edge
+   .proc-tab it does NOT fade when idle (owner, 2026-10-18: no transparency on
+   the tabs): its script still toggles .idle, but busy vs idle shows only
+   through its badge, which hides when nothing is processing. */
+
+/* #779: a tab the user's role can't use stays visible, greyed out (fully
+   desaturated, NOT translucent: the owner banned transparency on the tabs).
+   Clicking it shows .nav-locked-msg instead of opening anything. */
+.nav-tab-locked { filter: grayscale(1); cursor: not-allowed; }
+.nav-locked-msg {
+  position: fixed; z-index: 60; max-width: 260px; padding: 10px 12px;
+  background: var(--card); border: 1px solid var(--border-strong); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+  color: var(--text); font-size: 12.5px; line-height: 1.4;
+}
+.nav-locked-msg[hidden] { display: none; }
+
+/* #774: the left rail mirrors the right one: the open edge tucks off the
+   LEFT side, corners round on the right, the shadow falls the other way, the
+   label reads top-to-bottom, and the badge sits on the screen-edge side.
+   Wide screens only: below 760px the left tabs join the right rail and keep
+   the right rail's look. */
+@media (min-width: 761px) {
+  .nav-rail-left .nav-tab {
+    border: 3px solid var(--purple-bright); border-left: none;
+    border-radius: 0 12px 12px 0;
+    box-shadow: 2px 2px 10px rgba(0,0,0,0.35);
+  }
+  .nav-rail-left .nav-tab-label { transform: none; }
+  .nav-rail-left .nav-tab-badge { right: auto; left: 4px; }
+}
+
+/* #774: narrow screens / phones: ONE right rail, left tabs first. The
+   wrapper takes the rail's place and the two lists flow inside it. It
+   scrolls (scrollbar hidden) when nine tabs are taller than the screen. */
+@media (max-width: 760px) {
+  .nav-rails {
+    position: fixed; top: 50%; right: 0; z-index: 45; transform: translateY(-50%);
+    display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+    max-height: 100vh; overflow-y: auto; scrollbar-width: none;
+  }
+  .nav-rails .nav-rail { position: static; transform: none; }
 }
 
 /* --- Hide redundant old nav controls (now all in the nav rail) ---
@@ -2049,12 +2101,14 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   font-size: 10px; font-weight: 600; line-height: 16px; text-align: center; box-sizing: border-box;
 }
 
-/* --- Processing drawer (#388) — left-edge pop-out mirroring the right nav
-   rail; shows in-flight post-upload work (OCR/caption/embed) per item. */
+/* --- Processing drawer (#388) -- shows in-flight post-upload work
+   (OCR/caption/embed) per item. #774: its tab moved into the right nav rail
+   (a NAV_TABS entry), so the drawer now slides in from the RIGHT like the
+   other drawers, instead of from the left edge where its old tab sat. */
 .proc-drawer {
-  position: fixed; top: 0; left: 0; bottom: 0; z-index: 46; width: 380px; max-width: 90vw;
-  background: var(--card); border-right: 1px solid var(--border);
-  transform: translateX(-100%); transition: transform 0.22s ease;
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 46; width: 380px; max-width: 90vw;
+  background: var(--card); border-left: 1px solid var(--border);
+  transform: translateX(100%); transition: transform 0.22s ease;
   display: flex; flex-direction: column; padding: 22px; box-sizing: border-box; overflow-y: auto;
 }
 .proc-drawer.open { transform: translateX(0); }
@@ -2062,30 +2116,9 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .proc-drawer-header h2 { font-size: 16px; font-weight: 500; margin: 0; }
 .proc-drawer .page-subtitle { margin: 0 0 16px; }
 
-.proc-tab {
-  position: fixed; left: 0; top: 50%; transform: translateY(-50%); z-index: 45;
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-  background:
-    linear-gradient(rgba(23,21,15,0.62), rgba(23,21,15,0.62)),
-    repeating-linear-gradient(-45deg, var(--hazard-stripe) 0 14px, var(--hazard-black) 14px 28px);
-  border: 3px solid var(--purple-bright); border-left: none;
-  border-radius: 0 12px 12px 0;
-  padding: 12px 9px; cursor: pointer; transition: background 0.2s ease, opacity 0.2s ease;
-  box-shadow: 2px 2px 10px rgba(0,0,0,0.35); color: inherit;
-}
-.proc-tab:hover {
-  background:
-    linear-gradient(rgba(23,21,15,0.34), rgba(23,21,15,0.34)),
-    repeating-linear-gradient(-45deg, var(--hazard-stripe) 0 14px, var(--hazard-black) 14px 28px);
-}
-.proc-tab.idle { opacity: 0.5; }
-.proc-tab-icon { width: 16px; height: 16px; color: var(--text); }
-.proc-tab-label { writing-mode: vertical-rl; font-size: 10px; letter-spacing: 0.3px; color: var(--text); }
-.proc-tab-badge {
-  position: absolute; top: 4px; left: 4px; min-width: 16px; height: 16px; padding: 0 4px;
-  border-radius: 8px; background: var(--accent); color: var(--hazard-black);
-  font-size: 10px; font-weight: 600; line-height: 16px; text-align: center; box-sizing: border-box;
-}
+/* #774: Processing's count keeps the accent colour its old .proc-tab-badge had
+   (NAV_TABS badge_tone "accent"); the Curator badge stays hazard yellow. */
+.nav-tab-badge-accent { background: var(--accent); }
 
 .proc-list { display: flex; flex-direction: column; gap: 10px; }
 .proc-item { padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }

@@ -85,6 +85,25 @@ templates.env.globals["hobby_label"] = _HobbyLabelGlobal()
 # request's context, set by web/auth.py's SessionMiddleware.
 templates.env.globals["current_user"] = users.current_user
 templates.env.globals["csrf_token"] = web_auth.csrf_token
+
+
+def _current_role():
+    """#779: the role this request's actor holds (core/roles.role_of: a signed-in user's role, admin
+    for the install token, public when anonymous). For SHOWING features only: the routes' own
+    role checks are still the guard."""
+    from core import actor, roles  # lazy, like role_of's own users import
+    return roles.role_of(actor.current_actor())
+
+
+def _has_role(need):
+    """#779: True when this request's actor is `need` or above (the nav rail greys a tab out and
+    leaves its drawer's markup off the page when it isn't)."""
+    from core import roles
+    return roles.at_least(_current_role(), need)
+
+
+templates.env.globals["current_role"] = _current_role
+templates.env.globals["has_role"] = _has_role
 # #660: this request's CSP script nonce. Every inline <script> carries nonce="{{ csp_nonce() }}";
 # the CSP allows only those (scripts/test_security_headers_645.py fails on one without it).
 templates.env.globals["csp_nonce"] = security_headers.current_nonce

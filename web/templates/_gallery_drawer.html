@@ -1,3 +1,5 @@
+{#- #779: Uploading (the home page's upload pop-out) is for editors and up (the server refuses anyone below on its routes). Below that the nav rail shows its tab greyed and explains it, and none of this markup or script is sent. -#}
+{% if has_role("editor") %}
 <!-- Upload pop-out — home page only, hides behind a tab on the right edge
      (avatar + owner name) and reveals on mouse-over or drag-over. Originally
      #17's combined gallery + upload panel; the embedded gallery section
@@ -214,3 +216,4 @@
   });
 })();
 </script>
+{% endif %}

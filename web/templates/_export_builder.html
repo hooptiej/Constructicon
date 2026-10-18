@@ -1,3 +1,5 @@
+{#- #779: Exporting and publishing the site is for admins and up (the server refuses anyone below on its routes). Below that the nav rail shows its tab greyed and explains it, and none of this markup or script is sent. -#}
+{% if has_role("admin") %}
 <!-- Export builder (#314 farm 2) — self-contained drawer for building and configuring
      a static website export. Vanilla JS IIFE with client-side state as the single
      source of truth, matching _blog_builder.html pattern. -->
@@ -439,3 +441,4 @@
   });
 })();
 </script>
+{% endif %}

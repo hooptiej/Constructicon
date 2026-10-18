@@ -20,8 +20,9 @@ CARD_ITEM_FIELDS = (
 )
 # Lamp tooltips (OCR text, auto-caption) are a hover hint, not the document: clip them.
 CARD_TOOLTIP_CHARS = 100
-# The only type_metadata keys the card reads (thumbnail rotation, caption lamp).
-CARD_TYPE_METADATA_KEYS = ("rotation", "auto_caption_status", "auto_caption")
+# The only type_metadata keys the card reads (thumbnail rotation, caption lamp, the OCR lamp's
+# "not compatible" reason, #724).
+CARD_TYPE_METADATA_KEYS = ("rotation", "auto_caption_status", "auto_caption", "ocr_note")
 
 
 def clip_tooltip(text):

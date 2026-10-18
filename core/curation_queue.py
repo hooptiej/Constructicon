@@ -9,6 +9,10 @@ Three kinds of item used to live in three places. They are one queue now:
             Can be deferred or dismissed.
   need      a computed card/hobby need (core/cards.py list_needs_decision: missing
             provenance, blank write-up, untyped link, hobby flags ...). Same as a nudge.
+            #725: also `needs_date`, one per FILE with no real date and no card range to
+            inherit (core/item_dates.py needs_date_rows), with its best date guess as the
+            one-click "Use <date>" (POST /api/image/{slug}/date-guess). Grouped under the card
+            it is on (a card with no real dates of its own), else under "Undated files".
 
 Nothing here stores items: questions are stored by their own table, nudges and needs are
 derived every time. The only thing this module's callers persist is the owner's Defer /
@@ -31,12 +35,13 @@ import threading
 import time
 from urllib.parse import quote
 
-from . import actor as actor_ctx, cards, curator_needs, db, decisions, install_config, item_title, policy, roles
+from . import actor as actor_ctx, cards, curator_needs, datefmt, date_guess, db, decisions, install_config, item_dates, item_title, policy, roles
 from .errors import InvalidInput
 
 TYPE_QUESTION = "question"
 TYPE_NUDGE = "nudge"
 TYPE_NEED = "need"
+NEED_DATE = "needs_date"  # #725: a file with no real date and no card range to inherit
 
 # The details-panel group (templates/_details_group.html) whose Edit button fixes each kind
 # of item. `None` = no single group applies, so Fix just opens the card.
@@ -216,6 +221,30 @@ def _need_item(r):
     }
 
 
+def _date_need_item(e):
+    """#725: one needs_date entry (core/item_dates.py needs_date_rows) as a queue item. It carries
+    `item_slug` (for_actor hides an item the asker can't see) and, with a guess, `accept_source`:
+    the template's "Use <date>" button posts it to POST /api/image/{slug}/date-guess."""
+    row, guess, card = e["row"], e["guess"], e["card"]
+    slug = row["slug"]
+    where = (f"It is on {card['title']}, which has no real dates either, so there is no range to borrow."
+             if card else "It is on no card, so there is no range to borrow.")
+    suggestion = None
+    if guess is not None:
+        suggestion = {"picks": [guess.source],
+                      "labels": [f"{datefmt.day(guess.epoch)}, from {date_guess.SOURCE_LABELS[guess.source]}"],
+                      "reason": guess.evidence}
+    return {
+        "type": TYPE_NEED, "key": f"need:{NEED_DATE}:{slug}", "id": None, "kind": NEED_DATE,
+        "label": f"{item_title.title_of(row)} has no date",
+        "detail": f"Imported {datefmt.day(row.get('timestamp'))}, which is not its date. {where}",
+        "suggested": suggestion, "confidence": guess.confidence if guess else None,
+        "group": "dates", "href": f"/object/{quote(slug, safe='')}?edit=dates", "fix_label": "Set the date",
+        "deferred": False, "dismissible": True, "item_slug": slug,
+        "accept_source": guess.source if guess else None,
+    }
+
+
 def _item_sort(item):
     if item["type"] == TYPE_QUESTION:
         return (0, _CONFIDENCE_RANK.get(item.get("confidence"), 0), item["id"] or 0, "")
@@ -258,6 +287,8 @@ def _group_order(g):
         return (1, 0 if g["activity"] == "active" else 1, 0, g["title"].lower())
     if g["type"] == "uploads":
         return (2, 0, 0, "")
+    if g["type"] == "undated":
+        return (2, 1, 0, "")
     return (3, 0, 0, "")
 
 
@@ -383,6 +414,25 @@ def build_queue(card=None, hobby=None):
             hs = r.get("hobby_slug")
             put(f"hobby:{hs}", _hobby_group(hs), item)
 
+    # #725: needs_date, a file with no real date and no card range to borrow (not on a hobby's slice)
+    if not hobby_row:
+        for e in item_dates.needs_date_rows():
+            if card_row and (e["card"] is None or e["card"]["slug"] != card_row["slug"]):
+                continue
+            # An item-level entry: only for an actor who may see the item. The card / hobby slices are
+            # built as the asker (project page strip, group expand) and never pass through for_actor;
+            # the shared whole queue is built as system and for_actor filters it per asker.
+            if not policy.can_view(e["row"]):
+                continue
+            item = _date_need_item(e)
+            if item["key"] in dismissed:
+                continue
+            c = (card_row or db.get_project(e["card"]["slug"])) if e["card"] else None
+            if c is not None:
+                put(f"card:{c['slug']}", _card_group(c), item)
+            else:
+                put("undated", _plain_group("undated", "undated", "Undated files", "/unfiled"), item)
+
     open_by, deferred_by = {}, {}
     for gid, item in items:
         (deferred_by if item["deferred"] else open_by).setdefault(gid, []).append(item)
@@ -446,26 +496,76 @@ def _full_queue():
 def for_actor(q, actor=None):
     """The queue `q` as `actor` (default: the current context) may see it (#603, #467): a file
     question about an item the item policy hides (a sensitive item that isn't theirs) is left out,
-    and the counts follow. An admin sees it unchanged. Returns `q` itself when nothing is hidden."""
-    if roles.at_least(roles.role_of(actor_ctx.resolve(actor)), roles.ADMIN):
+    and the counts follow. #604 step 3: so is a card's or hobby's group when that card / hobby is
+    private and hidden from them, and a question's options never name a card or file they can't
+    see (the shared cache is built as `system`, which sees everything). An admin sees it unchanged.
+    Returns `q` itself when nothing is hidden."""
+    who = actor_ctx.resolve(actor)
+    if roles.at_least(roles.role_of(who), roles.ADMIN):
         return q
-    hidden = set()
-    for g in q["groups"] + q["deferred"]:
-        for i in g["items"]:
-            slug = i.get("item_slug")
-            if slug and slug not in hidden and not policy.can_view(db.get_by_slug(slug), actor):
-                hidden.add(slug)
-    if not hidden:
-        return q
+    from . import revisions  # lazy: revisions imports a lot of the core
+    with policy.access_scope(who) as acc:
+        return _for_actor(q, who, acc, revisions)
+
+
+def _for_actor(q, who, acc, revisions):
+    seen_items = {}
+
+    def item_visible(slug):
+        if slug not in seen_items:
+            seen_items[slug] = policy.can_view(db.get_by_slug(slug), who)
+        return seen_items[slug]
+
+    def group_visible(g):
+        if acc.empty or not g.get("slug"):
+            return True
+        if g["type"] == "card":
+            row = db.get_project(g["slug"])
+            return row is None or policy.can_view_card(row, access=acc)
+        if g["type"] == "hobby":
+            row = db.get_hobby(g["slug"])
+            return row is None or policy.can_view_hobby(row, access=acc)
+        return True
+
+    def option_visible(item, opt):
+        if item.get("kind") == "project_match":
+            return opt["key"] == "none" or policy.can_view_card(int(opt["key"]) if str(opt["key"]).isdigit()
+                                                                else opt["key"], access=acc)
+        if item.get("kind") == revisions.KIND_ITEM_SUPERSEDES:
+            action, cand = revisions.option_target(opt["key"])
+            return action == "none" or not cand or item_visible(cand)
+        return True
+
+    changed = False
 
     def keep(groups):
+        nonlocal changed
         out = []
         for g in groups:
-            its = [i for i in g["items"] if i.get("item_slug") not in hidden]
+            if not group_visible(g):
+                changed = True
+                continue
+            its = []
+            for i in g["items"]:
+                if i.get("item_slug") and not item_visible(i["item_slug"]):
+                    changed = True
+                    continue
+                opts = i.get("options")
+                if opts:
+                    shown = [o for o in opts if option_visible(i, o)]
+                    if len(shown) != len(opts):
+                        changed = True
+                        picks = [k for k in (i.get("suggested") or {}).get("picks", []) if k in {o["key"] for o in shown}]
+                        i = {**i, "options": shown,
+                             "suggested": {**(i.get("suggested") or {}), "picks": picks,
+                                           "labels": [o["label"] for o in shown if o["key"] in picks]}}
+                its.append(i)
             if its:
                 out.append({**g, "items": its})
         return out
     open_groups, deferred_groups = keep(q["groups"]), keep(q["deferred"])
+    if not changed:
+        return q
     return {**q, "groups": open_groups, "deferred": deferred_groups, "counts": _counts(open_groups, deferred_groups)}
 
 
@@ -482,9 +582,9 @@ def group_items(gid, section="open"):
     expanding a group never rebuilds the whole queue."""
     key = "deferred" if section == "deferred" else "groups"
     if gid.startswith("card:"):
-        q = build_queue(card=gid[5:])
+        q = for_actor(build_queue(card=gid[5:]))  # #604 step 3: a hidden private card shows nothing
     elif gid.startswith("hobby:"):
-        q = build_queue(hobby=gid[6:])
+        q = for_actor(build_queue(hobby=gid[6:]))
     else:
         q = cached_queue()
     for g in q[key]:

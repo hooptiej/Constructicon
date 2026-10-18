@@ -44,7 +44,7 @@ sys.path.insert(0, HERE)
 
 from starlette.testclient import TestClient  # noqa: E402
 
-from core import actor, cards, db, items, policy, timeline, users  # noqa: E402
+from core import actor, cards, db, item_dates, items, policy, users  # noqa: E402
 _testenv.assert_isolated()
 from web import app as webapp  # noqa: E402
 
@@ -241,9 +241,10 @@ def main():
         if filed != "all":
             rows = [r for r in rows if (filed == "unfiled") == (r["slug"] in unfiled)]
         if sort == "date_newest":  # #622: the card's date, then the upload time (both newest first)
-            rows = sorted(rows, key=lambda r: (-timeline.resolve_item_date(r), -r["timestamp"]))
+            # #725: an undated item sorts last (inherited ones at their card range's start)
+            rows = sorted(rows, key=lambda r: item_dates.sort_key(r, newest_first=True))
         elif sort == "date_oldest":
-            rows = sorted(rows, key=lambda r: (timeline.resolve_item_date(r), r["timestamp"]))
+            rows = sorted(rows, key=lambda r: item_dates.sort_key(r, newest_first=False))
         elif sort == "newest":
             rows = sorted(rows, key=lambda r: -r["timestamp"])
         elif sort == "oldest":
@@ -417,7 +418,9 @@ def main():
     print("      sample bad_cursor message:", err(r).get("message"))
     r = api(admin, type="hologram")
     print("      sample bad_type message:  ", err(r).get("message"))
-    body = api(admin, type="image", cursor=None).json()
+    # the same view as `first` (#725: in the default Date sort the undated items no longer sit where
+    # their upload time would put them, so another sort's first page is not this one's)
+    body = api(admin, type="image", sort="newest", cursor=None).json()
     check("an empty cursor is the first page", body["items"][0]["slug"] == first["items"][0]["slug"])
 
     # --- 6. the list changing between two pages --------------------------------------------------------------------------------

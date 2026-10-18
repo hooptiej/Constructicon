@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from core import automatch, cards, curation_queue, curator, curator_needs, db, decisions, revisions
 from web.common import templates
 from web.shapes import _friendly_datetime, _project_effective_cover_url, _to_card_face, _to_content_public
-from core import roles
+from core import policy, roles
 from web.roles import RoleRouter, requires
 
 router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own label are viewer
@@ -105,8 +105,8 @@ def api_curator_dashboard(request: Request):
     """Curator Stage 2 dashboard: aggregate project health scoring.
 
     Returns:
-        - projects_by_status: count per effective status
-        - average_health: average score of LIVE projects (wip/complete/published)
+        - projects_by_stage: count of cards per stage label
+        - average_health: average score of LIVE cards (in progress, done, in use)
         - gap_buckets: counts of projects failing each specific check
         - unfiled_count: count of capture_events not in any project
         - all_project_scores: detailed scoring for every project
@@ -127,7 +127,8 @@ def api_curator_list_needs(request: Request, kind: str | None = None, limit: int
         - target_id, target_slug: project id/slug or None for global nudges
         - title, summary: human-readable text
         - priority: computed score (base_impact * status_weight)
-        - base_impact, status_weight: components of priority
+        - base_impact, status_weight: components of priority (status_weight comes from the
+          card's stage: 3 for done / in use, else 1)
         - action: descriptor dict for UI/agent to interpret
 
     Optional query params:
@@ -170,7 +171,7 @@ def api_curator_queue(card: str | None = None, summary: bool = False):
     (#524) The whole-queue and summary forms come from curation_queue's cache, which is
     rebuilt only after something has been written to the database."""
     if card:
-        q = curation_queue.build_queue(card=card)
+        q = curation_queue.for_actor(curation_queue.build_queue(card=card))  # #604 step 3: private cards
     else:
         q = curation_queue.cached_queue()
     if summary:
@@ -195,7 +196,7 @@ def api_curator_queue_html(request: Request, group: str | None = None, card: str
     face = None
     if g is not None and g["type"] == "card":
         p = db.get_project(g["slug"])
-        if p is not None:
+        if p is not None and policy.can_view_card(p):  # #604 step 3
             face = _to_card_face(p)
     return templates.TemplateResponse(request, "_curation_group.html", {"items": items, "face": face})
 

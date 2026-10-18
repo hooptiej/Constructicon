@@ -36,8 +36,10 @@ SERVICE_MODULES = {
     "core/decisions.py": "answering questions + the explicit stale sweep (phase D)",
     "core/reset.py": "the one delete-all (phase C)",
     "core/revisions.py": "revision chains (#477) and their questions",
+    "core/duplicates.py": "byte-identical duplicates folded into one survivor (#615)",
     "core/install_config.py": "install identity: owner, site title, publish targets (#562)",
     "core/users.py": "user accounts, passwords and sessions (#467 step 1)",
+    "core/mcp_tokens.py": "per-user MCP tokens: create, rotate, revoke, sign-in by token (#604 step 5)",
 }
 
 # Raw writes kept on purpose, outside the service layer. Each needs a reason.
@@ -90,6 +92,7 @@ PUBLIC_WRITERS = {
     "insert_content": "ingest pipeline: a new file-less item row (YouTube link, authored document)",
     "set_ocr_status": "OCR pipeline state (queue, watchdog, retry)",
     "set_extracted_text": "OCR pipeline result",
+    "set_text_source_fields": "#724 (e): OCR pipeline state for a fetched text source (a YouTube transcript) + its resettled text",
     "set_perceptual_hash": "similarity pipeline",
     "set_embedding": "similarity pipeline (a BLOB; never imaged)",
     "enqueue_caption": "caption queue (#549: MCP enqueues)",

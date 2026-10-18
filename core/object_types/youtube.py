@@ -14,6 +14,7 @@ from datetime import datetime
 from markupsafe import Markup, escape
 
 from .. import besteffort
+from ..text_sources import TextSource
 from . import register, ObjectTypeSpec, ThumbnailSource, MetadataField, TypeAction
 
 log = logging.getLogger("constructicon.youtube")
@@ -140,6 +141,12 @@ def get_properties(row):
     if video_id:
         props["Video ID"] = video_id
 
+    # #724 (e): where the captions stand (found / none / retrying, with the reason)
+    from .. import transcripts
+    captions = transcripts.describe(type_metadata)
+    if captions:
+        props["Captions"] = captions
+
     return props
 
 
@@ -169,6 +176,43 @@ def preview(ctx):
         html += details_html
 
     return Markup(html)
+
+
+def text_sources(row):
+    """#724 (c) text_sources_fn: the video's stored description (type_metadata.description, from
+    the YouTube Data API: scripts/full_youtube_channel_sync.py or POST /api/content) and (#724 e)
+    its transcript (type_metadata.transcript, fetched by fetch_transcript below), searchable as its
+    extracted text beside the thumbnail's OCR text. No network: only what the row holds."""
+    meta = row.get("type_metadata") or {}
+    description = meta.get("description")
+    transcript = meta.get("transcript")
+    return [TextSource("description", "Description", description if isinstance(description, str) else ""),
+            TextSource("transcript", "Transcript", transcript if isinstance(transcript, str) else "")]
+
+
+def fetch_transcript(row):
+    """#724 (e) text_fetch_fn: one polite, deadline-bound attempt at the video's captions
+    (core/transcripts.py), as type_metadata changes; None when transcripts are turned off or the
+    URL has no video id. The library only ever talks to YouTube itself (the id is checked against
+    YOUTUBE_ID_RE's alphabet), so this is not an arbitrary-URL fetch."""
+    from .. import transcripts
+    video_id = extract_youtube_id(row.get("external_url"))
+    if not video_id or not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", video_id):
+        return None
+    return transcripts.fetch_fields(row, video_id)
+
+
+def unsupported_note(row):
+    """#724 (c/e) ocr_unsupported_note: no description, no captions and nothing on the thumbnail.
+    Says "no captions" once YouTube has said so, and why captions are still missing otherwise."""
+    meta = row.get("type_metadata") or {}
+    status = meta.get("transcript_status") if isinstance(meta, dict) else None
+    note = meta.get("transcript_note") if isinstance(meta, dict) else None
+    if status == "none":
+        return f"video: no description and no captions ({note or 'YouTube has none'})"
+    if status == "retry":
+        return f"video: no description; captions not fetched yet ({note or 'will try again'})"
+    return "video: no description or captions yet"
 
 
 def _fetch_real_date(row):
@@ -214,11 +258,20 @@ register(ObjectTypeSpec(
         MetadataField("comment_count", "Comment count"),
         MetadataField("description", "Full description (from the YouTube Data API)"),
         MetadataField("author", "Uploading channel — only set when it isn't the owner's own channel"),
+        # #724 (e): the captions (core/transcripts.py has the full list of transcript_* keys)
+        MetadataField("transcript", "Captions text, noise removed (youtube-transcript-api)"),
+        MetadataField("transcript_status", "found | none | retry | queued"),
+        MetadataField("transcript_language", "The captions' language, e.g. 'English (auto-generated)'"),
+        MetadataField("transcript_kind", "manual | auto"),
+        MetadataField("transcript_note", "Why there's no transcript (none), or why it will be tried again (retry)"),
     ),
     badge_icon="▶️",
     badge_text="YOUTUBE",
     preview_fn=preview,
     properties_fn=get_properties,
     external_link_label="Watch on YouTube ↗",
+    ocr_unsupported_note=unsupported_note,  # #724 (c/e): nothing in either, nor on the thumbnail
+    text_sources_fn=text_sources,  # #724 (c/e): the stored description and transcript are searchable text
+    text_fetch_fn=fetch_transcript,  # #724 (e): captions, fetched politely with a hard deadline
     actions=(TypeAction("fetch-real-date", "Fetch real date", _fetch_real_date),),
 ))

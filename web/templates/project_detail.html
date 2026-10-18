@@ -4,6 +4,7 @@
 {% from "_card.html" import card %}
 {% from "_details_group.html" import dp_group %}
 {% from "_card_text.html" import about_view, about_edit, about_script %}
+{% from "_sharing.html" import sharing_panel %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
@@ -42,6 +43,10 @@
     <div class="project-video-timeline" id="project-video-timeline"></div>
   </div>
   {% endif %}
+  {% if timeline_undated %}
+  {# #725: items with no real date are left off the axis, and the page says so. #}
+  <p class="dp-note project-timeline-undated">{{ timeline_undated }} undated file{{ '' if timeline_undated == 1 else 's' }} not on the timeline. Each one shows this card's range as its approximate date; give one a real date in its DATES group, or drag it in once it has one.</p>
+  {% endif %}
 
   <div class="dp-hero">
     <div class="dp-hero-left">
@@ -66,7 +71,7 @@
       {% set _applicable = project_score.checklist | rejectattr('excused') | list %}
       {% set _passed = _applicable | selectattr('passed') | list %}
       {% if project_score.silent %}
-      <span class="project-health-badge" title="Status '{{ project_score.status }}' is not scored by the Curator" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#6E6B57">
+      <span class="project-health-badge" title="{{ project_score.stage_label }}: not scored by the Curator" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#6E6B57">
         <span style="width:9px;height:9px;border-radius:50%;background:#B9B4A0"></span>not scored
       </span>
       {% else %}
@@ -312,6 +317,9 @@
         {{ dp_group("identity", "IDENTITY", identity_view, identity_edit, done_only=false) }}
         {{ dp_group("status", "STATUS", status_view, status_edit) }}
         {{ dp_group("origin", "ORIGIN", origin_view, origin_edit) }}
+        {# #604 step 3: Private + members, changed in place (static/js/sharing.js) #}
+        {% set sharing_v %}{{ sharing_panel(card_sharing, "card") }}{% endset %}
+        {{ dp_group("sharing", "SHARING", sharing_v, editable=false) }}
         {{ dp_group("dates", "DATES", dates_view, dates_edit) }}
         {{ dp_group("structure", "STRUCTURE", structure_view, structure_edit) }}
         {{ dp_group("links", "LINKS", links_view, links_edit, links_static, done_only=true) }}
@@ -430,6 +438,7 @@
   {% endif %}
   <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
   <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
+  <script src="/static/js/sharing.js?v={{ static_version('js/sharing.js') }}" defer></script>
 
   {% if timeline_children or timeline_items %}
   <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
@@ -472,8 +481,10 @@
     function afterSave({ event, result, reset }) {
       refreshDates(result.span);
       if (!result.batch_id) return;
-      const when = MountainTime.formatDate(result.effective_date);
-      const msg = reset
+      const when = result.effective_date === null ? null : MountainTime.formatDate(result.effective_date);
+      const msg = when === null
+        ? `"${event.label}" has no real date now, so it left the timeline (it shows this card's range as an approximate date).`
+        : reset
         ? `"${event.label}" is back on its computed date (${when}).`
         : `"${event.label}" re-dated to ${when}. The date is now set by hand.`;
       window.showUndoBar(msg, result.batch_id, (how) => { if (how === 'undone') window.location.reload(); });

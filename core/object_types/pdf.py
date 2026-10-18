@@ -8,10 +8,12 @@ Dockerfile, unlike pdf2image) — rendering is just `page.get_pixmap()`, and
 the same open document gives us `page.get_text()` for the embedded text
 layer most PDFs already have.
 
-Both entry points below are best-effort, same as every other type's
-capture_fn/thumbnail_url_fn in this codebase: a corrupt/encrypted/zero-page
-PDF returns None/""  rather than raising, so a bad upload never breaks the
-upload response or the OCR background task that calls these.
+The thumbnail render is best-effort, same as every other type's capture_fn:
+a corrupt/encrypted/zero-page PDF renders None rather than raising, so a bad
+upload never breaks the upload response. The text reader is not silent about
+it (#724 b2): text_layer raises NotCompatibleFile for an encrypted PDF (grey)
+and UnreadableFile for a corrupt one (red, "corrupt or unreadable .pdf: ..."),
+which core/ocr.py catches and reports.
 """
 
 import re
@@ -66,24 +68,32 @@ def render_first_page(path):
         return None
 
 
-def extract_text(path):
-    """The PDF's embedded text layer, all pages concatenated (capped at
-    storage.MAX_EXTRACTED_TEXT_CHARS, #433), or "" if there isn't one
-    (an image-only/scanned PDF), the PDF is corrupt/encrypted, or the file
-    is missing. "" (not None) on the no-text-layer case specifically, so
-    callers can tell "found nothing" and "wasn't even a PDF" apart if they
-    ever need to — today core/ocr.py just treats falsy either way as "fall
-    back to OCR"."""
+def text_layer(path):
+    """#724 (b2): the PDF's embedded text layer, all pages concatenated (capped at
+    storage.MAX_EXTRACTED_TEXT_CHARS, #433); "" when the PDF has no text layer
+    (an image-only/scanned PDF: core/ocr.py falls back to OCR of page 1).
+
+    Raises instead of guessing: NotCompatibleFile ("encrypted: ...", grey) for a
+    password-protected PDF; UnreadableFile ("corrupt or unreadable .pdf: ...",
+    red) when PyMuPDF can't open it, with the pages read so far as partial_text
+    when it breaks partway through."""
+    from . import ENCRYPTED_NOTE, NotCompatibleFile, unreadable
     try:
-        doc = _open(path)
-        if doc is None:
-            return ""
+        doc = fitz.open(path)
+    except MemoryError:
+        raise
+    except Exception as e:
+        print(f"PDF open failed for {path}: {e!r}")
+        raise unreadable(path, e) from e
+    try:
+        if doc.needs_pass:
+            raise NotCompatibleFile(ENCRYPTED_NOTE)  # we never have a password to hand it
+        cap = storage.MAX_EXTRACTED_TEXT_CHARS
+        text_parts = []
+        running_length = 0
+        pages_read = 0
         try:
-            cap = storage.MAX_EXTRACTED_TEXT_CHARS
-            text_parts = []
-            running_length = 0
-            pages_read = 0
-            for page_num, page in enumerate(doc):
+            for page in doc:
                 page_text = page.get_text()
                 page_length = len(page_text)
                 if running_length + page_length > cap:
@@ -96,14 +106,26 @@ def extract_text(path):
                 text_parts.append(page_text)
                 running_length += page_length
                 pages_read += 1
-            # Slice after joining: the "\n" separators count toward the cap too.
-            text = "\n".join(text_parts)[:cap]
-        finally:
-            doc.close()
-        return text.strip()
+        except MemoryError:
+            raise
+        except Exception as e:
+            print(f"PDF text extraction failed for {path} after {pages_read} page(s): {e!r}")
+            raise unreadable(path, e, partial_text="\n".join(text_parts)[:cap].strip()) from e
+        # Slice after joining: the "\n" separators count toward the cap too.
+        return "\n".join(text_parts)[:cap].strip()
+    finally:
+        doc.close()
+
+
+def extract_text(path):
+    """Best-effort text_layer for callers that only want text: "" on any failure
+    (corrupt/encrypted PDF, missing file). The OCR pipeline uses text_layer
+    itself (extract_text_for_row), so a broken PDF says so there."""
+    try:
+        return text_layer(path)
     except Exception as e:
         print(f"PDF text extraction failed for {path}: {e!r}")
-        return ""
+        return getattr(e, "partial_text", None) or ""
 
 
 def _stored_path(row):
@@ -126,9 +148,10 @@ def capture_thumbnail(row):
 
 def extract_text_for_row(row):
     """ObjectTypeSpec.text_extract_fn for media_type='pdf' — see
-    core/ocr.py, which tries this before ever running OCR."""
+    core/ocr.py, which tries this before ever running OCR. #724 (b2): a corrupt or
+    encrypted PDF raises (text_layer), it never reads as "no text"."""
     path = _stored_path(row)
-    return extract_text(path) if path else ""
+    return text_layer(path) if path else ""
 
 
 def _parse_pdf_date(raw):
@@ -176,6 +199,27 @@ def get_properties(row):
         return {}
 
 
+def get_embedded_metadata(path):
+    """ObjectTypeSpec.embedded_metadata_fn (#725): the PDF's own CreationDate as content_date
+    ({} when it has none, or on any failure). Read once at upload (core/embedded_metadata.py
+    fill_missing, which gates it as plausible and never overwrites), and by the date guesser
+    (core/item_dates.py) as in-file evidence for an undated PDF. A date with no offset is Mountain
+    Time (core/date_guess.py parse_pdf_date)."""
+    from .. import date_guess  # lazy: keeps this module's import graph as it was
+    try:
+        doc = _open(path)
+        if doc is None:
+            return {}
+        try:
+            created = date_guess.parse_pdf_date((doc.metadata or {}).get("creationDate"))
+        finally:
+            doc.close()
+    except Exception as e:
+        print(f"PDF creation date read failed for {path}: {e!r}")
+        return {}
+    return {"content_date": created} if created is not None else {}
+
+
 from . import _preview
 
 
@@ -197,6 +241,7 @@ register(ObjectTypeSpec(
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,
     properties_fn=get_properties,
+    embedded_metadata_fn=get_embedded_metadata,  # #725: the PDF's CreationDate -> content_date
     badge_icon="\U0001F4C4",
     badge_text="PDF",
 ))

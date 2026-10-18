@@ -41,7 +41,7 @@ import binascii
 import json
 import unicodedata
 
-from core import install_config, item_title, object_types, policy, timeline
+from core import install_config, item_dates, item_title, object_types, policy
 from core import db
 from core.errors import AppError, NotFound
 from web.shapes import _card_items, _split_revisions
@@ -87,12 +87,17 @@ def _az_key(row):
             tuple((upper, expanded) for _, upper, expanded in folded))  # lowercase first; ss before ß
 
 
-def _card_date_key(row):
-    """#622: the date the card shows (core/timeline.py resolve_item_date, the same resolver
-    web/shapes.py uses for card_date / card_date_epoch), then the upload time to break ties. An item
-    with no content date resolves to its file's modified time, else its upload time, exactly as
-    its card face does, so it sits where the date on its card says."""
-    return (timeline.resolve_item_date(row), row["timestamp"])
+def _card_date_newest(row):
+    """#622: the date the card shows (core/item_dates.py, the same value web/shapes.py makes
+    card_date / card_date_epoch from), newest first, then the upload time to break ties. #725: an
+    item that inherits its card's range sorts at the range's start; an undated one goes LAST (in
+    either direction), by upload time among themselves."""
+    return item_dates.sort_key(row, newest_first=True)
+
+
+def _card_date_oldest(row):
+    """The same, oldest first (undated still last)."""
+    return item_dates.sort_key(row, newest_first=False)
 
 
 # sort name -> (key function over a capture_events row, reverse). The same names, labels and order
@@ -100,8 +105,8 @@ def _card_date_key(row):
 # "newest" / "oldest" keep their pre-#622 meaning (upload time) so old links and API callers don't
 # change; "date_newest" (the card date) is the default view since #622.
 SORTS = {
-    "date_newest": (_card_date_key, True),
-    "date_oldest": (_card_date_key, False),
+    "date_newest": (_card_date_newest, False),  # #725: the key itself is newest-first, undated last
+    "date_oldest": (_card_date_oldest, False),
     "newest": (lambda r: r["timestamp"], True),
     "oldest": (lambda r: r["timestamp"], False),
     "az": (_az_key, False),

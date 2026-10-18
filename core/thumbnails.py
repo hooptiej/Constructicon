@@ -16,14 +16,14 @@ ingest pipeline so the upload response's thumb_url is ready immediately.
 import io
 import logging
 
-import httpx
 from PIL import Image
 
-from . import besteffort, object_types, parse_limits, storage
+from . import besteffort, object_types, parse_limits, safe_fetch, storage
 
 log = logging.getLogger("constructicon.thumbnails")
 
 FETCH_TIMEOUT_SECONDS = 10
+FETCH_MAX_BYTES = 10_000_000  # a thumbnail image; YouTube's hqdefault is ~30 KB
 
 # #284: i.imgur.com answers HTTP 429 (Retry-After: 0, empty body, no
 # Cloudflare ray id) to any request that doesn't carry a browser-like
@@ -119,9 +119,12 @@ def _from_fetch(row, spec):
     url = spec.thumbnail_url_fn(row.get("external_url"))
     if not url:
         return False
-    resp = httpx.get(url, headers=FETCH_HEADERS, timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=True)
-    resp.raise_for_status()
-    storage.save_thumbnail_from_bytes(row["slug"], resp.content)
+    # #724 (d): through the SSRF guard (public addresses only, pinned, every redirect re-checked,
+    # image/* only, capped), like every outbound fetch. A refusal or failure raises FetchError with
+    # its reason, which ensure_thumbnail logs and reports as "no thumbnail", as before.
+    resp = safe_fetch.fetch(url, accept=("image/",), max_bytes=FETCH_MAX_BYTES, timeout=FETCH_TIMEOUT_SECONDS,
+                            headers=FETCH_HEADERS, polite=False)
+    storage.save_thumbnail_from_bytes(row["slug"], resp.body)
     return storage.thumb_path_for(row["slug"]).exists()
 
 

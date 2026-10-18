@@ -8,7 +8,7 @@ from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from core import besteffort, card_rules, cards, changes, db, hobbies, membership, timeline
+from core import besteffort, card_rules, cards, changes, db, hobbies, membership, sharing, timeline
 from core.errors import NotFound
 from web.common import from_request_thread
 from web.shapes import _to_card_face, _to_project_option
@@ -24,7 +24,7 @@ router = RoleRouter(default_role=roles.EDITOR)  # #557: routes without their own
 def api_card(slug: str):
     """The card face for one card (V2 piece 7, 8.1): zone content as JSON, plus the cover URL."""
     project = db.get_project(slug)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: a hidden private card = missing
         raise NotFound(f"No card '{slug}'.")  # #548: the shared error shape (was a hand-built 404 without `detail`)
     return JSONResponse(_to_card_face(project))
 
@@ -34,7 +34,7 @@ def api_projects(request: Request):
     """Populates the upload drawer's Project dropdown (#1) — every project,
     most-recently-updated first, same ordering list_projects() already uses
     for the home page's Projects column."""
-    return JSONResponse([_to_project_option(p) for p in db.list_projects()])
+    return JSONResponse([_to_project_option(p) for p in policy.filter_visible_cards(db.list_projects())])  # #604 step 3
 
 
 # (#423) The per-project auto write-up now lives in db.create_project (as
@@ -72,7 +72,8 @@ def api_create_project(request: Request, title: str = Form(...), parent_id: str 
     if parent_id:
         try:
             parent_id_int = int(parent_id)
-            if db.get_project(parent_id_int) is None:
+            parent_row = db.get_project(parent_id_int)
+            if parent_row is None or not policy.can_view_card(parent_row):  # #604 step 3
                 raise HTTPException(status_code=400, detail="Parent project not found")
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid parent_id")
@@ -439,8 +440,9 @@ def api_export_project(project_id: str):
 def _related_projects_public(slug):
     """Trim shape for the project-detail Related-projects widget (#408)."""
     return [
-        {"slug": p["slug"], "title": p["title"], "status": card_rules.curator_status(p)}
-        for p in db.list_related_projects(slug)
+        {"slug": p["slug"], "title": p["title"], "stage": p.get("stage"),
+         "stage_label": card_rules.stage_label(p.get("stage"))}
+        for p in policy.filter_visible_cards(db.list_related_projects(slug))  # #604 step 3
     ]
 
 
@@ -525,3 +527,43 @@ def api_convert_project_to_hobby(request: Request, slug: str):
         },
         "batch_id": result.batch_id,
     })
+
+
+# --- #604 step 3: private cards and hobbies (core/sharing.py) ---------------------------------
+# `kind` is card | hobby (the API word stays "hobby" whatever the install calls it, #700); `target`
+# is the card's / hobby's id or slug. Reads are viewer; changes are editor here, and core/sharing.py
+# then lets only the owner or an admin through (403 forbidden saying who can).
+
+def _truthy(value):
+    return (value or "").strip().lower() in ("1", "true", "on", "yes")
+
+
+@router.get("/api/sharing/users")
+def api_sharing_users():
+    """The people a card owner can add as members: [{id, username, name, role}] (enabled users)."""
+    return JSONResponse(sharing.user_choices())
+
+
+@router.get("/api/sharing/{kind}/{target}", dependencies=requires(roles.VIEWER))
+def api_sharing_state(kind: str, target: str):
+    """Is it private (here or inherited, and from where), its owner, its members, and whether the
+    caller may change that."""
+    return JSONResponse(sharing.state(kind, target))
+
+
+@router.post("/api/sharing/{kind}/{target}/private")
+def api_sharing_set_private(kind: str, target: str, private: str = Form(...)):
+    """Tick (private=true) or untick (false) Private. Undoable: the answer carries batch_id."""
+    return JSONResponse(sharing.set_private(kind, target, _truthy(private)).to_dict())
+
+
+@router.post("/api/sharing/{kind}/{target}/members")
+def api_sharing_add_member(kind: str, target: str, user: str = Form(...), role: str = Form("viewer")):
+    """Add a member (user id or username) as viewer or editor, or change their role."""
+    return JSONResponse(sharing.add_member(kind, target, user, role).to_dict())
+
+
+@router.post("/api/sharing/{kind}/{target}/members/remove")
+def api_sharing_remove_member(kind: str, target: str, user: str = Form(...)):
+    """Take a member off the list."""
+    return JSONResponse(sharing.remove_member(kind, target, user).to_dict())

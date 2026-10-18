@@ -42,6 +42,73 @@ class ObjectTypeContractError(Exception):
     pass
 
 
+class UnreadableFile(Exception):
+    """#724: a text_extract_fn raises this when the file can't be read in a way worth telling the
+    owner. The message is the plain reason, stored as type_metadata.ocr_note.
+
+    - UnreadableFile itself: the file is corrupt or unreadable ("corrupt or unreadable .doc: ...");
+      core/ocr.py settles ocr_status='failed' with that reason (never fail silently).
+    - NotCompatibleFile: the file is fine but holds nothing we can read (encrypted, an older format);
+      core/ocr.py settles 'unsupported' (grey) with that reason, like a None return but per file.
+
+    #724 (b2): `partial_text` is what the reader got out before the error (a tar listing that broke
+    halfway, the first sheets of a workbook). core/ocr.py keeps it as the item's text (done) and
+    keeps the reason as the note, so neither the text nor the warning is lost. It survives the trip
+    back from a parse_limits child (an exception's __dict__ is pickled with it)."""
+
+    def __init__(self, message, partial_text=None):
+        super().__init__(message)
+        self.partial_text = partial_text or None
+
+
+class NotCompatibleFile(UnreadableFile):
+    """#724: see UnreadableFile: a readable-in-principle file we can't read (grey, not red)."""
+
+
+class TooLarge(ValueError):
+    """A part, stream or file over its size cap (#644): refused, reported as "too large to read"."""
+
+
+ENCRYPTED_NOTE = "encrypted: can't read without the password"  # #724 owner wording
+MAX_REASON_DETAIL_CHARS = 120
+_DOUBLE_EXTENSIONS = (".tar.gz", ".tar.bz2", ".tar.xz")
+
+
+def file_ext(path):
+    """The extension a reason names, without the dot: "pdf", "tar.gz"; "file" when there is none."""
+    name = str(path).lower()
+    for ext in _DOUBLE_EXTENSIONS:
+        if name.endswith(ext):
+            return ext[1:]
+    suffix = Path(name).suffix
+    return suffix[1:] if suffix else "file"
+
+
+def short_error(exc, path=None):
+    """A one-line, human-sized version of `exc` for a reason: its message (or its class name when
+    it has none), newlines folded, cut at MAX_REASON_DETAIL_CHARS. With `path`, the full server path
+    a library put in its message ("cannot identify image file '/app/storage/x.png'") is cut down to
+    the file's name: the reason is shown to people, the storage layout isn't theirs to read."""
+    detail = str(exc).strip() or type(exc).__name__
+    if path:
+        full = str(path)
+        # as given, as repr() writes it inside an OSError's message ("\\" doubled), and with "/"
+        for form in (full.replace("\\", "\\\\"), full, full.replace("\\", "/")):
+            detail = detail.replace(form, Path(full).name)
+    detail = detail.replace("\r", " ").replace("\n", " ")
+    if len(detail) > MAX_REASON_DETAIL_CHARS:
+        detail = detail[:MAX_REASON_DETAIL_CHARS - 1] + "…"
+    return detail
+
+
+def unreadable(path, exc, partial_text=None):
+    """#724: the UnreadableFile a text reader raises when it couldn't read `path` (it raised `exc`):
+    "corrupt or unreadable .<ext>: <short error>", or "too large to read .<ext>: ..." for a size
+    cap (TooLarge). The red lamp shows this reason. `partial_text`: see UnreadableFile."""
+    kind = "too large to read" if isinstance(exc, TooLarge) else "corrupt or unreadable"
+    return UnreadableFile(f"{kind} .{file_ext(path)}: {short_error(exc, path)}", partial_text=partial_text)
+
+
 class ThumbnailSource(Enum):
     """How a type's representative thumbnail image is obtained."""
 
@@ -201,6 +268,17 @@ class ObjectTypeSpec:
     # meaningful when ocr_capable=True; leave None for types that have no
     # text layer to try (an uploaded screenshot goes straight to OCR, same
     # as always).
+    # #724: when the row has no picture to OCR either, the return value decides how OCR settles:
+    # "" = the source was read and holds no text (done, empty); None = no readable source for this
+    # row, e.g. a legacy format with no reader (ocr_status 'unsupported', with ocr_unsupported_note);
+    # raising = a real read error (failed). A falsy return still falls back to OCR when there IS a
+    # picture (a scanned PDF).
+    # #724 (b2): a reader never turns a read error into "" or None: it raises UnreadableFile
+    # (object_types.unreadable(path, exc): "corrupt or unreadable .<ext>: ...", red) or
+    # NotCompatibleFile (grey, e.g. encrypted). "" is only for a file that was read and is empty.
+    # When the reader raised but the item has a picture, OCR still reads the picture and the row
+    # settles done, with the reader's reason kept in type_metadata.ocr_note ("text layer
+    # unreadable: ...; OCR used instead"). UnreadableFile(partial_text=...) keeps what was read.
     text_extract_fn: object = None
     # Issue #135: (row: dict) -> dict[str, str] of type-specific properties
     # suitable for display on the object detail page. Returns an ordered dict
@@ -307,6 +385,36 @@ class ObjectTypeSpec:
     # A str for the whole type, or a dict {extension: noun} for a type spanning several formats.
     # Unset: "<label> file" is used.
     content_noun: object = ""
+    # #724: the plain reason shown when OCR can't read an item of this type at all (no text source
+    # and no picture to OCR): core/ocr.py settles it ocr_status='unsupported' with this note in
+    # type_metadata.ocr_note, shown grey as "Not compatible with OCR: <note>". A str for the whole
+    # type, or a dict {extension: note} for a type spanning several formats (a key "" is the
+    # type-wide fallback), or a function (row) -> str (#724 e). Unset: "<label>: no readable text".
+    ocr_unsupported_note: object = ""
+    # #724: where text_extract_fn's text comes from, recorded as type_metadata.text_source when
+    # core/ocr.py stores text it returned (one of ocr | text_layer | office | transcript |
+    # description | page, the #724 convention). Unset: nothing is recorded. Text OCR'd from a
+    # picture never carries this type's source (and clears a stale one).
+    text_source: str = ""
+    # #724 (c): text the row already holds, beside the picture OCR reads: (row) -> [TextSource]
+    # (core/text_sources.py; e.g. a YouTube video's stored description). It reads only the row: no
+    # file, no network, so it runs in the web/MCP process, not a parser child. core/ocr.py
+    # concatenates these with the picture's OCR text under headed sections ("Description:" ...
+    # "Thumbnail text:" ...) and records the sources that gave text as type_metadata.text_source.
+    # A type with text sources settles 'unsupported' (its ocr_unsupported_note) when neither they
+    # nor the picture hold any text, and keeps the source text (with a warning note) when the
+    # picture can't be made or read. A change to the row's sources after OCR settled (a corrected
+    # description through items.update) is folded in by that same update, in its change-log row,
+    # so one undo puts the old text back too (text_sources.resettle, no OCR re-run).
+    text_sources_fn: object = None
+    # #724 (e): text that has to be FETCHED over the network (a YouTube video's transcript):
+    # (row) -> {type_metadata key: value or None (remove)} or None (nothing to fetch / turned off).
+    # core/ocr.py calls it in the OCR thread before combining text_sources_fn's sources, stores the
+    # result (db.set_text_source_fields) and text_sources_fn then reads it from the row; web's
+    # background pass (core/transcripts.work_due) calls it again for rows queued or due a retry.
+    # It must bound itself (a hard deadline, polite pacing) and never raise for a network problem:
+    # a failed fetch is a field saying "retry", never an OCR failure, and never removes text.
+    text_fetch_fn: object = None
 
 
 OBJECT_TYPES = {}
@@ -630,6 +738,54 @@ def mismatch_reason(filename):
     noun = noun or f"{spec.label.lower()} file"
     return (f"This {ext} file isn't a valid {noun}: its contents don't match what a {ext} file should "
             f"contain (is it corrupt, or renamed from another format?).")
+
+
+def ocr_unsupported_note(row, spec=None):
+    """#724: the plain reason OCR can't read `row` (its type's ocr_unsupported_note, per extension
+    when the type gives a dict), e.g. "web link: no readable text yet"."""
+    spec = spec or get_object_type(row.get("media_type"))
+    note = spec.ocr_unsupported_note
+    if callable(note):  # #724 (e): a reason that depends on the row (YouTube: "no captions" once known)
+        note = note(row)
+    if isinstance(note, dict):
+        note = note.get(file_extension(row.get("filename") or row.get("stored_filename") or "")) or note.get("")
+    return note or f"{spec.label.lower()}: no readable text"
+
+
+def picture_expected(row, spec):
+    """#724: should this row have a picture for OCR to read? False when the type has no thumbnail
+    strategy that can produce one (a web link: CAPTURE with no capture_fn yet), the URL gives no
+    thumbnail URL, or the type says this row carries none (a .doc with no embedded preview,
+    has_thumbnail_fn). True means a missing picture is a real failure (a fetch or render that went
+    wrong), not "nothing to read". Reads only the row, never the file."""
+    src = spec.thumbnail_source
+    if src == ThumbnailSource.NONE:
+        return False
+    if src == ThumbnailSource.CAPTURE and spec.capture_fn is None:
+        return False
+    if src == ThumbnailSource.FETCH_URL:
+        if spec.thumbnail_url_fn is None:
+            return False
+        try:
+            if not spec.thumbnail_url_fn(row.get("external_url")):
+                return False
+        except Exception as e:  # can't tell: count it as expected, so a missing picture stays a failure
+            print(f"thumbnail_url_fn failed for {row.get('slug')}: {e!r}")
+            return True
+    if spec.has_thumbnail_fn is not None:
+        try:
+            return bool(spec.has_thumbnail_fn(row))
+        except Exception as e:  # can't tell: count it as expected, so a missing picture stays a failure
+            print(f"has_thumbnail_fn failed for {row.get('slug')}: {e!r}")
+            return True
+    return True
+
+
+def nothing_to_read(row, spec):
+    """#724: True when OCR has nothing at all to read for this row: no text source (the type has no
+    text_extract_fn) and no picture expected. The one test the re-settle migration
+    (core/db.py _mig_ocr_unsupported_724) uses, so old rows are judged exactly as new ones are."""
+    return spec.text_extract_fn is None and not picture_expected(row, spec)
 
 
 def accepted_extensions():

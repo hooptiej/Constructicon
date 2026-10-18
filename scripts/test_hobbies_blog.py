@@ -207,18 +207,18 @@ check("web remove-project: 200, logged as token, card out", r.status_code == 200
 undo_ok("web remove-project", row[0]["batch_id"], before)
 before = snapshot()
 with actor.acting_as(actor.ACTOR_MCP):
-    server.constructicon_remove_from_hobby(base["slug"], H["slug"])
+    server.constructicon_card_hobby(base["slug"], H["slug"], action="remove")
 row = q("SELECT batch_id, actor FROM audit_log WHERE op = 'remove_from_hobby' ORDER BY id DESC LIMIT 1")
-check("MCP remove_from_hobby logged as mcp", row[0]["actor"] == "mcp")
-undo_ok("MCP remove_from_hobby", row[0]["batch_id"], before)
+check("MCP card_hobby(remove) logged as mcp", row[0]["actor"] == "mcp")
+undo_ok("MCP card_hobby(remove)", row[0]["batch_id"], before)
 before = snapshot()
 other = cards.create("Other Card").data["card"]
 before = snapshot()
 with actor.acting_as(actor.ACTOR_MCP):
-    server.constructicon_add_project_to_hobby(other["slug"], H["slug"])
+    server.constructicon_card_hobby(other["slug"], H["slug"])
 row = q("SELECT batch_id, actor FROM audit_log WHERE op = 'add_to_hobby' ORDER BY id DESC LIMIT 1")
-check("MCP add_project_to_hobby logged as mcp", row[0]["actor"] == "mcp")
-undo_ok("MCP add_project_to_hobby", row[0]["batch_id"], before)
+check("MCP card_hobby(add) logged as mcp", row[0]["actor"] == "mcp")
+undo_ok("MCP card_hobby(add)", row[0]["batch_id"], before)
 
 # ---- 3. unmark ---------------------------------------------------------------------------
 U = hobbies.create("Unmark Me").data["hobby"]
@@ -275,7 +275,7 @@ notag = cards.create("No Tag Card", link_tag=False).data["card"]
 membership.add_files(notag["id"], [C], **membership.NO_EFFECTS)
 before = snapshot()
 with actor.acting_as(actor.ACTOR_MCP):
-    out = server.constructicon_convert_project_to_hobby(notag["slug"])
+    out = server.constructicon_convert("card_to_hobby", card=notag["slug"])
 check("MCP convert->hobby (card had no tag): a tag is made, actor mcp",
       out["summary"]["items_moved"] == 1 and db.get_hobby(out["slug"]) is not None
       and {a for _, a in ops_of(out["batch_id"])} == {"mcp"}, out)
@@ -333,7 +333,7 @@ check("hobby->card undo: hobby back with its code, members and home override",
 cards.set_hobby_activity(GI["id"], "inactive")
 before = snapshot()
 with actor.acting_as(actor.ACTOR_MCP):
-    out = server.constructicon_convert_hobby_to_card(GI["slug"], "project", title="Joe Build")
+    out = server.constructicon_convert("hobby_to_card", hobby=GI["slug"], kind="project", title="Joe Build")
 new = db.get_project(out["card"])
 check("MCP hobby->card kind=project: members nested, paused, title override, actor mcp",
       new["kind"] == "project" and new["title"] == "Joe Build" and new["stage"] == "paused"
@@ -477,14 +477,14 @@ check("blog delete (web): entry and its rows gone, batch returned",
 undo_ok("blog delete", r.json()["batch_id"], step)
 with actor.acting_as(actor.ACTOR_MCP):
     out = server.constructicon_create_blog_entry("Mcp Post", body="hi")
-    server.constructicon_set_blog_entry_items(out["slug"], [{"slug": A, "note": "n"}])
+    server.constructicon_update_blog_entry(out["slug"], items=[{"slug": A, "note": "n"}])
     server.constructicon_update_blog_entry(out["slug"], clear_cover_slug=True, status="published")
-    gone = server.constructicon_delete_blog_entry(out["slug"])
-    missing = server.constructicon_delete_blog_entry(out["slug"])
+    gone = server.constructicon_delete(blog_entry=out["slug"])
+    missing = server.constructicon_delete(blog_entry=out["slug"])
 mcp_ops = [r_["op"] for r_ in q("SELECT op FROM audit_log WHERE actor = 'mcp' AND op LIKE 'blog_entry_%' ORDER BY id")]
 check("MCP blog create/set_items/update/delete all logged as mcp",
       mcp_ops[-4:] == ["blog_entry_create", "blog_entry_set_items", "blog_entry_update", "blog_entry_delete"]
-      and gone is True and missing["error"]["code"] == "not_found", mcp_ops)
+      and gone.get("deleted") is True and gone.get("batch_id") and missing["error"]["code"] == "not_found", mcp_ops)
 
 # ---- 8b. #679: blog content_date takes a date, not just a hand-rolled epoch ------------------
 from datetime import datetime as _dt  # noqa: E402
@@ -516,7 +516,7 @@ with actor.acting_as(actor.ACTOR_MCP):
           and not [e for e in db.list_blog_entries() if e["title"] == "Bad Date"], bad)
     u = server.constructicon_update_blog_entry(d1["slug"], clear_content_date=True)
     check("MCP update, clear_content_date clears", u.get("content_date") is None, u)
-    server.constructicon_delete_blog_entry(d1["slug"])
+    server.constructicon_delete(blog_entry=d1["slug"])
 import asyncio  # noqa: E402
 for tool, args in (("constructicon_create_blog_entry", {"title": "Sdk Dated", "content_date": "2026-10-01"}),
                    ("constructicon_create_blog_entry", {"title": "Sdk Epoch", "content_date": OCT1_MT})):

@@ -222,9 +222,9 @@ check("dry_run writes nothing", dry.dry_run and not tm(NEVER).get("auto_caption"
 from mcp_server import server  # noqa: E402  (sets CONSTRUCTICON_ROLE=mcp; imported last on purpose)
 from mcp.server.mcpserver import Image as McpImage  # noqa: E402
 
-lst = server.constructicon_list_needs_caption(limit=100)
+lst = server.constructicon_needs(view="caption", limit=100)
 ls = {i["slug"]: i for i in lst["items"]}
-check("list_needs_caption returns slug/name/type with context and total",
+check("needs(view=caption) returns slug/name/type with context and total",
       NEVER in ls and set(ls[NEVER]) >= {"slug", "name", "type", "projects", "hobbies"} and lst["total"] == len(ls), lst)
 check("...and excludes redacted, described and non-capable items", not ({REDACTED, DESCRIBED, STL} & set(ls)))
 

@@ -20,7 +20,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import actor as actor_ctx, card_rules, changes, datefmt, db, item_title, markdown_render, timeline
+from . import actor as actor_ctx, card_rules, changes, datefmt, db, item_dates, item_title, markdown_render, policy, timeline
 from .card_rules import CardError
 from .errors import AppError, InvalidInput
 
@@ -75,9 +75,11 @@ def is_card_decision_slug(post_slug):
 
 
 def get_card(card):
-    """Resolves a project id or slug to its row, or raises CardError('not_found')."""
+    """Resolves a project id or slug to its row, or raises CardError('not_found'). #604 step 3: a
+    private card the actor can't see answers exactly like a missing one (every card op goes
+    through here, so none can reach it)."""
     row = db.get_project(card)
-    if row is None:
+    if row is None or not policy.can_view_card(row):
         raise CardError("not_found", f"No such card: {card!r}")
     return row
 
@@ -194,7 +196,7 @@ def set_whereabouts(card, whereabouts=None, note=..., *, dry_run=False, actor=No
 def set_provenance(card, provenance=None, credit=..., *, dry_run=False, actor=None, batch_id=None):
     """Sets (or clears, with None) the CARD's provenance and optionally its credit
     (who designed it / where it came from; credit=... leaves it alone). Distinct from
-    the per-file provenance (db._set_provenance / constructicon_set_provenance), which
+    the per-file provenance (db._set_provenance / constructicon_update fields.provenance), which
     is untouched. One value per card: mixed origins are separate cards (3.5)."""
     row = get_card(card)
     value = card_rules.validate_provenance(provenance, current=row.get("provenance"))
@@ -456,9 +458,11 @@ def family_fields(card):
         return {"id": c["id"], "slug": c["slug"], "title": c["title"], "kind": c.get("kind") or "project",
                 "kind_label": card_rules.kind_label(c.get("kind") or "project"), "stage": c.get("stage"),
                 "activity": c.get("activity")}
-    out = {"families": [slim(f) for f in db.list_families_for_member(card["id"])], "members": []}
+    acc = policy.card_access()  # #604 step 3: never name a private card the actor isn't on
+    out = {"families": [slim(f) for f in policy.filter_visible_cards(db.list_families_for_member(card["id"]), access=acc)],
+           "members": []}
     if (card.get("kind") or "project") in card_rules.GROUP_KINDS:
-        out["members"] = [slim(m) for m in db.list_family_members(card["id"])]
+        out["members"] = [slim(m) for m in policy.filter_visible_cards(db.list_family_members(card["id"]), access=acc)]
     return out
 
 
@@ -650,6 +654,7 @@ def list_links(card):
     row = get_card(card)
     rows = db.list_project_link_rows(slug=row["slug"])
     cache, out = {}, []
+    acc = policy.card_access()  # #604 step 3: a link to a private card the actor isn't on isn't listed
 
     def other(slug):
         if slug not in cache:
@@ -664,7 +669,7 @@ def list_links(card):
         else:
             direction, o_slug = "in", lg["a"]
         o = other(o_slug)
-        if o is None:
+        if o is None or not policy.can_view_card(o, access=acc):
             continue
         out.append({"slug": o["slug"], "title": o["title"], "kind": o.get("kind") or "project",
                     "stage": o.get("stage"), "type": lg["type"], "direction": direction,
@@ -766,11 +771,6 @@ def provisional_legacy_status(card):
         if legacy and prov.get("stage") == card.get("stage") and prov.get("stop_reason") == card.get("stop_reason"):
             return legacy
     return None
-
-
-def curator_status_for(card):
-    """The v1-vocabulary status the Curator scores a card by (spec 4.1)."""
-    return card_rules.curator_status(card, provisional_legacy=provisional_legacy_status(card))
 
 
 def status_fields(card):
@@ -959,7 +959,7 @@ def decision_summary(decision):
 def get_hobby(hobby):
     """Resolves a hobby id or slug to its blog_tags row, or raises CardError('not_found')."""
     row = db.get_hobby(hobby)
-    if row is None:
+    if row is None or not policy.can_view_hobby(row):  # #604 step 3: a hidden private hobby = missing
         raise CardError("not_found", f"No such hobby: {hobby!r}")
     return row
 
@@ -1115,6 +1115,17 @@ def list_needs_decision(kind=None, need=None, hobby=None, limit=None, card=None)
                  if not need or r["need"] == need]
     if picked_card is not None:
         rows = [r for r in rows if r.get("card_slug") == picked_card["slug"]]
+    acc = policy.card_access()  # #604 step 3: never a need about (or naming) a private card the actor isn't on
+    if not acc.empty:
+        def _shown(r):
+            slugs = [r.get("card_slug")] + ([r["link"].get("a"), r["link"].get("b")] if r.get("link") else [])
+            for sl in filter(None, slugs):
+                c = db.get_project(sl)
+                if c is not None and acc.card_hidden(c["id"]):
+                    return False
+            h = db.get_hobby(r["hobby_slug"]) if r.get("hobby_slug") else None
+            return h is None or not acc.hobby_hidden(h["id"])
+        rows = [r for r in rows if _shown(r)]
     rows.sort(key=lambda r: (r["title"].lower(), r["need"]))
     return rows[:limit] if limit else rows
 
@@ -1207,9 +1218,12 @@ def resolve_home(card):
     kind, ref = row.get("home_kind"), row.get("home_ref")
     if kind and ref is not None:
         target = db.get_project(ref) if kind == "card" else (db.get_hobby(ref) if kind == "hobby" else None)
-        if target is not None and not (kind == "card" and target["id"] == row["id"]):
+        # #604 step 3: a home override naming a private card / hobby the actor can't see is passed over
+        # (not flagged dangling either, which would hint that something is there).
+        hidden = target is not None and not (policy.can_view_card(target) if kind == "card" else policy.can_view_hobby(target))
+        if target is not None and not hidden and not (kind == "card" and target["id"] == row["id"]):
             return _home_entry(kind, target, "override")
-        dangling = True
+        dangling = not hidden
     if row.get("parent_id"):
         parent = db.get_project(row["parent_id"])
         if parent is not None:
@@ -1374,6 +1388,17 @@ def _resolve_family_refs(spec, src):
     return [get_card(f) for f in spec]
 
 
+def _copy_privacy(from_card, to_card, op, actor, batch_id, slugs):
+    """#604 step 3: tick Private on `to_card` and give it `from_card`'s member list (imaged)."""
+    def _copy(log):
+        log.update("projects", {"id": to_card}, {"private": 1})
+        for m in db.share_members(policy.CARD, from_card):
+            key = {"target_kind": policy.CARD, "target_id": to_card, "user_id": m["user_id"]}
+            if log.get("share_members", key) is None:
+                log.insert("share_members", key, {"role": m["role"], "added_at": time.time()})
+    db.write_images(op, actor, batch_id, slugs, _copy)
+
+
 def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None, batch_id=None):
     """Carves files (and a description) out of `source` into new cards (spec 6).
 
@@ -1425,6 +1450,8 @@ def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None
                                 actor=actor, batch_id=batch_id)
             if p.get("highlight"):
                 set_highlight(new["id"], True, actor=actor, batch_id=batch_id)
+            if src.get("private"):  # #604 step 3: a part split out of a private card stays private
+                _copy_privacy(src["id"], new["id"], "split_card", actor, batch_id, [new["slug"], src["slug"]])
             files = _as_slug_list(p["file_slugs"]) if p.get("file_slugs") else []
             if files:
                 _membership().write(new["id"], files, [], "split_card", actor, batch_id, [new["slug"], src["slug"]])
@@ -1585,6 +1612,9 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
             db._update_card_columns(other["id"], {"home_kind": new_home[0], "home_ref": new_home[1]}, op, actor,
                                    batch_id=batch_id)
     db._write_card_row(keep["id"], {}, op, actor, batch_id)
+    if db.share_members(policy.CARD, a["id"]):  # #604 step 3: the kept card's member list governs
+        warnings.append(f"'{a['title']}' had its own member list; the files now follow '{keep['title']}''s.")
+        _drop_share_rows(a["id"], op, actor, batch_id, slugs)
     db.write_images(op, actor, batch_id, slugs, lambda log: log.delete("projects", {"id": a["id"]}))
     rows.append({"card": keep["slug"], "field": "merged", "before": a["slug"], "after": None})
 
@@ -1611,6 +1641,15 @@ def merge_cards(keep, absorb, *, dry_run=False, actor=None, batch_id=None):
         absorbed.append(a)
     if not absorbed:
         raise CardError("bad_merge", "Name at least one card to absorb.")
+    # #604 step 3: merging moves the files, so a private card can't be folded into one that isn't.
+    if not policy.share_state(policy.CARD, keep_row)["effective"]:
+        for a in absorbed:
+            if policy.share_state(policy.CARD, a)["effective"]:
+                raise CardError("privacy_conflict",
+                                f"Nothing was changed: '{a['title']}' is private and '{keep_row['title']}' isn't, so "
+                                f"merging would show its files to everyone signed in. Tick Private on "
+                                f"'{keep_row['title']}' first (and add the same members), or untick it on '{a['title']}'.",
+                                {"private": a["slug"], "open": keep_row["slug"]})
     batch_id = batch_id or changes.new_batch_id()
     rows, warnings = [], []
     with db.transaction(dry_run=dry_run):
@@ -1684,6 +1723,8 @@ def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolv
         for r in db.list_entry_project_rows(cid):
             log.delete("blog_entry_projects", {"entry_id": r["entry_id"], "project_id": cid})
     db.write_images(op, actor, batch_id, slugs, _drop_entry_rows)
+    if not dissolving:  # #604 step 3: its member list goes with it (a conversion carries it over instead)
+        _drop_share_rows(cid, op, actor, batch_id, slugs)
     # Other cards that borrowed this card's cover or named it as their home.
     for other in db.list_projects_referencing(cid):
         if other["id"] == cid:
@@ -1693,6 +1734,22 @@ def _clear_card_dependents(card, op, actor, batch_id, rows, warnings, *, dissolv
         if other.get("home_kind") == "card" and other.get("home_ref") == cid:
             db._update_card_columns(other["id"], {"home_kind": None, "home_ref": None}, op, actor, batch_id=batch_id)
     return out
+
+
+def _drop_share_rows(card_id, op, actor, batch_id, slugs):
+    """#604 step 3: a card that goes away takes its member list with it (imaged, so undo restores it)."""
+    def _drop(log):
+        for m in db.share_members(policy.CARD, card_id):
+            log.delete("share_members", {"target_kind": policy.CARD, "target_id": card_id, "user_id": m["user_id"]})
+    db.write_images(op, actor, batch_id, slugs, _drop)
+
+
+def _privacy_note(card, files, children):
+    """#604 step 3: say so when taking files / cards out from under a private card can open them up."""
+    if not (files or children) or not policy.share_state(policy.CARD, card)["effective"]:
+        return None
+    return (f"'{card['title']}' was private: its {files} file(s) and {children} nested card(s) are no longer under it, "
+            f"so everyone signed in can see them unless another private card holds them. Undo puts them back.")
 
 
 def delete_card(card, *, dry_run=False, actor=None, batch_id=None):
@@ -1708,7 +1765,10 @@ def delete_card(card, *, dry_run=False, actor=None, batch_id=None):
     rows, warnings = [], []
     with db.transaction(dry_run=dry_run):
         fresh = db.get_project(row["id"])
+        note = _privacy_note(fresh, len(db.list_project_item_rows(row["id"])), len(db.list_child_projects(row["id"])))
         out = _clear_card_dependents(fresh, "delete_card", actor, batch_id, rows, warnings)
+        if note:
+            warnings.append(note)
         db.write_images("delete_card", actor, batch_id, [row["slug"]], lambda log: log.delete("projects", {"id": row["id"]}))
         rows.append({"card": row["slug"], "field": "deleted", "before": row["title"], "after": None})
     return Result(True, rows, warnings, batch_id, dry_run,
@@ -1745,7 +1805,7 @@ def create(title, *, description="", cover_slug=None, parent=None, kind=None, st
     parent_row = None
     if parent not in (None, ""):
         parent_row = db.get_project(parent)
-        if parent_row is None:
+        if parent_row is None or not policy.can_view_card(parent_row):  # #604 step 3: hidden = missing
             raise CardError("not_found", f"No such parent card: {parent!r}")
         card_rules.validate_nest({"id": None, "kind": kind, "title": title, "parent_id": None}, parent_row, ())
     from . import tags as _tags  # lazy: tags imports Result from here
@@ -1831,6 +1891,34 @@ def update(card, *, title=None, description=None, cover_slug=None, cover_project
     return Result(True, changed, [], batch_id, dry_run, {"card": fresh})
 
 
+OP_CARD_AGENT_NOTES = "card_agent_notes"
+
+
+def set_agent_notes(card, notes, *, dry_run=False, actor=None, batch_id=None):
+    """(#745) Sets (or, with None, clears) the card's private agent notes: the card twin of an item's
+    agent_notes (#206, `items.update(agent_notes=...)`), stored exactly as given, the same way. ONE
+    imaged change-log row (op card_agent_notes), undoable with the generic undo; a no-op logs nothing.
+    Deliberately NOT part of `update`: it leaves updated_at alone, so a private note never reorders
+    the card lists or shows as an edit anywhere public. Only the MCP (`constructicon_set_agent_notes`)
+    calls it. Change summaries leave the text out (`_changes_from_log` strips private card
+    columns); this op's own summary says only that the field changed. data: {card: the row after
+    (no notes, see db._card_row), agent_notes: the notes after}."""
+    if notes is not None and not isinstance(notes, str):
+        raise InvalidInput("notes must be text, or null to clear them.")
+    row = get_card(card)
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_CARD_AGENT_NOTES, actor, batch_id, [row["slug"]]) as log:
+            log.update("projects", {"id": row["id"]}, {"agent_notes": notes})
+            muts = list(log.muts)
+        after = db.get_card_agent_notes(row["id"])
+        fresh = db.get_project(row["id"])
+    changed = [{"op": OP_CARD_AGENT_NOTES, "card": row["slug"], "table": "projects", "key": m["key"],
+                "field": "agent_notes", "before": "(private)", "after": "(private)"} for m in muts]
+    return Result(True, changed, [] if changed else ["Nothing changed."], batch_id if changed else None,
+                  dry_run, {"card": fresh, "agent_notes": after})
+
+
 def _blank_writeup_left_behind(row, writeup_slug):
     """#672: the card's previous write-up when `writeup_slug` points the card at a DIFFERENT item
     and the previous one is an empty document (the blank write-up every card is born with), else
@@ -1891,8 +1979,8 @@ def _file_summary(card, items):
     by_type = {}
     for f in files:
         by_type[f.get("media_type") or "unknown"] = by_type.get(f.get("media_type") or "unknown", 0) + 1
-    dates = [timeline.resolve_item_date(f) for f in files]
-    return {"total": len(files), "by_type": by_type,
+    dates = timeline.real_dates(files)  # #725: undated files have no say in the span
+    return {"total": len(files), "by_type": by_type, "undated": len(files) - len(dates),
             "earliest": min(dates) if dates else None, "latest": max(dates) if dates else None}
 
 
@@ -1905,7 +1993,7 @@ def explain_card(card):
     recent_changes. Read-only."""
     from . import card_level  # lazy: card_level imports db/timeline only, but keeps cards.py's import graph flat
     row = get_card(card)
-    items = db.list_project_items(row["id"])
+    items = policy.filter_visible(db.list_project_items(row["id"]))  # #557 / #604 step 3
     parent = db.get_project(row["parent_id"]) if row.get("parent_id") else None
     home = resolve_home(row["id"])
     needs = list_needs_decision(card=row["slug"])
@@ -1928,7 +2016,7 @@ def explain_card(card):
                     for r in db.list_hobby_rows(row["id"]) if db.get_hobby(r["hobby_tag_id"])],
         **family_fields(row),
         "parent": _slim(parent) if parent else None,
-        "children": [_slim(c) for c in db.list_child_projects(row["id"])],
+        "children": [_slim(c) for c in policy.filter_visible_cards(db.list_child_projects(row["id"]))],
         "links": list_links(row["id"]),
         "home": home,
         "home_chain": home_chain(row["id"]),
@@ -1942,6 +2030,12 @@ def explain_card(card):
         "suggestions": suggestions,
         "recent_changes": recent,
     }
+    from . import sharing  # lazy: sharing imports this module
+    out["sharing"] = sharing.state("card", row["id"])  # #604 step 3
+    if out["home_override"] and row["home_kind"] in ("card", "hobby"):
+        t = db.get_project(row["home_ref"]) if row["home_kind"] == "card" else db.get_hobby(row["home_ref"])
+        if t is not None and not (policy.can_view_card(t) if row["home_kind"] == "card" else policy.can_view_hobby(t)):
+            out["home_override"] = {**out["home_override"], "text": None}  # #604 step 3: not spelled out
     return out
 
 
@@ -2120,13 +2214,29 @@ def _day_label(ts):
     return datefmt.day(ts)
 
 
+def _by_real_date(rows):
+    """[(real date or None, row)], earliest first, undated last (#725; stable, so they keep their
+    list order)."""
+    cutoff = timeline.first_upload()
+    dated = [(timeline.resolve_item_date(r, cutoff), r) for r in rows]
+    return sorted(dated, key=lambda p: timeline.date_sort_key(p[0]))
+
+
+def _pile_span(dated):
+    """A pile's `Mon YYYY - Mon YYYY` from its REAL dates; "Undated" when it has none (#725)."""
+    real = [ts for ts, _r in dated if ts is not None]
+    return date_range_label(real[0], real[-1]) if real else item_dates.UNDATED_LABEL
+
+
 def _asset_card(r, ts, spec, card_row, thumb_fn):
-    """One file's face (file_face) for a pile or a fan on `card_row`'s page."""
+    """One file's face (file_face) for a pile or a fan on `card_row`'s page. `ts` is its real date
+    or None (#725): an undated file's date line is what core/item_dates.py says it shows."""
     title = item_title.title_of(r)
     text = next((t for t in (r.get("content_description"), r.get("description")) if t and t != title), "")
     name = r.get("filename") or ""
     ext = name.rpartition(".")[2] if "." in name else ""
-    return file_face(slug=r["slug"], title=title, dates=_day_label(ts), type_line=spec.label,
+    dates = _day_label(ts) if ts is not None else item_dates.item_date(r)["label"]
+    return file_face(slug=r["slug"], title=title, dates=dates, type_line=spec.label,
                      cover_url=thumb_fn(r) if thumb_fn else None,
                      href=f"/object/{r['slug']}?from=project:{card_row['slug']}",
                      stacked=card_row["title"], text=text, stat=ext.upper())
@@ -2143,11 +2253,11 @@ def project_pile(card, items=None, thumb_fn=None):
         items = db.list_project_items(row["id"])
     if not items:
         return None
-    dated = sorted(((timeline.resolve_item_date(r), r) for r in items), key=lambda p: p[0])
+    dated = _by_real_date(items)
     shown = dated[:STACK_FAN_MAX]
     cards = [_asset_card(r, ts, object_types.get_object_type(r.get("media_type") or "unknown"), row, thumb_fn)
              for ts, r in shown]
-    return {"count": len(items), "span": date_range_label(dated[0][0], dated[-1][0]),
+    return {"count": len(items), "span": _pile_span(dated),
             "cards": cards, "more": max(0, len(items) - len(cards))}
 
 
@@ -2205,7 +2315,7 @@ def resolve_hobby_cover(hobby_row, projects=None, usable=None):
             return out
         out["picked_unavailable"] = True
     if projects is None:
-        projects = db.list_projects_for_hobby(hobby_row["id"])
+        projects = policy.filter_visible_cards(db.list_projects_for_hobby(hobby_row["id"]))  # #604 step 3
     ranked = recent_first(projects)
     highlighted = [p for p in ranked if p.get("highlight")]
     rest = [p for p in ranked if not p.get("highlight")]
@@ -2301,12 +2411,12 @@ def file_stacks(card, items=None, thumb_fn=None):
     piles = []
     for mt, rows in by_type.items():
         spec = object_types.get_object_type(mt)
-        dated = sorted(((timeline.resolve_item_date(r), r) for r in rows), key=lambda p: p[0])
+        dated = _by_real_date(rows)
         shown = dated[:STACK_FAN_MAX]
         cards = [_asset_card(r, ts, spec, row, thumb_fn) for ts, r in shown]
         piles.append({
             "media_type": mt, "label": spec.label, "count": len(rows),
-            "span": date_range_label(dated[0][0], dated[-1][0]),
+            "span": _pile_span(dated),
             "cards": cards, "more": max(0, len(rows) - len(cards)),
         })
     piles.sort(key=lambda p: (-p["count"], p["label"]))
@@ -2485,6 +2595,9 @@ def _changes_from_log(rows):
                             "field": "decision", "before": _state(b) if b and "resolved_at" in b else "open",
                             "after": _state(a) if a and "resolved_at" in a else None})
                 continue
+            if m["table"] == "projects":  # #745: a card's agent notes never ride in a change summary
+                b = {k: v for k, v in b.items() if k not in db.PRIVATE_CARD_COLUMNS} if b else b
+                a = {k: v for k, v in a.items() if k not in db.PRIVATE_CARD_COLUMNS} if a else a
             if b is None or a is None:
                 if m["table"] == "capture_events":  # #541: an item row can carry a megabyte of OCR text
                     from . import items as _items
@@ -2629,7 +2742,9 @@ def undo(target, *, force=False, dry_run=False, actor=None):
     # #541 phase B: an item delete/redact moved files into the trash. Plan the file side first so
     # a purged file refuses the whole undo (trash_expired) before anything is written.
     from . import items as _items  # lazy: items imports this module
+    from . import sharing as _sharing  # lazy: sharing imports this module
     _items.check_undo_allowed(rows, actor)  # #603: an undo that would clear a sensitive flag is admin-only
+    _sharing.check_undo_allowed(rows, actor)  # #604 step 3: private cards (sharing changes, hidden rows)
     file_plan = _items.undo_prepare(rows)
     batch_id = changes.new_batch_id()
     applied, slugs, moved = [], [], []
@@ -2679,7 +2794,13 @@ def list_changes(card=None, batch_id=None, limit=50):
     slug = None
     if card not in (None, ""):
         c = db.get_project(card)
+        if c is not None:
+            policy.require_card_view(c, message=f"No such card: {card!r}")  # #604 step 3
         slug = c["slug"] if c else str(card)
+    from . import sharing as _sharing  # lazy: sharing imports this module
+    # #604 steps 3 and 5: a row image carries the whole row, so a non-admin reads only the rows
+    # that touch nothing hidden from them (a private card they aren't on, a sensitive item).
+    rows = _sharing.visible_change_rows(db.list_change_log(card_slug=slug, batch_id=batch_id, limit=limit))
     return [{"id": r["id"], "op": r["op"], "actor": r["actor"], "batch_id": r["batch_id"],
              "timestamp": r["timestamp"], "affected_slugs": r["affected_slugs"], "undone_by": r.get("undone_by"),
-             "mutations": r["mutations"]} for r in db.list_change_log(card_slug=slug, batch_id=batch_id, limit=limit)]
+             "mutations": r["mutations"]} for r in rows]

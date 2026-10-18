@@ -1039,12 +1039,12 @@ SAMPLES = [
     *[S(f"spreadsheet-workbook{e}", "spreadsheet", spreadsheet_file(e), thumbnail=True, date=True,
         shows="sheet table preview, embedded thumbnail") for e in (".xlsx", ".xlsm", ".xltx", ".xltm")],
     S("word-legacy.doc", "word", legacy_office("WordDocument", "Word 97-2003"), thumbnail=False, text=False,
-      hand_built=True, shows="legacy format recognised; no preview or text (no .doc/.xls/.ppt text reader; OCR reads failed, #724)"),
+      hand_built=True, shows="legacy format recognised; no preview or text (a stub, not a real Word 97 file: the .doc reader finds nothing it can read, so OCR reads 'not compatible', grey, #724)"),
     S("spreadsheet-legacy.xls", "spreadsheet", legacy_office("Workbook", "Excel 97-2003"), thumbnail=False, text=False,
-      hand_built=True, shows="legacy format recognised; no preview or text (no .doc/.xls/.ppt text reader; OCR reads failed, #724)"),
+      hand_built=True, shows="legacy format recognised; no preview or text (a hand-built stub xlrd can't parse, so OCR reads failed: a real read error, #724)"),
     S("powerpoint-legacy.ppt", "powerpoint", legacy_office("PowerPoint Document", "PowerPoint 97-2003"),
       thumbnail=False, text=False, hand_built=True,
-      shows="legacy format recognised; no preview or text (no .doc/.xls/.ppt text reader; OCR reads failed, #724)"),
+      shows="legacy format recognised; no preview or text (a stub with no Current User stream: the .ppt reader finds nothing it can read, so OCR reads 'not compatible', grey, #724)"),
     # archives
     S("archive-bundle.zip", "archive", archive_zip, shows="member listing (3 files)"),
     S("archive-bundle.7z", "archive", archive_7z, shows="member listing (3 files)"),
@@ -1129,8 +1129,10 @@ class Content:
 CONTENT = [
     Content("youtube-link", "youtube", {"external_url": "https://www.youtube.com/watch?v=jNQXAC9IVRw"},
             thumbnail="network", text="network", shows="embedded player; thumbnail fetched from YouTube (needs network)"),
-    Content("web-page-link", "url", {"external_url": "https://example.com/constructicon-type-sampler"},
-            thumbnail=False, text=False, shows="link card with the URL as its title (no capture yet, so OCR reads failed, #724)"),
+    Content("web-page-link", "url", {"external_url": "https://example.com/"},
+            thumbnail=False, text="network",
+            shows="link card with the URL as its title; OCR reads the page's title and summary through the guarded "
+                  "fetch (needs network; offline it settles grey with the reason, #724 d)"),
     Content("written-post", "document", {
         "media_type": "document", "content_description": "Constructicon type sampler written post (#720)",
         "type_metadata": json.dumps({"body": f"# {MARK}: written post\n\nA post made by the drop test."})},

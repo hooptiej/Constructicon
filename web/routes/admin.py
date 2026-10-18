@@ -26,7 +26,7 @@ def api_delete_all(confirm: str = Form("")):
     'my uploads' and 'everything' are the same set.
 
     #558: requires the typed phrase (confirm=DELETE EVERYTHING). #541 phase C: one
-    implementation in core/reset.py, shared with MCP constructicon_delete_all; it writes one
+    implementation in core/reset.py, shared with MCP constructicon_delete(everything=true); it writes one
     change-log row (op delete_all) with the per-table counts."""
     return JSONResponse(reset.delete_everything(confirm))
 

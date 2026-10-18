@@ -6,7 +6,9 @@ variants) are zips of XML, so properties, text and the embedded preview
 image come straight out with the standard library (zipfile + ElementTree):
 no python-docx/python-pptx. Old binary files (.doc/.xls/.ppt) are OLE
 compound files; olefile (already a dependency, #444) reads their summary
-properties. A password-protected OOXML file is also an OLE container (an
+properties; word.py and powerpoint.py read the text of Word 97+ .doc and
+PowerPoint 97+ .ppt themselves with olefile (#724, read_ole_stream below).
+A password-protected OOXML file is also an OLE container (an
 "EncryptedPackage" stream), so it's recognised and reported rather than
 refused.
 
@@ -20,6 +22,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from .. import datefmt
+from . import TooLarge  # #724 b2: defined in the registry now, shared by every text reader
 
 MAX_PART_BYTES = 32 * 1024 * 1024
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -55,6 +58,28 @@ def ole_streams(path):
         return {"/".join(e) for e in ole.listdir()}
 
 
+def unreadable(path, exc, partial_text=None):
+    """#724: the exception an Office text reader raises when it couldn't read `path` (it raised
+    `exc`): object_types.unreadable, "corrupt or unreadable .doc: <short error>" (or "too large to
+    read .doc: ..." for a size cap). Kept as a name here for the Office readers."""
+    from . import unreadable as _unreadable
+    return _unreadable(path, exc, partial_text=partial_text)
+
+
+def read_ole_stream(ole, name, cap=None):
+    """#724: one stream of an open olefile.OleFileIO as bytes, refused (ValueError) when it's larger
+    than `cap` (TooLarge; default MAX_PART_BYTES), like read_part for an OOXML part. A missing stream raises
+    too (callers check first)."""
+    cap = cap or MAX_PART_BYTES
+    size = ole.get_size(name)
+    if size > cap:
+        raise TooLarge(f"{name} stream too large ({size:,} bytes, cap {cap:,})")
+    data = ole.openstream(name).read()
+    if len(data) < size:
+        raise ValueError(f"{name} stream truncated ({len(data):,} of {size:,} bytes)")
+    return data
+
+
 def is_encrypted_ooxml(path):
     streams = ole_streams(path)
     return bool(streams and "EncryptedPackage" in streams)
@@ -63,7 +88,7 @@ def is_encrypted_ooxml(path):
 def read_part(z, name):
     info = z.getinfo(name)
     if info.file_size > MAX_PART_BYTES:
-        raise ValueError(f"{name} too large")
+        raise TooLarge(f"{name} too large")
     return z.read(name)
 
 

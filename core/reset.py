@@ -1,5 +1,5 @@
 """Delete-all (#541 phase C): the ONE full reset, called by POST /api/delete-all and MCP
-constructicon_delete_all. Before this, each front end had its own line-for-line copy (raw SQL),
+constructicon_delete(everything=true). Before this, each front end had its own line-for-line copy (raw SQL),
 and both forgot blog entries, card questions, curator snoozes, the trash and more.
 
 PERMANENT BY DESIGN: it is a reset, not a delete. Nothing goes to the trash and nothing can be
@@ -32,6 +32,7 @@ CONFIRM_PHRASE = "DELETE EVERYTHING"
 
 # Children first (nothing here has ON DELETE rules, but the order reads as "what points at what").
 CLEARED_TABLES = (
+    "share_members",  # #604 step 3: private cards' / hobbies' member lists go with the cards
     "post_tags", "project_items", "capture_event_relations", "item_revisions", "caption_queue",
     "blog_entry_items", "blog_entry_projects", "blog_entries",
     "project_relations", "family_members", "project_hobbies",
@@ -40,7 +41,8 @@ CLEARED_TABLES = (
 )
 KEPT_TABLES = ("app_settings", "audit_log", "install_config", "provenance_options",
                "schema_migrations", "users", "sessions",
-               "item_access_log")  # #604 follow-up 7: a log, like audit_log (who opened sensitive items)
+               "item_access_log",  # #604 follow-up 7: a log, like audit_log (who opened sensitive items)
+               "mcp_tokens")  # #604 step 5: users' MCP tokens stay with the users
 
 
 def delete_everything(confirm="", *, actor=None):

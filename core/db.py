@@ -247,6 +247,30 @@ CREATE TABLE IF NOT EXISTS item_access_log (
     at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_item_access_log_slug ON item_access_log(slug, at);
+-- #604 step 3: the members of a PRIVATE card (projects.private) or hobby (hobby_settings.private),
+-- each a viewer or an editor of it. Only core/sharing.py writes it (imaged, undoable). The owner
+-- (created_by_user_id) and admins see a private card without a row here.
+CREATE TABLE IF NOT EXISTS share_members (
+    target_kind TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    added_at REAL NOT NULL,
+    PRIMARY KEY (target_kind, target_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_share_members_user ON share_members(user_id);
+-- #604 step 5: per-user MCP tokens, several per user, each named ("windows claude"). Only the sha256
+-- of the token is stored (like sessions); core/mcp_tokens.py owns every write. Never imaged.
+CREATE TABLE IF NOT EXISTS mcp_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at REAL NOT NULL,
+    rotated_at REAL,
+    last_used_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id);
 """
 
 # Provenance (capture_events.provenance, #341): the options live in the provenance_options
@@ -256,11 +280,6 @@ CREATE INDEX IF NOT EXISTS idx_item_access_log_slug ON item_access_log(slug, at)
 # Suggested vocab for reusable branding objects (logo, logotype, icon, etc.).
 # Loose (no DB CHECK), extensible — brand_role is freeform text, allows custom values.
 BRAND_ROLES = ["logo", "logotype", "icon", "color", "typography", "swag", "template-asset", "other"]
-
-# --- Project statuses (projects.status) — #341 ---
-# Controlled vocab for project lifecycle stage. Loose, no DB CHECK. Existing
-# rows have status='active' — treat as 'wip' (work in progress).
-PROJECT_STATUSES = ["wip", "complete", "shelved", "means-to-an-end", "abandoned", "failed", "idea", "published", "reference-only"]
 
 # --- Hobby statuses (blog_tags.hobby_status) — #360 ---
 # Controlled vocab for hobby activity. Only meaningful when is_hobby=1.
@@ -456,6 +475,11 @@ def transaction(dry_run=False, timeout=30):
         real.close()
 
 
+def in_transaction():
+    """True inside a transaction() on this thread (#725: derived-data caches skip uncommitted state)."""
+    return getattr(_ambient, "tx", None) is not None
+
+
 @contextmanager
 def read_session():
     """(#524) One shared connection for a read-heavy computation. get_conn() opens and closes
@@ -503,6 +527,34 @@ def change_fingerprint():
         except OSError:
             out.append(None)
     return tuple(out)
+
+
+# --- #725: the install's first upload (timeline's cutoff for "real" file mtimes) ---------------
+# core/timeline.py counts a file's own modified time as a real date only when it is from before the
+# install's first upload. That is MIN(capture_events.timestamp): derived, never stored, so a fresh
+# install and every throwaway test DB get their own. Cached per DB file until anything is written
+# (change_fingerprint), so a grid of 2,000 rows costs two stat() calls per row, not a query.
+_first_upload_cache = {"key": None, "value": None}
+_first_upload_lock = threading.Lock()
+
+
+def first_upload_epoch():
+    """The install's first upload (UTC unix seconds), or None while it holds no items."""
+    key = (str(DB_PATH), change_fingerprint())
+    with _first_upload_lock:
+        if _first_upload_cache["key"] == key and key[1] is not None:
+            return _first_upload_cache["value"]
+    conn = get_conn()
+    try:
+        value = conn.execute("SELECT MIN(timestamp) FROM capture_events").fetchone()[0]
+    finally:
+        conn.close()
+    with _first_upload_lock:
+        _first_upload_cache.update(key=key, value=value)
+    return value
+
+
+timeline.set_first_upload_provider(first_upload_epoch)
 
 
 class _DryRunRollback(Exception):
@@ -861,6 +913,12 @@ def init_db(migrate=True):
         # Never exposed through public HTTP API — agent-only scratch space.
         if "agent_notes" not in existing_columns:
             _add_column(conn, "capture_events", "agent_notes", "TEXT")
+        # projects.agent_notes (#745): the same private scratch field on a CARD. Schema DDL like
+        # every other column (both processes, so the MCP that writes it never waits on web's
+        # migrations); NULL = none, so nothing to backfill. It never rides in a card row the readers
+        # below hand out (_card_row strips it); only get_card_agent_notes reads it.
+        if "agent_notes" not in existing_project_columns:
+            _add_column(conn, "projects", "agent_notes", "TEXT")
         # provenance + highlight (#341): Curator Stage 1 data model. provenance is a
         # controlled-vocab extensible field describing how the object came to be (found,
         # created, documented, result, reference, design). highlight is a boolean
@@ -877,8 +935,8 @@ def init_db(migrate=True):
         # --- V2 cards, piece 1 (docs/design/v2-cards.md 3.1, 3.2, 3.13) ---
         # kind: what sort of card this is (project/thing/action/family/collection/event).
         # No CHECK -- core/card_rules.validate_kind is the gate (same stance as media_type).
-        # activity/stage/stop_reason: the live status. Legacy projects.status is now
-        # FROZEN (the static export still reads it); live code reads stage.
+        # activity/stage/stop_reason: the live status. Legacy projects.status is
+        # FROZEN and retired (#545): nothing reads it; only the v1 migration did.
         for column, ddl_type in (
             ("kind", "TEXT NOT NULL DEFAULT 'project'"),
             ("activity", "TEXT"),
@@ -934,6 +992,12 @@ def init_db(migrate=True):
         if "created_by_user_id" not in existing_blog_entry_columns:
             _add_column(conn, "blog_entries", "created_by_user_id", "INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_capture_events_sensitive ON capture_events(sensitive)")
+        # #604 step 3: a PRIVATE card or hobby (0 = open, the default). Who else may see it is
+        # share_members; core/policy.py decides, core/sharing.py writes.
+        if "private" not in existing_project_columns:
+            _add_column(conn, "projects", "private", "INTEGER NOT NULL DEFAULT 0")
+        if "private" not in existing_hobby_settings_columns:
+            _add_column(conn, "hobby_settings", "private", "INTEGER NOT NULL DEFAULT 0")
         # Change log: audit_log grows nullable columns so core operations can record
         # row images (before/after) for audit + undo. Direct HTTP callers keep getting
         # the old request-log row (these columns NULL there).
@@ -1147,6 +1211,161 @@ def _mig_empty_file_ocr_done_587():
                          (r["slug"],))
 
 
+def _mig_ocr_unsupported_724():
+    # #724: an item with nothing OCR can read (no text source and no picture: a web link today)
+    # used to settle as 'failed', a red lamp for something that never went wrong. core/ocr.py now
+    # settles those as 'unsupported' with a reason; re-settle the old failed rows the same way.
+    # A row qualifies only by object_types.nothing_to_read(row, spec), the exact test new OCR runs use: its
+    # type has no text_extract_fn AND no picture is expected for it. So an image (its own file is
+    # the picture), a YouTube video (a fetched thumbnail), a PDF or any type with a text source
+    # is never touched: their 'failed' is a real error and stays. Redacted rows are left alone.
+    # Idempotent: a second run finds no failed row that qualifies.
+    from . import object_types
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug, media_type, filename, stored_filename, external_url, type_metadata FROM capture_events "
+        "WHERE ocr_status = 'failed' AND COALESCE(redacted, 0) = 0").fetchall()
+    moved = {}
+    for r in rows:
+        row = dict(r)
+        try:
+            row["type_metadata"] = json.loads(row["type_metadata"] or "{}")
+        except ValueError:  # silent-ok: unreadable JSON: not provably "nothing to read", leave the row failed
+            continue
+        spec = object_types.get_object_type(row.get("media_type"))
+        if spec is None or not spec.ocr_capable or not object_types.nothing_to_read(row, spec):
+            continue
+        note_sql, note_args = _ocr_note_sql(object_types.ocr_unsupported_note(row, spec))
+        conn.execute(f"UPDATE capture_events SET ocr_status = ?, {note_sql} WHERE slug = ? AND ocr_status = 'failed'",
+                     (OCR_UNSUPPORTED, *note_args, row["slug"]))
+        moved[row["media_type"]] = moved.get(row["media_type"], 0) + 1
+    print(f"schema_migrations: ocr_unsupported_724 checked {len(rows)} failed row(s), re-settled "
+          f"{sum(moved.values())} as unsupported {moved or ''}".rstrip(), flush=True)
+
+
+def _mig_reread_legacy_office_724b():
+    # #724 part b (owner decision 2026-10-17): legacy .doc / .ppt have text readers now, so the rows
+    # that settled before them are re-read once: 'failed' (part a and earlier had no reader, or
+    # one that couldn't open them) and 'unsupported' (part a's "no readable text yet"). They go back
+    # to 'pending' (fresh ocr_started_at, stale ocr_note removed); web's startup self-heal, which runs
+    # right after init_db, re-runs OCR on every pending row, and the readers decide afresh (text,
+    # "not compatible" with a reason, or "corrupt" with a reason). Matched by the stored file's
+    # extension, which is what the readers dispatch on. Redacted rows are left alone. Idempotent:
+    # recorded once in schema_migrations, and a second run would only re-queue rows that a re-read
+    # settled the same way again.
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug FROM capture_events WHERE ocr_status IN ('failed', ?) AND COALESCE(redacted, 0) = 0 "
+        "AND media_type IN ('word', 'powerpoint') "
+        "AND (lower(stored_filename) LIKE '%.doc' OR lower(stored_filename) LIKE '%.ppt')",
+        (OCR_UNSUPPORTED,)).fetchall()
+    note_sql, _ = _ocr_note_sql(None)
+    now = time.time()
+    for r in rows:
+        conn.execute(f"UPDATE capture_events SET ocr_status = 'pending', ocr_started_at = ?, {note_sql} WHERE slug = ?",
+                     (now, r["slug"]))
+    print(f"schema_migrations: reread_legacy_office_724b re-queued {len(rows)} legacy .doc/.ppt row(s) for OCR",
+          flush=True)
+
+
+def _mig_text_sources_724c():
+    # #724 part c (owner decision 2026-10-17: descriptions first, free, no network): a YouTube
+    # video's stored description (type_metadata.description) becomes searchable extracted text,
+    # concatenated with the thumbnail's OCR text under headed sections, text_source 'description'.
+    # New rows get it from core/ocr.py; this re-settles the existing ones once, by the same rule
+    # (core/text_sources.resettle), for every type with a text_sources_fn (YouTube today):
+    # - a settled row ('done' / 'unsupported') whose sources hold text: extracted_text rebuilt, the
+    #   OCR text already stored kept as its "Thumbnail text:" section (never lost);
+    # - a settled row with no source text and no thumbnail text: 'unsupported' with the type's note
+    #   ("video: no description or captions yet", grey), part a's rule;
+    # - pending rows are left to their OCR run, 'failed' rows keep their real error until Retry,
+    #   redacted rows and rows with unreadable type_metadata JSON are left alone.
+    # No network, no OCR. Idempotent: resettle returns None for a row already settled this way, so a
+    # second run changes nothing. The FTS index follows through the UPDATE OF extracted_text trigger.
+    from . import object_types, text_sources
+    specs = {k: s for k, s in object_types.OBJECT_TYPES.items() if s.ocr_capable and s.text_sources_fn is not None}
+    if not specs:
+        return
+    conn = get_conn()
+    marks = ", ".join("?" for _ in specs)
+    rows = conn.execute(
+        "SELECT slug, media_type, filename, stored_filename, external_url, extracted_text, ocr_status, type_metadata "
+        f"FROM capture_events WHERE media_type IN ({marks}) AND ocr_status IN ('done', ?) "
+        "AND COALESCE(redacted, 0) = 0", (*specs, OCR_UNSUPPORTED)).fetchall()
+    combined = unsupported = 0
+    for r in rows:
+        row = dict(r)
+        try:
+            row["type_metadata"] = json.loads(row["type_metadata"] or "{}")
+        except ValueError:  # silent-ok: unreadable JSON: leave the row exactly as it is
+            continue
+        spec = specs[row["media_type"]]
+        change = text_sources.resettle(row, spec, object_types.ocr_unsupported_note(row, spec))
+        if change is None:
+            continue
+        meta = text_sources.resettled_meta(row["type_metadata"], change)
+        conn.execute("UPDATE capture_events SET extracted_text = ?, ocr_status = ?, type_metadata = ? WHERE slug = ?",
+                     (change["text"], change["status"], json.dumps(meta), row["slug"]))
+        if change["status"] == OCR_UNSUPPORTED:
+            unsupported += 1
+        else:
+            combined += 1
+    print(f"schema_migrations: text_sources_724c checked {len(rows)} settled row(s) of {sorted(specs)}: "
+          f"{combined} given their description text, {unsupported} re-settled as unsupported (no text at all)",
+          flush=True)
+
+
+def _mig_link_page_text_724d():
+    # #724 part d (owner decision 2026-10-17, "Title + summary, safe fetch"): web links read their
+    # page's title and summary now (core/object_types/url.py page_text, through core/safe_fetch.py).
+    # The url rows that settled before it ('unsupported' "web link: no readable text yet" from part
+    # a, or 'failed' on an install where part a found them first) go back to 'pending' once (fresh
+    # ocr_started_at, stale ocr_note removed); web's startup self-heal, right after init_db, re-runs
+    # OCR on every pending row. The fetches themselves are polite: core/safe_fetch.py lets one page
+    # fetch run at a time per container with a pause between them (CONSTRUCTICON_LINK_FETCH_DELAY_
+    # SECONDS, default 2), so a backfill of many links to one site never bursts. No network here.
+    # Rows with no external_url, redacted rows and every other type are left alone. Idempotent:
+    # recorded once in schema_migrations; a second run would only re-queue rows a fetch settled the
+    # same way again.
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug FROM capture_events WHERE media_type = 'url' AND ocr_status IN ('failed', ?) "
+        "AND COALESCE(redacted, 0) = 0 AND COALESCE(TRIM(external_url), '') != ''",
+        (OCR_UNSUPPORTED,)).fetchall()
+    note_sql, _ = _ocr_note_sql(None)
+    now = time.time()
+    for r in rows:
+        conn.execute(f"UPDATE capture_events SET ocr_status = 'pending', ocr_started_at = ?, {note_sql} WHERE slug = ?",
+                     (now, r["slug"]))
+    print(f"schema_migrations: link_page_text_724d re-queued {len(rows)} web link row(s) to read their page title "
+          f"and summary", flush=True)
+
+
+def _mig_transcripts_724e():
+    # #724 part e (owner decision 2026-10-17: transcripts through youtube-transcript-api): every
+    # existing row of a type with a network text source (YouTube today, ObjectTypeSpec.text_fetch_fn)
+    # that has never had a transcript attempt is marked type_metadata.transcript_status = 'queued'.
+    # No network here and no OCR re-run: web's _transcript_loop (web/app.py) works the queued rows a
+    # few per pass, one fetch at a time (core/transcripts.py), and folds each result into the row's
+    # stored text (core/text_sources.resettle). Rows that already have a transcript_status (an OCR
+    # run since part e landed), redacted rows and rows with unreadable type_metadata are left alone.
+    # Idempotent: recorded once in schema_migrations, and a second run finds no row without a status.
+    from . import object_types
+    types = [k for k, s in object_types.OBJECT_TYPES.items() if getattr(s, "text_fetch_fn", None) is not None]
+    if not types:
+        return
+    conn = get_conn()
+    marks = ", ".join("?" for _ in types)
+    cur = conn.execute(
+        "UPDATE capture_events SET type_metadata = json_set(CASE WHEN COALESCE(type_metadata, '') = '' THEN '{}' "
+        "ELSE type_metadata END, '$.transcript_status', 'queued') "
+        f"WHERE media_type IN ({marks}) AND COALESCE(redacted, 0) = 0 "
+        "AND (COALESCE(type_metadata, '') = '' OR (json_valid(type_metadata) AND json_type(type_metadata) = 'object' "
+        "AND json_extract(type_metadata, '$.transcript_status') IS NULL))", types)
+    print(f"schema_migrations: transcripts_724e queued {cur.rowcount} row(s) of {sorted(types)} for a transcript "
+          f"attempt (fetched in the background, one at a time)", flush=True)
+
+
 def _mig_writeup_lead_596():
     # #596: fill the projects.writeup_lead cache (the card face's write-up excerpt) once for every
     # card that has a write-up. From then on the cards service keeps it in step with every write-up
@@ -1315,6 +1534,29 @@ def _mig_ownership_backfill_604():
 # owner's own cards; they moved to scripts/archive/ (already recorded in schema_migrations on the
 # owner's installs, so dropping them from this list changes nothing there; fresh installs never
 # run them). v2c_1/2/5 are generic (legacy status, hobby vocabulary, reference-only cards).
+def _mig_date_guess_backfill_725():
+    # #725: undated items (no real date: the upload time and a post-install file mtime don't count)
+    # get the high-confidence date guesses (core/date_guess.py: a date in the file name, the file's
+    # own embedded date such as a PDF CreationDate or a container date, a stored YouTube publish
+    # date) as content_date, with the source recorded, as ONE undoable batch (core/items.py
+    # apply_dates, op item_date_guess, actor migration). No network: nothing is fetched. Idempotent:
+    # fill-only, so a second run finds those items dated and skips them. The rest stay undated:
+    # they inherit their card's range, or the Curator shows them as needs_date.
+    from . import actor as actor_ctx, item_dates, items
+    with actor_ctx.acting_as(actor_ctx.ACTOR_MIGRATION):
+        plan = item_dates.auto_plan(read_files=True)
+        by_source = {}
+        for _row, g in plan:
+            by_source[g.source] = by_source.get(g.source, 0) + 1
+        if plan:
+            res = items.apply_dates([(r["slug"], g.epoch, item_dates.source_record(g)) for r, g in plan])
+            applied, batch = len(res.data["applied"]), res.batch_id
+        else:
+            applied, batch = 0, None
+    print(f"schema_migrations: date_guess_backfill_725 dated {applied} undated item(s) from in-file evidence "
+          f"{by_source} (batch {batch}; undo it with POST /api/changes/<batch>/undo)", flush=True)
+
+
 def _mig_search_index_543():
     # #543: fills the FTS5 search index for every item already in the DB (new/changed items are
     # kept current by the triggers from here on). Idempotent: 'rebuild' discards and re-creates the
@@ -1340,6 +1582,12 @@ MIGRATIONS = [
     ("ownership_backfill_604", _mig_ownership_backfill_604),
     ("audit_scrub_secret_routes_559", _mig_audit_scrub_secret_routes_559),
     ("search_index_543", _mig_search_index_543),
+    ("ocr_unsupported_724", _mig_ocr_unsupported_724),
+    ("reread_legacy_office_724b", _mig_reread_legacy_office_724b),
+    ("text_sources_724c", _mig_text_sources_724c),
+    ("link_page_text_724d", _mig_link_page_text_724d),
+    ("transcripts_724e", _mig_transcripts_724e),
+    ("date_guess_backfill_725", _mig_date_guess_backfill_725),
 ]
 
 
@@ -1777,16 +2025,41 @@ def list_pending_ocr():
         conn.close()
 
 
-def set_ocr_status(slug, status):
+OCR_UNSUPPORTED = "unsupported"  # #724: nothing OCR can read (no text source, no picture); not a failure
+
+
+def _ocr_note_sql(note):
+    """#724: SQL (and its parameter) that sets or clears type_metadata.ocr_note in place, in the
+    same UPDATE as the status (json_set / json_remove, so a concurrent caption write to another
+    key isn't lost). A row whose type_metadata isn't valid JSON is left as it is."""
+    if note:
+        return ("type_metadata = CASE WHEN json_valid(type_metadata) "
+                "THEN json_set(type_metadata, '$.ocr_note', ?) ELSE type_metadata END"), (note,)
+    return ("type_metadata = CASE WHEN json_valid(type_metadata) "
+            "THEN json_remove(type_metadata, '$.ocr_note') ELSE type_metadata END"), ()
+
+
+def set_ocr_status(slug, status, note=None):
     """Setting status to "pending" also stamps ocr_started_at — lets the
     watchdog measure how long the *current* attempt has been running,
-    independent of how old the upload itself is."""
+    independent of how old the upload itself is.
+
+    #724: `note` is the plain reason for status 'unsupported' (stored as type_metadata.ocr_note,
+    shown as "Not compatible with OCR: <note>"); 'failed' may carry one too (a corrupt file says
+    so: "corrupt or unreadable .doc: ..."); and (b2) so may 'done', when the text came with a
+    warning (the reader failed and OCR read the picture instead, or only part of the file could
+    be read). 'pending', or no note, clears a stale note."""
+    if status == OCR_UNSUPPORTED and not note:
+        raise ValueError("ocr_status 'unsupported' needs a note saying why")
+    note_sql, note_args = _ocr_note_sql(note if status in (OCR_UNSUPPORTED, "failed", "done") else None)
     conn = get_conn()
     try:
         if status == "pending":
-            conn.execute("UPDATE capture_events SET ocr_status = ?, ocr_started_at = ? WHERE slug = ?", (status, time.time(), slug))
+            conn.execute(f"UPDATE capture_events SET ocr_status = ?, ocr_started_at = ?, {note_sql} WHERE slug = ?",
+                         (status, time.time(), *note_args, slug))
         else:
-            conn.execute("UPDATE capture_events SET ocr_status = ? WHERE slug = ?", (status, slug))
+            conn.execute(f"UPDATE capture_events SET ocr_status = ?, {note_sql} WHERE slug = ?",
+                         (status, *note_args, slug))
         conn.commit()
     finally:
         conn.close()
@@ -2344,11 +2617,92 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
         conn.close()
 
 
-def set_extracted_text(slug, text):
+def set_extracted_text(slug, text, source=None):
+    """#724: `source` is where the text came from (the type's text_source, e.g. 'office'), stored
+    as type_metadata.text_source in the same UPDATE; None clears a stale one (text OCR'd from a
+    picture, or emptied). A row whose type_metadata isn't valid JSON keeps it as it is."""
+    if source:
+        meta_sql = ("type_metadata = CASE WHEN type_metadata IS NULL OR type_metadata = '' "
+                    "THEN json_object('text_source', ?) WHEN json_valid(type_metadata) "
+                    "THEN json_set(type_metadata, '$.text_source', ?) ELSE type_metadata END")
+        meta_args = (source, source)
+    else:
+        meta_sql = ("type_metadata = CASE WHEN json_valid(type_metadata) "
+                    "THEN json_remove(type_metadata, '$.text_source') ELSE type_metadata END")
+        meta_args = ()
     conn = get_conn()
     try:
-        conn.execute("UPDATE capture_events SET extracted_text = ? WHERE slug = ?", (text, slug))
+        conn.execute(f"UPDATE capture_events SET extracted_text = ?, {meta_sql} WHERE slug = ?",
+                     (text, *meta_args, slug))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def set_text_source_fields(slug, fields, resettle=False):
+    """#724 (e): pipeline bookkeeping for a type's network text source (a YouTube transcript,
+    core/transcripts.py): merge `fields` into type_metadata ({key: value}, None removes the key),
+    in one transaction that re-reads the row first (so a concurrent write to another key isn't
+    lost). With `resettle`, a row whose OCR has settled also gets its extracted_text / text_source
+    / ocr_status rebuilt from its type's sources and the picture text already stored
+    (core/text_sources.resettle, no OCR re-run), and an 'unsupported' row's ocr_note follows the
+    type's current reason ("no captions"). A pending row is left to its OCR run, a 'failed' row
+    keeps its error until Retry, unreadable JSON is left alone. Returns the resettle change (or
+    None)."""
+    from . import object_types, text_sources
+    with transaction() as tx:
+        r = tx.conn.execute(
+            "SELECT slug, media_type, filename, stored_filename, external_url, extracted_text, ocr_status, "
+            "type_metadata FROM capture_events WHERE slug = ?", (slug,)).fetchone()
+        if r is None:
+            return None
+        row = dict(r)
+        try:
+            meta = json.loads(row["type_metadata"] or "{}")
+        except ValueError:  # silent-ok: unreadable JSON is never overwritten; the caller's fetch is dropped
+            print(f"set_text_source_fields: {slug} has unreadable type_metadata; left as it is", flush=True)
+            return None
+        if not isinstance(meta, dict):
+            return None
+        for key, value in (fields or {}).items():
+            if value is None:
+                meta.pop(key, None)
+            else:
+                meta[key] = value
+        row["type_metadata"] = meta
+        change = None
+        text, status = row["extracted_text"], row["ocr_status"]
+        if resettle:
+            spec = object_types.get_object_type(row.get("media_type"))
+            change = text_sources.resettle(row, spec, object_types.ocr_unsupported_note(row, spec))
+            if change is not None:
+                meta = text_sources.resettled_meta(meta, change)
+                text, status = change["text"], change["status"]
+            if status == OCR_UNSUPPORTED:
+                meta["ocr_note"] = object_types.ocr_unsupported_note({**row, "type_metadata": meta}, spec)
+        tx.conn.execute("UPDATE capture_events SET extracted_text = ?, ocr_status = ?, type_metadata = ? WHERE slug = ?",
+                        (text, status, json.dumps(meta), slug))
+        return change
+
+
+def list_due_text_fetches(media_types, now, limit):
+    """#724 (e): slugs of rows of `media_types` waiting for a network text fetch: transcript_status
+    'queued' (never tried), or 'retry' with transcript_retry_at passed. Not redacted, not pending
+    OCR (that run fetches itself). Oldest-due first."""
+    if not media_types:
+        return []
+    marks = ", ".join("?" for _ in media_types)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT slug FROM capture_events WHERE media_type IN ({marks}) AND COALESCE(redacted, 0) = 0 "
+            "AND COALESCE(ocr_status, '') != 'pending' AND json_valid(type_metadata) AND ("
+            "json_extract(type_metadata, '$.transcript_status') = 'queued' OR "
+            "(json_extract(type_metadata, '$.transcript_status') = 'retry' "
+            " AND json_extract(type_metadata, '$.transcript_retry_at') <= ?)) "
+            "ORDER BY COALESCE(json_extract(type_metadata, '$.transcript_retry_at'), 0), id LIMIT ?",
+            (*media_types, now, int(limit))).fetchall()
+        return [r["slug"] for r in rows]
     finally:
         conn.close()
 
@@ -2789,7 +3143,7 @@ def list_linked_projects(slug):
             "SELECT slug_a FROM project_relations WHERE slug_b = ?) ORDER BY p.updated_at DESC",
             (slug, slug),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -2804,7 +3158,7 @@ def list_related_projects(slug):
             "WHERE r.slug_a = ? AND r.type = 'related' ORDER BY p.updated_at DESC",
             (slug,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -3100,7 +3454,7 @@ def _create_project(title, description="", cover_slug=None, status="active", tag
     kind/stage/stop_reason (V2 cards): default to a Project that is In progress
     (matching v1's default status='active'); validated by core/card_rules and a
     rule violation raises card_rules.CardError. The legacy `status` column keeps
-    its default and is otherwise frozen (the static export still reads it)."""
+    its default and is otherwise frozen; nothing reads it (#545)."""
     from . import card_rules, changes
     batch_id = batch_id or changes.new_batch_id()
     kind = card_rules.validate_kind(kind or card_rules.DEFAULT_KIND)
@@ -3275,6 +3629,31 @@ def resolve_project_cover_slug(project_or_id, _depth=0):
     return None
 
 
+PRIVATE_CARD_COLUMNS = ("agent_notes",)  # #745: never in a card row a reader hands out
+
+
+def _card_row(row):
+    """A projects row as a dict WITHOUT its private columns (#745). Every reader below that hands out
+    whole card rows goes through this, so a route or shaper that dumps a row (or a future one that
+    forgets to whitelist) can't leak the agent notes. Undo and the change log read the table
+    themselves (image_get), so they still see and restore the column."""
+    d = dict(row)
+    for col in PRIVATE_CARD_COLUMNS:
+        d.pop(col, None)
+    return d
+
+
+def get_card_agent_notes(card_id):
+    """A card's private agent notes (#745), or None. The ONE reader of projects.agent_notes: MCP
+    get_project and set_agent_notes only."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT agent_notes FROM projects WHERE id = ?", (int(card_id),)).fetchone()
+        return row["agent_notes"] if row else None
+    finally:
+        conn.close()
+
+
 def get_project(id_or_slug):
     """Look up by either numeric id or slug — a project detail page will
     likely be reached by slug in a URL, but internal callers (e.g.
@@ -3285,25 +3664,24 @@ def get_project(id_or_slug):
             row = conn.execute("SELECT * FROM projects WHERE id = ?", (int(id_or_slug),)).fetchone()
         else:
             row = conn.execute("SELECT * FROM projects WHERE slug = ?", (id_or_slug,)).fetchone()
-        return dict(row) if row else None
+        return _card_row(row) if row else None
     finally:
         conn.close()
 
 
-def list_projects(status=None, kind=None, activity=None, stage=None):
-    """All projects, most-recently-updated first. `status` filters the FROZEN
-    legacy column (the static export relies on status="active"); kind/activity/
-    stage filter the live V2 columns."""
+def list_projects(kind=None, activity=None, stage=None):
+    """All projects, most-recently-updated first, optionally filtered on the live V2
+    columns. (#545: no filter on the frozen, retired `status` column.)"""
     conn = get_conn()
     try:
         clauses, args = [], []
-        for col, val in (("status", status), ("kind", kind), ("activity", activity), ("stage", stage)):
+        for col, val in (("kind", kind), ("activity", activity), ("stage", stage)):
             if val is not None:
                 clauses.append(f"{col} = ?")
                 args.append(val)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         rows = conn.execute(f"SELECT * FROM projects{where} ORDER BY updated_at DESC", args).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -3378,7 +3756,7 @@ def list_child_projects(project_id):
             "SELECT * FROM projects WHERE parent_id = ? ORDER BY title",
             (project_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -3420,8 +3798,8 @@ def list_project_items(project_id):
 
     Ordered by each item's real-world chronology (#300): the same
     effective-date chain core/timeline.py's resolve_item_date establishes
-    for the Timeline feature (display_date_override → content_date →
-    source_modified_at → timestamp), oldest first, so the project page
+    for the Timeline feature (display_date_override → date made → content_date →
+    a pre-install source_modified_at; #725: undated items last), oldest first, so the project page
     reads as the project actually happened rather than in the order things
     were filed. Resolved in Python rather than inlined into SQL so there's
     exactly one implementation of that chain. The SQL still orders by
@@ -3445,11 +3823,154 @@ def list_project_items(project_id):
             (project_id,),
         ).fetchall()
         items = [_row_to_dict(r) for r in rows]
-        items.sort(key=timeline.resolve_item_date)
+        cutoff = timeline.first_upload()
+        # #725: undated items (no real date) go last, in sort_order (the sort is stable).
+        items.sort(key=lambda i: timeline.date_sort_key(timeline.resolve_item_date(i, cutoff)))
         if memo is not None:
             memo[("items", project_id)] = items
             return list(items)
         return items
+    finally:
+        conn.close()
+
+
+def privacy_snapshot():
+    """(#604 step 3) Everything core/policy.py needs to decide card / hobby visibility, read in one
+    go. None when nothing at all is private (the common case: one cheap query each). Otherwise
+    {"cards": {id: owner_user_id}, "hobbies": {tag_id: owner_user_id}, "members": {(kind, id):
+    {user_id: role}}, "children": {parent_id: [card ids]} (projects.parent_id), "family": {family_id:
+    [member ids]}, "hobby_cards": {tag_id: [card ids]}}: the private nodes and the edges along which
+    privacy is inherited downward. Inside a read_session() (a page render) it is read once and kept
+    for the session (read-only work, so it can't go stale; a write clears the memo)."""
+    memo = getattr(_ambient, "memo", None)
+    if memo is not None and "privacy_snapshot" in memo:
+        return memo["privacy_snapshot"]
+    snap = _privacy_snapshot()
+    if memo is not None:
+        memo["privacy_snapshot"] = snap
+    return snap
+
+
+def _privacy_snapshot():
+    conn = get_conn()
+    try:
+        cards_p = {r["id"]: r["created_by_user_id"] for r in conn.execute(
+            "SELECT id, created_by_user_id FROM projects WHERE COALESCE(private, 0) = 1")}
+        hobbies_p = {r["hobby_tag_id"]: r["created_by_user_id"] for r in conn.execute(
+            "SELECT hs.hobby_tag_id, hs.created_by_user_id FROM hobby_settings hs "
+            "JOIN blog_tags bt ON bt.id = hs.hobby_tag_id WHERE COALESCE(hs.private, 0) = 1 AND bt.is_hobby = 1")}
+        if not cards_p and not hobbies_p:
+            return None
+        members = {}
+        for r in conn.execute("SELECT target_kind, target_id, user_id, role FROM share_members"):
+            members.setdefault((r["target_kind"], r["target_id"]), {})[r["user_id"]] = r["role"]
+        children, family, hobby_cards = {}, {}, {}
+        for r in conn.execute("SELECT id, parent_id FROM projects WHERE parent_id IS NOT NULL"):
+            children.setdefault(r["parent_id"], []).append(r["id"])
+        for r in conn.execute("SELECT family_id, member_id FROM family_members"):
+            family.setdefault(r["family_id"], []).append(r["member_id"])
+        for r in conn.execute("SELECT project_id, hobby_tag_id FROM project_hobbies"):
+            hobby_cards.setdefault(r["hobby_tag_id"], []).append(r["project_id"])
+        return {"cards": cards_p, "hobbies": hobbies_p, "members": members, "children": children,
+                "family": family, "hobby_cards": hobby_cards}
+    finally:
+        conn.close()
+
+
+def card_parents(card_id):
+    """(#604 step 3) What a card inherits privacy FROM: {"cards": [parent card id, family ids it is a
+    member of], "hobbies": [hobby tag ids it is in]}. Read-only."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT parent_id FROM projects WHERE id = ?", (card_id,)).fetchone()
+        up = [row["parent_id"]] if row and row["parent_id"] is not None else []
+        up += [r["family_id"] for r in conn.execute("SELECT family_id FROM family_members WHERE member_id = ?",
+                                                    (card_id,))]
+        hobbies_ = [r["hobby_tag_id"] for r in conn.execute(
+            "SELECT hobby_tag_id FROM project_hobbies WHERE project_id = ?", (card_id,))]
+        return {"cards": up, "hobbies": hobbies_}
+    finally:
+        conn.close()
+
+
+def slugs_in_cards(card_ids):
+    """(#604 step 3) The item slugs on any of these cards (project_items)."""
+    ids = [int(i) for i in card_ids]
+    if not ids:
+        return set()
+    conn = get_conn()
+    try:
+        out = set()
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            out |= {r[0] for r in conn.execute(
+                f"SELECT post_slug FROM project_items WHERE project_id IN ({','.join('?' for _ in chunk)})", chunk)}
+        return out
+    finally:
+        conn.close()
+
+
+def card_tag_links():
+    """(#604 step 3) {tag_id: [card ids whose linked tag it is]} (projects.tag_id)."""
+    conn = get_conn()
+    try:
+        out = {}
+        for r in conn.execute("SELECT id, tag_id FROM projects WHERE tag_id IS NOT NULL"):
+            out.setdefault(r["tag_id"], []).append(r["id"])
+        return out
+    finally:
+        conn.close()
+
+
+def slugs_tagged(tag_ids):
+    """(#604 step 3) The item slugs tagged directly (post_tags) with any of these tags: a hobby's
+    loose objects, for a private hobby."""
+    ids = [int(i) for i in tag_ids]
+    if not ids:
+        return set()
+    conn = get_conn()
+    try:
+        return {r[0] for r in conn.execute(
+            f"SELECT post_slug FROM post_tags WHERE tag_id IN ({','.join('?' for _ in ids)})", ids)}
+    finally:
+        conn.close()
+
+
+def item_holders(slug):
+    """(#604 step 3) {"cards": [card ids holding this item], "tags": [tag ids on it]}: what an item's
+    visibility depends on."""
+    conn = get_conn()
+    try:
+        return {"cards": [r[0] for r in conn.execute("SELECT project_id FROM project_items WHERE post_slug = ?", (slug,))],
+                "tags": [r[0] for r in conn.execute("SELECT tag_id FROM post_tags WHERE post_slug = ?", (slug,))]}
+    finally:
+        conn.close()
+
+
+def share_members(kind, target_id):
+    """(#604 step 3) A private card's / hobby's members: [{user_id, role, added_at, username,
+    display_name, user_role, disabled}], by name. Deleted users show with username None."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT sm.user_id, sm.role, sm.added_at, u.username, u.display_name, u.role AS user_role, u.disabled "
+            "FROM share_members sm LEFT JOIN users u ON u.id = sm.user_id "
+            "WHERE sm.target_kind = ? AND sm.target_id = ? ORDER BY LOWER(COALESCE(u.display_name, u.username, ''))",
+            (kind, target_id)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def hobby_privacy(tag_id):
+    """(#604 step 3) {private, created_by_user_id} for a hobby (no hobby_settings row = open,
+    admin-owned)."""
+    conn = get_conn()
+    try:
+        r = conn.execute("SELECT COALESCE(private, 0) AS private, created_by_user_id FROM hobby_settings "
+                         "WHERE hobby_tag_id = ?", (tag_id,)).fetchone()
+        return {"private": int(r["private"]), "created_by_user_id": r["created_by_user_id"]} if r else \
+            {"private": 0, "created_by_user_id": None}
     finally:
         conn.close()
 
@@ -3464,7 +3985,7 @@ def list_projects_for_post(post_slug):
             "WHERE pi.post_slug = ? ORDER BY p.updated_at DESC",
             (post_slug,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -3679,6 +4200,9 @@ def insert_change_log(conn, op, actor, mutations, batch_id=None, affected_slugs=
     `details` (#541 phase C): an optional JSON-able summary kept in form_body, for a record
     that has no row images (delete-all writes its per-table counts there)."""
     actor = actor_ctx.resolve(actor)
+    # #604 step 3: the private-card write guard (a viewer member only looks). It raises before the
+    # log row exists, so the caller's transaction rolls the write back.
+    policy.check_write(mutations, actor)
     cur = conn.execute(
         "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, "
         "op, actor, batch_id, mutations) VALUES (?, ?, ?, ?, 200, NULL, ?, ?, ?, ?, ?)",
@@ -3741,6 +4265,8 @@ IMAGE_TABLE_KEYS = {
     # #562: install identity (core/install_config.py) and per-hobby settings (core/hobbies.py).
     "install_config": ("key",),
     "hobby_settings": ("hobby_tag_id",),
+    # #604 step 3 (core/sharing.py): a private card's / hobby's members.
+    "share_members": ("target_kind", "target_id", "user_id"),
 }
 _IMAGE_ROWID_TABLES = ("project_items", "project_hobbies", "family_members", "project_relations",
                        "blog_entry_projects", "post_tags")
@@ -4043,7 +4569,7 @@ def list_projects_referencing(card_id):
     """Cards that point at `card_id` through cover_project_id or a card home override."""
     conn = get_conn()
     try:
-        return [dict(r) for r in conn.execute(
+        return [_card_row(r) for r in conn.execute(
             "SELECT * FROM projects WHERE cover_project_id = ? OR (home_kind = 'card' AND home_ref = ?)",
             (card_id, card_id))]
     finally:
@@ -4161,7 +4687,7 @@ def list_family_members(family_id):
             "ORDER BY fm.sort_order, fm.created_at, fm.rowid",
             (family_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -4175,7 +4701,7 @@ def list_families_for_member(member_id):
             "WHERE fm.member_id = ? ORDER BY fm.created_at, fm.rowid",
             (member_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -4608,7 +5134,7 @@ def list_entry_projects(entry_id):
             "JOIN projects p ON p.id = bep.project_id WHERE bep.entry_id = ? ORDER BY bep.sort_order ASC",
             (entry_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -4754,10 +5280,9 @@ def hobby_flags(tag_id, now=None):
         last = None
         for p in projects:
             items = list_project_items(p["id"])
-            dated = [i for i in items if i["slug"] != p.get("writeup_slug")]
-            if not dated and p.get("end_date_override") is None:
+            end = timeline.resolve_project_span(p, items)[1]  # #725: None when nothing real
+            if end is None:
                 continue
-            end = timeline.resolve_project_span(p, items)[1]
             last = end if last is None else max(last, end)
         conn = get_conn()
         try:
@@ -4768,6 +5293,8 @@ def hobby_flags(tag_id, now=None):
             conn.close()
         for r in rows:
             d = timeline.resolve_item_date(_row_to_dict(r))
+            if d is None:
+                continue  # #725: an undated item says nothing about when the hobby was touched
             last = d if last is None else max(last, d)
         if last is not None:
             days = int((now - last) // 86400)
@@ -4830,7 +5357,7 @@ def list_projects_for_hobby(tag_id):
             "WHERE ph.hobby_tag_id = ? ORDER BY p.updated_at DESC",
             (tag_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_card_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -4909,6 +5436,60 @@ def first_card_titles():
             "WHERE pi.rowid IN (SELECT MIN(rowid) FROM project_items GROUP BY post_slug)")}
     finally:
         conn.close()
+
+
+# --- #725: the reads behind core/item_dates.py (an undated item's approximate date) ----------
+_DATE_COLS = ("ce.slug, ce.media_type, ce.sensitive, ce.redacted, ce.timestamp, ce.content_date, "
+              "ce.display_date_override, ce.source_modified_at, "
+              "CASE WHEN json_valid(ce.type_metadata) THEN json_extract(ce.type_metadata, '$.date_made') END AS date_made")
+
+
+def date_lending_rows():
+    """#725: (cards, links) for every card's REAL-dated range in ONE pass. `cards`: id, slug,
+    title, writeup_slug and the Timeline start/end overrides of every card. `links`: one row per
+    card membership with the item's date columns only (never its text or embedding): project_id,
+    `link_order` (project_items.rowid: the first one per item is the card it was first filed into,
+    as db.first_card_titles), the date columns, `date_made` (type_metadata.date_made) and
+    `blank_doc` (an empty written post, #672: never part of a span)."""
+    conn = get_conn()
+    try:
+        cards = [dict(r) for r in conn.execute(
+            "SELECT id, slug, title, writeup_slug, start_date_override, end_date_override FROM projects")]
+        links = [dict(r) for r in conn.execute(
+            f"SELECT pi.project_id, pi.rowid AS link_order, {_DATE_COLS}, "
+            "CASE WHEN ce.media_type = 'document' AND json_valid(ce.type_metadata) "
+            "THEN trim(COALESCE(json_extract(ce.type_metadata, '$.body'), '')) = '' ELSE 0 END AS blank_doc "
+            "FROM project_items pi JOIN capture_events ce ON ce.slug = pi.post_slug")]
+        return cards, links
+    finally:
+        conn.close()
+
+
+def item_date_rows():
+    """#725: the date columns (as date_lending_rows) of every non-redacted item, for finding the
+    undated ones without loading every row's text."""
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(f"SELECT {_DATE_COLS} FROM capture_events ce WHERE ce.redacted = 0")]
+    finally:
+        conn.close()
+
+
+def get_by_slugs(slugs):
+    """Full item rows (the get_by_slug shape) for `slugs`, in the order given; unknown slugs are
+    left out. Read in chunks (SQLite's parameter limit)."""
+    slugs = list(dict.fromkeys(slugs))
+    found = {}
+    conn = get_conn()
+    try:
+        for i in range(0, len(slugs), 500):
+            chunk = slugs[i:i + 500]
+            marks = ",".join("?" for _ in chunk)
+            for r in conn.execute(f"SELECT * FROM capture_events WHERE slug IN ({marks})", chunk):
+                found[r["slug"]] = _row_to_dict(r)
+    finally:
+        conn.close()
+    return [found[s] for s in slugs if s in found]
 
 
 def hobby_shows_physical_piece(hobby_id):
@@ -5057,7 +5638,87 @@ def _delete_user(user_id):
     conn = get_conn()
     try:
         conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM mcp_tokens WHERE user_id = ?", (user_id,))  # #604 step 5
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --- #604 step 5: per-user MCP tokens (core/mcp_tokens.py owns every write) -----------------------
+
+MCP_TOKEN_PUBLIC_COLUMNS = "id, user_id, name, created_at, rotated_at, last_used_at"
+
+
+def list_mcp_tokens(user_id):
+    """A user's MCP tokens, newest first: {id, user_id, name, created_at, rotated_at, last_used_at}
+    (never the hash)."""
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            f"SELECT {MCP_TOKEN_PUBLIC_COLUMNS} FROM mcp_tokens WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+            (user_id,))]
+    finally:
+        conn.close()
+
+
+def get_mcp_token(token_id):
+    conn = get_conn()
+    try:
+        r = conn.execute(f"SELECT {MCP_TOKEN_PUBLIC_COLUMNS} FROM mcp_tokens WHERE id = ?", (token_id,)).fetchone()
+        return dict(r) if r else None
+    finally:
+        conn.close()
+
+
+def find_mcp_token(token_hash):
+    """The token row (no hash) whose sha256 is `token_hash`, plus its user's username / role /
+    disabled (None for a deleted user); None when no such token."""
+    conn = get_conn()
+    try:
+        r = conn.execute(
+            "SELECT t.id, t.user_id, t.name, t.created_at, t.rotated_at, t.last_used_at, u.username, u.role, "
+            "u.disabled, u.display_name FROM mcp_tokens t LEFT JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
+            (token_hash,)).fetchone()
+        return dict(r) if r else None
+    finally:
+        conn.close()
+
+
+def _insert_mcp_token(user_id, name, token_hash, now):
+    conn = get_conn()
+    try:
+        cur = conn.execute("INSERT INTO mcp_tokens (user_id, name, token_hash, created_at) VALUES (?, ?, ?, ?)",
+                           (user_id, name, token_hash, now))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _rehash_mcp_token(token_id, token_hash, now):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE mcp_tokens SET token_hash = ?, rotated_at = ?, last_used_at = NULL WHERE id = ?",
+                     (token_hash, now, token_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _delete_mcp_token(token_id):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM mcp_tokens WHERE id = ?", (token_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _touch_mcp_token(token_id, now):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?", (now, token_id))
         conn.commit()
     finally:
         conn.close()

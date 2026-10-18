@@ -119,15 +119,16 @@ def fill_missing(slug):
     """Seeds content_description, display_name, type_metadata and
     content_date from the file's embedded metadata, touching only what the
     row doesn't already have (see the module docstring for the rule and
-    why both title columns). Returns the row afterwards — re-read if
-    anything was written — or None for an unknown slug."""
+    why both title columns). #725: then, when the row still has no real
+    date, a date in its file name (_date_from_filename). Returns the row
+    afterwards — re-read if anything was written — or None for an unknown slug."""
     row = db.get_by_slug(slug)
     if row is None:
         return None
     try:
         found = extract(row)
         if not found:
-            return row
+            return _date_from_filename(slug, row)  # #725: a name can still carry the date
         title = (found.get("content_description") or "").strip()
         existing_tm = row.get("type_metadata") or {}
         new_tm = {
@@ -149,6 +150,31 @@ def fill_missing(slug):
         if content_date is not None and row is not None and row.get("content_date") is None:
             db._set_content_date(slug, content_date)
             row = db.get_by_slug(slug)
+    except Exception as e:
+        print(f"embedded metadata fill failed for {slug}: {e!r}")
+    return _date_from_filename(slug, row)
+
+
+def _date_from_filename(slug, row):
+    """#725: an upload that still has no real date (no EXIF / container / PDF date, and a file
+    mtime from after the install's first upload, which is a download date, not a real one) takes a
+    date written in its file name (IMG_20190512_..., 2019-05-12, a unix timestamp: core/date_guess.py)
+    as content_date, recording where it came from (type_metadata.content_date_source). Same
+    fill-only rule and same best-effort contract as the rest of fill_missing."""
+    if row is None:
+        return row
+    try:
+        from . import date_guess, timeline  # lazy: keeps this module's import list as it was
+        if timeline.resolve_item_date(row) is not None:
+            return row
+        guess = date_guess.from_filename(row.get("filename"))
+        if guess is None:
+            return row
+        db._set_content_date(slug, guess.epoch)
+        db._update_content_metadata(slug, type_metadata={"content_date_source": {
+            "source": guess.source, "confidence": guess.confidence, "evidence": guess.evidence[:200],
+            "guessed": True, "accepted": "auto"}})
+        row = db.get_by_slug(slug)
     except Exception as e:
         print(f"embedded metadata fill failed for {slug}: {e!r}")
     return row

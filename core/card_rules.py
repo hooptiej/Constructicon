@@ -287,9 +287,10 @@ def validate_status(kind, stage, stop_reason=None, activity=None, whereabouts=No
     }
 
 
-# --- Legacy v1 status adapters (4.1, 4.2) ------------------------------------
-# projects.status is frozen: the static export still reads it. Live code reads
-# stage instead, through these.
+# --- Legacy v1 status words (4.2) ----------------------------------------------
+# projects.status is frozen and retired (#545): the stage is the only status, and no live
+# code reads the column. What's left here: the one-time v1 -> v2 mapping the migration uses,
+# and the translation of a v1 word a caller still SENDS (API / MCP) into a stage.
 
 LEGACY_STATUSES = ("wip", "complete", "shelved", "means-to-an-end", "abandoned", "failed",
                    "idea", "published", "reference-only", "active", "archived")
@@ -343,7 +344,7 @@ def legacy_to_status(word):
     tgt = migration_target(word)
     warnings = [f"Legacy status {word!r} translated to stage {tgt['stage']!r}"
                 + (f" ({tgt['stop_reason']})" if tgt["stop_reason"] else "")
-                + "; prefer constructicon_set_status with a stage."]
+                + "; prefer constructicon_update_project with a stage."]
     if word in ("complete", "archived", "means-to-an-end"):
         warnings.append("Legacy 'complete' is ambiguous: done (finished) or in_use (finished and still used)? "
                         "Applied 'done'; pass stage='in_use' if it is still in use.")
@@ -357,99 +358,12 @@ def legacy_to_status(word):
     }
 
 
-def curator_status(card, provisional_legacy=None):
-    """Adapter for the Curator (spec 4.1): the v1-vocabulary status the scoring
-    rules understand, derived from the live stage.
-
-    in_progress->wip, in_use/done->complete, paused->shelved, idea->idea,
-    stopped+failed->failed, stopped+abandoned->abandoned, collection->reference-only.
-
-    `provisional_legacy` is the legacy word recorded on an *open* migration
-    decision for this card. While a card's status is still a provisional guess
-    (e.g. a means-to-an-end card the migration parked on 'done'), the Curator
-    keeps scoring it by what v1 said, so migrating doesn't change a score
-    before the owner has answered. A row that has no stage yet (pre-migration
-    data) falls back to its legacy status column.
-    """
-    if provisional_legacy:
-        return provisional_legacy
-    stage = card.get("stage")
-    if not stage:
-        return card.get("status") or "wip"
-    if card.get("kind") == "collection" and card.get("provenance") in (None, "referenced"):
-        # Piece 1: the only collections are migrated v1 reference-only cards.
-        return "reference-only"
-    if stage == "in_progress":
-        return "wip"
-    if stage in ("in_use", "done"):
-        return "complete"
-    if stage == "paused":
-        return "shelved"
-    if stage == "idea":
-        return "idea"
-    if stage == "stopped":
-        return "failed" if card.get("stop_reason") == "failed" else "abandoned"
-    return "wip"
-
-
-def export_status(card):
-    """The v1-vocabulary status the STATIC EXPORT should use for a card (#512).
-
-    projects.status is frozen at the V2 migration; the live status is
-    kind/stage/stop_reason. The export keeps speaking v1, so this returns the
-    legacy-equivalent word:
-
-    * Unchanged card: if (kind, stage, stop_reason) is still exactly what
-      migration_target() mapped the frozen status to (including the provisional
-      values for queued ones), return the frozen `status` untouched. So a
-      `complete` card still provisional `done` stays `complete`, `archived`
-      stays `archived`, and an unchanged export is byte-identical.
-    * Changed or new card: map from the live stage.
-
-        kind collection (any stage)       -> reference-only
-        stage in_progress                 -> wip
-        stage done                        -> complete   (event done too)
-        stage in_use                      -> complete   (finished, still used)
-        stage paused                      -> shelved
-        stage stopped + stop_reason failed     -> failed
-        stage stopped + stop_reason abandoned  -> abandoned
-        stage idea                        -> idea
-        no stage at all (pre-migration row)    -> frozen status, else wip
-    """
-    frozen = card.get("status")
-    stage = card.get("stage")
-    if not stage:
-        return frozen or "wip"
-    tgt = migration_target(frozen)
-    if (tgt["kind"], tgt["stage"], tgt["stop_reason"]) == (
-            card.get("kind") or "project", stage, card.get("stop_reason") or None):
-        return frozen
-    if card.get("kind") == "collection":
-        return "reference-only"
-    if stage == "in_progress":
-        return "wip"
-    if stage in ("done", "in_use"):
-        return "complete"
-    if stage == "paused":
-        return "shelved"
-    if stage == "idea":
-        return "idea"
-    if stage == "stopped":
-        return "failed" if card.get("stop_reason") == "failed" else "abandoned"
-    return "wip"
-
-
 def export_included_by_default(card):
-    """Whether the export-everything default includes this card (#512). v1 used
-    db.list_projects(status="active"), i.e. only cards whose status was the literal
-    word 'active' (the other in-progress word, 'wip', never matched; that quirk is
-    kept so unchanged output stays byte-identical). Unchanged cards therefore keep
-    that rule on their frozen status; a card whose stage has changed is included
-    exactly when it is now in progress."""
-    status = export_status(card)
-    if status == card.get("status"):
-        return status == "active"
-    return status in ("wip", "active")
+    """Whether the export-everything default (no cards picked) includes this card: an
+    in-progress card that isn't a collection. #545: read from the live stage only (the frozen
+    v1 `projects.status` word is no longer an input; before, an unchanged card kept v1's
+    literal status == 'active' rule, #512)."""
+    return card.get("stage") == "in_progress" and (card.get("kind") or "project") != "collection"
 
 
 # --- Families, collections and nesting (3.6, 3.7) ---------------------------------

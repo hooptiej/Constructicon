@@ -33,7 +33,7 @@ const DAY = 86400;
 const items = [
   { slug: 'content', display_name: 'Desk build', card_date_epoch: 1000 * DAY, uploaded_at: 5000 * DAY },
   { slug: 'override', display_name: 'apple', card_date_epoch: 200 * DAY, uploaded_at: 5001 * DAY },
-  { slug: 'none', display_name: 'Zed', card_date_epoch: 4000 * DAY, uploaded_at: 4000 * DAY },  // no content date: card shows the upload
+  { slug: 'none', display_name: 'Zed', card_date_epoch: null, uploaded_at: 4000 * DAY },  // #725: undated (null), never the upload time
   { slug: 'tieA', display_name: 'Étude', card_date_epoch: 700 * DAY, uploaded_at: 4500 * DAY },
   { slug: 'tieB', display_name: 'etude', card_date_epoch: 700 * DAY, uploaded_at: 4600 * DAY },
   { slug: 'tieC1', display_name: 'beta', card_date_epoch: 300 * DAY, uploaded_at: 4100 * DAY },
@@ -41,14 +41,14 @@ const items = [
   { slug: 'oldpayload', display_name: '10th', uploaded_at: 3000 * DAY },  // no card_date_epoch at all
 ];
 const before = slugs(items);
-check('date_newest: by the card date, newest first; same date -> later upload first; full tie keeps list order',
-  slugs(ItemSort.sorted(items, 'date_newest')) === 'none,oldpayload,content,tieB,tieA,tieC1,tieC2,override',
+check('date_newest: by the card date, newest first; same date -> later upload first; full tie keeps list order; undated last',
+  slugs(ItemSort.sorted(items, 'date_newest')) === 'oldpayload,content,tieB,tieA,tieC1,tieC2,override,none',
   slugs(ItemSort.sorted(items, 'date_newest')));
-check('date_oldest: by the card date, oldest first; same date -> earlier upload first; full tie keeps list order',
+check('date_oldest: by the card date, oldest first; same date -> earlier upload first; full tie keeps list order; undated STILL last',
   slugs(ItemSort.sorted(items, 'date_oldest')) === 'override,tieC1,tieC2,tieA,tieB,content,oldpayload,none',
   slugs(ItemSort.sorted(items, 'date_oldest')));
-check('an item with no card_date_epoch sorts by its upload time (where its card date would be)',
-  ItemSort.sorted(items, 'date_newest').findIndex((x) => x.slug === 'oldpayload') === 1);
+check('an item with no card_date_epoch KEY at all (a pre-#622 payload) sorts by its upload time',
+  ItemSort.sorted(items, 'date_newest').findIndex((x) => x.slug === 'oldpayload') === 0);
 check('newest: upload time, newest first (the pre-#622 Newest)',
   slugs(ItemSort.sorted(items, 'newest')) === 'override,content,tieB,tieA,tieC1,tieC2,none,oldpayload', slugs(ItemSort.sorted(items, 'newest')));
 check('oldest: upload time, oldest first',
@@ -61,8 +61,17 @@ check('az: a missing title sorts as empty, no crash',
 check('sorted() returns a copy: the caller\'s list is untouched', slugs(items) === before);
 check('an unknown sort name sorts by the default (date_newest)', slugs(ItemSort.sorted(items, 'bogus')) === slugs(ItemSort.sorted(items, 'date_newest')));
 check('sorted() of nothing is an empty list', Array.isArray(ItemSort.sorted(null, 'az')) && ItemSort.sorted(null, 'az').length === 0);
-check('a non-number card_date_epoch (null) falls back to the upload time',
-  slugs(ItemSort.sorted([{ slug: 'a', card_date_epoch: null, uploaded_at: 5 }, { slug: 'b', card_date_epoch: 3, uploaded_at: 9 }], 'date_newest')) === 'a,b');
+check('#725: card_date_epoch null = undated, after every dated item (newest first)',
+  slugs(ItemSort.sorted([{ slug: 'a', card_date_epoch: null, uploaded_at: 5 }, { slug: 'b', card_date_epoch: 3, uploaded_at: 9 }], 'date_newest')) === 'b,a');
+check('#725: and after every dated item when oldest first too',
+  slugs(ItemSort.sorted([{ slug: 'a', card_date_epoch: null, uploaded_at: 1 }, { slug: 'b', card_date_epoch: 3, uploaded_at: 9 }], 'date_oldest')) === 'b,a');
+{
+  const und = [{ slug: 'u1', card_date_epoch: null, uploaded_at: 10 }, { slug: 'u2', card_date_epoch: null, uploaded_at: 30 },
+    { slug: 'u3', card_date_epoch: null, uploaded_at: 20 }, { slug: 'd', card_date_epoch: 1, uploaded_at: 5 }];
+  check('#725: the undated among themselves go by upload time, in the sort\'s direction',
+    slugs(ItemSort.sorted(und, 'date_newest')) === 'd,u2,u3,u1' && slugs(ItemSort.sorted(und, 'date_oldest')) === 'd,u1,u3,u2',
+    [slugs(ItemSort.sorted(und, 'date_newest')), slugs(ItemSort.sorted(und, 'date_oldest'))]);
+}
 
 // ---- wire() ---------------------------------------------------------------------------------------
 {

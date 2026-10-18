@@ -3,3 +3,8 @@
 # so a script committed with CRLF doesn't fail with a shebang/line-ending
 # error once deployed.
 *.sh text eol=lf
+
+# #724 part b: binary test fixtures (OLE compound files), never line-ending converted.
+*.doc binary
+*.ppt binary
+*.xls binary

@@ -30,7 +30,8 @@ def api_list_hobbies(request: Request):
     cover: `cover_url` (the thumb route, or null), `cover_slug`, `cover_picked` (chosen by hand)
     and `cover_source` (picked | highlighted_project | recent_project | null), `cover_project`,
     `picked_cover_slug`, `picked_cover_unavailable` (see cards.resolve_hobby_cover)."""
-    return JSONResponse([{**h, **cards.hobby_fields(h), **_hobby_cover(h)[1]} for h in db.list_hobbies()])
+    return JSONResponse([{**h, **cards.hobby_fields(h), **_hobby_cover(h)[1]}
+                         for h in policy.filter_visible_hobbies(db.list_hobbies())])  # #604 step 3
 
 
 @router.get("/api/hobbies/html", response_class=HTMLResponse, dependencies=requires(roles.VIEWER))
@@ -38,7 +39,8 @@ def api_hobbies_html(request: Request):
     """#686: every hobby as a card (the shared card component, _hobby_cards.html), as a
     server-rendered fragment for the Hobbies drawer; the /hobbies page renders the same partial."""
     return templates.TemplateResponse(request, "_hobby_cards.html",
-                                      {"hobby_faces": [_to_hobby_face(h) for h in db.list_hobbies()]})
+                                      {"hobby_faces": [_to_hobby_face(h) for h in
+                                                       policy.filter_visible_hobbies(db.list_hobbies())]})
 
 
 @router.post("/api/hobbies")
@@ -58,10 +60,10 @@ def api_get_hobby(request: Request, id_or_slug: str):
 
     Returns a dict with the hobby tag, its projects, and its objects (via post_tags)."""
     hobby = db.get_hobby(id_or_slug)
-    if hobby is None:
+    if hobby is None or not policy.can_view_hobby(hobby):  # #604 step 3: hidden = missing
         raise HTTPException(status_code=404, detail=_not_found())
 
-    projects = db.list_projects_for_hobby(hobby["id"])
+    projects = policy.filter_visible_cards(db.list_projects_for_hobby(hobby["id"]))
     # Get all objects tagged with this hobby tag
     items = policy.filter_visible(db.list_posts_for_tag(hobby["id"], include_descendants=False))  # #557
 
@@ -73,7 +75,7 @@ def api_get_hobby(request: Request, id_or_slug: str):
                 "id": p["id"],
                 "slug": p["slug"],
                 "title": p["title"],
-                "status": card_rules.curator_status(p),
+                "stage": p.get("stage"), "stage_label": card_rules.stage_label(p.get("stage")),
             }
             for p in projects
         ],
@@ -155,13 +157,13 @@ def api_add_project_to_hobby(request: Request, id_or_slug: str, project_id: str 
 
     hobbies.add_card(hobby["id"], project["id"])  # #541 phase D: logged + undoable (was unlogged)
 
-    projects = db.list_projects_for_hobby(hobby["id"])
+    projects = policy.filter_visible_cards(db.list_projects_for_hobby(hobby["id"]))  # #604 step 3
     return JSONResponse([
         {
             "id": p["id"],
             "slug": p["slug"],
             "title": p["title"],
-            "status": card_rules.curator_status(p),
+            "stage": p.get("stage"), "stage_label": card_rules.stage_label(p.get("stage")),
         }
         for p in projects
     ])
@@ -183,13 +185,13 @@ def api_remove_project_from_hobby(request: Request, id_or_slug: str, project_id:
 
     hobbies.remove_card(hobby["id"], project["id"])  # #541 phase D: logged + undoable (was unlogged)
 
-    projects = db.list_projects_for_hobby(hobby["id"])
+    projects = policy.filter_visible_cards(db.list_projects_for_hobby(hobby["id"]))  # #604 step 3
     return JSONResponse([
         {
             "id": p["id"],
             "slug": p["slug"],
             "title": p["title"],
-            "status": card_rules.curator_status(p),
+            "stage": p.get("stage"), "stage_label": card_rules.stage_label(p.get("stage")),
         }
         for p in projects
     ])

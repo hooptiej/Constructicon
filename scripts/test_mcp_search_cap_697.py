@@ -153,12 +153,12 @@ for bad in (-1, "300", 2.5, True):
     check(f"text_chars={bad!r} is refused (bad_request)", isinstance(r, dict) and r.get("ok") is False
           and r["error"]["code"] == "bad_request", r if isinstance(r, dict) else type(r))
 tools = {t.name: t for t in asyncio.run(mcp.mcp.list_tools())}
-for name in ("constructicon_search", "constructicon_get_posts_for_tag", "constructicon_get_project"):
+for name in ("constructicon_search", "constructicon_list_items", "constructicon_get_project"):
     schema = tools[name].input_schema if hasattr(tools[name], "input_schema") else tools[name].inputSchema
     check(f"{name}'s input schema has text_chars (default 300)",
           schema.get("properties", {}).get("text_chars", {}).get("default") == 300, schema.get("properties", {}).keys())
-check("the search description points at constructicon_get for the full text",
-      "constructicon_get(slug)" in (tools["constructicon_search"].description or ""))
+check("the server instructions point at constructicon_get for the full text (#746: said once, not per tool)",
+      "constructicon_get(slug)" in (mcp.mcp.instructions or ""))
 
 # ---- 3. constructicon_get keeps the whole text ---------------------------------------------------
 print("--- 3. get ---")
@@ -184,13 +184,14 @@ def find(rows, slug="big"):
 
 
 with actor.acting_as(actor.ACTOR_MCP):
-    mcp.constructicon_attach_tags("big", ["catalogs697"])
-    capped("get_posts_for_tag", find(mcp.constructicon_get_posts_for_tag("catalogs697")))
-    capped("get_posts_for_tag(text_chars=2000)", find(mcp.constructicon_get_posts_for_tag("catalogs697", text_chars=2000)), 2000)
+    mcp.constructicon_item_tags("big", ["catalogs697"])
+    capped("list_items(which=tag)", find(mcp.constructicon_list_items(which="tag", tag="catalogs697")))
+    capped("list_items(which=tag, text_chars=2000)",
+           find(mcp.constructicon_list_items(which="tag", tag="catalogs697", text_chars=2000)), 2000)
 
     card = mcp.constructicon_create_project("Catalog card 697", cover_slug="big")
-    added = mcp.constructicon_add_items_to_project(card["id"], ["big", "short"])
-    capped("add_items_to_project", find(added))
+    added = mcp.constructicon_card_files(card["id"], ["big", "short"])
+    capped("card_files(add)", find(added.get("items")))
     proj = mcp.constructicon_get_project(card["id"])
     capped("get_project items", find(proj.get("items")))
     capped("get_project cover", proj.get("cover") or {})
@@ -198,23 +199,25 @@ with actor.acting_as(actor.ACTOR_MCP):
     check("get_project(text_chars=0): no item text", find(proj0.get("items")).get("extracted_text") is None)
     check("get_project: the payload stays small", len(json.dumps(proj)) < 30_000, len(json.dumps(proj)))
 
-    capped("add_related", find(mcp.constructicon_add_related("short", "big")))
-    capped("get_related", find(mcp.constructicon_get_related("short")))
+    capped("related(add)", find(mcp.constructicon_related("short", "big")))
+    capped("get(include=related)", find(mcp.constructicon_get("short", include=["related"]).get("related")))
 
-    mcp.constructicon_set_brand_asset("big", is_brand=True, brand_role="logo")
-    capped("list_brand_assets", find(mcp.constructicon_list_brand_assets()))
-    mcp.constructicon_set_brand_asset("big", is_brand=False)
+    mcp.constructicon_update("big", fields={"is_brand_asset": True, "brand_role": "logo"})
+    capped("list_items(which=brand_assets)", find(mcp.constructicon_list_items(which="brand_assets")))
+    mcp.constructicon_update("big", fields={"is_brand_asset": False})
 
     entry = mcp.constructicon_create_blog_entry("Entry 697")
-    capped("set_blog_entry_items", find(mcp.constructicon_set_blog_entry_items(entry["slug"], [{"slug": "big"}]).get("items")))
+    capped("update_blog_entry(items)", find(mcp.constructicon_update_blog_entry(entry["slug"], items=[{"slug": "big"}]).get("items")))
     capped("get_blog_entry items", find(mcp.constructicon_get_blog_entry(entry["slug"]).get("items")))
 
-    mcp.constructicon_set_sensitive("big", True)
-    capped("list_restricted", find(mcp.constructicon_list_restricted()))
-    mcp.constructicon_set_sensitive("big", False)
+    mcp.constructicon_update("big", fields={"sensitive": True})
+    capped("list_items(which=restricted)", find(mcp.constructicon_list_items(which="restricted")))
+    mcp.constructicon_update("big", fields={"sensitive": False})
 
     mcp.constructicon_redact("big")
-    capped("list_redacted", find(mcp.constructicon_list_redacted()))
+    capped("list_items(which=redacted)", find(mcp.constructicon_list_items(which="redacted")))
+    capped("list_items(which=redacted, text_chars=2000)",
+           find(mcp.constructicon_list_items(which="redacted", text_chars=2000)), 2000)
 
 print()
 if FAILS:

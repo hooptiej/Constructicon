@@ -1,30 +1,30 @@
-"""Curator Stage 2: completeness/health scoring engine for projects.
+"""Curator Stage 2: completeness/health scoring engine for cards.
 
-This module provides a single source of truth for scoring project completeness
-across multiple dimensions. Stage 3 will reuse these rules for automated nudges;
-the scoring model is intentionally declarative and separated from policy.
+Scores a card's completeness across several dimensions; curator_needs.py turns the
+unmet checks into nudges. The model is declarative and separated from policy.
+
+One report card (#545): the checks this score shares with the card pips (cover,
+write-up, dates) are NOT defined here. They call core/card_level.py's check_cover /
+check_writeup / check_dates, so the two can never grade the same card differently
+(write-up >= 200 characters, >= 80% of files with a real date). And the card's
+STAGE is the only status it reads: the frozen v1 `projects.status` word is not an
+input any more (STAGE_APPLICABILITY below is keyed on card_rules.STAGES).
 """
 
 import json
 import logging
 
-from core import besteffort, cards, db, timeline
+from core import besteffort, card_level, card_rules, db, timeline
 from core.object_types import get_object_type
 
 log = logging.getLogger("constructicon.curator")
-
-# Status mapping: legacy active/archived -> wip/complete
-_LEGACY_STATUS_MAP = {
-    "active": "wip",
-    "archived": "complete",
-}
 
 # Weights as fractions of 100
 SCORING_RULES = {
     "story": {
         "weight": 25,
         "items": [
-            {"name": "writeup_body", "description": "write-up body present & non-empty"},
+            {"name": "writeup_body", "description": f"write-up has >= {card_level.WRITEUP_MIN_CHARS} characters"},
             {"name": "provenance_diversity", "description": "≥2 distinct provenance values"},
         ],
     },
@@ -38,7 +38,8 @@ SCORING_RULES = {
     "timeline": {
         "weight": 25,
         "items": [
-            {"name": "content_dates", "description": "≥60% of objects have a resolvable date"},
+            {"name": "content_dates",
+             "description": f">= {int(card_level.DATES_SHARE * 100)}% of files have a real date, or start and end dates are set"},
             {"name": "no_large_gap", "description": "no large unexplained gap"},
         ],
     },
@@ -57,18 +58,37 @@ SCORING_RULES = {
     },
 }
 
-# Status-based check applicability (True = applicable, False = excused)
-STATUS_APPLICABILITY = {
-    "complete": {"story": [True, True], "presentation": [True, True], "timeline": [True, True], "connections": [True, True], "oddball_bonus": [True]},
-    "published": {"story": [True, True], "presentation": [True, True], "timeline": [True, True], "connections": [True, True], "oddball_bonus": [True]},
-    "wip": {"story": [True, True], "presentation": [True, True], "timeline": [True, False], "connections": [True, True], "oddball_bonus": [False]},
-    "shelved": None,  # Silent
-    "abandoned": None,  # Silent
-    "failed": None,  # Silent
-    "reference-only": None,  # Silent
-    "idea": None,  # Silent
-    "means-to-an-end": "parent_or_related_only",  # Only check parent_id or related links
+# Which checks apply at each stage (True = applicable, False = excused). None = the stage is
+# silent: not scored, never nudged. Keyed on the live stage (card_rules.STAGES), #545.
+_ALL_CHECKS = {"story": [True, True], "presentation": [True, True], "timeline": [True, True],
+               "connections": [True, True], "oddball_bonus": [True]}
+STAGE_APPLICABILITY = {
+    "done": _ALL_CHECKS,
+    "in_use": _ALL_CHECKS,
+    # Still being worked on: a gap in the timeline is expected and no highlight is due yet.
+    "in_progress": {"story": [True, True], "presentation": [True, True], "timeline": [True, False],
+                    "connections": [True, True], "oddball_bonus": [False]},
+    "paused": None,
+    "idea": None,
+    "stopped": None,
 }
+assert set(STAGE_APPLICABILITY) == set(card_rules.STAGES), "every stage needs a Curator rule"
+LIVE_STAGES = ("in_progress", "done", "in_use")  # the stages the dashboard's average health counts
+
+
+def scoring_stage(card):
+    """The stage the Curator scores a card by: its live stage. A row with no stage yet
+    (pre-migration data, migrated at the next boot) scores as in progress."""
+    return card.get("stage") or "in_progress"
+
+
+def is_silent(card):
+    """True when the Curator doesn't score or nudge this card: a silent stage (paused, idea,
+    stopped), or a reference collection (kind collection with no provenance of its own, or
+    'referenced': what v1 called reference-only)."""
+    if card.get("kind") == "collection" and card.get("provenance") in (None, "referenced"):
+        return True
+    return STAGE_APPLICABILITY.get(scoring_stage(card)) is None
 
 
 def _auto_caption(item):
@@ -82,18 +102,6 @@ def _auto_caption(item):
                             slug=item.get("slug"))
             return False
     return bool(((tm or {}).get("auto_caption") or "").strip())
-
-def _normalize_status(status):
-    """Map legacy statuses to current ones."""
-    return _LEGACY_STATUS_MAP.get(status, status)
-
-
-def _get_writeup(project):
-    """Get the writeup object if writeup_slug is set."""
-    if not project.get("writeup_slug"):
-        return None
-    return db.get_by_slug(project["writeup_slug"])
-
 
 def content_items(project, items):
     """Project items EXCLUDING the write-up document (#404).
@@ -123,7 +131,7 @@ def _has_large_gap(items):
         return True  # No gap to speak of, check passes
 
     # Compute effective dates using timeline resolution
-    dates = sorted([timeline.resolve_item_date(item) for item in items])
+    dates = sorted(timeline.real_dates(items))  # #725: undated items have no place on the line
 
     # Compute gaps between consecutive dates
     gaps = []
@@ -162,12 +170,14 @@ def score_project(project_id_or_dict):
         project_id_or_dict: numeric project id or a project dict from db.get_project.
 
     Returns a dict with keys:
-        - project_id, slug, title, status (effective after legacy mapping)
-        - silent: bool, True if this status should be greyed out / not nudged
+        - project_id, slug, title, stage + stage_label (the live stage it was scored by)
+        - silent: bool, True if this card is greyed out / not nudged (see is_silent)
         - score: int (0-100, rounded)
         - band: "green"|"yellow"|"red" (>=80, 50-79, <50)
         - earned: float, applicable: float (precise, before rounding)
-        - checklist: list of {"dimension", "item", "passed", "excused", "weight"}
+        - checklist: list of {"dimension", "item", "passed", "excused", "weight"}; the checks
+          shared with the pips (cover_image, writeup_body, content_dates) also carry `reason`,
+          the same sentence the pips show
         - unmet: list of {"dimension", "item"} for applicable-and-failed checks
     """
     if isinstance(project_id_or_dict, dict):
@@ -178,19 +188,8 @@ def score_project(project_id_or_dict):
     if project is None:
         return None
 
-    # Normalize status
-    # V2 cards: the live status is `stage` (legacy projects.status is frozen), read
-    # through the card_rules adapter so scoring keeps its v1 vocabulary. While a
-    # card's status is still a provisional migration guess, it scores by what v1
-    # said, so migrating can't change a score before the owner answers.
-    effective_status = _normalize_status(cards.curator_status_for(project))
-
-    # Determine if silent
-    silent = effective_status in ("shelved", "abandoned", "failed", "reference-only", "idea")
-
-    # Special case: means-to-an-end
-    if effective_status == "means-to-an-end":
-        return _score_means_to_an_end(project)
+    stage = scoring_stage(project)
+    silent = is_silent(project)
 
     # Get project items and tags
     items = db.list_project_items(project["id"])
@@ -205,8 +204,8 @@ def score_project(project_id_or_dict):
     earned = 0.0
     applicable = 0.0
 
-    # Get applicability for this status
-    applicability = STATUS_APPLICABILITY.get(effective_status, STATUS_APPLICABILITY["wip"])
+    # Which checks apply at this stage (a silent card: none)
+    applicability = None if silent else STAGE_APPLICABILITY[stage]
     if applicability is None:
         applicability = {
             "story": [False, False],
@@ -222,16 +221,11 @@ def score_project(project_id_or_dict):
     dim_applicable = applicability.get(dimension, [False, False])
     weight_per_item = dim_rules["weight"] / len(dim_rules["items"])
 
-    # Check 1: writeup_body
-    # The write-up narrative lives in the writeup document's type_metadata.body
-    # (the one place site_export.py and app.py both read it from), NOT in
-    # content_description/description. Projects auto-get an empty writeup doc on
-    # creation (#156), so presence of writeup_slug is not enough — check the body.
-    writeup = _get_writeup(project)
-    _writeup_body = ""
-    if writeup is not None:
-        _writeup_body = (writeup.get("type_metadata") or {}).get("body", "") or ""
-    writeup_body_passed = bool(_writeup_body.strip())
+    # Check 1: writeup_body. #545: the pips' rule (card_level.check_writeup), so the score and
+    # the pips agree. The narrative lives in the write-up document's type_metadata.body (#156:
+    # every card gets an empty one on creation, so having a writeup_slug proves nothing).
+    writeup_check = card_level.check_writeup(project)
+    writeup_body_passed = writeup_check["passed"]
     excused = not dim_applicable[0]
     if not excused:
         applicable += weight_per_item
@@ -245,6 +239,7 @@ def score_project(project_id_or_dict):
         "passed": writeup_body_passed,
         "excused": excused,
         "weight": weight_per_item,
+        "reason": writeup_check["reason"],
     })
 
     # Check 2: provenance_diversity
@@ -270,8 +265,9 @@ def score_project(project_id_or_dict):
     dim_applicable = applicability.get(dimension, [False, False])
     weight_per_item = dim_rules["weight"] / len(dim_rules["items"])
 
-    # Check 1: cover_image
-    cover_passed = db.resolve_project_cover_slug(project) is not None
+    # Check 1: cover_image (card_level.check_cover, the pips' rule)
+    cover_check = card_level.check_cover(project)
+    cover_passed = cover_check["passed"]
     excused = not dim_applicable[0]
     if not excused:
         applicable += weight_per_item
@@ -285,6 +281,7 @@ def score_project(project_id_or_dict):
         "passed": cover_passed,
         "excused": excused,
         "weight": weight_per_item,
+        "reason": cover_check["reason"],
     })
 
     # Check 2: captions (#532). Only caption-capable items (images, video: the
@@ -327,13 +324,10 @@ def score_project(project_id_or_dict):
     dim_applicable = applicability.get(dimension, [False, False])
     weight_per_item = dim_rules["weight"] / len(dim_rules["items"])
 
-    # Check 1: content_dates
-    date_threshold = 0.6
-    if content:
-        items_with_dates = sum(1 for item in content if timeline.has_real_date(item))
-        content_dates_passed = items_with_dates / len(content) >= date_threshold
-    else:
-        content_dates_passed = False
+    # Check 1: content_dates. #545: the pips' rule (card_level.check_dates): >= 80% of the
+    # files have a real date (never the upload time), or the card's start and end are both set.
+    dates_check = card_level.check_dates(project, content)
+    content_dates_passed = dates_check["passed"]
     excused = not dim_applicable[0]
     if not excused:
         applicable += weight_per_item
@@ -347,6 +341,7 @@ def score_project(project_id_or_dict):
         "passed": content_dates_passed,
         "excused": excused,
         "weight": weight_per_item,
+        "reason": dates_check["reason"],
     })
 
     # Check 2: no_large_gap
@@ -449,7 +444,8 @@ def score_project(project_id_or_dict):
         "project_id": project["id"],
         "slug": project["slug"],
         "title": project["title"],
-        "status": effective_status,
+        "stage": stage,
+        "stage_label": card_rules.stage_label(stage),
         "silent": silent,
         "score": score,
         "band": band,
@@ -457,39 +453,6 @@ def score_project(project_id_or_dict):
         "applicable": applicable,
         "checklist": checklist,
         "unmet": unmet,
-    }
-
-
-def _score_means_to_an_end(project):
-    """Special scoring for means-to-an-end status.
-    Only checks that the project is connected (hobby, family, nesting or a link).
-    """
-    # Check: any real connection (#534, owner: "relax means-to-an-end"): a hobby, a
-    # family/collection, nesting, or a link, the same set as the connections check.
-    linked = project["id"] in db.connected_project_ids()
-
-    checklist = [
-        {
-            "dimension": "means-to-an-end",
-            "item": "linked",
-            "passed": linked,
-            "excused": False,
-            "weight": 100.0,
-        }
-    ]
-
-    return {
-        "project_id": project["id"],
-        "slug": project["slug"],
-        "title": project["title"],
-        "status": "means-to-an-end",
-        "silent": False,
-        "score": 100 if linked else 0,
-        "band": "green" if linked else "red",
-        "earned": 100.0 if linked else 0.0,
-        "applicable": 100.0,
-        "checklist": checklist,
-        "unmet": [] if linked else [{"dimension": "means-to-an-end", "item": "linked"}],
     }
 
 
@@ -518,22 +481,22 @@ def score_all_projects():
     """Score every project and return aggregate dashboard data.
 
     Returns a dict with:
-        - projects_by_status: count of projects per effective status
-        - average_health: average score of LIVE projects (wip+complete+published, excluding silent)
+        - projects_by_stage: count of cards per stage label (#545: the stage is the only status)
+        - average_health: average score of LIVE cards (in progress, done, in use; not silent ones)
         - gap_buckets: counts of projects failing each specific check
         - unfiled_count: count of capture_events not in any project
     """
     all_projects = db.list_projects()
     scores = [score_project(p) for p in all_projects]
 
-    # Projects by status
-    projects_by_status = {}
+    # Cards by stage
+    projects_by_stage = {}
     for score in scores:
-        status = score["status"]
-        projects_by_status[status] = projects_by_status.get(status, 0) + 1
+        label = score["stage_label"]
+        projects_by_stage[label] = projects_by_stage.get(label, 0) + 1
 
-    # Average health (only live, non-silent projects)
-    live_scores = [s for s in scores if s["status"] in ("wip", "complete", "published")]
+    # Average health (only live, non-silent cards)
+    live_scores = [s for s in scores if s["stage"] in LIVE_STAGES and not s["silent"]]
     average_health = sum(s["score"] for s in live_scores) / len(live_scores) if live_scores else 0
 
     # Gap buckets: count per failed check
@@ -547,7 +510,7 @@ def score_all_projects():
     unfiled_count = db.count_unfiled_items()
 
     return {
-        "projects_by_status": projects_by_status,
+        "projects_by_stage": projects_by_stage,
         "average_health": round(average_health, 1),
         "gap_buckets": gap_buckets,
         "unfiled_count": unfiled_count,

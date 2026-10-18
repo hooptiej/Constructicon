@@ -582,6 +582,11 @@ class ProjectVideoTimeline {
   }
 
   _apply(event, result) {
+    // #725: a reset can leave the item with no real date at all; it then leaves the axis.
+    if (result.effective_date === null || result.effective_date === undefined) {
+      this.events = this.events.filter((e) => e !== event);
+      return;
+    }
     event.date = result.effective_date;
     event.setByHand = !!result.set_by_hand;
     event.dateLabel = window.MountainTime.formatDate(event.date);

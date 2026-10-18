@@ -120,14 +120,20 @@ the date and commit forward when you re-verify.
     (who did it), `errors.py` (`AppError` family), `besteffort.py` (logged, rate-limited non-fatal
     failures). See "Service layer" and "Actor and errors".
   - *Rules and policy (pure or near-pure):* `card_rules.py` (card enums, labels, validation, no DB),
-    `card_level.py` (the 0-5 curation pips), `card_payload.py` (slim item records for grids),
-    `timeline.py` (effective-date resolution; `source_datetime_to_epoch`), `datefmt.py` (the one place
+    `card_level.py` (the 0-5 curation pips, and the one definition of the checks the Curator score
+    shares with them, #545), `card_payload.py` (slim item records for grids),
+    `timeline.py` (an item's REAL date or None, card spans from real dates only, #725;
+    `source_datetime_to_epoch`), `item_dates.py` (what date an item SHOWS: real, inherited from its
+    card "≈ ... · from <card>", or Undated; the undated items' guesses, #725), `date_guess.py` (the pure
+    date guesser, #725), `datefmt.py` (the one place
     a stored date becomes text, in Mountain Time, #544), `item_title.py` (`title_of`, #542),
     `markdown_render.py`, `roles.py` + `policy.py` (who may use a door / see an item; `access_log.py`
     records opens of sensitive items), `physical_piece.py` (made-by-hand item fields).
   - *The upload pipeline:* `ingest.py` (one pipeline for web and MCP uploads), `automatch.py`
     (filename-based project/tag matching, queues `project_match`), `embedded_metadata.py`,
-    `thumbnails.py`, `ocr.py`, `similarity.py`, `captions.py`.
+    `thumbnails.py`, `ocr.py`, `similarity.py`, `captions.py`, `text_sources.py` (#724 c), and
+    `safe_fetch.py` (#724 d: **the one way the app fetches a web address it was given**, see
+    "Outbound fetches" under "Data model"; never call `httpx.get` / `urllib` on a stored URL directly).
   - *Curator:* `curator.py` (completeness scoring), `curator_needs.py` (derived nudges),
     `curation_queue.py` (the one queue). See "Decisions and the Curator".
   - *Install, files, export:* `paths.py`, `storage.py`, `backup.py`, `install_token.py`, `version.py`,
@@ -212,8 +218,12 @@ the date and commit forward when you re-verify.
   (artist/album/track/year/genre); and, since #265, **`content_date`** —
   an image's EXIF `DateTimeOriginal` (Pillow, `core/object_types/image.py`)
   and a video's container `creation_time` (ffprobe,
-  `core/object_types/video.py`), gated by a plausibility window (1980 to
-  now) that drops metadata sentinels like QuickTime's 1904 epoch. Naive
+  `core/object_types/video.py`) (#725: and a PDF's own `CreationDate`,
+  `core/object_types/pdf.py`), gated by a plausibility window (1980 to
+  now) that drops metadata sentinels like QuickTime's 1904 epoch. #725: a
+  row that still has no real date then takes a date written in its FILE
+  NAME (`core/date_guess.py` `from_filename`), recorded in
+  `type_metadata.content_date_source` (see "Dates" below). Naive
   source dates go through `core/timeline.py`'s
   `source_datetime_to_epoch` (the Mountain Time convention below).
   Strictly fill-only-missing — never overwrites a value already on the
@@ -426,6 +436,11 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   the policy fail the check below).
 - **Since #603** "restricted" = sensitive: a restricted type OR an item flagged "This is sensitive",
   visible to admins AND the item's uploader (`can_view`), see "Ownership and sensitive items" below.
+- **Since #604 step 3** the policy also decides CARDS and HOBBIES: a private card / hobby (and
+  everything under it) is hidden from everyone but admins, its owner and its members, and `can_view`
+  hides an item on a hidden card (see "Private cards and hobbies" below). A card door asks
+  `policy.can_view_card` / `filter_visible_cards` (or resolves its card through `cards.get_card`);
+  `check_policy_doors.py` rule 5.
 - **Writes refuse what the caller can't see (#709), in the service op itself**, so web, MCP and any
   future per-user token are covered: `policy.viewable_rows(slugs, missing_ok=...)` for a set
   (`items.delete`, `unrelate`, `membership.add_files` / `remove_files`, `tags.merge_item_tags`; bulk
@@ -856,13 +871,15 @@ containers (`sudo docker restart <web> <mcp>`), update every client. **Lost admi
 Check with `scripts/test_auth_step2.py` (throwaway DB: the whole matrix per role and for the token,
 mounts, `next`, the decision queue, the MCP refusing to start, no secrets
 in the audit log). Later (not built): HTTPS itself (the app is ready for a TLS proxy since #646, see
-"Behind a reverse proxy"), per-user MCP tokens.
+"Behind a reverse proxy"). Per-user MCP tokens are built (#604 step 5): see "Per-user MCP tokens" below.
 
 ## Ownership and sensitive items (#604 build steps 1-2, #603)
 
 Owner decisions 2026-10-07 (#604 "Decided" table + settled follow-ups). Step 1 records who made what;
-step 2 is the per-item "This is sensitive" switch, its first consumer. Private cards, card members,
-edit rules by owner and per-user MCP tokens are #604 steps 3-5 (not built).
+step 2 is the per-item "This is sensitive" switch, its first consumer. Private cards and card members
+(step 3) and per-user MCP tokens (step 5) are the next two sections. Step 4 (the edit rules) is built only
+inside private cards (a viewer member only looks, see "Private cards and hobbies"); the owner-only rule
+for OPEN cards is not built (owner questions on PR for #604 steps 3-5).
 
 **Ownership (step 1).** A users.id, set at WRITE time from the actor context
 (`users.user_id_for_actor`): a signed-in user's id; NULL for the install token, the MCP, scripts, the
@@ -897,8 +914,8 @@ string) + `sensitive_at`. Written only by `items.set_sensitive(slugs, on)`: ONE 
   /api/image/{slug}/sensitive`, `sensitive=true|false`); every file grid's bulk bar
   (#553: home, Unfiled, the uploader gallery, a hobby's loose objects; "Mark sensitive", `POST /api/bulk/sensitive`, one batch); the upload drawer's checkbox (`sensitive`
   form field on `/api/upload` and `/api/content`, set IN the INSERT so the item is never visible
-  unlocked; a duplicate upload marks the existing item instead); MCP `constructicon_set_sensitive(slug,
-  sensitive, dry_run)`, and `sensitive` on `constructicon_upload` / `import` / `add_content`.
+  unlocked; a duplicate upload marks the existing item instead); MCP `constructicon_update(slug,
+  fields={"sensitive": bool}, dry_run)`, and `sensitive` on `constructicon_upload` / `import` / `add_content`.
 - **Policy:** `policy.is_restricted(item)` = a restricted TYPE (`is_type_restricted`) OR flagged
   (`is_flagged`); "sensitive" means either. `can_view`: an ordinary item -> yes; a sensitive one -> an
   admin, or **its uploader** (a signed-in, enabled user whose id = `uploaded_by_user_id`). The uploader
@@ -918,7 +935,7 @@ string) + `sensitive_at`. Written only by `items.set_sensitive(slugs, on)`: ONE 
   candidate the actor can't see isn't offered), revision chains (a hidden revision shows as "(an item
   you can't see)"), and the **Curator queue**: its shared cache is now built as `system` (the whole
   queue) and filtered per actor on read (`curation_queue.for_actor`; file questions carry `item_slug`).
-  The MCP acts as admin (install token) until per-user tokens (#604 step 5).
+  The MCP acts as admin with the install token, and as the user with a per-user token (#604 step 5).
 - **Admin's list** (Admin > "Sensitive items", `GET /api/restricted`, MCP `list_restricted`): restricted
   types AND flagged items, each with `reason` ("type: Certificate" / "marked by Jason K. on ...") and
   how often it was opened.
@@ -941,10 +958,126 @@ the full matrix per door, who may flip it, undo, bulk, the upload-time flag, a r
 uploader, the captioning agent, exports and the view log. `test_role_policy.py` covers a flagged
 fixture next to the certificate.
 
+## Private cards and hobbies (#604 build step 3; parts of step 4)
+
+Owner decisions: the #604 table and follow-ups (2026-10-07), and 2026-10-17 ("shared by default,
+private with a check box on the card"). **Cards and hobbies are open** (every signed-in user sees them
+and their items) **unless ticked Private.**
+- **Who sees a private card or hobby:** admins (signed-in admins, the install token, scripts, the
+  system), its **owner** (`created_by_user_id`, #604 step 1; NULL = admin-owned, so admins only) and its
+  **members** (`share_members`, viewer or editor; the member still needs an install role). Everyone else
+  gets 404 `not_found` on every door, exactly as if it didn't exist.
+- **Inherited downward** along every grouping edge: a hobby -> its cards (`project_hobbies`), a card ->
+  its nested parts (`projects.parent_id`), a family / collection -> its members (`family_members`). A card
+  is visible only when the actor may see EVERY private node above it and itself (an AND): unticking a
+  child can't make it more open than its parent, and a private child with its own list is closed to the
+  parent's members who aren't on it. Families count as an edge on purpose (owner question on the PR).
+  Since a hidden node hides everything under it, everything ABOVE a visible card is visible too.
+- **Items:** hidden when ANY card holding them is hidden ("private wins", follow-up 1), or when tagged
+  directly with a hidden hobby (its loose objects). The uploader is not exempt (owner question on the PR).
+  Unfiled items stay visible to everyone signed in. **Hotlinks are unchanged:** `/f/<slug>` and its
+  thumbnail stay public for an ordinary item even inside a private card (owner rule: the link is the
+  deliberate share); `policy.require_file` applies only the sensitive rule.
+- **Schema:** `projects.private`, `hobby_settings.private` (0/1, ADD COLUMN at boot, default 0: no data
+  migration), `share_members(target_kind card|hobby, target_id, user_id, role viewer|editor, added_at)`
+  (in `IMAGE_TABLE_KEYS`, cleared by delete-all), all in `core/db.py`.
+- **Policy (`core/policy.py`):** `card_access(actor)` -> an `Access` (the hidden card ids and hobby ids;
+  empty for an admin or when nothing is private, which costs one cheap query); `can_view_card`,
+  `can_view_hobby`, `require_card_view`, `filter_visible_cards`, `filter_visible_hobbies`,
+  `filter_tag_tree` (a hidden card's linked tag and a hidden hobby's tag leave the tag tree),
+  `outsider_access()` (everything under any private node). `can_view` / `filter_visible` /
+  `viewable_rows` / `sql_browse_clause` apply it to items, so search, browse, the file grids and every
+  item door follow. `access_scope(actor)` works the Access out once for a block (a list filter); keep
+  calls to `policy.can_view(item, actor)` positional so tests can still monkeypatch it.
+- **Doors:** pages (home, card, hobby, /hobbies, the item breadcrumb), the card / hobby APIs, the Curator
+  queue (`for_actor` drops hidden card / hobby groups and options naming hidden cards or files), the
+  decision queue, card needs and nudges, `cards.family_fields` / `list_links` / `resolve_home` (a manual
+  home naming a hidden card is passed over) / `explain_card`, blog entries' card lists, MCP
+  `list_projects`, `get_project`, `list_hobbies`, `list_tags`, every card tool (through `cards.get_card` /
+  `get_hobby` / `membership.get_card`, which refuse a hidden card as `not_found`).
+  `scripts/check_policy_doors.py` rule 5 lists them (`CARD_DOORS`).
+- **The change log:** a non-admin reads only change rows that touch nothing hidden from them
+  (`sharing.visible_change_rows`, used by `cards.list_changes`: MCP `list_changes`), and can't undo one
+  (`sharing.check_undo_allowed`, from `cards.undo`). Undoing a sharing change needs the owner or an admin.
+- **The write guard (step 4, inside private cards only): `policy.check_write`, called by
+  `db.insert_change_log` for EVERY logged write** (so every service op, the undo and any future door).
+  Inside private territory only an admin, the owner or an **editor** member may change a card, its
+  nesting / families / hobbies / links, or a file on it; a **viewer** member only looks (follow-up 4).
+  A viewer member may still file and edit their OWN uploads there (follow-up 2: "the item's owner or an
+  editor of that private card"). Refused: 403 `forbidden`, `details.reason` `private_view_only`, naming
+  the card when the actor can see it; the transaction rolls back, nothing is written. **Open cards are
+  unchanged** (any editor may change them, as before): the owner-only rule for open cards, and which ops
+  count as "editing", are owner questions (#604 step 4).
+- **Writes (`core/sharing.py`, a service module):** `state(kind, target)`, `set_private(kind, target, on)`,
+  `add_member(kind, target, user, role)` (adding again changes the role), `remove_member(...)`; each one
+  imaged change-log row (`share_private`, `share_member_add`, `share_member_remove`), undoable, `dry_run`.
+  **Only the owner (holding the editor role) or an admin** (follow-ups 4 and 6; `policy.can_manage_sharing`),
+  else 403 saying who can; a hidden target is 404. **Role ceiling** (follow-up 8): making an install
+  viewer a card editor is refused (400 `role_ceiling`, says how to fix it); a member whose install role
+  later drops shows `capped`. Members stay listed while Private is unticked (ticking it again restores
+  them). Warnings, never silent: unticking a card that still inherits privacy names the parent.
+- **Keeping things private through reshaping:** `cards.delete_card` drops the card's member rows (undo
+  restores them) and warns when its files / nested cards come out from under a private card;
+  `merge_cards` refuses a private card into a card that isn't (409 `privacy_conflict`); a part split out
+  of a private card is private with the same members; card <-> hobby conversions carry the tick, the
+  owner and the members over. The static site export publishes nothing under a private card or hobby
+  (skipped with a warning; owner question on the PR whether an admin may publish one on purpose); the
+  project zip follows the actor's view.
+- **UI:** the card page and the hobby page get a SHARING group (`templates/_sharing.html`,
+  `static/js/sharing.js`): the **Private** checkbox; ticking it reveals the member list right there (add a
+  person as viewer or editor, change a role, remove); "Private · inherited from <parent>" when it comes
+  from above. Read-only (with who can change it) for everyone but the owner and admins. Every change
+  offers Undo; a refusal shows the server's message and puts the checkbox back.
+- **Routes:** `GET /api/sharing/{card|hobby}/{id or slug}` (viewer), `POST .../private` (`private=true|false`),
+  `POST .../members` (`user`, `role`), `POST .../members/remove` (`user`) (editor, then the owner rule),
+  `GET /api/sharing/users` (editor: the people you can add). **MCP:** `constructicon_sharing(action=get |
+  set_private | add_member | remove_member | users, card= | hobby=, private=, user=, role=, dry_run=)`;
+  `get_project` / `explain_card` carry `sharing`.
+- **Not done:** the heir when a user is disabled or deleted (follow-up 5; their member rows stay and
+  match nobody once deleted), an admin view of every private card; counts ("N nested", a hobby's
+  project count) may still include hidden cards (numbers only, never names).
+- Check with `scripts/test_private_cards_604.py` (throwaway DB: the whole owner / editor member / viewer
+  member / outsider / viewer / admin / token matrix per door, inheritance, the write guard, undo, the
+  export) and `check_policy_doors.py` rule 5.
+
+## Per-user MCP tokens (#604 build step 5)
+
+Owner decision 2026-10-17: **several named tokens per user** ("windows claude", "mac claude"), each
+revocable on its own in Account, stored hashed like sessions; the MCP acts as that user. The install
+token stays the admin key for scripts and ops.
+- **Model (`core/mcp_tokens.py`, a service module; table `mcp_tokens(id, user_id, name, token_hash UNIQUE,
+  created_at, rotated_at, last_used_at)`):** a token is `ctu_` + 32 random bytes (urlsafe); only its
+  sha256 is stored. The secret is in the ANSWER to create / rotate, once, and is never logged, imaged or
+  stored (request bodies carry only the name). Up to 20 per user (409 `too_many_tokens`), names unique per
+  user in any case (409 `token_name_taken`, 400 `bad_token_name`). Each op is one change-log row with a
+  `details` summary (`mcp_token_create` / `_rotate` / `_revoke`; never the secret), not imaged, so undo
+  refuses it. `last_used_at` is written at most every 10 minutes. Kept by delete-all (`reset.KEPT_TABLES`);
+  a deleted user's tokens go with them (`db._delete_user`); a disabled user's are refused until re-enabled.
+- **Who:** every signed-in user (viewer and up) manages ONLY their own tokens; the install token / MCP
+  (no user) get 403 `not_signed_in`. An admin can't see or revoke someone else's (owner question).
+- **Web:** Account page (`/account/password`, the header's name link), section "My MCP tokens"
+  (`static/js/account-tokens.js`): make (shows the secret once plus the client config line), rotate
+  (confirm), revoke (confirm). API (viewer, JSON bodies): `GET /api/account/mcp-tokens`, `POST
+  /api/account/mcp-tokens` `{name}`, `POST /api/account/mcp-tokens/{id}/rotate`, `.../revoke`.
+- **MCP (`mcp_server/auth.py`):** the install token still runs as `mcp` (admin). A Bearer value starting
+  `ctu_` is looked up (`mcp_tokens.authenticate`, off the event loop); valid -> the request's identity
+  (`auth.IDENTITY`, a ContextVar) and the tool wrapper (`server._call_as_mcp`) runs the tool as
+  `user:<name>`: ACTION_ROLES applies their role (a viewer's token can't write), the item and card policy
+  apply (they see what they see), and the change log names them. Refused (revoked, rotated, unknown, a
+  disabled or deleted user, no role) = 401 with a message saying what to do; a lookup that fails (DB) =
+  503 saying the token couldn't be checked. Client config: the same `headers` block with the user's token.
+- **The web API with a user token:** not accepted (the web's `Authorization: Bearer` is the install
+  token only; a `ctu_` value there is 401 `invalid_token`). Owner question.
+- Check with `scripts/test_mcp_user_tokens_604.py` (throwaway DB: the account API, the secret never at
+  rest, authenticate's refusals, the middleware, and real tool calls through the streamable-HTTP app as a
+  user: a card they create is theirs, a viewer can't write, a private card is not_found).
+
 ## Service layer (#541): one core module per domain
 
 **The rule: all writes go through `core/{items,membership,tags,cards,hobbies,blog,decisions,reset}.py`
-(plus `core/revisions.py` for revision chains, `core/install_config.py` and `core/users.py`); the raw writers in `core/db.py` are private
+(plus `core/revisions.py` for revision chains, `core/duplicates.py` for duplicate folding (#615),
+`core/install_config.py`, `core/users.py`, and since #604
+`core/sharing.py` (private cards / members) and `core/mcp_tokens.py` (per-user MCP tokens)); the raw writers in `core/db.py` are private
 (`_`-prefixed); `scripts/check_layering.py` enforces it.** Run `python scripts/check_layering.py`
 (no server, no DB; `--list` prints every db.py writer and its class) before every PR that touches
 `core/`, `web/` or `mcp_server/`. It fails when:
@@ -997,7 +1130,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   thing; loose objects go onto the card; home overrides naming the hobby now name the card; the
   hobby is unmarked. One batch, `dry_run` previews. Web: the hobby page's More > "Convert to card"
   (`POST /api/hobby/{id}/convert-to-card`), `POST /api/hobby/{id}/unmark`; MCP
-  `constructicon_convert_hobby_to_card`, `constructicon_unmark_hobby`.
+  `constructicon_convert(direction="hobby_to_card")`, `constructicon_unmark_hobby`.
 - **Blog (phase D): `core/blog.py`.** `create`, `update` (None = leave; `...` = leave for
   cover_slug / content_date, None clears), `delete`, `set_projects(entry, [(card, note)])`,
   `set_items(entry, [(slug, note)])`, all imaged (`blog_entries` is in `IMAGE_TABLE_KEYS`). Unknown
@@ -1023,7 +1156,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   `delete`. Their raw writers (`db._rename_object`, `_update_content_metadata`, `_set_type_metadata`,
   `_set_provenance`, `_set_highlight`, `_set_brand_asset`, `_set_display_date_override`,
   `_set_content_date`, `_set_media_type`, `_mark_redacted`, `_unmark_redacted`, `_delete_upload`) are
-  private since phase D. The MCP's agent notes (#206) go through `items.update(agent_notes=...)`. Deliberate raw exceptions: pipeline bookkeeping (caption status/results in
+  private since phase D. The MCP's agent notes (#206) go through `items.update(agent_notes=...)`; a card's (#745) through `cards.set_agent_notes`. Deliberate raw exceptions: pipeline bookkeeping (caption status/results in
   `core/captions.py`, upload-time `core/embedded_metadata.py`, a YouTube row's fetched publish
   date, OCR state). `items.relate` / `items.unrelate` (phase C) are the item <-> item "related"
   link: relate also shares tags and card memberships both ways (#16), all imaged, so one undo
@@ -1035,8 +1168,8 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   with no `cover_slug` takes the first file (also clears `cover_project_id`, bumps `updated_at`).
   `membership.UI_EFFECTS` (all three) is what upload / `ingest.attach_to_project`, the item page,
   bulk add-to-project, from-selection / from-related, a resolved project-match question, AND (since
-  phase C) MCP `constructicon_add_to_project` / `add_items_to_project` pass. `NO_EFFECTS`: MCP
-  `set_project_writeup`. Removing never untags and never touches the cover, on any path. The card
+  phase C) MCP `constructicon_card_files(action="add")` passes. `NO_EFFECTS`: MCP
+  `constructicon_update_project(fields={"writeup_slug": ...})`. Removing never untags and never touches the cover, on any path. The card
   reshaping ops (copy / move / split / merge / delete) call `membership.write(...)` / `write_items(log,
   ...)`: rows only, logged under their own op (`db.write_card_items` is gone). Don't call
   `db.add_item_to_project` / `remove_item_from_project` from a route or tool.
@@ -1058,8 +1191,8 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   tags through `tags.ensure` too (phase D); the only raw tag writer left is the upload-time
   automatch tagging (pipeline, allowlisted; the OCR client tagging went with #704).
 - **Delete-all (phase C): `core/reset.py` `delete_everything(confirm)`**, called by `POST
-  /api/delete-all` and MCP `constructicon_delete_all(confirm)`; both need the phrase `DELETE
-  EVERYTHING`. Permanent by design (no trash, no undo); one change-log row (op `delete_all`, actor
+  /api/delete-all` and MCP `constructicon_delete(everything=true, confirm=...)` (#746: BOTH keys, either alone
+  is refused); both need the phrase `DELETE EVERYTHING`. Permanent by design (no trash, no undo); one change-log row (op `delete_all`, actor
   from context) with per-table counts in `form_body`. Clears `reset.CLEARED_TABLES` (items and
   everything pointing at them, cards, tags and hobbies, blog entries, questions and their snoozes,
   caption queue, trash) plus every item file and thumbnail and `<storage>/.trash`; keeps
@@ -1071,16 +1204,16 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   row. **Deletes are held 7 days, then purged** (`expires_at` = now + 7 days). **Redacts are held
   until the owner clicks** (owner decision 2026-10-04): the row is `reason='redact'`, `expires_at`
   NULL, and neither the hourly purge nor "Empty trash now" (`POST /api/trash/empty`,
-  `constructicon_empty_trash`) ever touches it. A redacted item's `/object/<slug>` page and the
+  `constructicon_trash(action="empty")`) ever touches it. A redacted item's `/object/<slug>` page and the
   /admin "Redacted items" list show "The redacted file is still stored on the NAS. Recover it, or
   delete it permanently." with two actions: **Recover** (`items.recover_redacted`,
-  `POST /api/image/{slug}/recover-redacted`, MCP `constructicon_recover_redacted`; file,
+  `POST /api/image/{slug}/recover-redacted`, MCP `constructicon_redact(action="recover")`; file,
   `stored_filename` and visibility exactly as before the redact) and **Delete file permanently**
   (`items.delete_redacted_file(slug, confirm)`, `POST /api/image/{slug}/delete-redacted-file`, MCP
-  `constructicon_delete_redacted_file`; confirm dialog, logged as `item_redact_erase`, not
+  `constructicon_redact(action="delete_file", confirm=true)`; confirm dialog, logged as `item_redact_erase`, not
   undoable; the item stays redacted, metadata only, and recover then refuses with
   `no_redact_hold`). `unredact` is only for file-less redactions and refuses with
-  `redact_hold_exists` while a hold exists. `constructicon_list_trash` lists holds separately
+  `redact_hold_exists` while a hold exists. `constructicon_trash(action="list")` lists holds separately
   under `held`. A delete images the `capture_events` row and everything
   pointing at it: `capture_event_relations` (both directions), `item_revisions` (incl. the
   A -> C re-link when B leaves a chain), `project_items`, `post_tags`, `blog_entry_items`,
@@ -1089,9 +1222,30 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   file was purged it refuses with `trash_expired` (410) and writes nothing. The web worker
   (`web/app.py`, `_trash_purge_loop`) purges expired entries hourly (rows kept, `purged_at` set);
   `/admin` "Trash" shows count/size/oldest with a typed-phrase "Empty trash now" (`POST
-  /api/trash/empty`, confirm `EMPTY TRASH`); MCP `constructicon_list_trash` /
-  `constructicon_empty_trash`. Delete and bulk delete answer with `batch_id`; the pages offer
+  /api/trash/empty`, confirm `EMPTY TRASH`); MCP `constructicon_trash(action="list" | "empty")`. Delete and bulk delete answer with `batch_id`; the pages offer
   Undo (`web/static/js/undo-bar.js`). Check with `scripts/test_items_service.py` (throwaway DB).
+- **Duplicates (#615): `core/duplicates.py`.** Owner rule (2026-10-17, on the issue): a duplicate is a
+  BYTE-IDENTICAL stored file (same size + sha256), never a perceptual look-alike (PDF versions sharing
+  a cover page, the .eps and .png of a logo). `plan(actor)` is read-only: it sizes every un-redacted
+  stored file, hashes only same-size ones, and per group picks the survivor: copies with a real date
+  (`timeline.resolve_item_date`) from BEFORE Constructicon's first upload (`MIN(timestamp)`) first,
+  the earliest Mountain day wins; ties -> on more cards -> more metadata (description, caption, tags)
+  -> a clean file name over a copy marker (`AlbertusMT.otf` over `AlbertusMT (1).otf`;
+  `duplicates.has_copy_marker`: "(n)", "- Copy", "copy 2", "Copy of") -> oldest upload. A copy with no real date, or one on/after the first upload, wins only when no copy
+  has an earlier real date. Groups with a copy the actor may not see (`policy.can_view`) are left out
+  and only counted; two rows sharing ONE stored file are skipped with the reason; an unreadable file is
+  listed under `unreadable`, never skipped silently; empty files are ignored. `apply(dry_run=True,
+  expect_trash=None)` is admin only and DRY-RUN BY DEFAULT: it re-plans inside one transaction, and
+  per group one imaged `duplicates_merge` row gives the survivor what the copies had and it lacks
+  (card memberships, tags in both stores, blank description / caption / provenance / agent notes /
+  brand role, the highlight / brand-asset / sensitive flags, related links, blog placements, and any
+  card cover, card write-up, hobby cover or blog cover that named a copy), then ONE `items.delete` of
+  every copy under the same batch (trash, 7 days). One `constructicon_undo(batch_id)` reverses it all.
+  `expect_trash` = the slugs a dry run listed; a fresh plan that differs refuses (409 `plan_changed`)
+  and writes nothing. No date is ever edited. Idempotent: a second run finds no groups. MCP
+  `constructicon_duplicates(action="plan" | "apply", dry_run, expect_trash)` (plan editor, apply
+  admin). Check: `scripts/test_duplicates_615.py` (throwaway DB: grouping, survivor rule,
+  inheritance, sensitive filter, dry run, refusals, apply, idempotence, the full undo, the upload guard).
 - Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),
   `test_hobbies_blog.py` (phase D: hobbies, both conversions, card create/Save, blog, the sweep;
   every write undone and the whole DB compared), `check_layering.py`. All run on a throwaway DB.
@@ -1130,7 +1284,7 @@ matching the V2 mockup's Card template:
   `web.shapes._hobby_cover_usable` (policy + the thumb route's rules). Write: `hobbies.set_cover(hobby,
   slug_or_None)` (op `hobby_cover`, imaged, undoable; `bad_cover` 422 for a redacted or picture-less item,
   `not_found`): web `POST /api/hobby/{id}/cover` (editor, blank = automatic; the hobby page's COVER group),
-  MCP `constructicon_set_hobby_cover(hobby, cover_slug, clear, dry_run)`. Reads carry `cover_url`,
+  MCP `constructicon_update_hobby(hobby, cover_slug | clear_cover=true, dry_run)`. Reads carry `cover_url`,
   `cover_slug`, `cover_picked`, `cover_source` (picked | highlighted_project | recent_project):
   `GET /api/hobbies`, `GET /api/hobby/{id}`, MCP `constructicon_list_hobbies`. The **/hobbies page and the
   Hobbies drawer** render the shared card (`_hobby_cards.html` -> `card(face, "small")`, faces from
@@ -1152,14 +1306,15 @@ matching the V2 mockup's Card template:
   text lives in `hobby_settings.synopsis / flavor`): `...` leaves a field, None / "" clears it,
   `card_rules.validate_card_text` (`bad_card_text`, 422). One imaged row each (`set_card_text`,
   `hobby_text`), undoable. Web (editor): `POST /api/projects/{id}/text`, `POST /api/hobby/{id}/text`
-  (omit a form field to leave it, send it blank to clear). MCP: `constructicon_set_card_text(card=|hobby=,
-  synopsis, flavor, clear_synopsis, clear_flavor, dry_run)`. Reads: `cards.text_fields(card)` (in
+  (omit a form field to leave it, send it blank to clear). MCP: `constructicon_update_project(card,
+  fields={"synopsis", "flavor"})` and `constructicon_update_hobby(hobby, synopsis, flavor)` ("" clears). Reads: `cards.text_fields(card)` (in
   `explain_card`, MCP `constructicon_get_project`: synopsis, flavor, writeup_lead, face_text,
   face_text_source). UI: the ABOUT group of the details panel on the project and hobby pages
   (`templates/_card_text.html`).
 - **Every write-up gets a synopsis** (owner, 2026-10-06). An agent that writes or rewrites a card's
-  write-up (`constructicon_set_project_writeup`, or an `update` of its body) also sets that card's
-  synopsis with `constructicon_set_card_text`: a few plain sentences saying what the card is.
+  write-up (`constructicon_update_project(fields={"writeup_slug": ...})`, or an `update` of its body) also
+  sets that card's synopsis (`fields={"synopsis": ...}`, in the same call): a few plain sentences saying
+  what the card is.
 - Item grids embed `stacked` (the title of the card a file is on, `db.first_card_titles()`, one query per
   grid) in the slim payload (`core/card_payload.py`); `provenance` left it. Check with
   `scripts/test_card_faces.py` (throwaway DB), `check_item_cards.py`, `test_home_payload.py`.
@@ -1208,16 +1363,17 @@ matching the V2 mockup's Card template:
   static on a phone (wrapped it is ~5 lines). Check with
   `scripts/test_item_grid_553.py` (throwaway DB: the four pages, viewers, every bulk action from a
   non-/unfiled grid with change log + undo, 1,050 gallery rows) and `node scripts/test_item_grid_553.js`.
-- **Grid sort: the date on the card, or the upload time (#622).** Every item grid (home Files, /unfiled,
+- **Grid sort: the date on the card, or the upload time (#622, #725).** Every item grid (home Files, /unfiled,
   the user gallery, hobby loose objects) has the same Sort menu, `templates/_item_sort_options.html`:
   **Date: newest** (`date_newest`, the default) / **Date: oldest** (`date_oldest`), **Uploaded: newest** /
   **Uploaded: oldest** (`newest` / `oldest`, upload time, their pre-#622 meaning, kept for old links and
   API callers) and **A–Z** (`az`). "Date" is the date the card shows: the payload's `card_date_epoch`
-  (`web/shapes.py`, the same `timeline.resolve_item_date` value `card_date` is the label of, so the order
-  and the dates on the cards can't disagree). **No content date is not a special case:** the resolver
-  falls back to the file's own modified time, then the upload time, and the card shows that date, so the
-  item sorts where its card's date says. Ties on the card date go by upload time (same direction), then
-  keep the list's order (stable). One sorter, `static/js/item-sort.js` (`ItemSort.sorted(items, name)`,
+  (`web/shapes.py`, from `core/item_dates.py` `item_date`, the same value `card_date` is the label of, so
+  the order and the dates on the cards can't disagree). **#725: the upload time is never the card date.**
+  `card_date_epoch` is the item's REAL date, else the start of the range it inherits from its card,
+  else **null = undated, which sorts LAST in both directions** (by upload time among themselves).
+  Ties on the card date go by upload time (same direction), then keep the list's order (stable). The
+  JS treats a payload with no `card_date_epoch` key at all (cached from before #622) as its upload time. One sorter, `static/js/item-sort.js` (`ItemSort.sorted(items, name)`,
   `ItemSort.wire(select, onChange)`; loaded by `_item_grid.html` with `?v=static_version`): since #553
   every grid passes the name to `GET /api/items/grid`, where `files_feed.SORTS` uses the same keys
   (`ItemSort.sorted` has no page caller left; the tests keep the two in step). **To add a sort:** one entry in `files_feed.SORTS`, the same in
@@ -1253,14 +1409,76 @@ already ranks first), so it is the same field as the item page's DATES group.
   key steps, stack grouping). Checks: `node scripts/test_timeline_drag.js` (the maths),
   `node scripts/test_timeline_drag_ui.js` (the widget against a fake DOM), `scripts/test_timeline_drag_593.py`
   (throwaway DB: write, undo, reset, roles, policy, span).
+- **Undated items are off the axis (#725):** an item with no real date has no marker (its approximate date
+  would only be this card's own range); the page says "N undated files not on the timeline". A reset that
+  leaves an item with no real date takes its marker off and says so; the route answers `effective_date`
+  null. A sub-card with no real dates draws no block, and a card with none shows "No real dates yet" for
+  its start / end.
 - Not built: dragging the axis end caps to set the card's Timeline start/end, dragging a whole stack.
+
+## Dates: real, approximate, undated (#725, "Import date is not a birthday")
+
+Owner, 2026-10-17: stop using the import date for anything but the import date. **An item's date is
+REAL or it is nothing.** `core/timeline.py` `resolve_item_date(row)` returns, in order: the
+display-date override (set by hand), the date made (#425), `content_date` (EXIF, a container or PDF date,
+a YouTube publish date, an accepted guess), the file's own mtime (`source_modified_at`) **only when it is
+from before the install's first upload** (`db.first_upload_epoch()` = `MIN(capture_events.timestamp)`,
+derived, cached until the DB changes; a later mtime is a download / copy date), else **None**. The upload
+time (`timestamp`) is shown only as **"Imported <date>"** (the item page's header and DATES group).
+`has_real_date` = not None (Curator coverage and the dates pip). `date_sort_key` puts None last;
+`real_dates(items)` skips them.
+- **Card spans** (`resolve_project_span`) are built from real dates only; the card's own Timeline
+  start/end overrides win; an ongoing card's open end ("... - now") stays. A card with nothing real and no
+  overrides has span **(None, None)**, not its `created_at` (faces show no date line, the gallery rail
+  leaves it off, the DATES group says "No real dates yet").
+- **What an item SHOWS** is `core/item_dates.py` `item_date(row)`: the real date; else, **when its card
+  has a real-dated range, that range, approximately: "≈ Nov 2019 - Jul 2021 · from Desk Build"**; else
+  **"Undated"**. Derived at read time, NEVER stored as `content_date`, and never an input to any span (spans
+  read real dates only, so no circularity). **The lending card is the one the item was first filed into**
+  (lowest `project_items.rowid`, the same card the file face's "Stacked · <card>" names), not the union of
+  its cards. The lent range counts only non-sensitive, non-redacted items (the same for every viewer, so it
+  can't hint that a hidden item exists), plus the card's overrides. One query for every card
+  (`db.date_lending_rows`), cached by `db.change_fingerprint` (never across an open transaction). The grids'
+  `card_date` / `card_date_epoch` (the range START for an inherited one, null for undated), file faces on
+  a card's piles, MCP `date_shown` all read it.
+- **The Curator's `needs_date`** (`core/curation_queue.py`, from `item_dates.needs_date_rows()`): one need
+  per item with no real date AND no range to borrow (on a card with no real dates: grouped under that card;
+  on no card: the "Undated files" group), never for a card's write-up (it documents the card; spans skip
+  it for the same reason). It carries `item_slug` (the queue hides it from anyone who can't
+  see the item) and its best guess as a one-click **"Use <date>"** (`POST /api/image/{slug}/date-guess`,
+  editor, `items.accept_date_guess`: one imaged row, op `item_date_guess`, `batch_id` for Undo; refusals
+  `already_dated` 409, `no_such_guess` 400, `bad_source` 400). Key `need:needs_date:<slug>`.
+- **The guesser** (`core/date_guess.py`, pure; `scripts/test_date_guess_725.py`): each guess has a source,
+  a confidence and its evidence. **Auto** (high, the evidence is in the file): `filename` (IMG_20190512_...,
+  2019-05-12, 20190512, "Screenshot ... at 14.30.22", a 10/13-digit unix timestamp when it is the name's
+  only long number; Facebook id runs never match), `file_metadata` (the type's `embedded_metadata_fn` date:
+  EXIF, container, a PDF's CreationDate, ...), `youtube` (a stored `type_metadata.published_at`; nothing is
+  fetched). **Suggested** (a click): `ocr_text` (a date in the extracted text: medium when it is the only
+  one, else low) and `siblings` (median of the card's other real dates, low). Ranked filename > file_metadata
+  > youtube > ocr_text > siblings. Naive dates are Mountain Time; a guess outside 1980..now is dropped.
+- **Writes:** `items.apply_dates([(slug, epoch, record)])` writes guesses as `content_date` plus
+  `type_metadata.content_date_source` = `{source, confidence, evidence, guessed: true, accepted: auto |
+  by_hand}`, ONE imaged row (op `item_date_guess`) for the batch, **fill-only** (an item that has a real date
+  is skipped, listed in `skipped`). New uploads take the filename date at upload (`embedded_metadata`, raw
+  pipeline write, same record). The migration **`date_guess_backfill_725`** ran the auto guesses once over
+  the archive (no network, one batch as actor `migration`, idempotent; undo the batch to take it back).
+- **MCP:** `constructicon_undated(action="list" | "accept" | "apply_auto", ...)`: list the undated items with
+  what they show, the range they borrow, `needs_date` and their guesses (`read_files=true` adds the file's
+  own embedded date); accept one guess; apply every auto guess as one batch (`dry_run`). Role rows: list
+  viewer, accept / apply_auto editor. **Never names a card the caller can't see (#604):** the list goes
+  through `policy.filter_visible`, and `item_dates.listing_entry(row, access=...)` drops a hidden lending
+  card's title from `shows`, `inherits` and the guesses' evidence (checked in `test_private_cards_604.py`).
+- Checks: `scripts/test_undated_725.py` (throwaway DB: the owner's real-dates-only card, the lending rules,
+  needs_date, accept / undo / refusals, apply_dates, the migration, uploads, pages, the MCP tool),
+  `test_timeline_dates.py`, `test_card_date_sort_622.py`, `node scripts/test_item_sort_622.js`.
 
 ## Static export, preview and publish
 
 The dynamic app freezes into a self-contained static site (relative links, media bundled), which can
 be previewed in the app and pushed to a GitHub Pages repo. All of it is admin-only.
 - **Build** (`core/site_export.py` `build_site(config, out_dir=None)`, `POST /api/export/build`):
-  renders `web/export_templates/` for the chosen cards (default: `card_rules.export_included_by_default`)
+  renders `web/export_templates/` for the chosen cards (default: `card_rules.export_included_by_default`,
+  every in-progress card that isn't a collection, by its stage alone since #545)
   and `ready` blog entries, copies each item's media and thumbnail once, and returns a report with
   counts and `warnings`. What may leave the install is `policy.filter_exportable` (restricted and
   sensitive items never do, whoever asks), and only the current revision of a chain goes in. The
@@ -1301,6 +1519,25 @@ Two ideas share the nav rail's "Curator" tab and one queue:
   into ONE list grouped by card (order rules in its docstring). Only the owner's **Defer** / **Dismiss**
   is persisted (`curator_dismissals`, keyed by the item's `key`; a question can be deferred, never
   dismissed).
+- **`needs_date` (#725):** a file with no real date and no card range to borrow, one need per item, with its
+  best date guess as a one-click "Use <date>" (see "Dates" above).
+- **One report card (#545, owner decisions 2026-10-17).** The Curator score and the card pips
+  (`core/card_level.py`) used to grade the same card differently. Now the checks they share are
+  defined once, in `card_level`: `check_cover`, `check_writeup` (the write-up has **>= 200
+  characters**, spaces not counted) and `check_dates` (**>= 80%** of the card's files, write-up
+  excluded, have a real date per `timeline.has_real_date`, or both the card's start and end are set).
+  `curator.score_project` calls them for `cover_image` / `writeup_body` / `content_dates`, and those
+  checklist rows carry the pips' `reason`, which is also the summary of the matching nudge
+  (`missing_writeup`, `missing_dates`). A new shared rule goes into `card_level`, never into both.
+  **The stage is the only status:** `curator.STAGE_APPLICABILITY` is keyed on `card_rules.STAGES`
+  (done / in use: every check; in progress: the timeline gap and the highlight excused; paused,
+  idea, stopped: silent), plus a reference collection (kind collection, provenance none or
+  referenced) is silent. Scores and the dashboard return `stage` / `stage_label`
+  (`projects_by_stage`), never a v1 word; a nudge's `status_weight` is 3 for done / in use, else 1;
+  the stale nudge (`stale_wip`, key unchanged) is for in-progress cards. The v1 adapters
+  (`card_rules.curator_status`, `export_status`, `cards.curator_status_for`, `STATUS_APPLICABILITY`,
+  the means-to-an-end scoring, `db.PROJECT_STATUSES`) are gone. Check with
+  `scripts/test_one_report_card_545.py`.
 - **Where it surfaces:** the **Curator tab in the nav rail** (`_nav_tabs.html`) opens the Curator drawer
   (`_nudges_drawer.html`, rendered by `static/js/curator-queue.js`); its count badge is
   `GET /api/curator/queue?summary=1` and refreshes on the `pending-decisions-changed` /
@@ -1337,7 +1574,7 @@ this order, and never straight to final prose:
    labelled section. Confirm an interpretation before stating it. The data has the "when" and the "what";
    only the owner has the "why" (intent, what was tried and dropped, what a part is for).
 
-Only then save it (`constructicon_set_project_writeup`). If the owner isn't available, a write-up built from the
+Only then save it (`constructicon_update_project(card, fields={"writeup_slug": ..., "owner_words": true})`). If the owner isn't available, a write-up built from the
 evidence pass alone must say so at the top ("Reconstructed by Claude from the project's own files ...").
 Voice: narrative, in chronological order, with real dates and tools named, not a dry spec sheet.
 
@@ -1421,8 +1658,14 @@ One generated file of every registered type and extension, to drop-test a new in
   type, thumbnail, text, object page, `/f/` disposition, raw view, content date, and a temporary VIEWER
   account's view: restricted items must 404), then deletes exactly its own slugs and empties the trash only
   when it held nothing else. `--keep` leaves the items. Verdict line `ALL PASS: ...` / `FAILED: ...`.
-- **Known findings it shows:** legacy `.doc/.xls/.ppt` and web links end OCR "failed" (#724, expected
-  there). (WAV downloading instead of playing, #723, is fixed: its row passes.)
+- **Known findings it shows:** the web link (`https://example.com/`) reads its page title with network
+  and settles grey "web link: ..." without (#724 d); legacy `.doc/.ppt` end OCR "not compatible" (grey,
+  `ocr_status='unsupported'`, #724 part a: the sampler's `.doc/.ppt` are stubs, not real Word 97 /
+  PowerPoint 97 files, so the part b readers find nothing to read; a real one gets its text, see
+  `scripts/test_legacy_office_724b.py`); an encrypted Office file reads "not compatible: encrypted: can't
+  read without the password", a corrupt one fails with "corrupt or unreadable .<ext>: ..." in `ocr_note`
+  (`object_types.NotCompatibleFile` / `UnreadableFile`, owner decision 2026-10-17); the hand-built `.xls` stub
+  ends "failed" (xlrd can't parse it: a real read error). (WAV downloading instead of playing, #723, is fixed: its row passes.)
 - **Windows / Defender (owner rule):** the executable-class samples (PE `.exe`, every installer package,
   the zipped `.app`, ELF firmware, the `.dmg`) are written only when `sys.platform` is Linux, and never
   committed: the default output `samples-out/` is gitignored and `.dockerignore` keeps `scripts/` and it out
@@ -1472,7 +1715,9 @@ One generated file of every registered type and extension, to drop-test a new in
     the content's *own* description/title (e.g. a YouTube video's real
     title). Similarly `timestamp` (capture/upload time) vs. `content_date`
     (the content's own real-world date). These pairs are easy to confuse —
-    check which one a given piece of code actually means.
+    check which one a given piece of code actually means. **#725: `timestamp` is never an item's
+    date** (only "Imported <date>"); a guessed `content_date` records where it came from in
+    `type_metadata.content_date_source`. See "Dates".
   - `display_name` — optional per-object override of the item's title (the badge icon is always
     the type's `badge_icon`; the per-object `icon` override went in #704). **An item's title (#542) is
     `core/item_title.py` `title_of(row)` and nothing else:** `display_name` →
@@ -1490,7 +1735,93 @@ One generated file of every registered type and extension, to drop-test a new in
     shared column so a new object type never needs a schema migration; see
     `core/object_types/__init__.py`'s `MetadataField` for the documented shape per type.
   - `extracted_text`, `perceptual_hash`, `embedding`, `ocr_status` —
-    OCR/similarity pipeline state.
+    OCR/similarity pipeline state. `ocr_status` is `pending | done | failed | unsupported` (NULL =
+    not an OCR type). **#724: `failed` is only a real error** (tesseract or the pipeline raised, a
+    text reader raised, the stored file is missing, a picture that should exist couldn't be made).
+    `unsupported` = nothing OCR can read (no text source and no picture expected:
+    `object_types.nothing_to_read` / `picture_expected`; a legacy .doc/.ppt whose reader
+    returns None), with the plain reason in `type_metadata.ocr_note` (the type's
+    `ocr_unsupported_note`, str or `{ext: note}`); `db.set_ocr_status(slug, 'unsupported', note=...)`
+    writes both, any other status clears the note. Shown grey ("Not compatible with OCR: <note>")
+    in both lamps, `off` in the processing drawer; Retry still runs it. A text reader that read the
+    file and found no text (`""`) settles `done` with empty text. The `ocr_unsupported_724` migration
+    re-settled old `failed` rows that pass `nothing_to_read` (only those). Check with
+    `scripts/test_ocr_unsupported_724.py`.
+    **#724 (c), more than one text source:** a type with `ObjectTypeSpec.text_sources_fn` (YouTube:
+    its stored `type_metadata.description`) gets that text in `extracted_text` too, so search finds
+    it: `core/text_sources.py` `combine()` puts each source with text under a header
+    ("Description:" ... then the picture's OCR text last, "Thumbnail text:" ...) and
+    `type_metadata.text_source` names the sources that gave text, `+`-joined in order
+    (`description`; part e's transcript will make it `description+transcript`). OCR text alone keeps
+    no header and no `text_source`, as before. No source text and no picture text = grey
+    `unsupported` ("video: no description or captions yet"); a thumbnail that can't be made or read
+    keeps the description, `done` with a warning `ocr_note`. A corrected description
+    (`items.update`) rebuilds the text in the same imaged change (`text_sources.resettle`, no OCR
+    re-run; the stored thumbnail section is recovered by `picture_text_of`), so one undo restores it.
+    The `text_sources_724c` migration did the same once for existing settled rows. Check with
+    `scripts/test_youtube_descriptions_724c.py`.
+    **#724 (d), web links read their page:** `url`'s `text_extract_fn` (`url.page_text`, in a parse
+    child like every reader) fetches the page through `core/safe_fetch.py` and stores its `<title>`,
+    `meta name=description` and `og:title` / `og:description` (stdlib `html.parser`, deduplicated,
+    capped) as "Page title:" / "Page summary:" sections, `text_source` `page`. Settles: text -> `done`;
+    the site blocks fetching (cults3d.com's Cloudflare 403 challenge: 16 of prod's 18 links), the guard
+    refuses the address, not HTML, no title/summary, or fetching turned off -> grey `unsupported` with
+    the reason ("web link: site blocks fetching (HTTP 403 challenge)"); a page over 2 MB is read to
+    the cap and parsed (`fetch(truncate=True)`; nothing in the first 2 MB -> grey "no title or summary
+    found in the first 2,000,000 bytes"); a dead link, HTTP 404/410 -> RED `failed` "page not found
+    (HTTP 404): dead link, or a private page this server can't see" (owner, PR #754: "Red, it's
+    broken"; GitHub answers 404 for a private repo); a timeout, an unreachable site, HTTP 429/5xx ->
+    `failed` "...; try OCR again". Retry re-fetches any of them. Nothing tries
+    to get past a bot check. The `link_page_text_724d` migration re-queued existing `failed` /
+    `unsupported` url rows to `pending` once (web's startup self-heal re-runs them; the fetches go one
+    at a time). Check with `scripts/test_safe_fetch_724d.py`.
+    **Outbound fetches (#724 d, `core/safe_fetch.py`).** A stored URL is untrusted input (it could aim
+    the server at the NAS, the router or a metadata address), so `safe_fetch.fetch(url, accept=,
+    max_bytes=, timeout=, headers=, polite=)` is the only fetch path (the page reader, and
+    `thumbnails._from_fetch` for YouTube thumbnails). It allows http/https on ports 80/443 only, no
+    credentials in the link; resolves the host itself and refuses ANY non-public answer (RFC 1918 incl.
+    10/8, loopback, link-local incl. 169.254.169.254, CGNAT 100.64/10, multicast, unspecified,
+    reserved, IPv6 ULA / site-local / link-local, and the IPv4 inside IPv4-mapped / 6to4 / NAT64);
+    **pins the checked IP** for the connection (request to the IP, real name in `Host` and as TLS SNI,
+    so the certificate is still checked; one client per hop, `trust_env=False`), so DNS rebinding
+    can't slip through; follows redirects **by hand** (max 5), re-checking scheme, port and the
+    resolved IP on every hop; caps the body (2 MB, counted while streaming, `Accept-Encoding:
+    identity`; over it = `TooLarge`, or with `truncate=True` the first 2 MB and the rest never read),
+    the whole fetch (10 s shared by DNS, connect and reads) and the content type
+    (text/html, application/xhtml+xml by default; thumbnails ask for `image/`). The page reader sends
+    an honest User-Agent (`Constructicon/<version> (...)`); thumbnails keep their Chrome-style UA
+    (#284, Imgur). `polite=True` (the page reader) takes a per-container one-at-a-time turn (a lock
+    file in the temp dir, so parse children share it) with `CONSTRUCTICON_LINK_FETCH_DELAY_SECONDS`
+    (default 2) between fetches. Every refusal/failure is a `FetchError` with a plain reason and a
+    `transient` flag. `CONSTRUCTICON_LINK_FETCH=off` turns page fetching off for an install;
+    `_testenv.isolate()` sets it, so no test reaches the internet unless it turns it on with fakes
+    (`safe_fetch._getaddrinfo` / `_transport`).
+    **#724 (e), YouTube transcripts (`core/transcripts.py`).** Captions through
+    `youtube-transcript-api` (pinned; an unofficial endpoint, owner accepted). `ObjectTypeSpec.text_fetch_fn`
+    (YouTube: `youtube.fetch_transcript`) runs in the OCR thread before the sources are combined and
+    returns `type_metadata` changes, stored by `db.set_text_source_fields`; `text_sources_fn` then reads
+    `type_metadata.transcript` as a "Transcript:" section (`text_source` `description+transcript`). Bounds:
+    a **hard 20 s deadline** on the library's whole run (a parse_limits child killed at the deadline,
+    `parse_limits.call(seconds=)`; no sandbox = an abandoned daemon thread), safe_fetch's one-at-a-time
+    `polite_turn()` (shared with page fetches and their delay), `CONSTRUCTICON_TRANSCRIPTS=off` (default
+    on; `_testenv.isolate()` sets it off; **the home prod install runs it off** until YouTube stops 429ing
+    the NAS, owner on PR #756). Off = nothing fetched, a video with no status yet is marked `queued` (the
+    backlog waits for it to be turned on), and the "Captions" line says "transcripts are turned off on
+    this install". **Web only:** the MCP process never fetches (`transcripts.queue_only()`,
+    `CONSTRUCTICON_ROLE=mcp`, like captions): its OCR runs mark the video `queued` (a Retry OCR there
+    re-queues, so web asks again). Manual captions over auto-generated, English first, any language
+    recorded (`transcript_language`, `transcript_kind`). Noise filter: bracketed tags, sound words in
+    parentheses, music notes, filler-only snippets ("foreign", "um") dropped; under 30 real words = none.
+    `transcript_status`: `found`; `none` (no captions, captions off, only noise, video unavailable:
+    settled, the grey reason of a row with nothing else says "no captions"); `retry` (network error,
+    timeout, YouTube blocking or rate-limiting: reason in `transcript_note`, backoff 15 min doubling to a
+    day, stops by itself after 8 tries; NEVER sets OCR failed and never removes text or an earlier
+    transcript); `queued`. The object page's properties show a "Captions" line. Retries and the backlog:
+    web's `_transcript_loop` (every 5 min, up to 3 rows, one at a time, `transcripts.work_due`) works
+    `queued` / due `retry` rows and folds each result into the stored text without OCR (resettle); a block
+    stops the pass early. The `transcripts_724e` migration queued existing YouTube rows (no network).
+    Seen live 2026-10-17: YouTube answered HTTP 429 to the caption download from the NAS address for some
+    videos (`IpBlocked`), which lands as `retry`. Check with `scripts/test_youtube_transcripts_724e.py`.
   - `redacted` — "file removed, metadata kept" (the detail page's "Remove
     file, keep info" button / `constructicon_redact`; since #541 `items.redact`
     holds the file in the trash with no expiry until the owner recovers it or
@@ -1501,8 +1832,8 @@ One generated file of every registered type and extension, to drop-test a new in
     `list_posts_for_tag`, and `list_uploaders`'
     totals) and reachable only by its direct `/object/<slug>` link, the
     admin page's (`/admin`) "Redacted items" list (`GET /api/redacted` /
-    `db.list_redacted()`) or the MCP `constructicon_list_redacted` tool.
-    `POST /api/image/{slug}/unredact` / `constructicon_unredact` flips it
+    `db.list_redacted()`) or the MCP `constructicon_list_items(which="redacted")`.
+    `POST /api/image/{slug}/unredact` / `constructicon_redact(action="unredact")` flips it
     back — visibility only, for redactions whose file is already gone (refused while a
     file is still held: recover it or delete it permanently first).
     `db.search(include_redacted=True)` is the escape hatch for a caller that
@@ -1525,6 +1856,9 @@ One generated file of every registered type and extension, to drop-test a new in
   hobby's tag), so tagging into a project also surfaces it via ordinary tag browsing. The link is the
   id, **not** the name: nothing renames the tag when the card is retitled (or the reverse), so the two
   names drift (7 of 75 prod cards had, per #552) and older cards have `tag_id` NULL.
+  `private` (#604 step 3, 0/1) ticks the card private; its members are `share_members` (see "Private
+  cards and hobbies"). `agent_notes` (#745) is the card's private agent scratch field: never in a row `core/db.py` hands
+  out, read only by `db.get_card_agent_notes` (see the MCP section, "Agent notes on cards").
 - **`project_items`** — many-to-many join, `(project_id, post_slug,
   sort_order)`, with a manual `sort_order` for deliberate (non-chronological)
   ordering within a project.
@@ -1556,10 +1890,12 @@ One generated file of every registered type and extension, to drop-test a new in
   #551 item 3 no read resolves anything: stale questions are left out of `list_open()` and resolved only
   by the explicit, logged `decisions.sweep_stale()` (see "Service layer").
 - **Card kind + status (V2, piece 1)** — `projects.kind` plus
-  `activity`/`stage`/`stop_reason` are the *live* status; legacy
-  `projects.status` is **frozen** (the static export's default card selection,
-  `card_rules.export_included_by_default`, #512, still reads it for a card whose stage never changed,
-  and the live stage once it has).
+  `activity`/`stage`/`stop_reason` are the *live* status, and the stage is the ONLY status (#545):
+  legacy `projects.status` is **frozen and retired**. No live code reads it (the Curator, the export,
+  every API / page / MCP read go by the stage; no read returns the old word). It is still written
+  with its default on create, and only the one-time v1 -> v2 migration ever read it. Dropping the
+  column is a separate step (#760). A v1 word a caller SENDS (the old `status` form field, the MCP's
+  retired `set_project_status`) is still translated to a stage by `card_rules.legacy_to_status`.
   Rules live in `core/card_rules.py` (pure), operations in `core/cards.py`,
   every core write is logged with row images in `audit_log` via
   `core/changes.py`, and the v1 -> v2 mapping is `core/card_migration.py`
@@ -1608,6 +1944,11 @@ One generated file of every registered type and extension, to drop-test a new in
   identical contents, then the ` (n)` copy marker (higher n = later; no marker = older than (1)), then
   `source_modified_at`, then upload time, and `suggested_reason` names which one decided it. Not
   `capture_event_relations`: that one is symmetric and syncs tags/projects.
+  **#615: a byte-identical copy under ANOTHER name** (the same photo from Imgur, Facebook, the photo
+  library) is not a name candidate, so `revisions.identical_items(slug)` (same `file_size` from the DB,
+  then compared byte for byte) adds it to the same question with only the `same:<slug>` answer, and the
+  question reads "... is the same file as one already in the library. Keep one?" when there is no name
+  match at all. So renamed dupes no longer come back in silently.
   `scripts/test_revisions.py` runs on a throwaway DB, no server.
 
 - **Trash (#541 phase B)** — `trash(batch_id, slug, stored_filename, has_original, has_thumb,
@@ -1641,7 +1982,9 @@ view `item_search_src` in `core/db.py`: `display_name`, `content_description` an
 name the item has had, so a rename never makes the old filename unfindable; `core/item_title.py`
 picks only one of them to SHOW), the free-text `tags` column plus tag-tree tag names (`post_tags`),
 the titles of the cards it is on (`project_items`), the uploader's note (`description`) and
-`extracted_text`. Not indexed: `agent_notes`, `type_metadata`, `provenance`, the slug.
+`extracted_text`. Not indexed: `agent_notes` (an item's or its card's, #745), `type_metadata`, `provenance`, the slug.
+(A YouTube description, which lives in `type_metadata`, is searchable because #724 (c) copies it into
+`extracted_text`; see the `ocr_status` notes under "Data model".)
 
 - **Matching:** each run of letters/digits you type is a word-START match, all required ("tun
   gig" finds "Tuning the Gigabyte"); accents fold; case is ignored. Quotes, `*`, `-`, `:`, brackets
@@ -1674,10 +2017,10 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
 Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
-`mcp_server/server.py`, exposing tools like `constructicon_list_projects`,
-`constructicon_create_project`, `constructicon_attach_tags`,
-`constructicon_get_posts_for_tag`, `constructicon_search`,
-`constructicon_update_project`, `constructicon_add_to_project`, etc.
+`mcp_server/server.py`, exposing 58 tools (55 after #746, plus `constructicon_undated` (#725),
+`constructicon_sharing` (#604) and `constructicon_duplicates` (#615)) like `constructicon_search`, `constructicon_get`,
+`constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
+`constructicon_card_files`, `constructicon_needs`, etc.
 (`mcp__constructicon-mcp__*` in a session with it configured). #68 tracked
 standing this up and was closed 2026-09-02 — **don't assume it's still
 missing**; if a session's tools list doesn't show it, that's a
@@ -1688,9 +2031,75 @@ configuration gap for that session, not evidence the server itself is gone.
   `db.search()`'s row-limit-before-filter bug (fixed in #543: the filter is SQL), whether there's a tool for
   setting a project's cover/write-up) — check it before assuming a
   capability needs building from scratch.
+- **The tool surface (#746, "108 tools in a trench coat"; owner decisions 2026-10-17).** 108 tools
+  were folded into **55** with no capability lost (the full old -> new table is on #746 and in
+  `scripts/test_mcp_consolidation_746.py`'s scenarios). The pattern:
+  - **Selector tools.** Related operations share one tool with a selector: `action=` (`redact`,
+    `trash`, `item_tags`, `related`, `revision`, `card_files`, `card_hobby`, `family`, `nest`, `link`,
+    `queue_item`), `view=` (`needs`: queue | nudges | caption | card_decisions | pending), `which=`
+    (`list_items`: tag | brand_assets | redacted | restricted), `direction=` (`convert`); `delete` picks
+    its target by which of `slug` / `slugs` / `card` / `blog_entry` / `everything` is given. The selector
+    is a `Literal[...]`; a parameter that doesn't apply to the chosen action is refused (`_only_for`),
+    never ignored. Each action's answer is documented in the tool's description.
+  - **Multi-field setters.** `constructicon_update(slug, ..., fields={...}, dry_run)` (provenance,
+    content_date, highlight, is_brand_asset, brand_role, sensitive) and
+    `constructicon_update_project(card | project_id, ..., fields={...}, dry_run)` (activity, force_kind,
+    whereabouts(_note), provenance(_credit), highlight, home, synopsis, flavor, writeup_slug,
+    owner_words) and `constructicon_update_hobby` / `constructicon_update_blog_entry(projects=, items=)`:
+    key present = set it (null / "" clears), absent = leave it; unknown key = `unknown_field`. The whole
+    call is ONE `db.transaction()` and ONE change-log batch (one undo). **`dry_run` is the real thing
+    rolled back** (`db.transaction(dry_run=True)`), so a step sees what the earlier ones did (kind and
+    stage together validate against the new kind). Agent notes are written ONLY by
+    `constructicon_set_agent_notes` (`agent_notes` is refused as a `fields` key); read them with
+    `constructicon_get(slug, include=["agent_notes"])` (`include` also takes "related", "revisions").
+  - **Agent notes on cards (#745).** `constructicon_set_agent_notes(slug=None, notes=None, card=None)`
+    takes exactly ONE target (neither or both: `bad_request`): `slug=` an item (#206, unchanged, still
+    positional `(slug, notes)`), `card=` a card's id or slug (`not_found` if missing). The card path is
+    `cards.set_agent_notes(card, notes)`: one imaged change-log row (op `card_agent_notes`), undoable,
+    a no-op logs nothing, **`updated_at` is not bumped** (so a private note never reorders the card
+    lists); its answer is the card plus `agent_notes` and `batch_id`. `constructicon_get_project` always
+    returns the card's `agent_notes` (null when none). Role rows: `(set_agent_notes, "slug")` and
+    `(set_agent_notes, "card")`, both editor. **Privacy is enforced at the reader:** `projects.agent_notes`
+    (schema DDL in `init_db`, both processes) is stripped from every whole card row `core/db.py` hands out
+    (`db._card_row`, `db.PRIVATE_CARD_COLUMNS`: `get_project`, `list_projects`, children, family members,
+    hobby / item / blog entry / related / referencing lists), so a route that dumps a raw row (the card
+    Save, orphan-child) can't leak it; `db.get_card_agent_notes(id)` is its one reader. Change summaries
+    (`cards._changes_from_log`, which every card / hobby / blog / undo answer uses) drop private card
+    columns too; the raw row images stay in the change log (MCP `list_changes`, admin `/api/audit-log`),
+    as for item notes, so undo still restores them. Never indexed for search, never exported.
+    Check: `scripts/test_card_agent_notes_745.py`.
+  - **Undated items (#725):** `constructicon_undated(action="list" | "accept" | "apply_auto")` lists the
+    items with no real date and their date guesses, accepts one guess, or applies every in-file guess as one
+    batch (see "Dates" above). Added after #746's count, like `constructicon_sharing` and `constructicon_duplicates`.
+  - **The whole-archive wipe** is `constructicon_delete(everything=true, confirm="DELETE EVERYTHING")`:
+    both keys or nothing (either alone, or with another target, is refused); `delete`, `redact` and
+    `trash` carry `destructiveHint`.
+  - **`run_type_action(slug, "retry_ocr")`** is built in; no object type may declare an action keyed
+    `retry_ocr` (the MCP refuses to start).
+  - **Retired names are hidden, logged aliases for 2 releases** (removal is a later issue): every old
+    name still answers `tools/call` with its old signature, defaults (e.g. `set_highlight()` with no
+    `on` unmarks) and return shape, but `tools/list` leaves it out (`@mcp.tool(alias_of=(tool,
+    action))` -> `_HIDDEN_ALIASES`, the #700 mechanism). Each call logs `MCP alias call: <old> -> <new>
+    [action] (deprecated name, #746)` in the MCP container's log, so it shows who still uses old names.
+    `scripts/data/mcp_aliases_golden_746.json` holds what each old name returned before #746 (on the
+    test's fixture); `scripts/test_mcp_consolidation_746.py` checks every alias against it, and that
+    the new call leaves the database exactly as the alias did.
+  - **Conventions live in the server's startup instructions** (`SERVER_INSTRUCTIONS`: error shape,
+    undo / batch ids, dry runs, visibility, text previews, dates, selectors), not in every description;
+    descriptions say usage and one short example, no issue numbers or history. **No tool publishes an
+    `outputSchema`** (`structured_output=False`): results are the JSON text (an empty list is `[]`).
+  - **Who may run what: `ACTION_ROLES`** in `server.py`, one row per `(tool, action)` (viewer for reads,
+    editor for curation, admin for anything permanent or install-wide). The wrapper checks it on every
+    call (an alias uses the row of the call it stands for). The install token is admin, so it is never
+    refused; a per-user MCP token (#604 step 5) runs as its user, and this table refuses what their role
+    doesn't allow (403 forbidden naming the role). Startup
+    refuses a visible tool or selector value with no row.
+  - **Adding or changing a tool:** add its `ACTION_ROLES` row(s), classify it in
+    `scripts/check_policy_doors.py` `MCP_TOOLS` (rule 4 covers EVERY MCP tool and alias: opens | items |
+    admin | new | none, each verified), and update `scripts/data/mcp_tool_names_700.json`.
 - **Captioning through MCP (#588, #585, #587 item 5).** On an install with no Ollama
   (`CAPTION_DISABLED=1`) an agent that can see images does the captioning:
-  1. `constructicon_list_needs_caption(limit=50, include_failed=True)`: caption-capable items with no
+  1. `constructicon_needs(view="caption", limit=50, include_failed=True)`: caption-capable items with no
      accepted description and a caption status that is absent (or failed/skipped), with project and
      hobby context and `total`. Redacted and restricted items never appear.
   2. `constructicon_view(slug, size="preview")`: the picture as MCP **image content** (PNG/JPEG,
@@ -1713,12 +2122,11 @@ configuration gap for that session, not evidence the server itself is gone.
   `captions_disabled`. Check with `scripts/test_captions_mcp.py` (throwaway DB).
 - **Extracted text is a preview in multi-item results (#697).** One search used to return every
   match's whole `extracted_text` (224,000 characters for 5 matches on the work install). Now every tool
-  that returns many items (`search`, `get_posts_for_tag`, `get_project` items and cover, `get_related`,
-  `add_related` / `remove_related`, `add_items_to_project`, `list_redacted`, `list_restricted`,
-  `list_brand_assets`, a blog entry's items) sends `_to_public_listed(row)`: `extracted_text` is a
+  that returns many items (`search`, `list_items`, `get_project` items and cover, `get(include=["related"])`,
+  `related`, `card_files`, a blog entry's items) sends `_to_public_listed(row)`: `extracted_text` is a
   window of `TEXT_PREVIEW_CHARS` (300) characters around the first query word found in it (word start,
   case and accents folded, like the search; else the start), with "…" at each cut end, plus
-  `extracted_text_chars` (full length) and `extracted_text_truncated`. `search`, `get_posts_for_tag` and
+  `extracted_text_chars` (full length) and `extracted_text_truncated`. `search`, `list_items` and
   `get_project` take `text_chars` (0 = no text, capped at `TEXT_PREVIEW_MAX_CHARS` = 5,000). Single-item
   tools (`constructicon_get`, the setters) still send the WHOLE text, uncapped (one item by design; a
   window-by-offset read for very long single items is not built). `get_project`'s write-up object is
@@ -1747,9 +2155,9 @@ runs that app via uvicorn itself, same host/port).
   `{"type":"http","url":"http://<host>:8100/mcp","headers":{"Authorization":"Bearer <token>"}}`
 - **Rotate:** `python3 -m core.manage.mcp_token generate <file> --force`, restart BOTH containers (web
   and MCP), update every client's `headers`. Old token stops working at the restart.
-- **Identity:** one install token = one identity: role **admin** (owner decision 2026-10-07), actor
-  `mcp`, so the agent sees restricted items (the policy's admin role). Per-user MCP tokens are a
-  later step (hook comment in `auth.py`).
+- **Identity:** the install token = role **admin** (owner decision 2026-10-07), actor `mcp`, so the
+  agent sees restricted items (the policy's admin role). A **per-user token** (`ctu_...`, #604 step 5)
+  acts as its user instead: see "Per-user MCP tokens" (after "Ownership and sensitive items").
 
 ## Install config (#562, groundwork for #467)
 
@@ -1956,11 +2364,12 @@ shows what would run; `--show-output` prints the whole output of anything that d
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_drop_columns_704` (the dead-column drop and its safeguard),
-    `test_move_tags_590`, `test_revisions`, `test_bulk_decisions`, `test_provenance_options`,
+    `test_move_tags_590`, `test_revisions`, `test_duplicates_615` (duplicate folding), `test_bulk_decisions`, `test_provenance_options`,
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,
-    `test_ownership_sensitive`, `test_bulk_visibility_709`, `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
+    `test_ownership_sensitive`, `test_bulk_visibility_709`, `test_private_cards_604`, `test_mcp_user_tokens_604`,
+    `test_request_guard`, `test_audit_secrets_559`, `test_mcp_auth`,
     `test_f_sandbox_610`, `test_body_cap_649`, `test_proxy_646`, `test_private_files_652`, `check_routes_roles`,
     `check_policy_doors`, `test_manage_634` (the `core/manage/` tools, their actor, the stubs);
   - errors, actors, background work, captions: `test_actor_errors`, `test_swallowed_errors`,
@@ -2460,6 +2869,10 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
   `content_date`.** Easy to grab the wrong one of each pair — they mean
   different things (uploader metadata vs. the content's own
   description/date). See the `capture_events` notes above.
+- **An item can be undated (#725).** `timeline.resolve_item_date` returns None when nothing real
+  exists, and `resolve_project_span` returns (None, None) for a card with no real dates: sort with
+  `timeline.date_sort_key`, take min/max over `timeline.real_dates(...)`, and show
+  `item_dates.item_date(row)["label"]`. Never fall back to `timestamp` or `created_at`.
 - **Backfilling a `content_date` from a naive/timezone-less real-world
   date (EXIF `DateTimeOriginal`, a blog post's "Jul 31, 2017" with no
   time) — interpret it as Mountain Time (`America/Denver`, DST-aware via

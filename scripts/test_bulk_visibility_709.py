@@ -312,9 +312,11 @@ _real_call = mcp._call_as_mcp
 
 
 def as_user(name):
-    def call(fn, args, kwargs):
+    def call(fn, args, kwargs, need_role=None):
         with actor.acting_as(f"user:{name}"):
             try:
+                if need_role is not None:
+                    mcp._require_role(need_role)  # #746: the (tool, action) role, as the real wrapper does
                 return True, fn(*args, **kwargs)
             except Exception as exc:  # noqa: BLE001 -- same shape as the real wrapper
                 payload = mcp._error_payload(exc)
@@ -331,17 +333,28 @@ def is_refused(value):
 
 
 MCP_CALLS = {
-    "delete": lambda: mcp.constructicon_delete(SECRET),
-    "delete_multiple": lambda: mcp.constructicon_delete_multiple([VIS, SECRET, UNKNOWN]),
-    "add_to_project": lambda: mcp.constructicon_add_to_project(SECRET, CARD_ID),
-    "add_items_to_project": lambda: mcp.constructicon_add_items_to_project(CARD_ID, [VIS, SECRET]),
-    "remove_from_project": lambda: mcp.constructicon_remove_from_project(SECRET, CARD_ID),
-    "set_project_writeup": lambda: mcp.constructicon_set_project_writeup(CARD_ID, SECRET),
-    "attach_tags": lambda: mcp.constructicon_attach_tags(SECRET, ["pwned"]),
-    "detach_tag": lambda: mcp.constructicon_detach_tag(SECRET, "bv-existing"),
-    "add_related": lambda: mcp.constructicon_add_related(VIS, SECRET),
-    "remove_related": lambda: mcp.constructicon_remove_related(VIS, SECRET),
+    "delete(slug)": lambda: mcp.constructicon_delete(SECRET),
+    "delete(slugs, missing_ok)": lambda: mcp.constructicon_delete(slugs=[VIS, SECRET, UNKNOWN], missing_ok=True),
+    "card_files(add)": lambda: mcp.constructicon_card_files(CARD_ID, [SECRET]),
+    "card_files(add, missing_ok)": lambda: mcp.constructicon_card_files(CARD_ID, [VIS, SECRET], missing_ok=True),
+    "card_files(remove)": lambda: mcp.constructicon_card_files(CARD_ID, [SECRET], action="remove"),
+    "update_project(fields.writeup_slug)": lambda: mcp.constructicon_update_project(card=CARD_ID,
+                                                                                   fields={"writeup_slug": SECRET}),
+    "item_tags(attach)": lambda: mcp.constructicon_item_tags(SECRET, ["pwned"]),
+    "item_tags(detach)": lambda: mcp.constructicon_item_tags(SECRET, ["bv-existing"], action="detach"),
+    "related(add)": lambda: mcp.constructicon_related(VIS, SECRET),
+    "related(remove)": lambda: mcp.constructicon_related(VIS, SECRET, action="remove"),
     "update": lambda: mcp.constructicon_update(SECRET, description="pwned"),
+    # #746: the retired names (hidden aliases) refuse exactly the same way
+    "alias delete_multiple": lambda: mcp.constructicon_delete_multiple([VIS, SECRET, UNKNOWN]),
+    "alias add_to_project": lambda: mcp.constructicon_add_to_project(SECRET, CARD_ID),
+    "alias add_items_to_project": lambda: mcp.constructicon_add_items_to_project(CARD_ID, [VIS, SECRET]),
+    "alias remove_from_project": lambda: mcp.constructicon_remove_from_project(SECRET, CARD_ID),
+    "alias set_project_writeup": lambda: mcp.constructicon_set_project_writeup(CARD_ID, SECRET),
+    "alias attach_tags": lambda: mcp.constructicon_attach_tags(SECRET, ["pwned"]),
+    "alias detach_tag": lambda: mcp.constructicon_detach_tag(SECRET, "bv-existing"),
+    "alias add_related": lambda: mcp.constructicon_add_related(VIS, SECRET),
+    "alias remove_related": lambda: mcp.constructicon_remove_related(VIS, SECRET),
 }
 mcp._call_as_mcp = as_user("bv_ed2")
 try:
@@ -353,11 +366,11 @@ try:
               is_refused(value) and not diff, f"{value!r:.300} {diff}")
 finally:
     mcp._call_as_mcp = _real_call
-value = mcp.constructicon_attach_tags(SECRET, ["bv-mcp-tag"])
-check("MCP attach_tags as the MCP itself (admin): works on the hidden item",
+value = mcp.constructicon_item_tags(SECRET, ["bv-mcp-tag"])
+check("MCP item_tags(attach) as the MCP itself (admin): works on the hidden item",
       isinstance(value, dict) and value.get("slug") == SECRET and value.get("ok") is not False, f"{value!r:.200}")
-value = mcp.constructicon_delete_multiple([SECRET2, UNKNOWN])
-check("MCP delete_multiple as the MCP itself: deletes it, the unknown slug skipped",
+value = mcp.constructicon_delete(slugs=[SECRET2, UNKNOWN], missing_ok=True)
+check("MCP delete(slugs, missing_ok) as the MCP itself: deletes it, the unknown slug skipped",
       isinstance(value, dict) and value.get("deleted") == 1 and db.get_by_slug(SECRET2) is None, f"{value!r:.200}")
 
 conn.close()

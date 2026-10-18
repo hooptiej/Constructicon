@@ -2,7 +2,7 @@
 into the dicts pages and the JSON API return, plus the small pure helpers they use.
 Moved verbatim from web/app.py."""
 
-from core import (captions, card_payload, cards, datefmt, db, install_config, item_title, object_types, parse_limits, policy, revisions,
+from core import (captions, card_payload, cards, datefmt, db, install_config, item_dates, item_title, object_types, parse_limits, policy, revisions,
                   storage, thumbnails, timeline, users)
 
 
@@ -73,8 +73,9 @@ def _to_public(row):
     # any consumer that doesn't.
     has_thumb = _should_advertise_thumb(row, spec)
     # #622: the card's date, resolved once, so the face's label and the grids' "Date" sort read the
-    # same value and can never disagree.
-    card_ts = timeline.resolve_item_date(row)
+    # same value and can never disagree. #725: the REAL date, else the range inherited from its card
+    # (approximate, "≈ ... · from <card>"), else "Undated" (core/item_dates.py).
+    shown = item_dates.item_date(row)
     return {
         "slug": row["slug"],
         "url": f"/f/{row['slug']}",
@@ -138,13 +139,15 @@ def _to_public(row):
         # and the completeness scoring/export to read.
         "provenance": row.get("provenance"),
         "highlight": bool(row.get("highlight")),
-        # #514: the item card's date line is the item's own effective date (same
-        # resolver as the project detail page's file cards), in the same label format.
-        "card_date": cards._day_label(card_ts),
+        # #514: the item card's date line. #725: its real date ("Mar 4, 2021"), else the range it
+        # inherits from its card ("≈ Nov 2019 - Jul 2021 · from Desk Build"), else "Undated". The
+        # upload time is never the date (it is "Imported <date>" on the item page).
+        "card_date": shown["label"],
+        "card_date_approx": shown["approx"],
         # #622: the same date as epoch seconds, the key of the grids' "Date: newest / oldest" sort
-        # (static/js/item-sort.js, web/files_feed.py SORTS). Never None: the resolver falls back to
-        # the file's own modified time, then the upload time, exactly as the label does.
-        "card_date_epoch": card_ts,
+        # (static/js/item-sort.js, web/files_feed.py SORTS). #725: an inherited date sorts at its
+        # range's start; None = undated, which every Date sort puts last.
+        "card_date_epoch": shown["sort_epoch"],
         # #604 step 1 / #603: who uploaded it (a user, or None = admin-owned: token / MCP / script)
         # and the sensitive lock. `uploaded_by` above is the older free-text Source label.
         **ownership_fields(row),
@@ -358,6 +361,11 @@ def _to_object_detail(row):
         "display_date_override": row.get("display_date_override"),
         "display_date_override_input": _datetime_local_value(row.get("display_date_override")),
         "effective_date_display": _friendly_datetime(timeline.resolve_item_date(row)),
+        # #725: what the item's date line says (real / "≈ range · from card" / "Undated"), which
+        # rung dated it (hand | made | content | file | None) and where a guessed date came from.
+        "date_shown": item_dates.item_date(row)["label"],
+        "date_source": timeline.date_source(row),
+        "content_date_source": (row.get("type_metadata") or {}).get("content_date_source"),
         # #448: per-type actions available on this object (e.g. YouTube's "fetch real date" moves here in PR 2).
         # The type file owns the handler; actions are declared in ObjectTypeSpec.actions.
         # #446: filter actions to only those that applies_to(row).
@@ -447,7 +455,7 @@ def _to_hobby_face(hobby_row, projects=None, items_by_project=None):
     and its computed mismatch flags. `items_by_project` (id -> rows) feeds the date span; missing
     = read here, through the item policy."""
     if projects is None:
-        projects = db.list_projects_for_hobby(hobby_row["id"])
+        projects = policy.filter_visible_cards(db.list_projects_for_hobby(hobby_row["id"]))  # #604 step 3
     if items_by_project is None:
         items_by_project = {p["id"]: policy.filter_visible(db.list_project_items(p["id"])) for p in projects}
     cover, fields = _hobby_cover(hobby_row, projects)
@@ -537,7 +545,7 @@ def _to_project_option(project):
     dropdown itself from offering a choice guaranteed to be rejected).
     writeup_slug (#156) is also included so the backfill script can see
     which projects already have writeups."""
-    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "status": project["status"], "parent_id": project.get("parent_id"), "writeup_slug": project.get("writeup_slug"), "kind": project.get("kind") or "project", "activity": project.get("activity"), "stage": project.get("stage"), "stop_reason": project.get("stop_reason")}
+    return {"id": project["id"], "slug": project["slug"], "title": project["title"], "parent_id": project.get("parent_id"), "writeup_slug": project.get("writeup_slug"), "kind": project.get("kind") or "project", "activity": project.get("activity"), "stage": project.get("stage"), "stop_reason": project.get("stop_reason")}
 
 
 # --- Blog Entries API ---
@@ -546,7 +554,7 @@ def _to_blog_entry_detail(entry):
     """Full detail shape for GET /api/blog-entries/{slug}, including hydrated
     projects and items. Same structure as the db layer returns but with
     attached project and item details."""
-    projects = db.list_entry_projects(entry["id"])
+    projects = policy.filter_visible_cards(db.list_entry_projects(entry["id"]))  # #604 step 3
     items = policy.filter_visible(db.list_entry_items(entry["id"]))  # #557
     return {
         "id": entry["id"],

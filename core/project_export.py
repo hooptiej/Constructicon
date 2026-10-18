@@ -12,7 +12,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from core import card_rules, db, policy, storage
+from core import card_rules, db, policy, storage, timeline
 
 
 def export_project(project_id_or_slug):
@@ -28,7 +28,7 @@ def export_project(project_id_or_slug):
         ValueError: If the project is not found
     """
     project = db.get_project(project_id_or_slug)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: a hidden card = missing
         raise ValueError(f"Project not found: {project_id_or_slug}")
 
     # Fetch all items in this project
@@ -37,7 +37,7 @@ def export_project(project_id_or_slug):
     # #477: current revisions only; superseded older revisions stay out of the zip.
     older = db.superseded_slugs()
     # #557: what may leave the install is core/policy.py's call (filter_exportable).
-    items = [i for i in policy.filter_exportable(db.list_project_items(project["id"]))
+    items = [i for i in policy.filter_exportable(policy.filter_visible(db.list_project_items(project["id"])))
              if i["slug"] not in older]
 
     # Fetch writeup body if writeup_slug is set
@@ -54,7 +54,11 @@ def export_project(project_id_or_slug):
             "slug": project["slug"],
             "title": project["title"],
             "description": project.get("description"),
-            "status": card_rules.export_status(project),
+            # #545: the live status (the frozen v1 `status` word is retired)
+            "kind": project.get("kind") or "project",
+            "stage": project.get("stage"),
+            "stage_label": card_rules.stage_label(project.get("stage")),
+            "stop_reason": project.get("stop_reason"),
             "writeup_body": writeup_body,
         },
         "items": [],
@@ -71,8 +75,9 @@ def export_project(project_id_or_slug):
             "content_description": item.get("content_description"),
             "tags": [tag["name"] for tag in db.list_tags_for_post(item["slug"])],
             "type_metadata": item.get("type_metadata"),
-            "timestamp": item.get("timestamp"),
+            "timestamp": item.get("timestamp"),  # the upload time ("Imported"), never the item's date (#725)
             "content_date": item.get("content_date"),
+            "effective_date": timeline.resolve_item_date(item),  # #725: the REAL date, or null = undated
             "source_modified_at": item.get("source_modified_at"),
             "external_url": item.get("external_url"),
         }

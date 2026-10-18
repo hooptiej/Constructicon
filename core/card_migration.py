@@ -196,7 +196,7 @@ def _gather(card, all_cards, hobby_ids_by_card, children_by_parent, now):
     items = db.list_project_items(card["id"])
     writeup = card.get("writeup_slug")
     content = [i for i in items if i.get("slug") != writeup]
-    dates = [timeline.resolve_item_date(i) for i in content]
+    dates = timeline.real_dates(content)  # #725: real dates only
     hobbies = db.list_hobbies_for_project(card["id"])
     writeup_body = ""
     if writeup:

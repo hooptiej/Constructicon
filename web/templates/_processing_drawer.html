@@ -53,7 +53,11 @@
 
   function stageHtml(st) {
     const label = st.state === 'failed' ? esc(st.stage) + ' failed' : st.state === 'off' ? esc(st.stage) + ' off' : esc(st.stage);
-    return `<span class="proc-stage ${esc(st.state)}"><span class="proc-stage-dot"></span>${label}</span>`;
+    // #724: an OCR stage that is "off" because the item is not compatible says why on hover; (b2) so
+    // does a failed one (a corrupt file) and a done one that came with a warning, each in its own words.
+    const NOTE_PREFIX = { off: 'Not compatible with OCR: ', failed: 'OCR failed: ', done: 'Read with a warning: ' };
+    const title = st.note ? ` title="${esc((NOTE_PREFIX[st.state] || '') + st.note)}"` : '';
+    return `<span class="proc-stage ${esc(st.state)}"${title}><span class="proc-stage-dot"></span>${label}</span>`;
   }
 
   function render(data) {

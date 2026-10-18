@@ -183,7 +183,9 @@
         <p class="title-edit-error" id="object-title-error" style="display:none" role="alert"></p>
         <div class="detail-meta" style="margin-top:8px">
           <span>Source: {{ item.source_display }}</span>
-          <span>{{ item.uploaded_at_display }}</span>
+          {# #725: the upload time is only ever "Imported <date>", never the item's date. #}
+          <span>Imported {{ item.uploaded_at_display }}</span>
+          <span>Date: {{ item.date_shown }}</span>
         </div>
       </div>
       {% if item.redacted %}
@@ -313,7 +315,10 @@
       {# ---- DATES: effective date + the timeline date override ---- #}
       {% set dates_view %}
       <dl class="dp-rows">
-        <div class="dp-row"><dt>Effective date</dt><dd>{{ item.effective_date_display }} <span class="dp-muted">({{ 'set by hand' if item.display_date_override else 'from the file' }})</span></dd></div>
+        {# #725: the REAL date and which rung gave it; else the card range it inherits, or Undated. #}
+        {% set src_labels = {'hand': 'set by hand', 'made': 'date made', 'content': 'from the content', 'file': "the file's own date"} %}
+        <div class="dp-row"><dt>Date</dt><dd>{% if item.date_source %}{{ item.effective_date_display }} <span class="dp-muted">({{ src_labels[item.date_source] }}{% if item.content_date_source and item.date_source == 'content' %}, guessed from {{ item.content_date_source.source | replace('_', ' ') }}: {{ item.content_date_source.evidence }}{% endif %})</span>{% else %}{{ item.date_shown }} <span class="dp-muted">(no real date: the upload time is not one)</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Imported</dt><dd>{{ item.uploaded_at_display }}</dd></div>
       </dl>
       {% endset %}
       {% set dates_edit %}
@@ -323,7 +328,7 @@
           <input class="input" type="datetime-local" id="timeline-date-input" name="display_date" value="{{ item.display_date_override_input or '' }}" style="width:auto">
           <button type="button" class="dp-btn" id="timeline-date-reset">Reset</button>
         </div>
-        <p class="dp-note">{% if item.display_date_override %}Manually set.{% else %}Computed: {{ item.effective_date_display }}{% endif %}</p>
+        <p class="dp-note">{% if item.display_date_override %}Manually set.{% elif item.date_source %}Computed: {{ item.effective_date_display }}{% else %}No real date yet ({{ item.date_shown }}). Set one here.{% endif %}</p>
       </div>
       {% endset %}
 
@@ -491,6 +496,8 @@
 const IS_OCR_CAPABLE = {{ item.ocr_capable | tojson }};
 const IS_FILE = {{ item.is_file | tojson }};
 let ocrStatus = {{ item.ocr_status | tojson }};
+// #724: why OCR can't read this item (ocr_status 'unsupported'), shown with the grey lamp.
+let ocrNote = {{ (item.type_metadata.get('ocr_note') or '') | tojson }};
 // #607: the page never embeds the extracted text (a 1 MB file text was inlined, shown as a tooltip and
 // copied into the DOM, and froze the tab). Only its length is here; the text is fetched on demand.
 let ocrChars = {{ item.extracted_text_chars | tojson }};
@@ -682,7 +689,10 @@ const OCR_LAMP_META = {
   pending: { color: '#BA7517', label: 'OCR in progress…' },
   done:    { color: '#7FA37C', label: 'OCR complete' },
   failed:  { color: '#E24B4A', label: 'OCR failed' },
-  none:    { color: '#E24B4A', label: 'OCR not run yet' },
+  // #724: nothing OCR can read (a web link, a legacy .doc): grey, never red, with the reason.
+  unsupported: { color: '#6E6B57', label: 'Not compatible with OCR' },
+  // Not run yet is not a failure either: grey like the caption lamp's "none" (was red).
+  none:    { color: '#6E6B57', label: 'OCR not run yet' },
 };
 
 const ocrPanel = document.getElementById('ocr-panel');
@@ -802,11 +812,15 @@ async function loadOcrText(limit) {
 function renderOcrPanel() {
   if (!IS_OCR_CAPABLE || !ocrPanel) return;
   ocrPanel.style.display = 'flex';
-  const meta = OCR_LAMP_META[ocrStatus || 'none'];
+  const meta = OCR_LAMP_META[ocrStatus || 'none'] || OCR_LAMP_META.none;
   ocrLamp.style.background = meta.color;
   // A short label, never the text itself (a megabyte tooltip is a freeze, #607).
-  ocrLamp.title = (ocrStatus === 'done' && ocrChars) ? meta.label + ' - ' + ocrSizeLabel(ocrChars) + ' of text' : meta.label;
-  ocrLabel.textContent = meta.label;
+  // #724: 'unsupported' says why it can't be read; 'failed' says why when the reader knew (a corrupt file)
+  // #724 (b2): 'done' with a note = text read with a warning (the reader failed; OCR read the picture instead)
+  const label = ((ocrStatus === 'unsupported' || ocrStatus === 'failed') && ocrNote) ? meta.label + ': ' + ocrNote
+    : (ocrStatus === 'done' && ocrNote) ? meta.label + ', with a warning: ' + ocrNote : meta.label;
+  ocrLamp.title = (ocrStatus === 'done' && ocrChars) ? label + ' - ' + ocrSizeLabel(ocrChars) + ' of text' : label;
+  ocrLabel.textContent = label;
   ocrRetryBtn.disabled = ocrStatus === 'pending';
   ocrRetryBtn.textContent = ocrStatus === 'pending' ? 'Running…' : (ocrChars ? 'Try again' : 'Run OCR');
   if (ocrChars) {
@@ -845,6 +859,7 @@ async function pollOcr() {
         const info = await res.json();
         if (info.ocr_status !== 'pending') {
           ocrStatus = info.ocr_status;
+          ocrNote = info.ocr_note || '';
           ocrChars = info.chars;
           ocrLoadedLimit = 0;  // refetch the new text
           renderOcrPanel();

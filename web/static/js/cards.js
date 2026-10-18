@@ -29,7 +29,11 @@
     pending: { color: '#BA7517', title: 'OCR in progress…' },
     done:    { color: '#7FA37C', title: null },
     failed:  { color: '#E24B4A', title: 'OCR failed' },
-    none:    { color: '#E24B4A', title: 'OCR not run yet' }
+    // #724: nothing OCR can read (a web link, a legacy .doc): grey, never red; the reason
+    // (type_metadata.ocr_note) is appended to the tooltip.
+    unsupported: { color: '#6E6B57', title: 'Not compatible with OCR' },
+    // Not run yet is not a failure either: grey like the caption lamp's "none" (was red).
+    none:    { color: '#6E6B57', title: 'OCR not run yet' }
   };
   var CAPTION_LAMP_META = {
     pending: { color: '#BA7517', title: 'Captioning…' },
@@ -44,6 +48,13 @@
     if (item.ocr_status == null) return '';
     var meta = OCR_LAMP_META[item.ocr_status || 'none'] || OCR_LAMP_META.none;
     var title = item.ocr_status === 'done' ? (item.extracted_text || 'OCR found no text') : meta.title;
+    var note = (item.type_metadata || {}).ocr_note;
+    if (item.ocr_status === 'unsupported' || item.ocr_status === 'failed') {  // #724: failed may say why (corrupt)
+      if (note) title = meta.title + ': ' + note;
+    } else if (item.ocr_status === 'done' && note) {
+      // #724 (b2): done, with a warning (the reader failed; OCR read the picture instead)
+      title = 'Read with a warning: ' + note + (item.extracted_text ? '\n\n' + item.extracted_text : '');
+    }
     return lamp(meta.color, title);
   }
   function captionLamp(item) {

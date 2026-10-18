@@ -26,6 +26,9 @@ constructicon_undo(batch_id); it calls back into this module for the file side o
   update(..., tags=[...])  (phase C) the free-text tags ride in the same batch (core/tags.py).
   set_sensitive(slugs, on) (#603) the "This is sensitive" flag: mark = editor+, clear = admin only.
   set_provenance(slugs, key) (#553) the file grids' bulk provenance, one batch.
+  apply_dates(entries)      (#725) guessed dates -> content_date (+ type_metadata.content_date_source),
+                           one batch, fill-only (an item with a real date is skipped).
+  accept_date_guess(slug, source)  (#725) one item's guess from one source, via apply_dates.
   purge_expired() / empty_trash(confirm) / trash_summary()
 
 Trash (owner decision on #541, 2026-10-04): a deleted file stays in the trash for TRASH_DAYS,
@@ -50,7 +53,7 @@ from pathlib import Path
 from datetime import datetime
 
 from . import captions, cards, changes, db, embedded_metadata, ingest, item_title, membership, object_types, physical_piece, provenance_options
-from . import parse_limits, paths, storage, thumbnails, timeline
+from . import parse_limits, paths, storage, text_sources, thumbnails, timeline
 from . import tags as tags_svc
 from .cards import Result
 from .errors import AppError, Conflict, InvalidInput, NotFound
@@ -69,6 +72,7 @@ OP_ERASE = "item_redact_erase"
 OP_SENSITIVE = "item_sensitive"  # #603
 OP_REPLACE_FILE = "item_replace_file"  # #617
 OP_BULK_PROVENANCE = "item_bulk_provenance"  # #553
+OP_DATE_GUESS = "item_date_guess"  # #725: guessed dates applied as content_date, one batch
 REASON_REDACT = "redact"
 REASON_REPLACE = "replace"  # #617: the bytes a replace_file displaced
 
@@ -182,6 +186,7 @@ def _plan_update(row, fields):
         merged = {**existing, **physical_piece.clean_fields(tm)}  # #425 keys; raises bad_physical_piece
         if merged != existing:
             cols["type_metadata"] = json.dumps(merged)
+            _plan_text_sources(row, merged, cols)
     if "provenance" in fields:
         cols["provenance"] = provenance_options.validate("file", fields["provenance"] or None,
                                                          current=row.get("provenance"))
@@ -202,6 +207,25 @@ def _plan_update(row, fields):
     if "agent_notes" in fields:  # #206 agent-only scratch notes (MCP set_agent_notes); None clears
         cols["agent_notes"] = fields["agent_notes"]
     return cols
+
+
+def _plan_text_sources(row, merged_meta, cols):
+    """#724 (c): a type_metadata edit can change one of the type's text sources (a YouTube
+    description corrected after OCR settled). Rebuild extracted_text from the sources plus the
+    picture text already stored (no OCR re-run) and write it in the SAME imaged update, so search
+    re-indexes and one undo restores the old text, text_source and lamp with the old description.
+    Only settled rows (text_sources.resettle); a pending run combines the sources itself."""
+    spec = object_types.get_object_type(row.get("media_type"))
+    if spec is None or not spec.ocr_capable or spec.text_sources_fn is None or row.get("redacted"):
+        return
+    new_row = {**row, "type_metadata": merged_meta}
+    change = text_sources.resettle(new_row, spec, object_types.ocr_unsupported_note(new_row, spec))
+    if change is None:
+        return
+    if change["status_changed"]:
+        cols["ocr_status"] = change["status"]
+    cols["extracted_text"] = change["text"]
+    cols["type_metadata"] = json.dumps(text_sources.resettled_meta(merged_meta, change))
 
 
 def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **fields):
@@ -371,6 +395,83 @@ def set_provenance(slugs, provenance, *, dry_run=False, actor=None, batch_id=Non
         item = db.get_by_slug(wanted[0]) if len(wanted) == 1 else None
     return _result(OP_BULK_PROVENANCE, muts, batch_id, dry_run, item, slugs=wanted,
                    changed=[m["key"]["slug"] for m in muts], provenance=provenance or None)
+
+
+DATE_SOURCE_KEY = "content_date_source"  # #725: type_metadata key recording where a guessed date came from
+
+
+def apply_dates(entries, *, dry_run=False, actor=None, batch_id=None):
+    """(#725) Writes guessed dates as content_date, with where each came from in
+    type_metadata.content_date_source, as ONE imaged change-log row (op item_date_guess) for the
+    whole batch, so one undo takes every date back. `entries`: [(slug, epoch, source_record)]
+    (core/item_dates.py source_record). Fill-only: an item that has a real date by now (hand-set,
+    date made, content_date, a pre-install file mtime) is SKIPPED, never overwritten, and listed in
+    `skipped` with the reason. Every item must exist and be visible to the actor (#709: else the
+    whole request is refused, nothing written); every date must be plausible (1980 .. now, else 400
+    `bad_date`). data: {applied: [slugs], skipped: [{slug, reason}]}."""
+    from . import date_guess, policy  # lazy: policy is imported by db at call time
+    entries = list(entries or [])
+    if not entries:
+        raise InvalidInput("Give at least one item to date.", code="no_items")
+    for slug, epoch, _record in entries:
+        if date_guess.plausible(epoch) is None:
+            raise InvalidInput(f"Nothing was changed: {epoch!r} is not a believable date for {slug!r} "
+                               "(it must be between 1980 and now).", code="bad_date")
+    rows, _missing = policy.viewable_rows([e[0] for e in entries], actor=actor)
+    by_slug = {r["slug"]: r for r in rows}
+    batch_id = batch_id or changes.new_batch_id()
+    applied, skipped = [], []
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_DATE_GUESS, actor, batch_id, list(by_slug)) as log:
+            for slug, epoch, record in entries:
+                row = db.get_by_slug(slug) or by_slug[slug]
+                if timeline.resolve_item_date(row) is not None:
+                    skipped.append({"slug": slug, "reason": "already_dated"})
+                    continue
+                meta = {**(row.get("type_metadata") or {}), DATE_SOURCE_KEY: dict(record or {})}
+                log.update("capture_events", {"slug": slug},
+                           {"content_date": float(epoch), "type_metadata": json.dumps(meta)})
+                applied.append(slug)
+            muts = list(log.muts)
+        item = db.get_by_slug(entries[0][0]) if len(entries) == 1 else None
+    return _result(OP_DATE_GUESS, muts, batch_id, dry_run, item, applied=applied, skipped=skipped)
+
+
+def accept_date_guess(slug, source, *, dry_run=False, actor=None, batch_id=None):
+    """(#725) The Curator's one-click "Use this date" / MCP accept: re-computes the item's guesses
+    (reading the file's own embedded date too), takes the one from `source` (core/date_guess.py
+    SOURCES) and writes it through apply_dates. Refuses, writing nothing: an item that already has
+    a real date (409 `already_dated`), a source with no guess for this item (400 `no_such_guess`,
+    the available sources in details), an unknown source (400 `bad_source`)."""
+    from . import date_guess, item_dates  # lazy: item_dates reads db / policy
+    if source not in date_guess.SOURCES:
+        raise InvalidInput(f"Unknown date source {source!r}: use one of {', '.join(date_guess.SOURCES)}.",
+                           code="bad_source")
+    row = get_item(slug, actor)
+    real = timeline.resolve_item_date(row)
+    if real is not None:
+        raise Conflict(f"Nothing was changed: {item_title.title_of(row)} already has a real date "
+                       f"({_day(real)}). Change it in the item page's DATES group.", code="already_dated")
+    found = item_dates.guesses_for(row, read_file=True)
+    guess = next((g for g in found if g.source == source), None)
+    if guess is None:
+        have = [g.source for g in found]
+        raise InvalidInput(f"Nothing was changed: there is no {date_guess.SOURCE_LABELS[source]} guess for "
+                           f"{item_title.title_of(row)}" + (f" (it has: {', '.join(have)})." if have else
+                                                            " (it has no guesses at all; set the date by hand)."),
+                           code="no_such_guess", details={"available": have})
+    record = item_dates.source_record(guess, accepted_by="by_hand")
+    res = apply_dates([(slug, guess.epoch, record)], dry_run=dry_run, actor=actor, batch_id=batch_id)
+    if res.data["skipped"]:  # it got a real date between the check above and the write
+        raise Conflict(f"Nothing was changed: {item_title.title_of(row)} got a real date in the meantime.",
+                       code="already_dated")
+    res.data["guess"] = guess.as_dict()
+    return res
+
+
+def _day(epoch):
+    from . import datefmt  # lazy, keeps this module's import list as it was
+    return datefmt.day(epoch)
 
 
 def check_undo_allowed(rows, actor=None):
@@ -730,7 +831,7 @@ def replace_file(slug, content, filename=None, run_background=None, *, dry_run=F
       unsupported_type / content_mismatch   400, the same checks an upload gets
       replace_type_mismatch 422, the bytes are another TYPE than the item (a .md replaced with a
                             .pdf): the type drives the item's metadata, icon and processing, so a
-                            type change is an upload + constructicon_mark_superseded, not a replace
+                            type change is an upload + constructicon_revision(action="supersede"), not a replace
       replace_needs_decision / replace_rejected   422, the type's pre-store hook would not just accept
       file_unchanged        409, the bytes are identical to the current file
     `filename` is the new file's name: it decides the type check; the item keeps its own name unless
@@ -746,7 +847,7 @@ def replace_file(slug, content, filename=None, run_background=None, *, dry_run=F
         raise NotFound(f"No item {slug!r}.")
     if row.get("redacted"):
         raise _refuse("replace_redacted", f"{slug} is redacted: its file was removed on purpose, so it can't be "
-                      "replaced. Recover the held file first (constructicon_recover_redacted).", 409, slug=slug)
+                      "replaced. Recover the held file first (constructicon_redact(slug, action='recover')).", 409, slug=slug)
     if not row.get("stored_filename"):
         raise _refuse("no_file", f"{slug} has no uploaded file to replace (it is a {row.get('media_type')} link or "
                       "content-only item).", 400, slug=slug, media_type=row.get("media_type"))
@@ -777,7 +878,7 @@ def replace_file(slug, content, filename=None, run_background=None, *, dry_run=F
             raise _refuse("replace_type_mismatch",
                           f"That file is a {sniffed!r}, but {slug} is a {row.get('media_type')!r}. Replacing keeps the "
                           "item's type; to swap in a different kind of file, upload it as a new item and use "
-                          "constructicon_mark_superseded. Nothing was changed.", 422,
+                          "constructicon_revision(old, action=\"supersede\", new=...). Nothing was changed.", 422,
                           slug=slug, current_type=row.get("media_type"), new_type=sniffed, filename=name_for_type)
         spec = object_types.get_object_type(sniffed)
         decision = ingest._apply_pre_store(spec, object_types.IngestCandidate(

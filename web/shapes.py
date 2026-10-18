@@ -447,7 +447,7 @@ def _to_hobby_face(hobby_row, projects=None, items_by_project=None):
     and its computed mismatch flags. `items_by_project` (id -> rows) feeds the date span; missing
     = read here, through the item policy."""
     if projects is None:
-        projects = db.list_projects_for_hobby(hobby_row["id"])
+        projects = policy.filter_visible_cards(db.list_projects_for_hobby(hobby_row["id"]))  # #604 step 3
     if items_by_project is None:
         items_by_project = {p["id"]: policy.filter_visible(db.list_project_items(p["id"])) for p in projects}
     cover, fields = _hobby_cover(hobby_row, projects)
@@ -546,7 +546,7 @@ def _to_blog_entry_detail(entry):
     """Full detail shape for GET /api/blog-entries/{slug}, including hydrated
     projects and items. Same structure as the db layer returns but with
     attached project and item details."""
-    projects = db.list_entry_projects(entry["id"])
+    projects = policy.filter_visible_cards(db.list_entry_projects(entry["id"]))  # #604 step 3
     items = policy.filter_visible(db.list_entry_items(entry["id"]))  # #557
     return {
         "id": entry["id"],

@@ -446,26 +446,76 @@ def _full_queue():
 def for_actor(q, actor=None):
     """The queue `q` as `actor` (default: the current context) may see it (#603, #467): a file
     question about an item the item policy hides (a sensitive item that isn't theirs) is left out,
-    and the counts follow. An admin sees it unchanged. Returns `q` itself when nothing is hidden."""
-    if roles.at_least(roles.role_of(actor_ctx.resolve(actor)), roles.ADMIN):
+    and the counts follow. #604 step 3: so is a card's or hobby's group when that card / hobby is
+    private and hidden from them, and a question's options never name a card or file they can't
+    see (the shared cache is built as `system`, which sees everything). An admin sees it unchanged.
+    Returns `q` itself when nothing is hidden."""
+    who = actor_ctx.resolve(actor)
+    if roles.at_least(roles.role_of(who), roles.ADMIN):
         return q
-    hidden = set()
-    for g in q["groups"] + q["deferred"]:
-        for i in g["items"]:
-            slug = i.get("item_slug")
-            if slug and slug not in hidden and not policy.can_view(db.get_by_slug(slug), actor):
-                hidden.add(slug)
-    if not hidden:
-        return q
+    from . import revisions  # lazy: revisions imports a lot of the core
+    with policy.access_scope(who) as acc:
+        return _for_actor(q, who, acc, revisions)
+
+
+def _for_actor(q, who, acc, revisions):
+    seen_items = {}
+
+    def item_visible(slug):
+        if slug not in seen_items:
+            seen_items[slug] = policy.can_view(db.get_by_slug(slug), who)
+        return seen_items[slug]
+
+    def group_visible(g):
+        if acc.empty or not g.get("slug"):
+            return True
+        if g["type"] == "card":
+            row = db.get_project(g["slug"])
+            return row is None or policy.can_view_card(row, access=acc)
+        if g["type"] == "hobby":
+            row = db.get_hobby(g["slug"])
+            return row is None or policy.can_view_hobby(row, access=acc)
+        return True
+
+    def option_visible(item, opt):
+        if item.get("kind") == "project_match":
+            return opt["key"] == "none" or policy.can_view_card(int(opt["key"]) if str(opt["key"]).isdigit()
+                                                                else opt["key"], access=acc)
+        if item.get("kind") == revisions.KIND_ITEM_SUPERSEDES:
+            action, cand = revisions.option_target(opt["key"])
+            return action == "none" or not cand or item_visible(cand)
+        return True
+
+    changed = False
 
     def keep(groups):
+        nonlocal changed
         out = []
         for g in groups:
-            its = [i for i in g["items"] if i.get("item_slug") not in hidden]
+            if not group_visible(g):
+                changed = True
+                continue
+            its = []
+            for i in g["items"]:
+                if i.get("item_slug") and not item_visible(i["item_slug"]):
+                    changed = True
+                    continue
+                opts = i.get("options")
+                if opts:
+                    shown = [o for o in opts if option_visible(i, o)]
+                    if len(shown) != len(opts):
+                        changed = True
+                        picks = [k for k in (i.get("suggested") or {}).get("picks", []) if k in {o["key"] for o in shown}]
+                        i = {**i, "options": shown,
+                             "suggested": {**(i.get("suggested") or {}), "picks": picks,
+                                           "labels": [o["label"] for o in shown if o["key"] in picks]}}
+                its.append(i)
             if its:
                 out.append({**g, "items": its})
         return out
     open_groups, deferred_groups = keep(q["groups"]), keep(q["deferred"])
+    if not changed:
+        return q
     return {**q, "groups": open_groups, "deferred": deferred_groups, "counts": _counts(open_groups, deferred_groups)}
 
 
@@ -482,9 +532,9 @@ def group_items(gid, section="open"):
     expanding a group never rebuilds the whole queue."""
     key = "deferred" if section == "deferred" else "groups"
     if gid.startswith("card:"):
-        q = build_queue(card=gid[5:])
+        q = for_actor(build_queue(card=gid[5:]))  # #604 step 3: a hidden private card shows nothing
     elif gid.startswith("hobby:"):
-        q = build_queue(hobby=gid[6:])
+        q = for_actor(build_queue(hobby=gid[6:]))
     else:
         q = cached_queue()
     for g in q[key]:

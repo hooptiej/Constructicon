@@ -579,7 +579,7 @@ def api_set_item_date(slug: str, display_date: float | None = Form(None), reset:
            "set_by_hand": res.data["set_by_hand"]}
     if project:
         card = db.get_project(project)
-        if card is None:
+        if card is None or not policy.can_view_card(card):  # #604 step 3: a hidden private card = missing
             raise HTTPException(status_code=404, detail="no such card")
         rows, _ = _split_revisions(policy.filter_visible(db.list_project_items(card["id"])), False)
         start, end = timeline.resolve_project_span(card, rows)
@@ -969,7 +969,7 @@ def api_tags(request: Request):
                 flat.extend(flatten_with_paths(node["children"], node_path))
         return flat
 
-    tag_tree = db.list_tag_tree()
+    tag_tree = policy.filter_tag_tree(db.list_tag_tree())  # #604 step 3
     flat_tags = flatten_with_paths(tag_tree)
     return JSONResponse(flat_tags)
 

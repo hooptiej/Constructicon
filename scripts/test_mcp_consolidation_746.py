@@ -461,7 +461,7 @@ print("--- 3. tools/list hides aliases, tools/call answers them, each alias call
 restore()
 listed = asyncio.run(S.mcp.list_tools())
 names = {t.name for t in listed}
-check("tools/list: 55 tools", len(names) == 55, len(names))
+check("tools/list: 56 tools (55 + constructicon_sharing, #604)", len(names) == 56, len(names))
 check("tools/list: no alias listed", not (names & set(S._HIDDEN_ALIASES)), sorted(names & set(S._HIDDEN_ALIASES)))
 SNAPNAMES = json.load(open(os.path.join(HERE, "data", "mcp_tool_names_700.json"), encoding="utf-8"))["names"]
 check("tools/list equals scripts/data/mcp_tool_names_700.json", sorted(names) == sorted(SNAPNAMES),
@@ -629,7 +629,7 @@ finally:
 # ---- 8. the (tool, action) -> role table -----------------------------------------------------------------
 print("--- 8. who may run which (tool, action) ---")
 visible = {n for n in S._TOOL_FUNCS if n not in S._ALIAS_OF}
-check("55 visible tool functions", len(visible) == 55, len(visible))
+check("56 visible tool functions (55 + constructicon_sharing, #604)", len(visible) == 56, len(visible))
 check("every visible tool has its role rows (startup refuses otherwise)",
       all(any(k[0] == n for k in S.ACTION_ROLES) for n in visible))
 check("permanent actions need admin",

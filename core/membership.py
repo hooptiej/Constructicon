@@ -44,7 +44,7 @@ NO_EFFECTS = {"link_tag": False, "merge_free_tags": False, "auto_cover": False}
 
 def get_card(card):
     row = db.get_project(card) if card not in (None, "") else None
-    if row is None:
+    if row is None or not policy.can_view_card(row):  # #604 step 3: a hidden private card = missing
         raise NotFound(f"No card {card!r}.")
     return row
 

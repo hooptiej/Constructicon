@@ -102,6 +102,11 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     warnings = []
     media_count = 0
 
+    # #604 step 3: nothing under a private card or hobby is published (owner question on the PR:
+    # whether an admin should be able to publish a private card on purpose). Skipped with a warning.
+    outsider = policy.outsider_access()
+    private_items = outsider.hidden_slugs() if not outsider.empty else frozenset()
+
     # Gather projects
     if project_slugs is None:
         # Include all active projects
@@ -115,6 +120,10 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
             p = db.get_project(slug)
             if p:
                 projects[p["id"]] = p
+    for pid in [i for i, p in projects.items() if outsider.card_hidden(i)]:
+        warnings.append(f"Project '{projects[pid]['slug']}' is private (or inside a private card or hobby), so it "
+                        f"was left out of the export.")
+        del projects[pid]
 
     # Gather project items + write-up bodies. The write-up lives in a separate
     # document row referenced by writeup_slug (its type_metadata.body); the
@@ -128,7 +137,7 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         # #477: only the current revision of a chain goes in the museum; no revisions, no change.
         # #557: what may leave the install is core/policy.py's call (filter_exportable).
         items = [i for i in policy.filter_exportable(db.list_project_items(project_id))
-                 if i["slug"] not in older_revisions]
+                 if i["slug"] not in older_revisions and i["slug"] not in private_items]
         project_items[project_id] = items
         if not items:
             warnings.append(f"Project '{project['slug']}' has no items")
@@ -159,8 +168,9 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     entry_projects = {}  # entry_id -> list of projects with sort_order and note
     entry_items = {}  # entry_id -> list of items with sort_order and note
     for entry_id in blog_entries_dict:
-        entry_projects[entry_id] = db.list_entry_projects(entry_id)
-        entry_items[entry_id] = policy.filter_exportable(db.list_entry_items(entry_id))  # #443, #557
+        entry_projects[entry_id] = [p for p in db.list_entry_projects(entry_id) if not outsider.card_hidden(p["id"])]
+        entry_items[entry_id] = [i for i in policy.filter_exportable(db.list_entry_items(entry_id))  # #443, #557
+                                 if i["slug"] not in private_items]  # #604 step 3
         if not entry_items[entry_id]:
             warnings.append(f"Blog entry '{blog_entries_dict[entry_id]['slug']}' has no attachments")
 

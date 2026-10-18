@@ -13,7 +13,7 @@ from core.db import BRAND_ROLES
 from web import files_feed, item_grid
 from web.common import _build_breadcrumbs, _rev_note, templates
 from web.shapes import _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _hobby_cover, _hobby_cover_usable, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_hobby_face, _to_object_detail, _to_public, _to_timeline_project
-from core import access_log, actor as actor_ctx, policy, roles, users
+from core import access_log, actor as actor_ctx, policy, roles, sharing, users
 from web.shapes import actor_label
 from web.roles import RoleRouter, requires
 
@@ -41,10 +41,11 @@ def _home_context(request, hobby, ref, rev):
     selecting the Reference pill (?ref=1) shows only reference-status projects;
     no params shows all top-level projects.
     """
-    all_projects = db.list_projects()
+    access = policy.card_access()  # #604 step 3: private cards and hobbies the viewer isn't on
+    all_projects = policy.filter_visible_cards(db.list_projects(), access=access)
     # #370: Hobby pills replace project-tag pills. Build the pill row from
     # hobbies, with an "All" pill (no filter) and a "Reference" pill at the end.
-    hobby_pills = db.list_hobbies()
+    hobby_pills = policy.filter_visible_hobbies(db.list_hobbies(), access=access)
 
     # Resolve selected hobby and determine filtered projects
     selected_hobby = None
@@ -53,6 +54,8 @@ def _home_context(request, hobby, ref, rev):
 
     if hobby:
         selected_hobby = db.get_hobby(hobby)
+        if selected_hobby and not policy.can_view_hobby(selected_hobby, access=access):
+            selected_hobby = None  # #604 step 3: a hidden hobby filters like an unknown one
         if selected_hobby:
             selected_hobby_slug = selected_hobby["slug"]
             # Show only projects in this hobby
@@ -167,7 +170,7 @@ def _card_queue_strip(slug=None, hobby=None):
     input" strip. The same items the Curator drawer shows for the card (questions, nudges,
     needs), open ones first and then the deferred ones, each carrying the suggested key(s)
     for the Accept button (no suggestion = no Accept, only Choose)."""
-    q = curation_queue.build_queue(card=slug, hobby=hobby)
+    q = curation_queue.for_actor(curation_queue.build_queue(card=slug, hobby=hobby))  # #604 step 3
     items = [i for g in q["groups"] for i in g["items"]] + [i for g in q["deferred"] for i in g["items"]]
     return {"items": items, "counts": q["counts"]}
 
@@ -175,8 +178,9 @@ def _card_queue_strip(slug=None, hobby=None):
 @router.get("/project/{slug}", response_class=HTMLResponse)
 def project_detail_page(request: Request, slug: str, rev: str = ""):
     project = db.get_project(slug)
-    if project is None:
+    if project is None or not policy.can_view_card(project):  # #604 step 3: hidden = missing
         raise HTTPException(status_code=404, detail="not found")
+    access = policy.card_access()
     # #557: a cover the actor may not see isn't named on the page either (today every cover is visible).
     cover_row = db.get_by_slug(project["cover_slug"]) if project.get("cover_slug") else None
     if cover_row is not None and not policy.can_view(cover_row):
@@ -188,7 +192,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
     # #557: what this card shows is the item policy's call (today: every item, restricted too).
     raw_items, n_sup = _split_revisions(policy.filter_visible(db.list_project_items(project["id"])), rev == "all")
     items = [_to_content_public(r, project_slug=slug) for r in raw_items]
-    child_projects = db.list_child_projects(project["id"])
+    child_projects = policy.filter_visible_cards(db.list_child_projects(project["id"]), access=access)
     # #156: fetch the writeup document and pass its body to the template
     writeup_body = None
     if project.get("writeup_slug"):
@@ -330,9 +334,13 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "card_home": cards.resolve_home(project["id"]),
             "card_home_value": (f"{project['home_kind']}:{project['home_ref']}" if project.get("home_kind") else ""),
             "home_card_options": [{"value": f"card:{c['id']}", "label": c["title"]}
-                                  for c in sorted(db.list_projects(), key=lambda c: c["title"].lower())
+                                  for c in sorted(policy.filter_visible_cards(db.list_projects(), access=access),
+                                                  key=lambda c: c["title"].lower())
                                   if c["id"] != project["id"]],
-            "home_hobby_options": [{"value": f"hobby:{h['id']}", "label": h["name"]} for h in db.list_hobbies()],
+            "home_hobby_options": [{"value": f"hobby:{h['id']}", "label": h["name"]}
+                                   for h in policy.filter_visible_hobbies(db.list_hobbies(), access=access)],
+            # #604 step 3: the Private checkbox and member list (the panel reads /api/sharing/card/<id>).
+            "card_sharing": sharing.state("card", project["id"]),
             # V2 cards 3.6: families this card is in / members of this family or collection.
             "family_info": family_info,
             "header_card": header_card,
@@ -343,7 +351,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "project_score": project_score,
             "project_hobbies": [{"id": h["id"], "name": h["name"], "slug": h["slug"]} for h in project_hobbies],
             # #408 / V2 3.8: every link (typed + related, both directions) for the Links row.
-            "links": cards.list_links(slug),
+            "links": cards.list_links(slug),  # #604 step 3: list_links leaves out hidden cards
             "link_types": [{"key": t, "forward": card_rules.LINK_LABELS[t][0], "reverse": card_rules.LINK_LABELS[t][1]}
                            for t in card_rules.LINK_TYPES],
             # #414: blog entries that feature this project, for the "Featured
@@ -383,7 +391,8 @@ def hobbies_page(request: Request):
     and 308-redirects /hobbies itself (and any earlier label's paths) there when the label isn't
     the default."""
     return templates.TemplateResponse(request, "hobbies.html",
-                                      {"hobby_faces": [_to_hobby_face(h) for h in db.list_hobbies()]})
+                                      {"hobby_faces": [_to_hobby_face(h) for h in
+                                                       policy.filter_visible_hobbies(db.list_hobbies())]})
 
 
 @router.get("/hobby/{slug}", response_class=HTMLResponse)
@@ -393,11 +402,11 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     this hobby, each member project as a small card with a pile of its files, and the loose
     objects (tagged with the hobby, in none of its member projects)."""
     hobby = db.get_hobby(slug)
-    if hobby is None:
+    if hobby is None or not policy.can_view_hobby(hobby):  # #604 step 3: hidden = missing
         raise HTTPException(status_code=404, detail=f"{install_config.hobby_label().one_lc} not found")
 
     fields = cards.hobby_fields(hobby)
-    projects = db.list_projects_for_hobby(hobby["id"])
+    projects = policy.filter_visible_cards(db.list_projects_for_hobby(hobby["id"]))
     items_by_project = {p["id"]: policy.filter_visible(db.list_project_items(p["id"])) for p in projects}  # #557
     queue = _card_queue_strip(hobby=hobby["slug"])
 
@@ -468,6 +477,8 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
             "dates_end": _friendly_date(end) if end else None,
             # #562: the per-hobby "shows physical-piece fields" setting (was a name match).
             "shows_physical_piece": db.hobby_shows_physical_piece(hobby["id"]),
+            # #604 step 3: the Private checkbox and member list for the hobby itself.
+            "hobby_sharing": sharing.state("hobby", hobby["id"]),
             # #596: the hobby card's own synopsis / flavor (the ABOUT group).
             "hobby_text": hobbies.text_fields(hobby),
             "card_text_limits": card_rules.CARD_TEXT_LIMITS,

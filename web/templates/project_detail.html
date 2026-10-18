@@ -4,6 +4,7 @@
 {% from "_card.html" import card %}
 {% from "_details_group.html" import dp_group %}
 {% from "_card_text.html" import about_view, about_edit, about_script %}
+{% from "_sharing.html" import sharing_panel %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
@@ -312,6 +313,9 @@
         {{ dp_group("identity", "IDENTITY", identity_view, identity_edit, done_only=false) }}
         {{ dp_group("status", "STATUS", status_view, status_edit) }}
         {{ dp_group("origin", "ORIGIN", origin_view, origin_edit) }}
+        {# #604 step 3: Private + members, changed in place (static/js/sharing.js) #}
+        {% set sharing_v %}{{ sharing_panel(card_sharing, "card") }}{% endset %}
+        {{ dp_group("sharing", "SHARING", sharing_v, editable=false) }}
         {{ dp_group("dates", "DATES", dates_view, dates_edit) }}
         {{ dp_group("structure", "STRUCTURE", structure_view, structure_edit) }}
         {{ dp_group("links", "LINKS", links_view, links_edit, links_static, done_only=true) }}
@@ -430,6 +434,7 @@
   {% endif %}
   <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
   <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
+  <script src="/static/js/sharing.js?v={{ static_version('js/sharing.js') }}" defer></script>
 
   {% if timeline_children or timeline_items %}
   <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>

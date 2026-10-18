@@ -9,6 +9,8 @@ A static check (AST, no server, no DB). It fails when:
      `db.list_restricted` (the admin's list of restricted items) is the one allowed exception.
   1b. (#604 follow-up 7) a door that OPENS one item (ACCESS_LOGGED) no longer records a sensitive
      item's access with `policy.note_access(...)`.
+  5. (#604 step 3) a known CARD door (CARD_DOORS) stops asking the card policy (private cards and
+     hobbies), or db.insert_change_log stops running the private-card write guard (policy.check_write).
   4. (#746) EVERY MCP tool function (visible tools and hidden aliases; no name-prefix heuristic) is
      in MCP_TOOLS with a kind, and the kind holds. The tool's body is followed into the server
      helpers it calls (not into core/, except CORE_GUARDED):
@@ -117,6 +119,61 @@ DOORS = {
     ("mcp_server/server.py", "_detach_tag"): "MCP detach_tag",
     ("mcp_server/server.py", "_set_writeup"): "MCP update_project(fields.writeup_slug), set_project_writeup",
 }
+
+# #604 step 3: doors that hand out CARDS or HOBBIES (or name them: titles in a tag tree, a breadcrumb,
+# a queue group) must ask the card policy (CARD_GATES), or go through cards.get_card / get_hobby, which
+# do. Rule 5 below. The behaviour (owner / editor member / viewer member / outsider / admin / token, per
+# door) is proven by scripts/test_private_cards_604.py.
+CARD_DOORS = {
+    ("web/routes/pages.py", "_home_context"): "/ (cards, hobby pills, timeline)",
+    ("web/routes/pages.py", "project_detail_page"): "/project/{slug} (the card, its parts, members, links, home)",
+    ("web/routes/pages.py", "hobbies_page"): "/hobbies",
+    ("web/routes/pages.py", "hobby_detail_page"): "/hobby/{slug} (the hobby and its cards)",
+    ("web/routes/cards.py", "api_card"): "GET /api/cards/{slug}",
+    ("web/routes/cards.py", "api_projects"): "GET /api/projects",
+    ("web/routes/cards.py", "api_create_project"): "POST /api/projects (its parent)",
+    ("web/routes/cards.py", "_related_projects_public"): "the Related-projects widget",
+    ("web/routes/hobbies.py", "api_list_hobbies"): "GET /api/hobbies",
+    ("web/routes/hobbies.py", "api_hobbies_html"): "GET /api/hobbies/html",
+    ("web/routes/hobbies.py", "api_get_hobby"): "GET /api/hobby/{id}",
+    ("web/routes/hobbies.py", "api_add_project_to_hobby"): "POST /api/hobby/{id}/add-project (its list)",
+    ("web/routes/hobbies.py", "api_remove_project_from_hobby"): "POST /api/hobby/{id}/remove-project (its list)",
+    ("web/routes/curator.py", "api_curator_queue"): "GET /api/curator/queue?card=",
+    ("web/routes/curator.py", "api_curator_queue_html"): "GET /api/curator/queue/html (a group's card face)",
+    ("web/routes/items.py", "api_tags"): "GET /api/tags (card and hobby tag names)",
+    ("web/routes/items.py", "api_set_item_date"): "POST /api/image/{slug}/date?project= (the card's span)",
+    ("web/shapes.py", "_to_hobby_face"): "a hobby's card face (its cards)",
+    ("web/shapes.py", "_to_blog_entry_detail"): "a blog entry's cards",
+    ("web/common.py", "_build_breadcrumbs"): "the item page's ?from=project: breadcrumb",
+    ("core/cards.py", "get_card"): "every card op (reads and writes)",
+    ("core/cards.py", "get_hobby"): "every hobby op",
+    ("core/membership.py", "get_card"): "files on / off a card",
+    ("core/cards.py", "family_fields"): "families / members of a card",
+    ("core/cards.py", "list_links"): "a card's links (and its face's relationship lines)",
+    ("core/cards.py", "resolve_home"): "a card's home (a manual override may name any card)",
+    ("core/cards.py", "list_needs_decision"): "card needs (MCP, the queue)",
+    ("core/cards.py", "explain_card"): "explain_card (children, links, home)",
+    ("core/cards.py", "list_changes"): "the change log (row images)",
+    ("core/cards.py", "resolve_hobby_cover"): "a hobby's automatic cover (its cards)",
+    ("core/cards.py", "create"): "a new card's parent",
+    ("core/curation_queue.py", "for_actor"): "the Curator queue (card / hobby groups, options)",
+    ("core/decisions.py", "list_open"): "the decision queue (card questions, project_match candidates)",
+    ("core/curator_needs.py", "list_needs"): "Curator nudges",
+    ("core/site_export.py", "build_site"): "the static site export (nothing private is published)",
+    ("core/project_export.py", "export_project"): "the project zip",
+    ("mcp_server/server.py", "constructicon_list_projects"): "MCP list_projects",
+    ("mcp_server/server.py", "constructicon_get_project"): "MCP get_project",
+    ("mcp_server/server.py", "constructicon_list_hobbies"): "MCP list_hobbies",
+    ("mcp_server/server.py", "constructicon_list_tags"): "MCP list_tags",
+    ("mcp_server/server.py", "constructicon_update_project"): "MCP update_project",
+    ("mcp_server/server.py", "constructicon_card_files"): "MCP card_files",
+    ("mcp_server/server.py", "constructicon_add_project_to_hobby"): "MCP add_project_to_hobby (alias)",
+    ("mcp_server/server.py", "_to_public_blog_entry"): "MCP blog entry cards",
+}
+CARD_GATES = {"can_view_card", "can_view_hobby", "require_card_view", "filter_visible_cards", "filter_visible_hobbies",
+              "card_access", "access_scope", "outsider_access", "filter_tag_tree", "hidden_tag_ids"}
+# #604 step 3: the write guard on private cards runs for every logged write.
+WRITE_GUARD = ("core/db.py", "insert_change_log", "check_write")
 
 # #604 follow-up 7: doors that OPEN one item must record a sensitive item's access
 # (`policy.note_access(row, how)`, a no-op for an ordinary item).
@@ -277,6 +334,7 @@ MCP_TOOLS = {
     "constructicon_add_to_family": (NONE, "alias"),
     "constructicon_remove_from_family": (NONE, "alias"),
     "constructicon_link": (NONE, "card links"),
+    "constructicon_sharing": (NONE, "a card's / hobby's privacy and members (core/sharing.py; hidden cards are not_found)"),
     "constructicon_unlink": (NONE, "alias"),
     "constructicon_retype_link": (NONE, "alias"),
     "constructicon_retype_links": (NONE, "card links"),
@@ -295,8 +353,9 @@ MCP_TOOLS = {
     "constructicon_resolve_decisions": (NONE, "card changes"),
     "constructicon_resolve_pending_decision": (NONE, "what the answer applied"),
     "constructicon_sweep_stale_decisions": (NONE, "resolved question ids"),
-    # The change log's row images carry whatever was written (item fields too): role-gated (editor),
-    # not item-gated; per-user tokens will need that (a follow-up).
+    # The change log's row images carry whatever was written (item fields too). Since #604 steps 3 / 5
+    # (per-user tokens) a non-admin reads only rows that touch nothing hidden from them, and can't undo
+    # one that does (core/sharing.py visible_change_rows / check_undo_allowed, policy.change_row_visible).
     "constructicon_undo": (NONE, "change rows"),
     "constructicon_list_changes": (NONE, "change rows"),
     "constructicon_list_needs": (NONE, "alias (nudges)"),
@@ -321,6 +380,21 @@ def _functions(tree):
 def _calls_policy(fn):
     return any(isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "policy"
                for n in ast.walk(fn))
+
+
+def _calls_card_policy(fn):
+    """#604 step 3: the function asks the card policy, resolves its card through get_card / get_hobby, or
+    filters through curation_queue.for_actor (itself a card door)."""
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "policy"                 and n.attr in CARD_GATES:
+            return True
+        if isinstance(n, ast.Call):
+            f = n.func
+            name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
+            if name in ("get_card", "get_hobby", "for_actor") and not (isinstance(f, ast.Attribute)
+                                                          and isinstance(f.value, ast.Name) and f.value.id == "db"):
+                return True
+    return False
 
 
 def _db_reads(fn):
@@ -367,6 +441,19 @@ def main():
                      and n.value.id == "policy" for n in ast.walk(fn)):
             failures.append(f"{rel}:{fn.lineno} {name} ({what}): doesn't record sensitive access (policy.note_access)")
 
+    # 5. #604 step 3: card / hobby doors ask the card policy
+    for (rel, name), what in CARD_DOORS.items():
+        fn = _functions(tree(rel)).get(name)
+        if fn is None:
+            failures.append(f"{rel}:{name} ({what}): card door not found (renamed? update CARD_DOORS)")
+        elif not _calls_card_policy(fn):
+            failures.append(f"{rel}:{fn.lineno} {name} ({what}): doesn't ask the card policy "
+                            f"(policy.{'/'.join(sorted(CARD_GATES))[:60]}..., or cards.get_card / get_hobby)")
+    rel, name, gate = WRITE_GUARD
+    fn = _functions(tree(rel)).get(name)
+    if fn is None or not any(isinstance(n, ast.Attribute) and n.attr == gate for n in ast.walk(fn)):
+        failures.append(f"{rel}:{name}: no longer calls policy.{gate} (the private-card write guard, #604 step 3)")
+
     # 2. the net
     netted = 0
     netted_names = set()
@@ -403,7 +490,7 @@ def main():
                     continue
                 failures.append(f"{rel}:{i}: decides restriction itself ({line.strip()[:90]}); ask core/policy.py")
 
-    print(f"known doors: {len(DOORS)}; access-logged doors: {len(ACCESS_LOGGED)}; "
+    print(f"known doors: {len(DOORS)}; card doors: {len(CARD_DOORS)}; access-logged doors: {len(ACCESS_LOGGED)}; "
           f"GET routes reading items (net): {netted}; exempt: {len(EXEMPT)}; MCP tools classified: "
           + ", ".join(f"{k} {v}" for k, v in sorted(mcp_counts.items())))
     if failures:

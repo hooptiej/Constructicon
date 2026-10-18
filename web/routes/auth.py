@@ -12,7 +12,7 @@ token). /login redirects to /setup while the install has no user; /setup is 404 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from core import install_config, roles, users
+from core import install_config, mcp_tokens, roles, users
 from core.errors import AppError, NotFound
 from web import auth as web_auth, proxy_trust
 from web.common import from_request_thread, templates
@@ -149,6 +149,37 @@ def api_change_my_password(request: Request):
     result = users.set_password(me["id"], body.get("new_password"), current_password=body.get("current_password") or "",
                                 keep_token=token)
     return {"ok": True, "sessions_ended": result.data["sessions_ended"]}
+
+
+# --- #604 step 5: my MCP tokens (core/mcp_tokens.py) -------------------------------------------
+# Viewer and up, each user manages only their own. The secret is in the ANSWER to create / rotate
+# (once), never in a request body, so the request log has nothing to redact (it stores bodies, not
+# answers). The install token has no user: 403 not_signed_in.
+
+@router.get("/api/account/mcp-tokens", dependencies=requires(roles.VIEWER))
+def api_my_mcp_tokens():
+    """{ok, tokens: [{id, name, created_at, rotated_at, last_used_at}]}: your MCP tokens, no secrets."""
+    return {"ok": True, "tokens": mcp_tokens.list_mine()}
+
+
+@router.post("/api/account/mcp-tokens", dependencies=requires(roles.VIEWER))
+def api_create_my_mcp_token(request: Request):
+    """JSON {name}. A new token for you: {ok, token (shown once), id, name, created_at, batch_id}.
+    400 bad_token_name; 409 token_name_taken / too_many_tokens."""
+    body = _json_body(request)
+    return {"ok": True, **mcp_tokens.create(body.get("name"))}
+
+
+@router.post("/api/account/mcp-tokens/{token_id}/rotate", dependencies=requires(roles.VIEWER))
+def api_rotate_my_mcp_token(token_id: str):
+    """A new secret for one of your tokens (the old one stops working now): {ok, token, ...}."""
+    return {"ok": True, **mcp_tokens.rotate(token_id)}
+
+
+@router.post("/api/account/mcp-tokens/{token_id}/revoke", dependencies=requires(roles.VIEWER))
+def api_revoke_my_mcp_token(token_id: str):
+    """Deletes one of your tokens. 404 when it isn't yours (or is already gone)."""
+    return mcp_tokens.revoke(token_id)
 
 
 # --- Admin > Users --------------------------------------------------------------------------

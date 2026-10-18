@@ -247,6 +247,30 @@ CREATE TABLE IF NOT EXISTS item_access_log (
     at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_item_access_log_slug ON item_access_log(slug, at);
+-- #604 step 3: the members of a PRIVATE card (projects.private) or hobby (hobby_settings.private),
+-- each a viewer or an editor of it. Only core/sharing.py writes it (imaged, undoable). The owner
+-- (created_by_user_id) and admins see a private card without a row here.
+CREATE TABLE IF NOT EXISTS share_members (
+    target_kind TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    added_at REAL NOT NULL,
+    PRIMARY KEY (target_kind, target_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_share_members_user ON share_members(user_id);
+-- #604 step 5: per-user MCP tokens, several per user, each named ("windows claude"). Only the sha256
+-- of the token is stored (like sessions); core/mcp_tokens.py owns every write. Never imaged.
+CREATE TABLE IF NOT EXISTS mcp_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at REAL NOT NULL,
+    rotated_at REAL,
+    last_used_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id);
 """
 
 # Provenance (capture_events.provenance, #341): the options live in the provenance_options
@@ -940,6 +964,12 @@ def init_db(migrate=True):
         if "created_by_user_id" not in existing_blog_entry_columns:
             _add_column(conn, "blog_entries", "created_by_user_id", "INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_capture_events_sensitive ON capture_events(sensitive)")
+        # #604 step 3: a PRIVATE card or hobby (0 = open, the default). Who else may see it is
+        # share_members; core/policy.py decides, core/sharing.py writes.
+        if "private" not in existing_project_columns:
+            _add_column(conn, "projects", "private", "INTEGER NOT NULL DEFAULT 0")
+        if "private" not in existing_hobby_settings_columns:
+            _add_column(conn, "hobby_settings", "private", "INTEGER NOT NULL DEFAULT 0")
         # Change log: audit_log grows nullable columns so core operations can record
         # row images (before/after) for audit + undo. Direct HTTP callers keep getting
         # the old request-log row (these columns NULL there).
@@ -3751,6 +3781,147 @@ def list_project_items(project_id):
         conn.close()
 
 
+def privacy_snapshot():
+    """(#604 step 3) Everything core/policy.py needs to decide card / hobby visibility, read in one
+    go. None when nothing at all is private (the common case: one cheap query each). Otherwise
+    {"cards": {id: owner_user_id}, "hobbies": {tag_id: owner_user_id}, "members": {(kind, id):
+    {user_id: role}}, "children": {parent_id: [card ids]} (projects.parent_id), "family": {family_id:
+    [member ids]}, "hobby_cards": {tag_id: [card ids]}}: the private nodes and the edges along which
+    privacy is inherited downward. Inside a read_session() (a page render) it is read once and kept
+    for the session (read-only work, so it can't go stale; a write clears the memo)."""
+    memo = getattr(_ambient, "memo", None)
+    if memo is not None and "privacy_snapshot" in memo:
+        return memo["privacy_snapshot"]
+    snap = _privacy_snapshot()
+    if memo is not None:
+        memo["privacy_snapshot"] = snap
+    return snap
+
+
+def _privacy_snapshot():
+    conn = get_conn()
+    try:
+        cards_p = {r["id"]: r["created_by_user_id"] for r in conn.execute(
+            "SELECT id, created_by_user_id FROM projects WHERE COALESCE(private, 0) = 1")}
+        hobbies_p = {r["hobby_tag_id"]: r["created_by_user_id"] for r in conn.execute(
+            "SELECT hs.hobby_tag_id, hs.created_by_user_id FROM hobby_settings hs "
+            "JOIN blog_tags bt ON bt.id = hs.hobby_tag_id WHERE COALESCE(hs.private, 0) = 1 AND bt.is_hobby = 1")}
+        if not cards_p and not hobbies_p:
+            return None
+        members = {}
+        for r in conn.execute("SELECT target_kind, target_id, user_id, role FROM share_members"):
+            members.setdefault((r["target_kind"], r["target_id"]), {})[r["user_id"]] = r["role"]
+        children, family, hobby_cards = {}, {}, {}
+        for r in conn.execute("SELECT id, parent_id FROM projects WHERE parent_id IS NOT NULL"):
+            children.setdefault(r["parent_id"], []).append(r["id"])
+        for r in conn.execute("SELECT family_id, member_id FROM family_members"):
+            family.setdefault(r["family_id"], []).append(r["member_id"])
+        for r in conn.execute("SELECT project_id, hobby_tag_id FROM project_hobbies"):
+            hobby_cards.setdefault(r["hobby_tag_id"], []).append(r["project_id"])
+        return {"cards": cards_p, "hobbies": hobbies_p, "members": members, "children": children,
+                "family": family, "hobby_cards": hobby_cards}
+    finally:
+        conn.close()
+
+
+def card_parents(card_id):
+    """(#604 step 3) What a card inherits privacy FROM: {"cards": [parent card id, family ids it is a
+    member of], "hobbies": [hobby tag ids it is in]}. Read-only."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT parent_id FROM projects WHERE id = ?", (card_id,)).fetchone()
+        up = [row["parent_id"]] if row and row["parent_id"] is not None else []
+        up += [r["family_id"] for r in conn.execute("SELECT family_id FROM family_members WHERE member_id = ?",
+                                                    (card_id,))]
+        hobbies_ = [r["hobby_tag_id"] for r in conn.execute(
+            "SELECT hobby_tag_id FROM project_hobbies WHERE project_id = ?", (card_id,))]
+        return {"cards": up, "hobbies": hobbies_}
+    finally:
+        conn.close()
+
+
+def slugs_in_cards(card_ids):
+    """(#604 step 3) The item slugs on any of these cards (project_items)."""
+    ids = [int(i) for i in card_ids]
+    if not ids:
+        return set()
+    conn = get_conn()
+    try:
+        out = set()
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            out |= {r[0] for r in conn.execute(
+                f"SELECT post_slug FROM project_items WHERE project_id IN ({','.join('?' for _ in chunk)})", chunk)}
+        return out
+    finally:
+        conn.close()
+
+
+def card_tag_links():
+    """(#604 step 3) {tag_id: [card ids whose linked tag it is]} (projects.tag_id)."""
+    conn = get_conn()
+    try:
+        out = {}
+        for r in conn.execute("SELECT id, tag_id FROM projects WHERE tag_id IS NOT NULL"):
+            out.setdefault(r["tag_id"], []).append(r["id"])
+        return out
+    finally:
+        conn.close()
+
+
+def slugs_tagged(tag_ids):
+    """(#604 step 3) The item slugs tagged directly (post_tags) with any of these tags: a hobby's
+    loose objects, for a private hobby."""
+    ids = [int(i) for i in tag_ids]
+    if not ids:
+        return set()
+    conn = get_conn()
+    try:
+        return {r[0] for r in conn.execute(
+            f"SELECT post_slug FROM post_tags WHERE tag_id IN ({','.join('?' for _ in ids)})", ids)}
+    finally:
+        conn.close()
+
+
+def item_holders(slug):
+    """(#604 step 3) {"cards": [card ids holding this item], "tags": [tag ids on it]}: what an item's
+    visibility depends on."""
+    conn = get_conn()
+    try:
+        return {"cards": [r[0] for r in conn.execute("SELECT project_id FROM project_items WHERE post_slug = ?", (slug,))],
+                "tags": [r[0] for r in conn.execute("SELECT tag_id FROM post_tags WHERE post_slug = ?", (slug,))]}
+    finally:
+        conn.close()
+
+
+def share_members(kind, target_id):
+    """(#604 step 3) A private card's / hobby's members: [{user_id, role, added_at, username,
+    display_name, user_role, disabled}], by name. Deleted users show with username None."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT sm.user_id, sm.role, sm.added_at, u.username, u.display_name, u.role AS user_role, u.disabled "
+            "FROM share_members sm LEFT JOIN users u ON u.id = sm.user_id "
+            "WHERE sm.target_kind = ? AND sm.target_id = ? ORDER BY LOWER(COALESCE(u.display_name, u.username, ''))",
+            (kind, target_id)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def hobby_privacy(tag_id):
+    """(#604 step 3) {private, created_by_user_id} for a hobby (no hobby_settings row = open,
+    admin-owned)."""
+    conn = get_conn()
+    try:
+        r = conn.execute("SELECT COALESCE(private, 0) AS private, created_by_user_id FROM hobby_settings "
+                         "WHERE hobby_tag_id = ?", (tag_id,)).fetchone()
+        return {"private": int(r["private"]), "created_by_user_id": r["created_by_user_id"]} if r else \
+            {"private": 0, "created_by_user_id": None}
+    finally:
+        conn.close()
+
+
 def list_projects_for_post(post_slug):
     """Reverse lookup — which projects contain a given post. Uses
     idx_project_items_slug."""
@@ -3976,6 +4147,9 @@ def insert_change_log(conn, op, actor, mutations, batch_id=None, affected_slugs=
     `details` (#541 phase C): an optional JSON-able summary kept in form_body, for a record
     that has no row images (delete-all writes its per-table counts there)."""
     actor = actor_ctx.resolve(actor)
+    # #604 step 3: the private-card write guard (a viewer member only looks). It raises before the
+    # log row exists, so the caller's transaction rolls the write back.
+    policy.check_write(mutations, actor)
     cur = conn.execute(
         "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, "
         "op, actor, batch_id, mutations) VALUES (?, ?, ?, ?, 200, NULL, ?, ?, ?, ?, ?)",
@@ -4038,6 +4212,8 @@ IMAGE_TABLE_KEYS = {
     # #562: install identity (core/install_config.py) and per-hobby settings (core/hobbies.py).
     "install_config": ("key",),
     "hobby_settings": ("hobby_tag_id",),
+    # #604 step 3 (core/sharing.py): a private card's / hobby's members.
+    "share_members": ("target_kind", "target_id", "user_id"),
 }
 _IMAGE_ROWID_TABLES = ("project_items", "project_hobbies", "family_members", "project_relations",
                        "blog_entry_projects", "post_tags")
@@ -5354,7 +5530,87 @@ def _delete_user(user_id):
     conn = get_conn()
     try:
         conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM mcp_tokens WHERE user_id = ?", (user_id,))  # #604 step 5
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --- #604 step 5: per-user MCP tokens (core/mcp_tokens.py owns every write) -----------------------
+
+MCP_TOKEN_PUBLIC_COLUMNS = "id, user_id, name, created_at, rotated_at, last_used_at"
+
+
+def list_mcp_tokens(user_id):
+    """A user's MCP tokens, newest first: {id, user_id, name, created_at, rotated_at, last_used_at}
+    (never the hash)."""
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            f"SELECT {MCP_TOKEN_PUBLIC_COLUMNS} FROM mcp_tokens WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+            (user_id,))]
+    finally:
+        conn.close()
+
+
+def get_mcp_token(token_id):
+    conn = get_conn()
+    try:
+        r = conn.execute(f"SELECT {MCP_TOKEN_PUBLIC_COLUMNS} FROM mcp_tokens WHERE id = ?", (token_id,)).fetchone()
+        return dict(r) if r else None
+    finally:
+        conn.close()
+
+
+def find_mcp_token(token_hash):
+    """The token row (no hash) whose sha256 is `token_hash`, plus its user's username / role /
+    disabled (None for a deleted user); None when no such token."""
+    conn = get_conn()
+    try:
+        r = conn.execute(
+            "SELECT t.id, t.user_id, t.name, t.created_at, t.rotated_at, t.last_used_at, u.username, u.role, "
+            "u.disabled, u.display_name FROM mcp_tokens t LEFT JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
+            (token_hash,)).fetchone()
+        return dict(r) if r else None
+    finally:
+        conn.close()
+
+
+def _insert_mcp_token(user_id, name, token_hash, now):
+    conn = get_conn()
+    try:
+        cur = conn.execute("INSERT INTO mcp_tokens (user_id, name, token_hash, created_at) VALUES (?, ?, ?, ?)",
+                           (user_id, name, token_hash, now))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _rehash_mcp_token(token_id, token_hash, now):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE mcp_tokens SET token_hash = ?, rotated_at = ?, last_used_at = NULL WHERE id = ?",
+                     (token_hash, now, token_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _delete_mcp_token(token_id):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM mcp_tokens WHERE id = ?", (token_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _touch_mcp_token(token_id, now):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?", (now, token_id))
         conn.commit()
     finally:
         conn.close()

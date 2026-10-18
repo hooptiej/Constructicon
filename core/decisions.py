@@ -135,6 +135,11 @@ def list_open():
             "current_type": str (retype only, row's media_type),
         }
     """
+    with policy.access_scope() as acc:  # #604 step 3: private cards the actor isn't on, worked out once
+        return _list_open(acc)
+
+
+def _list_open(acc):
     items = []
     for decision in db.list_pending_decisions():
         if stale_reason(decision):
@@ -143,6 +148,8 @@ def list_open():
             # V2 card decision (post_slug = "card:<project slug>"): validated against
             # `projects`, NOT capture_events (stale_reason, spec 4.3).
             card_row = cards._decision_card(decision)
+            if card_row is not None and not policy.can_view_card(card_row, access=acc):
+                continue  # #604 step 3: a question about a private card is for those who can see it
             payload = decision["payload"]
             items.append({
                 "id": decision["id"],
@@ -176,7 +183,7 @@ def list_open():
             candidates = []
             for pid in decision["payload"].get("candidate_project_ids", []):
                 project = db.get_project(pid)
-                if project is not None:
+                if project is not None and policy.can_view_card(project, access=acc):  # #604 step 3
                     candidates.append(
                         {"id": project["id"], "title": project["title"], "slug": project["slug"]}
                     )

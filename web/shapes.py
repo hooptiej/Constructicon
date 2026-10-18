@@ -476,8 +476,8 @@ def _to_card_face(project, items=None):
 
 
 def _to_timeline_project(project):
-    """Shape for one entry on the gallery timeline rail (web/static/js/timeline-rail.js).
-    Unlike _to_card_face, this includes children (is_child) -- the rail
+    """Shape for one card on the home page's radio dial (web/static/js/radio-dial.js, #775).
+    Unlike _to_card_face, this includes children (is_child) -- the dial
     shows every project, the grid deliberately doesn't (#149)."""
     items = db.list_project_items(project["id"])
     effective_start, effective_end = timeline.resolve_project_span(project, items)

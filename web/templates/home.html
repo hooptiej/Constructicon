@@ -7,11 +7,22 @@
 {% include "_blog_builder.html" %}
 {% include "_export_builder.html" %}
 
-{% if timeline_projects %}
-<aside class="timeline-rail" id="gallery-timeline-rail"></aside>
-{% endif %}
-
-<div class="app-main{% if timeline_projects %} app-main-shifted{% endif %}">
+<div class="app-main">
+  {# #775 "Tune in to the past": the timeline is a horizontal radio dial across the top (it replaced
+     the vertical left rail). Browse only: it never filters or scrolls the cards below. The tuning
+     panel (live sliders for the dial's feel values) shows only on a dev instance, or with ?tune=1
+     for an admin. #}
+  {% set dial_tune = is_dev or (request.query_params.get('tune') == '1' and has_role('admin')) %}
+  <section class="radio-dial" id="home-radio-dial" aria-label="Timeline">
+    <div class="radio-dial-chassis">
+      {% if timeline_projects %}
+      <p class="radio-dial-message" role="status">Tuning the dial&hellip;</p>
+      {% else %}
+      <p class="radio-dial-message" role="status">No dated cards yet: the dial lights up once a card has a real date (a dated file on it, or a Timeline start on the card).</p>
+      {% endif %}
+    </div>
+    {% if dial_tune %}<div id="radio-dial-tune"></div>{% endif %}
+  </section>
   <div>
     <h1 class="page-title">{{ app_name() }}</h1>
     <p class="page-subtitle">Curated projects below — gallery and upload live behind the tab on the right (hover, or drag a file over it).</p>
@@ -139,28 +150,41 @@
 
       {% if timeline_projects %}
       <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
-      <script src="/static/js/timeline-rail.js?v={{ static_version('js/timeline-rail.js') }}"></script>
+      <script src="/static/js/radio-dial-math.js?v={{ static_version('js/radio-dial-math.js') }}"></script>
+      <script src="/static/js/radio-dial.js?v={{ static_version('js/radio-dial.js') }}"></script>
+      {% if dial_tune %}<script src="/static/js/radio-dial-tuning.js?v={{ static_version('js/radio-dial-tuning.js') }}"></script>{% endif %}
+      <script type="application/json" id="radio-dial-data" nonce="{{ csp_nonce() }}">{{ timeline_projects | tojson }}</script>
       <script nonce="{{ csp_nonce() }}">
       (function () {
-        const rail = document.getElementById('gallery-timeline-rail');
-        const timelineProjects = {{ timeline_projects | tojson }};
-        if (timelineProjects.length) {
-          new TimelineRail(
-            rail,
-            timelineProjects.map((p) => ({
-              id: p.id,
-              thumbUrl: p.cover_url,
-              label: p.title,
-              date: p.effective_start,
-              endDate: p.effective_end,
-              isChild: p.is_child,
-              dateLabel: MountainTime.formatDate(p.effective_start),
-              openUrl: `/project/${p.slug}`,
-            })),
-            {
-              onOpen: (entry) => { window.location.href = entry.openUrl; },
-            }
-          );
+        // #775: mount the dial. Any failure is written into the chassis, never left at "Tuning...".
+        const root = document.getElementById('home-radio-dial');
+        const chassis = root.querySelector('.radio-dial-chassis');
+        const say = (msg) => {
+          chassis.innerHTML = '';
+          const p = document.createElement('p');
+          p.className = 'radio-dial-message';
+          p.setAttribute('role', 'alert');
+          p.textContent = msg;
+          chassis.appendChild(p);
+        };
+        if (!window.RadioDial || !window.RadioDialMath || !window.MountainTime) {
+          say('The timeline dial did not load (one of its scripts is missing). Reload the page; if it stays, check the browser console.');
+          return;
+        }
+        let data;
+        try {
+          data = JSON.parse(document.getElementById('radio-dial-data').textContent);
+        } catch (e) {
+          say(`The timeline data could not be read (${e.message}). Reload the page; if it stays, the home page is sending bad data.`);
+          return;
+        }
+        try {
+          const dial = new RadioDial(root, data, { formatDate: (e) => MountainTime.formatDate(e) });
+          const panel = document.getElementById('radio-dial-tune');
+          if (panel && window.RadioDialTuning && !dial.failed) RadioDialTuning.mount(panel, dial);
+        } catch (e) {
+          say(`The timeline dial hit an error: ${e.message}. Reload the page; if it stays, check the browser console.`);
+          throw e;  // and still reach the console with its stack
         }
       })();
       </script>

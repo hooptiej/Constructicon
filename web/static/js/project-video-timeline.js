@@ -1,5 +1,6 @@
 // Horizontal, video-editor-style timeline for a project's detail page --
-// distinct from the gallery page's vertical rail (web/static/js/timeline-rail.js).
+// distinct from the home page's radio dial (web/static/js/radio-dial.js, #775), which
+// replaced the old vertical rail (timeline-rail.js).
 // Sub-projects render as blocks on a track (they're spans, like clips);
 // this project's own items render as point events below the track (like
 // markers/keyframes). See
@@ -28,6 +29,14 @@ const DRAG_START_PX = 4;   // a press that moves less than this is a click
 const DETAILS_ROUTE = 'open the item, then in its Details choose Edit on the DATES group and set the Timeline date';
 const NO_DRAG_NOTE = `Timeline is shorter than one day: dragging can't move items here. To set an exact date, ${DETAILS_ROUTE}.`;
 const SCALE_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// Ruler label thinning (PR #782): every tick keeps its mark, but a label is drawn only when it fits.
+// Monthly labels ("Jan 2020") used to be emitted for every month of a two-year span, which on a
+// normal-width panel ran together into one line of text. Width estimate for the 17.5px monospace
+// .project-video-timeline-scale-label (~0.6em per character) plus a gap.
+const SCALE_LABEL_CHAR_PX = 10.6;
+const SCALE_LABEL_GAP_PX = 14;
+// Strides that keep labels on calendar-friendly ticks: months land on quarters/halves/years.
+const SCALE_STRIDES = { month: [1, 2, 3, 6, 12, 24, 36, 60], year: [1, 2, 5, 10, 20, 50, 100], week: [1, 2, 4, 8], day: [1, 2, 7, 14] };
 
 class ProjectVideoTimeline {
   constructor(container, { blocks = [], events = [], canEdit = false, onSave = null, onSaved = null, onNoMove = null } = {}) {
@@ -92,33 +101,61 @@ class ProjectVideoTimeline {
       while (true) {
         const t = MT.toEpoch(year, 1, 1);
         if (t > range.max) break;
-        if (t >= range.min) ticks.push({ date: t, label: String(year) });
+        if (t >= range.min) ticks.push({ date: t, label: String(year), anchor: year % 10 === 0 });
         year++;
       }
+      ticks.kind = 'year';
     } else if (spanDays > 60) {
       let year = minDate.year;
       let month = minDate.month - 1;
       while (true) {
         const t = MT.toEpoch(year, month + 1, 1);
         if (t > range.max) break;
-        if (t >= range.min) ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[month]} ${year}` });
+        if (t >= range.min) ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[month]} ${year}`, anchor: month === 0 });
         month++;
         if (month > 11) { month = 0; year++; }
       }
+      ticks.kind = 'month';
     } else if (spanDays > 14) {
       const dayMs = 7 * 86400;
       for (let t = range.min; t <= range.max; t += dayMs) {
         const d = MT.parts(t);
         ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[d.month - 1]} ${d.day}` });
       }
+      ticks.kind = 'week';
     } else {
       const dayMs = 86400;
       for (let t = range.min; t <= range.max; t += dayMs) {
         const d = MT.parts(t);
         ticks.push({ date: t, label: `${SCALE_MONTH_NAMES[d.month - 1]} ${d.day}` });
       }
+      ticks.kind = 'day';
     }
     return ticks;
+  }
+
+  // Which ticks get a label (PR #782): the smallest calendar-friendly stride whose labels, at their
+  // estimated width, don't touch at `widthPx`; offset so an anchor tick (a January, a round decade)
+  // is labelled when there is one. Returns a Set of tick indexes. widthPx 0 (not laid out yet, so
+  // nothing can be measured) labels everything, as before.
+  static labelledTicks(ticks, range, widthPx) {
+    const all = new Set(ticks.map((_, i) => i));
+    if (!widthPx || ticks.length < 2) return all;
+    const span = range.max - range.min;
+    const xs = ticks.map((t) => ((t.date - range.min) / span) * widthPx);
+    let minGap = Infinity;
+    for (let i = 1; i < xs.length; i++) minGap = Math.min(minGap, xs[i] - xs[i - 1]);
+    const need = Math.max(...ticks.map((t) => t.label.length)) * SCALE_LABEL_CHAR_PX + SCALE_LABEL_GAP_PX;
+    if (minGap >= need) return all;
+    const strides = SCALE_STRIDES[ticks.kind] || [1];
+    let stride = strides.find((s) => s * minGap >= need);
+    if (!stride) {  // past the list: keep growing the last stride's multiple
+      stride = strides[strides.length - 1];
+      while (stride * minGap < need) stride *= 2;
+    }
+    const anchor = ticks.findIndex((t) => t.anchor);
+    const offset = anchor >= 0 ? anchor % stride : 0;
+    return new Set(ticks.map((_, i) => i).filter((i) => i % stride === offset));
   }
 
   _ensurePopover() {
@@ -240,17 +277,21 @@ class ProjectVideoTimeline {
     const scaleLine = document.createElement('div');
     scaleLine.className = 'project-video-timeline-scale-line';
     scale.appendChild(scaleLine);
-    this._scaleTicks(range).forEach((tick) => {
+    const ticks = this._scaleTicks(range);
+    const labelled = ProjectVideoTimeline.labelledTicks(ticks, range, this.container.clientWidth || 0);
+    ticks.forEach((tick, i) => {
       const tickEl = document.createElement('div');
       tickEl.className = 'project-video-timeline-scale-tick';
       tickEl.style.left = `${this._percent(tick.date, range)}%`;
       const mark = document.createElement('span');
       mark.className = 'project-video-timeline-scale-mark';
-      const label = document.createElement('span');
-      label.className = 'project-video-timeline-scale-label';
-      label.textContent = tick.label;
       tickEl.appendChild(mark);
-      tickEl.appendChild(label);
+      if (labelled.has(i)) {  // a tick whose label wouldn't fit keeps its mark only (PR #782)
+        const label = document.createElement('span');
+        label.className = 'project-video-timeline-scale-label';
+        label.textContent = tick.label;
+        tickEl.appendChild(label);
+      }
       scale.appendChild(tickEl);
     });
     this.container.appendChild(scale);

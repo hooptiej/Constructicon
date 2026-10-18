@@ -112,11 +112,10 @@ def _home_context(request, hobby, ref, rev):
     # #553: the panel is the shared file grid (web/item_grid.py, templates/_item_grid.html).
     files_grid, older_revs = item_grid.build("files", files_feed.HOME, show_all_revs, grid_class="cx-item-grid files-scroll",
                                              empty_text="No files yet.", filed_key="constructicon.filesFiled")
-    # Timeline feature: the gallery rail shows every project (including
-    # children, with an is_child flag) in date order -- deliberately built
-    # from all_projects, not the top-level-only `projects` local above that
-    # #149 scoped to the grid.
-    # #725: a card with no real dates has no place on the rail (its span is None, not its created_at)
+    # Timeline feature: the home page's radio dial (#775, was the gallery rail) shows every project
+    # (including children, with an is_child flag) -- deliberately built from all_projects, not the
+    # top-level-only `projects` local above that #149 scoped to the grid.
+    # #725: a card with no real dates has no place on the dial (its span is None, not its created_at)
     timeline_projects = [t for t in (_to_timeline_project(p) for p in all_projects) if t["effective_start"] is not None]
     # V2 cards (8.2): every card once. Unfiltered, a family/collection member is
     # represented by its family's card (members N) instead of repeating as a tile; a

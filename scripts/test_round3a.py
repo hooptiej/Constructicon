@@ -69,7 +69,7 @@ def keys(d):
 
 # ============================ #592 captions ============================
 calls = []
-captions.caption_once = lambda *a, **k: calls.append((a, k)) or {"caption": "a cat", "elapsed_seconds": 0.0, "restarted": False,
+captions.caption_once = lambda *a, **k: calls.append(a) or {"caption": "a cat", "elapsed_seconds": 0.0, "restarted": False,
                                                           "restart_seconds": 0.0, "restart_reason": None, "error": None}
 captions._caption_source_path = lambda row, spec: "/dev/null"
 for n in range(3):
@@ -83,7 +83,7 @@ check("#592: ...and wakes the worker", captions._wake.is_set())
 captions.run_caption("cap1")
 # "restart": nothing in memory survives, the rows do. A fresh drain resumes them in order.
 check("#592: after a restart the queued items resume", captions._drain_one() is True and captions._drain_one() is True
-      and len([c for c in calls if c[1].get("prompt") != captions.TITLE_PROMPT]) == 2)  # #542: + a title call each
+      and len(calls) == 2)
 check("#592: both came out done", all(db.get_by_slug(s)["type_metadata"].get(captions.STATUS_KEY) == "done" for s in ("cap0", "cap1")))
 check("#592: queue is empty again", db.peek_caption_queue() is None)
 

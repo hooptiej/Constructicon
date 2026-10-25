@@ -168,10 +168,14 @@ TITLE_DISMISSED_KEY = "auto_caption_title_dismissed"
 TITLE_STATUS_KEY = "short_title_proposal_status"  # a backfill proposal: queued | done | failed
 SHORT_TITLE_MODEL_KEY = "short_title_model"       # who wrote the accepted short_title (absent = by hand)
 OWNER_MODEL = "owner"  # a caption or title the owner wrote or edited on the caption review page
-TITLE_PROMPT = ("Give this image a short title of three to six words, like a photo caption in an album. "
-                "Answer with the title only.")
-TITLE_STEPS = ((TITLE_PROMPT, DEFAULT_TEMPERATURE), (TITLE_PROMPT, 0.15))
-TITLE_NUM_PREDICT = 24
+# The local model is NOT asked for a title with a prompt of its own: measured 2026-10-25 on
+# constructicon-test (moondream via Ollama, 6 real photos x 4 prompts), every constrained prompt
+# ("in five words", "a short phrase", "the main subject in a few words") came back starting
+# mid-word ("urn of paint...", "ids: HOOPT 13", "iced tea" for a knife) on every photo, and only the
+# plain "Describe this image." gave whole sentences. So the short title is DERIVED from a caption
+# (title_from_caption): the backfill asks with FALLBACK_PROMPT and derives one from the answer.
+TITLE_STEPS = ((FALLBACK_PROMPT, DEFAULT_TEMPERATURE), (FALLBACK_PROMPT, 0.15))
+TITLE_MAX_WORDS = 8
 
 
 def local_models():
@@ -220,7 +224,7 @@ def is_ollama_up(timeout=3):
         return False
 
 
-def generate_caption(image_path, prompt=None, temperature=None, num_predict=None, keep_alive=0):
+def generate_caption(image_path, prompt=None, temperature=None, num_predict=None):
     """One model call. Returns (caption_text, elapsed_seconds). Raises on any
     failure — callers decide whether that's fatal (the tuning endpoint
     surfaces it, the pipeline records it as a failed attempt).
@@ -235,10 +239,8 @@ def generate_caption(image_path, prompt=None, temperature=None, num_predict=None
         "images": [image_b64],
         "stream": False,
         # Unload the model as soon as the response is done — the primary
-        # unload now, not insurance. Releases GPU memory to 1-4 MiB. #542: the caption call that a
-        # short-title call follows straight away (same lock, same image) keeps it a few seconds, and
-        # that second call unloads it.
-        "keep_alive": keep_alive,
+        # unload now, not insurance. Releases GPU memory to 1-4 MiB.
+        "keep_alive": 0,
         "options": {
             "temperature": DEFAULT_TEMPERATURE if temperature is None else float(temperature),
             "num_predict": DEFAULT_NUM_PREDICT if num_predict is None else int(num_predict),
@@ -371,7 +373,7 @@ def reset_breaker():
 
 # --- The one-image cycle ---
 
-def caption_once(image_path, prompt=None, temperature=None, num_predict=None, label=None, keep_alive=0):
+def caption_once(image_path, prompt=None, temperature=None, num_predict=None, label=None):
     """#454: The full per-image cycle under CAPTION_LOCK: one model call,
     optional guarded restart (on failure, via the #643 sidecar), then release.
     Returns dict {caption, elapsed_seconds, restarted, restart_seconds,
@@ -393,8 +395,7 @@ def caption_once(image_path, prompt=None, temperature=None, num_predict=None, la
         caption, elapsed, error = None, 0.0, None
         restarted, restart_seconds, restart_reason = False, 0.0, None
         try:
-            caption, elapsed = generate_caption(image_path, prompt=prompt, temperature=temperature, num_predict=num_predict,
-                                                keep_alive=keep_alive)
+            caption, elapsed = generate_caption(image_path, prompt=prompt, temperature=temperature, num_predict=num_predict)
             _consecutive_failures = 0  # reset on success
         except Exception as e:
             error = repr(e)
@@ -560,50 +561,92 @@ def should_caption(spec):
 
 # --- Short titles (#542) ---
 
-WARM_SECONDS = "20s"  # how long the caption call keeps the model loaded for the title call after it
-PROPOSE_MAX = 2000     # one backfill call queues at most this many proposals; it can be repeated
+PROPOSE_MAX = 2000  # one backfill call queues at most this many proposals; it can be repeated
+
+# Lead-ins a describing model opens with. Stripped only as whole phrases at the very start (a
+# phrase boundary: the next character is a space, a comma or a colon), never by position, so a
+# word can't be cut (#743's suspicion; there never was a strip here before).
+_LEAD_INS = (
+    "the image shows", "the image features", "the image depicts", "the image displays", "the image captures",
+    "the image presents", "the image contains", "the image is of", "this image shows", "this image features",
+    "this image depicts", "this is an image of", "this is a photo of", "this is a picture of", "in the image",
+    "in this image", "the photo shows", "the photograph shows", "the picture shows", "a photo of",
+    "a photograph of", "a picture of", "an image of", "a close-up of", "a closeup of",
+)
+_CLAUSE_CUTS = (",", ";", ":", " - ", " \u2014 ", " \u2013 ", " which ", " that ", " while ", " where ", " who ")
+_TRAILING_STOP = frozenset("a an the and or with of on in at to for by from its his her their is are as".split())
 
 
-def _unload_model():
-    """Best-effort: the cascade's last call may have asked to keep the model warm; with no title call
-    following, ask Ollama to unload it now (keep_alive 0, no prompt). Logged when it fails: the model
-    then unloads on its own after WARM_SECONDS."""
-    try:
-        with CAPTION_LOCK:
-            _ollama_post_json("/api/generate", {"model": OLLAMA_MODEL, "keep_alive": 0}, timeout=10)
-    except Exception as e:
-        besteffort.warn(log, "captions: asking Ollama to unload the model", e)
+def _strip_lead_in(t):
+    low = t.lower()
+    for phrase in sorted(_LEAD_INS, key=len, reverse=True):
+        if low.startswith(phrase) and (len(t) == len(phrase) or t[len(phrase)] in " ,:"):
+            return t[len(phrase):].lstrip(" ,:")
+    return t
 
 
-def _clean_title(raw):
-    """A model's title answer, cleaned (core/item_title.clean_short_title), or (None, why)."""
+def title_from_caption(caption, max_words=TITLE_MAX_WORDS):
+    """#542: a short title derived from a caption: its first sentence, a describing lead-in ("The
+    image shows ...") and a leading article taken off on phrase boundaries, cut at the first clause
+    break (a comma, "which", "while", ...), at most `max_words` words, with no dangling "with"/"and"
+    at the end, first letter capitalised. "The image shows a green monster truck with six wheels,
+    parked on a wooden workbench." -> "Green monster truck with six wheels". None when nothing usable
+    is left (a fragment, no letters). Pure."""
     from . import item_title
-    title = item_title.clean_short_title(raw or "")
+    if _is_garbage(caption):  # empty, no letters, or a mid-word fragment: nothing to build on
+        return None
+    t = " ".join((caption or "").split())
+    if t.startswith("(") and 0 < t.find(")") <= 20:  # "(video) ..." / "(animated) ..."
+        t = t[t.find(")") + 1:].strip()
+    for end in (". ", "! ", "? "):
+        if end in t:
+            t = t.split(end, 1)[0]
+    t = t.rstrip(".!?")
+    t = _strip_lead_in(t)
+    low = " " + t.lower()
+    cut = min((low.find(c) for c in _CLAUSE_CUTS if low.find(c) > 0), default=-1)
+    if cut > 0:
+        t = t[:cut - 1]
+    words = t.split()
+    if len(words) > 1 and words[0].lower() in ("a", "an", "the"):
+        words = words[1:]
+    if len(words) > 6:  # a long phrase: its head, up to the first "with" / "next to" past the second word
+        for i in range(2, len(words)):
+            if words[i].lower() == "with" or (words[i].lower() == "next" and i + 1 < len(words)
+                                              and words[i + 1].lower() == "to"):
+                words = words[:i]
+                break
+    words = words[:max_words]
+    while len(words) > 1 and words[-1].lower().strip(",.;:") in _TRAILING_STOP:
+        words.pop()
+    if not words:
+        return None
+    title = item_title.clean_short_title(" ".join(words))
     if not title:
-        return None, "empty answer"
-    if _is_garbage(title):
-        return None, _bad_response_label(title)
-    if len(title.split()) > 12:
-        return None, f"not a short title ({len(title.split())} words)"
-    return title, None
+        return None
+    title = title[0].upper() + title[1:]
+    if not any(ch.isalpha() for ch in title):
+        return None
+    return title
 
 
 def suggest_title(image_path, label=None):
-    """#542: asks the local model for a short title of the image (TITLE_STEPS: the prompt at temp 0,
-    then 0.15 when the first answer is garbage: empty, no letters, mid-word or a whole sentence).
-    The last call unloads the model. Returns (title or None, reason when None). Never raises."""
+    """#542, the backfill: asks the local model to describe the image (TITLE_STEPS: "Describe this
+    image." at temp 0, then 0.15 when the answer is garbage) and derives a short title from the
+    answer (title_from_caption). Returns (title or None, reason when None). Never raises."""
     why = "not run"
-    for i, (prompt, temperature) in enumerate(TITLE_STEPS):
-        last = i == len(TITLE_STEPS) - 1
-        result = caption_once(image_path, prompt=prompt, temperature=temperature, num_predict=TITLE_NUM_PREDICT,
-                              label=f"{label} (title)" if label else None, keep_alive=0 if last else WARM_SECONDS)
+    for prompt, temperature in TITLE_STEPS:
+        result = caption_once(image_path, prompt=prompt, temperature=temperature,
+                              label=f"{label} (title)" if label else None)
         if result["error"]:
             return None, f"model call failed: {result['error']}"
-        title, why = _clean_title(result["caption"])
+        if _is_garbage(result["caption"]):
+            why = _bad_response_label(result["caption"])
+            continue
+        title = title_from_caption(result["caption"])
         if title:
-            if not last:
-                _unload_model()
             return title, None
+        why = f"no title could be derived from {result['caption'][:60]!r}"
     return None, why
 
 
@@ -862,26 +905,24 @@ def _run_caption_now(slug, start_step=0, cascade=True):
             return
         step_index = start_step % len(STEPS)
         step_prompt, step_temperature = STEPS[step_index]
-        result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug,
-                              keep_alive=WARM_SECONDS)
+        result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug)
         if cascade:
             for next_index in range(step_index + 1, len(STEPS)):
                 if result["error"] or not _is_garbage(result["caption"]):
                     break
                 step_prompt, step_temperature = STEPS[next_index]
                 print(f"caption {_bad_response_label(result['caption'])} for {slug} — retrying with prompt {step_prompt!r} at temperature {step_temperature}", flush=True)
-                result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug,
-                                      keep_alive=WARM_SECONDS)
+                result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug)
                 step_index = next_index
         if result["error"] or _is_garbage(result["caption"]):
             print(f"caption failed for {slug} at step {step_index}: {result['error'] or _bad_response_label(result['caption'])}", flush=True)
             reason = result["error"] or _bad_response_label(result["caption"])
             db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed", STEP_KEY: step_index,
                                                              "auto_caption_failed_reason": reason[:300]})
-            _unload_model()
             return
-        # #542: the caption comes with a short title (a second, short model call on the same image).
-        title, title_note = suggest_title(image_path, label=slug)
+        # #542: the caption comes with a short title, derived from it (no second model call).
+        title = title_from_caption(result["caption"])
+        title_note = "no title could be derived from the caption"
         meta = {
             METADATA_KEY: result["caption"],
             STATUS_KEY: "done",

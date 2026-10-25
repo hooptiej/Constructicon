@@ -115,17 +115,15 @@ def fake(answers):
 
 
 P1 = mk("pipe00001")
-fake(["urn with wires and a small black box on top.", "A turntable with wires and a black box", "Turntable and box"])
+fake(["urn with wires and a small black box on top.", "A turntable with wires and a black box"])
 captions._run_caption_now(P1)
 m = tm(P1)
 check("a fragment at step 0 moves to step 1 and that caption is stored as done",
       m.get("auto_caption") == "A turntable with wires and a black box" and m.get("auto_caption_status") == "done"
       and m.get("auto_caption_step") == 1, m)
-check("the caption comes with a short title (#542)", m.get("auto_caption_title") == "Turntable and box"
+check("the caption comes with a short title derived from it (#542)", m.get("auto_caption_title") == "Turntable with wires and a black box"
       and m.get("auto_caption_title_model") == captions.OLLAMA_MODEL, m)
-check("the caption call keeps the model warm for the title call, which is asked next; then it is unloaded",
-      calls[-2][2] == captions.WARM_SECONDS and calls[-1][0] == captions.TITLE_PROMPT
-      and _unloads and _unloads[-1].get("keep_alive") == 0, (calls, _unloads))
+check("...with no second model call (two calls: the fragment and the retry)", len(calls) == 2 and not _unloads, calls)
 check("...a suggested title is in the review queue", P1 in [r["slug"] for r in db.list_unaccepted_captions()])
 P2 = mk("pipe00002")
 fake(["ids and numbers", "ids of things", "urns", "erso speedo"])
@@ -136,10 +134,17 @@ check("a ladder of fragments ends failed, never done (re-queues: needs_caption l
       and "mid-word" in (m.get("auto_caption_failed_reason") or "")
       and P2 in [r["slug"] for r in captions.needs_caption(limit=100)], m)
 P3 = mk("pipe00003")
-fake(["A desk with a lamp", "urn of", "ids"])
+fake(["The image shows"])
 captions._run_caption_now(P3)
-check("a garbage title is dropped, the caption still lands", tm(P3).get("auto_caption") == "A desk with a lamp"
+check("no usable title from a caption: no title, the caption still lands", tm(P3).get("auto_caption") == "The image shows"
       and not tm(P3).get("auto_caption_title"), tm(P3))
+for cap, want in (("The image shows a green monster truck with six wheels, parked on a wooden workbench. The t",
+                   "Green monster truck with six wheels"),
+                  ("In the image, a person's hand is holding a knife with a unique design.", "Person's hand is holding a knife"),
+                  ("(video) The blue chassis on the carpet with a white track frame at the rear", "Blue chassis on the carpet"),
+                  ("The image showsy thing", "Image showsy thing"),  # a lead-in is cut on a phrase boundary only
+                  ("urn with wires", None), ("!!!!", None)):
+    check(f"title_from_caption({cap[:28]!r}) = {want!r}", captions.title_from_caption(cap) == want, captions.title_from_caption(cap))
 
 # ---- #787: set_caption never overwrites silently ---------------------------------------------
 A = mk("agent0001")
@@ -158,7 +163,7 @@ cards.undo(r2.batch_id)
 check("...and one undo brings the rich caption back", "favourite photo" in tm(A)["auto_caption"])
 r3 = items.set_caption(P1, "An agent's better caption", title="Turntable rig")
 check("a moondream draft is replaced freely, and reported", r3.data["replaced_suggestion"] == "A turntable with wires and a black box"
-      and r3.data["replaced"].get("title_suggestion") == "Turntable and box", r3.data)
+      and r3.data["replaced"].get("title_suggestion") == "Turntable with wires and a black box", r3.data)
 r4 = items.set_caption(A, "The owner's favourite photo of his arcade machines, his last day owning them.",
                        title="Turbo Outrun's last day", accept=True)
 row = db.get_by_slug(A)
@@ -190,7 +195,7 @@ check("MCP: replace=true succeeds and every answer carries replaced_suggestion",
       "replaced_suggestion" in out and "favourite photo" in (out["replaced_suggestion"] or ""), out)
 out = server.constructicon_set_caption(P3, "A desk lamp, switched on", title="Desk lamp")
 check("MCP: title= stores the title suggestion; replaced_suggestion reported for the moondream draft",
-      out["replaced_suggestion"] == "A desk with a lamp" and tm(P3)["auto_caption_title"] == "Desk lamp" and out["in_review_queue"], out)
+      out["replaced_suggestion"] == "The image shows" and tm(P3)["auto_caption_title"] == "Desk lamp" and out["in_review_queue"], out)
 u = server.constructicon_update(P3, short_title="Lamp on desk")
 check("MCP update(short_title=) sets the name", u["short_title"] == "Lamp on desk" and u["display_name"] == "Lamp on desk", u)
 ctx.__exit__(None, None, None)
@@ -264,10 +269,10 @@ with actor.acting_as(actor.ACTOR_UI):
     db.dequeue_caption(P2)
     with actor.acting_as(actor.ACTOR_SYSTEM):
         nxt = db.peek_caption_queue()
-        fake(["Olive suspension links"])
+        fake(["The image shows olive suspension links, laid on a tray."])
         captions._drain_one()
     first = nxt["slug"]
-    check("the worker writes the proposal into the backfill's batch, never into short_title",
+    check("the worker writes the proposal (derived from the model's description) into the backfill's batch, never into short_title",
           tm(first).get("auto_caption_title") == "Olive suspension links" and tm(first)["short_title_proposal_status"] == "done"
           and not db.get_by_slug(first)["short_title"] and len(db.get_change_rows(batch_id=B)) == 2, tm(first))
     lst = client.get("/api/captions/unreviewed").json()

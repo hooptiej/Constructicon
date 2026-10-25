@@ -169,11 +169,14 @@ the date and commit forward when you re-verify.
   `ocr_capable`: video is captioned but not OCR'd; STL is explicitly
   excluded — wireframe renders produce garbage). Strictly one image at a
   time under `CAPTION_LOCK`. **#542: every caption comes with a short-title
-  suggestion** (`TITLE_PROMPT`, a second short call on the same image; the caption
-  call keeps the model loaded `WARM_SECONDS` for it, the title call unloads it) in
-  `type_metadata.auto_caption_title`; the caption queue also carries title-only
+  suggestion** in `type_metadata.auto_caption_title`, DERIVED from the caption
+  (`captions.title_from_caption`: first sentence, the "The image shows" lead-in and a
+  leading article cut on phrase boundaries, the first clause, at most 8 words). No
+  title prompt: measured 2026-10-25, moondream answers every constrained prompt ("in
+  five words", "a short phrase") starting mid-word, on every photo tried; only "Describe
+  this image." gives whole sentences. The caption queue also carries title-only
   proposals (`caption_queue.mode = 'title'`, with their `batch_id`; real captions
-  drain first). **#743: a caption that starts mid-word** ("urn with...", "ids
+  drain first), which ask "Describe this image." and derive the title from the answer. **#743: a caption that starts mid-word** ("urn with...", "ids
   and...": `captions.starts_mid_word`, a lower-case first word with no capital that
   isn't an article or plain sentence start) **is garbage** like an empty answer: the
   ladder moves on, and a ladder of fragments ends `failed` (back in needs-caption),

@@ -4,9 +4,10 @@
 Throwaway SQLite DB and storage (scripts/_testenv.py), built by the real `db.init_db()`; the real
 FastAPI app through TestClient, the MCP tool functions called directly and the real static export.
 Covers:
-  - the order (owner decision 2026-10-18): display_name -> short_title -> filename -> slug; the long
-    caption (content_description) and `description` (the uploader's note) are NEVER a title, on a
-    renamed item, a captioned item, a short-titled item, a note-only item and a bare one;
+  - the order (owner decisions 2026-10-18 / 2026-10-25): display_name -> short_title ->
+    content_description ONLY when hand-written -> filename -> slug; a model's caption and
+    `description` (the uploader's note) are NEVER a title, on a renamed item, a model-captioned item,
+    a hand-described item, a short-titled item, a note-only item and a bare one;
   - a renamed item shows its display_name on every converted surface: the item card payload, the
     search result shape, the object page, the project grid, the project timeline, a pile, the blog
     entry payload, the MCP get / search / project items, the revision and curation-queue labels and
@@ -72,10 +73,13 @@ base = {"slug": "s1", "filename": "f.png", "content_description": "cap", "displa
         "short_title": "Short"}
 check("title_of: display_name wins", item_title.title_of(base) == "Name")
 check("title_of: then short_title", item_title.title_of({**base, "display_name": None}) == "Short")
-check("title_of: then filename (the long caption is never the title)",
-      item_title.title_of({**base, "display_name": "", "short_title": None}) == "f.png")
+check("title_of: then a hand-written description (no caption record)",
+      item_title.title_of({**base, "display_name": "", "short_title": None}) == "cap")
+check("title_of: a model caption is skipped: filename",
+      item_title.title_of({**base, "display_name": "", "short_title": None,
+                           "type_metadata": {"description_caption_model": "mcp-agent"}}) == "f.png")
 check("title_of: then slug", item_title.title_of({**base, "display_name": None, "short_title": "",
-                                                  "filename": None}) == "s1")
+                                                  "content_description": None, "filename": None}) == "s1")
 check("title_of: description is never a title",
       item_title.title_of({"slug": "s1", "filename": None, "description": NOTE}) == "s1")
 check("items.py no longer carries its own copy", not hasattr(items, "title_of"))
@@ -97,7 +101,8 @@ NOTEONLY = mk("noteonly01", "IMG_0003.png", description=NOTE)
 # #725: a real date, so it has a marker on the project timeline (an undated item is off the axis)
 items.update(RENAMED, display_name="Tension Biped, one leg standing", content_description="A walker on a bench",
              content_date=1500000000.0)
-items.update(CAPTIONED, content_description="A long caption that must never be the title")
+items.set_caption(CAPTIONED, "A long model caption that must never be the title: it runs well past eighty characters on purpose.",
+                  accept=True)  # an agent's caption
 NAME = "Tension Biped, one leg standing"
 
 proj = cards.create("Biped", kind="thing").data["card"]
@@ -150,7 +155,7 @@ check("static export, project page: alt text is the rename", f'alt="{NAME}"' in 
 check("static export, blog page: alt text is the rename", blog_html is not None and f'alt="{NAME}"' in blog_html.read_text())
 
 # ---- 4. caption and filename steps, and the note never a title -------------------------------
-check("captioned item: the long caption is NOT the title (the filename is), card and project grid",
+check("model-captioned item: the caption is NOT the title (the filename is), card and project grid",
       _card_items([rows[CAPTIONED]])[0]["display_name"] == "IMG_0002.png"
       and _to_content_public(rows[CAPTIONED])["title"] == "IMG_0002.png")
 items.update(CAPTIONED, short_title="Short wins over filename")

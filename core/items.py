@@ -221,21 +221,28 @@ def _plan_update(row, fields):
 
 
 def _plan_hand_edits(row, fields, cols):
-    """#787: a description or short title changed by hand (this update didn't also say who wrote it)
-    is no longer a model's draft, so set_caption must not replace it silently any more: drop the
-    recorded model for it (captions.DESCRIPTION_MODEL_KEY / SHORT_TITLE_MODEL_KEY)."""
+    """#787 / #542: a description or short title changed by hand (this update didn't also say who
+    wrote it) is no longer a model's draft. A short title's recorded model is dropped (absent = by
+    hand). A description that carried a caption record is re-recorded as written by whoever edited it
+    now: "owner" (a person: the item page, a script) or "mcp-agent" (an MCP call), so set_caption
+    won't replace it silently and core/item_title.py can tell the owner's words from a model's
+    (description_is_handwritten)."""
+    from . import actor as actor_ctx
     given = fields.get("type_metadata") if isinstance(fields.get("type_metadata"), dict) else {}
     current = json.loads(cols["type_metadata"]) if "type_metadata" in cols else dict(row.get("type_metadata") or {})
-    drop = []
+    changed = False
     if ("content_description" in cols and (cols["content_description"] or None) != (row.get("content_description") or None)
-            and captions.DESCRIPTION_MODEL_KEY not in given and current.get(captions.DESCRIPTION_MODEL_KEY)):
-        drop.append(captions.DESCRIPTION_MODEL_KEY)
+            and captions.DESCRIPTION_MODEL_KEY not in given
+            and (current.get(captions.DESCRIPTION_MODEL_KEY) or current.get(captions.DESCRIPTION_USED_AT_KEY))):
+        who = actor_ctx.current_actor()
+        current[captions.DESCRIPTION_MODEL_KEY] = captions.AGENT_MODEL if who == actor_ctx.ACTOR_MCP else captions.OWNER_MODEL
+        current[captions.DESCRIPTION_STEP_LABEL_KEY] = _model_label(current[captions.DESCRIPTION_MODEL_KEY])
+        changed = True
     if ("short_title" in cols and cols["short_title"] != (row.get("short_title") or None)
             and captions.SHORT_TITLE_MODEL_KEY not in given and current.get(captions.SHORT_TITLE_MODEL_KEY)):
-        drop.append(captions.SHORT_TITLE_MODEL_KEY)
-    if drop:
-        for k in drop:
-            current.pop(k, None)
+        current.pop(captions.SHORT_TITLE_MODEL_KEY, None)
+        changed = True
+    if changed:
         cols["type_metadata"] = json.dumps(current)
 
 
@@ -311,7 +318,9 @@ def _model_label(model):
     if model == captions.AGENT_MODEL:
         return "written by an agent (MCP)"
     if model == captions.OWNER_MODEL:
-        return "written or edited by hand on the caption review page"
+        return "written or edited by hand"
+    if model == captions.WORDS_MODEL:
+        return "cut from the item's own description"
     return f"suggested by {model}" if model else "written by hand"
 
 
@@ -431,16 +440,14 @@ def set_caption(slug, text=None, *, title=None, accept=False, replace=False, mod
 OP_SHORT_TITLE_SEED = "item_short_title_seed"
 OP_TITLE_PROPOSALS = "item_short_title_proposals"
 OP_TITLE_PROPOSAL = "item_short_title_proposal"
+OP_TITLE_WORDS = "item_short_title_proposal_words"
 OP_REJECT_MIDWORD = "item_caption_midword_requeue"
 
 
 def _is_caption_text(row):
-    """True when the row's content_description came from a caption (accepted on the review page or
-    by set_caption, or still identical to the suggestion), not from the content itself."""
-    tm = row.get("type_metadata") or {}
-    cd = (row.get("content_description") or "").strip()
-    return bool(tm.get(captions.DESCRIPTION_USED_AT_KEY) or tm.get(captions.DESCRIPTION_MODEL_KEY)
-                or (cd and cd == (tm.get(captions.METADATA_KEY) or "").strip()))
+    """True when the row's content_description is a model's caption (the rule lives in
+    core/item_title.py: description_is_handwritten)."""
+    return item_title.description_is_handwritten(row) is False
 
 
 def seed_short_titles(*, dry_run=False, actor=None, batch_id=None):
@@ -487,6 +494,36 @@ def queue_title_proposals(slugs, *, dry_run=False, actor=None, batch_id=None):
                 log.update("capture_events", {"slug": row["slug"]}, {"type_metadata": json.dumps(meta)})
             muts = list(log.muts)
     return _result(OP_TITLE_PROPOSALS, muts, batch_id, dry_run, None, queued=[r["slug"] for r in rows])
+
+
+def propose_titles_from_words(entries, *, dry_run=False, actor=None, batch_id=None):
+    """(#542, owner decision 2026-10-25) Words-first proposals: writes short-title SUGGESTIONS cut
+    from each item's own description (captions.title_from_words via the caller), no model, as ONE
+    imaged row (op item_short_title_proposal_words). `entries`: [(slug, title)]. Nothing is applied:
+    each waits in the caption review queue (author "words"); one undo removes them all. An item
+    that got a name or a short title meanwhile is skipped. data: {proposed: [slugs], skipped: [...]}."""
+    from . import policy
+    entries = [(s_, t) for s_, t in (entries or []) if s_ and t]
+    if not entries:
+        raise InvalidInput("No short titles to propose.", code="no_items")
+    rows, _missing = policy.viewable_rows([e[0] for e in entries], actor=actor)
+    by_slug = {r["slug"]: r for r in rows}
+    batch_id = batch_id or changes.new_batch_id()
+    proposed, skipped = [], []
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_TITLE_WORDS, actor, batch_id, list(by_slug)) as log:
+            for slug, title in entries:
+                row = db.get_by_slug(slug) or by_slug.get(slug)
+                if row is None or row.get("display_name") or row.get("short_title"):
+                    skipped.append({"slug": slug, "reason": "has a name already"})
+                    continue
+                meta = {**(row.get("type_metadata") or {}), captions.TITLE_KEY: title,
+                        captions.TITLE_MODEL_KEY: captions.WORDS_MODEL, captions.TITLE_DISMISSED_KEY: None,
+                        captions.TITLE_STATUS_KEY: "done"}
+                log.update("capture_events", {"slug": slug}, {"type_metadata": json.dumps(meta)})
+                proposed.append(slug)
+            muts = list(log.muts)
+    return _result(OP_TITLE_WORDS, muts, batch_id, dry_run, None, proposed=proposed, skipped=skipped)
 
 
 def record_title_proposal(slug, title, *, model, batch_id, note=None, actor=None):

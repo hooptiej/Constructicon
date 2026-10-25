@@ -1781,9 +1781,16 @@ One generated file of every registered type and extension, to drop-test a new in
   - `display_name` — optional per-object override of the item's title (the badge icon is always
     the type's `badge_icon`; the per-object `icon` override went in #704). **An item's title (#542) is
     `core/item_title.py` `title_of(row)` and nothing else:** `display_name` → `short_title` →
-    `filename` → `slug` (owner decision 2026-10-18 on #542: "a separate short title field"). **The
-    long caption (`content_description`) is never the title**, and `description` (the uploader's
-    note) is never a title either. Python calls `title_of`; Jinja uses the `item_title` filter (the
+    `content_description` **only when hand-written** → `filename` → `slug` (owner decisions on #542:
+    2026-10-18 "a separate short title field", 2026-10-25 "keep the description as the title
+    fallback ONLY when it is hand-written"). **A model's caption is never the title.** Hand-written vs
+    model (`item_title.description_is_handwritten`, the rule lives only there): caption provenance
+    `description_caption_model` "owner" = hand-written; any other model, or
+    `description_caption_used_at` with no model, or the text equal to `auto_caption` = a model
+    caption; no caption record at all = hand-written (the uploader's or a migration's own words, a
+    content's own title). A hand edit of a captioned description (`items.update`) re-records it as
+    "owner" (or "mcp-agent" when the MCP made it). `description` (the uploader's note) is never a
+    title either. Python calls `title_of`; Jinja uses the `item_title` filter (the
     static export registers it); JS reads the `display_name` (item payloads) or `title`
     (project grid, timeline, blog entry items) the server already resolved and never
     rebuilds the chain. `scripts/test_item_title_542.py` fails on a new hand-rolled
@@ -1798,11 +1805,15 @@ One generated file of every registered type and extension, to drop-test a new in
     `POST /api/image/{slug}` `short_title`, MCP `constructicon_update(short_title=)`; `items.update`).
     The `short_title_seed_542` migration copied every existing name-shaped `content_description`
     into it once (one change-log row, op `item_short_title_seed`, actor `migration`), so those kept
-    their names; longer captions show the filename until a short title is accepted. **Backfill:**
-    `captions.propose_short_titles` has the local captioner propose one for every item whose long
-    caption used to be its title, into the caption review queue (nothing auto-applies; dry run by
-    default; `POST /api/captions/propose-titles` admin, or `scripts/caption_cleanup.py
-    propose-titles [--execute]`). The marks and every proposal share ONE batch, so one undo takes the
+    their names; longer model captions show the filename until a short title is accepted (longer
+    hand-written ones still show the description). **Backfill:** `captions.propose_short_titles`
+    proposes one for every item whose long description used to be its title, into the caption
+    review queue (nothing auto-applies; dry run by default; `POST /api/captions/propose-titles`
+    admin, or `scripts/caption_cleanup.py propose-titles [--source auto|words|model] [--execute]`).
+    **Words-first** (owner decision 2026-10-25), the default for hand-written descriptions: a title
+    cut from the item's own words on word/phrase boundaries (`item_title.title_from_words`, no GPU,
+    author `words`); model captions go to the local captioner (`suggest_title`), left out with a
+    reason when captioning is off. Everything a run writes shares ONE batch, so one undo takes the
     whole backfill back (the worker then skips what is still queued). Search indexes it (folded into
     the view's `display_name` column). Check: `scripts/test_captions_titles_787_743.py`.
   - `uploaded_by_user_id` (#604 step 1, NULL = admin-owned) and `sensitive` / `sensitive_by` /

@@ -391,12 +391,13 @@ def api_captions_mid_word_requeue(dry_run: bool = Form(True)):
 
 
 @router.post("/api/captions/propose-titles")
-def api_captions_propose_titles(dry_run: bool = Form(True), limit: int = Form(captions.PROPOSE_MAX)):
-    """#542 backfill: the local captioner proposes a short title for every item whose title used to
-    be its long caption; the proposals wait in /captions/review, nothing is applied. Dry run unless
-    dry_run=false; a real run answers the batch_id that undoes every proposal. 409 captions_disabled
-    when captioning is off."""
-    return JSONResponse({"ok": True, **captions.propose_short_titles(limit=limit, dry_run=dry_run)})
+def api_captions_propose_titles(dry_run: bool = Form(True), limit: int = Form(captions.PROPOSE_MAX),
+                                source: str = Form("auto")):
+    """#542 backfill: proposes a short title for every item whose title used to be its long
+    description; the proposals wait in /captions/review, nothing is applied. source: auto (cut from
+    the item's own words when they are hand-written, else the local captioner), words, model. Dry run
+    unless dry_run=false; a real run answers the batch_id that undoes every proposal."""
+    return JSONResponse({"ok": True, **captions.propose_short_titles(limit=limit, dry_run=dry_run, source=source)})
 
 
 @router.post("/api/captions/reset-breaker")

@@ -61,7 +61,7 @@ import urllib.error
 import urllib.request
 
 from . import actor as actor_ctx, besteffort, db, object_types, policy, storage, thumbnails
-from .errors import Conflict
+from .errors import Conflict, InvalidInput
 
 log = logging.getLogger("constructicon.captions")
 
@@ -178,10 +178,14 @@ TITLE_STEPS = ((FALLBACK_PROMPT, DEFAULT_TEMPERATURE), (FALLBACK_PROMPT, 0.15))
 TITLE_MAX_WORDS = 8
 
 
+WORDS_MODEL = "words"  # #542: a short-title proposal cut from the item's own description (no model)
+
+
 def local_models():
-    """The captioners that run on this install's own GPU. Their suggestions are drafts: a new
-    caption may replace one freely (#787); anything else (an agent's, the owner's) is protected."""
-    return {"moondream", OLLAMA_MODEL}
+    """The authors whose suggestions are DRAFTS: the captioners on this install's own GPU, and the
+    words-first title cutter. A new caption or title may replace a draft freely (#787); anything
+    else (an agent's, the owner's) is protected."""
+    return {"moondream", OLLAMA_MODEL, WORDS_MODEL}
 
 
 def is_local_model(model):
@@ -686,39 +690,83 @@ def _run_title_now(slug, batch_id):
 
 
 def title_backfill_candidates(limit=PROPOSE_MAX):
-    """#542: the items whose title used to be their long caption (no rename, no short title, a
-    description longer than a name), with a picture the local model can read; the actor's view."""
+    """#542: the items whose title used to be their long description (no rename, no short title, a
+    description longer than a name, no title proposal yet); the actor's view."""
     from . import item_title
-    rows = db.list_long_caption_items(caption_capable_types(), limit=max(1, min(int(limit), PROPOSE_MAX)))
+    rows = db.list_long_caption_items(None, limit=max(1, min(int(limit), PROPOSE_MAX)))
     rows = [r for r in rows if not item_title.title_shaped(r.get("content_description"), item_title.CAPTION_AS_TITLE_MAX)]
     return policy.filter_visible(rows)
 
 
-def propose_short_titles(limit=PROPOSE_MAX, dry_run=True):
-    """#542 backfill: has the local captioner PROPOSE a short title for every item whose title used
-    to be its long caption, into the caption review queue. Nothing is applied: each proposal waits
-    for the owner (Accept / edit / Skip on /captions/review). Dry run by DEFAULT: answers what it
-    would queue. A real run marks the items in ONE imaged batch (items.queue_title_proposals) and
-    queues them for web's worker (behind any real caption); the proposals join that batch as they
-    land, so constructicon_undo / POST /api/changes/<batch>/undo takes back every proposal written
-    so far and the worker skips the rest. Refuses with `captions_disabled` when captioning is off.
-    Returns {dry_run, count, batch_id, examples: [{slug, title, description}]}."""
-    from . import item_title, items  # lazy: items imports this module
-    if DISABLED:
+PROPOSE_SOURCES = ("auto", "words", "model")
+
+
+def propose_short_titles(limit=PROPOSE_MAX, dry_run=True, source="auto"):
+    """#542 backfill: PROPOSES a short title for every item whose title used to be its long
+    description, into the caption review queue. Nothing is applied: each proposal waits for the
+    owner (Accept / edit / Skip on /captions/review). Two ways (owner decision 2026-10-25):
+      * words-first (no GPU): a title cut from the item's OWN description on word and phrase
+        boundaries (item_title.title_from_words), written at once. The default for every item whose
+        description is hand-written (item_title.description_is_handwritten).
+      * the local captioner: the model describes the picture and a title is derived from that
+        (suggest_title), queued for web's worker behind any real caption. The default for items whose
+        description is a model's caption and that have a picture to read.
+    `source`: "auto" (the defaults above), "words" (words-first for every candidate, hand-written or
+    not), "model" (the captioner for every candidate with a picture). Dry run by DEFAULT. A real run
+    is ONE batch: the words proposals, the captioner marks, and every captioner proposal as it lands,
+    so constructicon_undo / POST /api/changes/<batch>/undo takes all of it back and the worker skips
+    what is still queued. With captioning off, "model" refuses with `captions_disabled` and "auto"
+    leaves those items out and says so (`left_out`). Returns {dry_run, count, words, model, batch_id,
+    left_out: {reason: n}, examples: [{slug, title, description, how, proposal}]}."""
+    from . import changes, item_title, items  # lazy: items imports this module
+    if source not in PROPOSE_SOURCES:
+        raise InvalidInput(f"source must be one of {', '.join(PROPOSE_SOURCES)}", code="bad_source")
+    if source == "model" and DISABLED:
         raise Conflict("Captions are off on this install (CAPTION_DISABLED), so the local model can't propose "
-                       "short titles. Turn captioning on and restart, or write them through the MCP "
-                       "(constructicon_set_caption with title=).", code="captions_disabled")
-    rows = title_backfill_candidates(limit)
-    examples = [{"slug": r["slug"], "title": item_title.title_of(r),
-                 "description": (r.get("content_description") or "")[:120]} for r in rows[:10]]
-    if dry_run or not rows:
-        return {"dry_run": bool(dry_run), "count": len(rows), "batch_id": None, "examples": examples}
-    res = items.queue_title_proposals([r["slug"] for r in rows])
-    for slug in res.data["queued"]:
-        db.enqueue_caption(slug, mode="title", batch_id=res.batch_id)
-    wake_worker()
-    print(f"caption: queued {len(res.data['queued'])} short-title proposal(s), batch {res.batch_id}", flush=True)
-    return {"dry_run": False, "count": len(res.data["queued"]), "batch_id": res.batch_id, "examples": examples}
+                       "short titles. Use source=words (cut from each item's own description), or write them "
+                       "through the MCP (constructicon_set_caption with title=).", code="captions_disabled")
+    capable = set(caption_capable_types())
+    words, model, left_out = [], [], {}
+
+    def leave(reason):
+        left_out[reason] = left_out.get(reason, 0) + 1
+
+    for r in title_backfill_candidates(limit):
+        hand = item_title.description_is_handwritten(r)
+        if source == "words" or (source == "auto" and hand):
+            t = item_title.title_from_words(r.get("content_description"))
+            if t:
+                words.append((r, t))
+            else:
+                leave("no title could be cut from its description")
+        elif (r.get("media_type") or "image") not in capable:
+            leave("a model caption on a type with no picture to read")
+        elif DISABLED:
+            leave("a model caption, and captioning is off here")
+        else:
+            model.append(r)
+    examples = ([{"slug": r["slug"], "title": item_title.title_of(r), "description": (r.get("content_description") or "")[:120],
+                  "how": "words", "proposal": t} for r, t in words[:10]]
+                + [{"slug": r["slug"], "title": item_title.title_of(r), "description": (r.get("content_description") or "")[:120],
+                    "how": "model", "proposal": None} for r in model[:10]])
+    out = {"dry_run": bool(dry_run), "count": len(words) + len(model), "words": len(words), "model": len(model),
+           "batch_id": None, "left_out": left_out, "examples": examples}
+    if dry_run or not (words or model):
+        return out
+    batch_id = changes.new_batch_id()
+    if words:
+        res = items.propose_titles_from_words([(r["slug"], t) for r, t in words], batch_id=batch_id)
+        out["words"] = len(res.data["proposed"])
+    if model:
+        res = items.queue_title_proposals([r["slug"] for r in model], batch_id=batch_id)
+        for slug in res.data["queued"]:
+            db.enqueue_caption(slug, mode="title", batch_id=batch_id)
+        wake_worker()
+        out["model"] = len(res.data["queued"])
+    out.update(count=out["words"] + out["model"], batch_id=batch_id)
+    print(f"caption: short-title proposals: {out['words']} cut from their own words, {out['model']} queued for the "
+          f"local captioner, batch {batch_id}", flush=True)
+    return out
 
 
 # --- Mid-word captions (#743) ---

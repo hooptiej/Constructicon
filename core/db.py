@@ -3281,21 +3281,21 @@ def list_long_caption_items(media_types, limit=1000):
     """#542: the items whose title USED to be their long caption: no rename, no short title, a
     content_description, a caption-capable type (a short-title proposal needs a picture), not
     redacted, no short-title proposal queued, written or waiting in review (skipped ones count as
-    answered). Newest first. The caller filters by the item policy."""
-    types = sorted(set(media_types))
-    if not types:
+    answered). Newest first. The caller filters by the item policy. media_types None = any type."""
+    types = sorted(set(media_types)) if media_types is not None else None
+    if types is not None and not types:
         return []
-    marks = ",".join("?" for _ in types)
+    type_sql = f"AND COALESCE(media_type, 'image') IN ({','.join('?' for _ in types)}) " if types else ""
     conn = get_conn()
     try:
         rows = conn.execute(
             "SELECT * FROM capture_events WHERE redacted = 0 "
             "AND (display_name IS NULL OR display_name = '') AND (short_title IS NULL OR short_title = '') "
             "AND content_description IS NOT NULL AND TRIM(content_description) != '' "
-            f"AND COALESCE(media_type, 'image') IN ({marks}) "
+            + type_sql +
             "AND COALESCE(json_extract(type_metadata, '$.short_title_proposal_status'), '') NOT IN ('queued', 'done') "
             "AND COALESCE(json_extract(type_metadata, '$.auto_caption_title'), '') = '' "
-            "ORDER BY timestamp DESC LIMIT ?", (*types, int(limit))).fetchall()
+            "ORDER BY timestamp DESC LIMIT ?", (*(types or ()), int(limit))).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()

@@ -84,6 +84,18 @@ for ok in ("A turn with wires", "a red car on a table", "the image shows a desk"
     check(f"not a fragment: {ok[:30]!r}", not captions.starts_mid_word(ok))
 check("no letters is still garbage (#262)", captions._is_garbage("!!!!!!") and captions._is_garbage(""))
 
+# ---- hand-written vs model caption (core/item_title.py) ---------------------------------------
+HW = item_title.description_is_handwritten
+check("no caption record -> hand-written", HW({"content_description": "My words"}) is True)
+check("accepted by an agent -> a model caption", HW({"content_description": "x", "type_metadata": {"description_caption_model": "mcp-agent"}}) is False)
+check("accepted from moondream -> a model caption", HW({"content_description": "x", "type_metadata": {"description_caption_model": "moondream"}}) is False)
+check("older Accept (used_at, no model) -> a model caption", HW({"content_description": "x", "type_metadata": {"description_caption_used_at": 1.0}}) is False)
+check("same text as the suggestion -> a model caption", HW({"content_description": "a cat", "type_metadata": json.dumps({"auto_caption": "a cat"})}) is False)
+check("owner-edited -> hand-written", HW({"content_description": "x", "type_metadata": {"description_caption_model": "owner"}}) is True)
+check("no description -> None", HW({"content_description": " "}) is None)
+check("title_of: a model caption is never the title", item_title.title_of(
+    {"slug": "s", "filename": "f.png", "content_description": "x", "type_metadata": {"description_caption_model": "mcp-agent"}}) == "f.png")
+
 # ---- title cleaning ---------------------------------------------------------------------------
 check("clean_short_title: quotes, label, trailing stop, spaces",
       item_title.clean_short_title('  Title: "Green  buggy on the berm."  ') == "Green buggy on the berm")
@@ -179,7 +191,8 @@ H = mk("hand00001")
 items.update(H, content_description="Typed by the owner", type_metadata={"auto_caption": "a draft", "auto_caption_model": "moondream",
                                                                       "description_caption_model": "moondream"})
 items.update(H, content_description="Typed by the owner, edited")
-check("a hand edit drops the recorded model (it is not a draft any more)", "description_caption_model" not in tm(H), tm(H))
+check("a hand edit re-records the description as the owner's (not a draft any more)",
+      tm(H).get("description_caption_model") == "owner" and item_title.description_is_handwritten(db.get_by_slug(H)), tm(H))
 e = err_of(items.set_caption, H, "Agent text", accept=True)
 check("...so set_caption(accept) won't replace a hand-written description", e is not None and "description" in e.details["existing"])
 check("bad title refused", err_of(items.set_caption, H, "x", title="t" * 200).code == "bad_title")
@@ -296,8 +309,42 @@ with actor.acting_as(actor.ACTOR_UI):
     r = client.get("/api/captions/mid-word")
     check("admin route: mid-word scan answers", r.status_code == 200 and "count" in r.json(), r.text[:200])
     captions.DISABLED = True
-    e = err_of(captions.propose_short_titles, dry_run=False)
-    check("backfill refuses with captions_disabled when captions are off", e is not None and e.code == "captions_disabled")
+    e = err_of(captions.propose_short_titles, dry_run=False, source="model")
+    check("backfill source=model refuses with captions_disabled when captions are off",
+          e is not None and e.code == "captions_disabled")
+    check("bad source refused", err_of(captions.propose_short_titles, source="nope").code == "bad_source")
+
+    # words-first (owner decision 2026-10-25): cut from the item's own hand-written words, no GPU
+    W = mk("words0001")
+    HAND = "Skinned and test fit! - it actually glides when thrown, a bit nose heavy though, needs some ballast up front."
+    conn = db.get_conn()
+    conn.execute("UPDATE capture_events SET content_description = ?, short_title = NULL WHERE slug = ?", (HAND, W))
+    conn.commit()
+    conn.close()
+    check("hand-written description (no caption record) is the title fallback", item_title.title_of(db.get_by_slug(W)) == HAND)
+    calls.clear()
+    res = captions.propose_short_titles(dry_run=False)  # auto; captions are off here
+    check("auto: hand-written -> a words-first proposal at once, no model call; model captions left out and SAID so",
+          res["words"] >= 1 and not calls and tm(W).get("auto_caption_title") == "Skinned and test fit!"
+          and tm(W).get("auto_caption_title_model") == captions.WORDS_MODEL
+          and any("captioning is off" in k for k in res["left_out"]), res)
+    lst = client.get("/api/captions/unreviewed").json()
+    wi = next((x for x in lst if x["slug"] == W), None)
+    check("the words proposal is in the review list (title-only, by 'words')",
+          wi and wi["kind"] == "title" and wi["title"] == "Skinned and test fit!" and wi["title_by"] == "words", wi)
+    check("the proposal changes nothing yet (no short_title)", not db.get_by_slug(W)["short_title"])
+    cards.undo(res["batch_id"])
+    check("one undo removes every words proposal", not tm(W).get("auto_caption_title"))
+    r = client.post(f"/api/captions/{W}/accept", data={"title": "Skinned and test fit!"})
+    check("accepting it later sets the name", r.status_code == 200 and item_title.title_of(db.get_by_slug(W)) == "Skinned and test fit!",
+          r.text[:200])
+    for txt, want in (("Skinned and test fit! - it actually glides", "Skinned and test fit!"),
+                      ("Family Photo - Also - Servo mounts installed, they're setup", "Family Photo"),
+                      ("Rebuilding the scorpion. Spent time this week", "Rebuilding the scorpion"),
+                      ("Oct 21, 2023 (video): the drone course", "Oct 21, 2023"),
+                      ("Home in the garage, nuzzled between the Silkworm", "Home in the garage")):
+        check(f"title_from_words({txt[:26]!r}) = {want!r}", item_title.title_from_words(txt) == want,
+              item_title.title_from_words(txt))
 
 # ---- the seed migration and the search view ----------------------------------------------------
 with actor.acting_as(actor.ACTOR_UI):

@@ -43,7 +43,7 @@
   const countEl = document.getElementById('cr-count');
   const loadErr = document.getElementById('cr-load-error');
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-  function who(by) { return by === 'mcp-agent' ? 'an agent (MCP)' : by === 'owner' ? 'you, by hand' : by ? by : 'by hand'; }
+  function who(by) { return by === 'mcp-agent' ? 'an agent (MCP)' : by === 'owner' ? 'you, by hand' : by === 'words' ? 'cutting its own description' : by ? by : 'by hand'; }
   function updateCount() {
     const n = list.querySelectorAll('.cr-card').length;
     countEl.textContent = n ? n + ' to review' : '';

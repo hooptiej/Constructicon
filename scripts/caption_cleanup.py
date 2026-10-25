@@ -16,9 +16,11 @@ where"):
                     description, and examples (GET /api/captions/mid-word).
   requeue-midword   Puts them back in the needs-caption queue as ONE undoable batch
                     (POST /api/captions/mid-word/requeue). Dry run unless --execute.
-  propose-titles    Has the local captioner propose a short title for every item whose title used
-                    to be its long caption; proposals wait in /captions/review, nothing is applied
-                    (POST /api/captions/propose-titles). Dry run unless --execute.
+  propose-titles    Proposes a short title for every item whose title used to be its long
+                    description: cut from its own words when they are hand-written (no GPU), else
+                    by the local captioner (--source auto|words|model); proposals wait in
+                    /captions/review, nothing is applied (POST /api/captions/propose-titles).
+                    Dry run unless --execute.
 
 A real run prints the batch id; undo it with POST /api/changes/<batch>/undo (or constructicon_undo).
 Write runs go to constructicon-test before production, as always. Every failure prints what was
@@ -63,6 +65,8 @@ def main(argv):
     pt = sub.add_parser("propose-titles", help="queue short-title proposals (dry run unless --execute)")
     pt.add_argument("--execute", action="store_true")
     pt.add_argument("--limit", type=int, default=2000)
+    pt.add_argument("--source", choices=("auto", "words", "model"), default="auto",
+                    help="auto: cut from the item's own hand-written words, else the local captioner")
     pt.add_argument("--examples", type=int, default=10)
     ap.add_argument("--show", type=int, default=10, help="how many examples to print (scan)")
     args = ap.parse_args(argv)
@@ -84,11 +88,15 @@ def main(argv):
         print("OK" + ("" if args.execute else ": dry run, nothing written (add --execute)"))
     else:
         r = call(args.base_url, "POST", "/api/captions/propose-titles",
-                 {"dry_run": "false" if args.execute else "true", "limit": str(args.limit)})
-        verb = "queued" if args.execute else "would queue"
-        print(f"{verb} {r['count']} short-title proposal(s)" + (f"; batch {r['batch_id']}" if r.get("batch_id") else ""))
+                 {"dry_run": "false" if args.execute else "true", "limit": str(args.limit), "source": args.source})
+        verb = "proposed" if args.execute else "would propose"
+        print(f"{verb} {r['count']} short title(s): {r['words']} cut from their own words, {r['model']} by the local "
+              f"captioner" + (f"; batch {r['batch_id']}" if r.get("batch_id") else ""))
+        for reason, n in (r.get("left_out") or {}).items():
+            print(f"  left out: {n} ({reason})")
         for ex in r.get("examples", [])[:args.examples]:
-            print(f"  {ex['slug']}  now titled {ex['title']!r}; description {ex['description'][:60]!r}")
+            prop = f" -> {ex['proposal']!r}" if ex.get("proposal") else " -> (the captioner will propose one)"
+            print(f"  {ex['slug']}  now {ex['title'][:40]!r}{prop}")
         print("OK" + ("" if args.execute else ": dry run, nothing written (add --execute)"))
     return 0
 

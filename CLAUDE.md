@@ -168,7 +168,20 @@ the date and commit forward when you re-verify.
   Gated per type by `ObjectTypeSpec.caption_capable` (distinct from
   `ocr_capable`: video is captioned but not OCR'd; STL is explicitly
   excluded — wireframe renders produce garbage). Strictly one image at a
-  time under `CAPTION_LOCK`. #454: **No routine restarts; restart only on
+  time under `CAPTION_LOCK`. **#542: every caption comes with a short-title
+  suggestion** (`TITLE_PROMPT`, a second short call on the same image; the caption
+  call keeps the model loaded `WARM_SECONDS` for it, the title call unloads it) in
+  `type_metadata.auto_caption_title`; the caption queue also carries title-only
+  proposals (`caption_queue.mode = 'title'`, with their `batch_id`; real captions
+  drain first). **#743: a caption that starts mid-word** ("urn with...", "ids
+  and...": `captions.starts_mid_word`, a lower-case first word with no capital that
+  isn't an article or plain sentence start) **is garbage** like an empty answer: the
+  ladder moves on, and a ladder of fragments ends `failed` (back in needs-caption),
+  never `done`. There was never a prefix strip in this pipeline; the fragments are
+  moondream's own output (all 37 on prod at step 0). `captions.scan_mid_word()` is the
+  read-only scan (`GET /api/captions/mid-word`, admin); `requeue_mid_word` puts them back
+  in the needs-caption queue as ONE undoable batch (`POST /api/captions/mid-word/requeue`,
+  dry run by default); `scripts/caption_cleanup.py scan | requeue-midword` drives both. #454: **No routine restarts; restart only on
   failure, guarded by cooldown + circuit breaker.** Keep-alive model unload is
   the primary memory release; a restart is a safety valve for failures.
   **#643: the app container never holds the Docker socket.** The restart is a
@@ -213,7 +226,7 @@ the date and commit forward when you re-verify.
   tags (via the already-present `ffprobe` — deliberately no `mutagen`
   dependency, see `core/object_types/audio.py`'s docstring for the
   real-file check behind that), seeded into `content_description` +
-  `display_name` (the title, so it is the owner-visible name from the
+  `short_title` (#542) + `display_name` (the title, so it is the owner-visible name from the
   start; see `core/item_title.py`) and `type_metadata`
   (artist/album/track/year/genre); and, since #265, **`content_date`** —
   an image's EXIF `DateTimeOriginal` (Pillow, `core/object_types/image.py`)
@@ -247,6 +260,7 @@ the date and commit forward when you re-verify.
   - *Live tools* (not retired): `run_checks.py`, `deploy.sh`, `release.py`, `run_tool.sh`,
     `golden_master.py`, `seed_test_from_production.py`, `full_youtube_channel_sync.py`,
     `backfill_content_dates.py`, `regenerate_thumbnails.py`, `make_type_samples.py` + `drop_test.py` (#720),
+    `caption_cleanup.py` (#743 / #542: the mid-word scan and re-queue, the short-title proposals),
     and the helpers `_http.py` and `_testenv.py`.
     **None of `scripts/` is mounted into the app containers (#634)**: where each kind runs is
     "Scripts: what runs where" below. `reset_password.py` and `mcp_token.py` moved into the app as
@@ -1763,13 +1777,31 @@ One generated file of every registered type and extension, to drop-test a new in
     `type_metadata.content_date_source`. See "Dates".
   - `display_name` — optional per-object override of the item's title (the badge icon is always
     the type's `badge_icon`; the per-object `icon` override went in #704). **An item's title (#542) is
-    `core/item_title.py` `title_of(row)` and nothing else:** `display_name` →
-    `content_description` → `filename` → `slug`. `description` (the uploader's note)
-    is never a title. Python calls `title_of`; Jinja uses the `item_title` filter (the
+    `core/item_title.py` `title_of(row)` and nothing else:** `display_name` → `short_title` →
+    `filename` → `slug` (owner decision 2026-10-18 on #542: "a separate short title field"). **The
+    long caption (`content_description`) is never the title**, and `description` (the uploader's
+    note) is never a title either. Python calls `title_of`; Jinja uses the `item_title` filter (the
     static export registers it); JS reads the `display_name` (item payloads) or `title`
     (project grid, timeline, blog entry items) the server already resolved and never
     rebuilds the chain. `scripts/test_item_title_542.py` fails on a new hand-rolled
     chain.
+  - `short_title` (#542) — the item's short name, a few words (at most `item_title.SHORT_TITLE_MAX`,
+    100). Where it comes from: a content's OWN title given at creation (`db.insert_upload`: a
+    YouTube title, a write-up's "<card> — Write-up", a link, an MCP `add_content` title) and a file's
+    embedded title (`core/embedded_metadata.py`), when one line and short enough; a caption's title
+    (the local captioner suggests one with every caption, `constructicon_set_caption(title=...)`, the
+    caption review page); an accepted caption that is itself name-shaped (one line, at most
+    `CAPTION_AS_TITLE_MAX`, 80) when no title came with it; by hand (the item page's ABOUT group,
+    `POST /api/image/{slug}` `short_title`, MCP `constructicon_update(short_title=)`; `items.update`).
+    The `short_title_seed_542` migration copied every existing name-shaped `content_description`
+    into it once (one change-log row, op `item_short_title_seed`, actor `migration`), so those kept
+    their names; longer captions show the filename until a short title is accepted. **Backfill:**
+    `captions.propose_short_titles` has the local captioner propose one for every item whose long
+    caption used to be its title, into the caption review queue (nothing auto-applies; dry run by
+    default; `POST /api/captions/propose-titles` admin, or `scripts/caption_cleanup.py
+    propose-titles [--execute]`). The marks and every proposal share ONE batch, so one undo takes the
+    whole backfill back (the worker then skips what is still queued). Search indexes it (folded into
+    the view's `display_name` column). Check: `scripts/test_captions_titles_787_743.py`.
   - `uploaded_by_user_id` (#604 step 1, NULL = admin-owned) and `sensitive` / `sensitive_by` /
     `sensitive_at` (#603): see "Ownership and sensitive items".
   - `type_metadata` — freeform JSON bag for per-type properties that don't
@@ -2021,8 +2053,8 @@ miss. Don't assume a keyword search is a substitute for a tag-tree walk.
 `db.search()` (behind `GET /api/search`, the object page's related/attach pickers, the blog
 builder, `/api/gallery` and the MCP `constructicon_search`) reads one SQLite FTS5 index,
 `item_search` (rowid = `capture_events.id`). The text it holds per item is defined once, by the
-view `item_search_src` in `core/db.py`: `display_name`, `content_description` and `filename` (every
-name the item has had, so a rename never makes the old filename unfindable; `core/item_title.py`
+view `item_search_src` in `core/db.py`: `display_name` (with `short_title` folded in, #542),
+`content_description` and `filename` (every name the item has had, so a rename never makes the old filename unfindable; `core/item_title.py`
 picks only one of them to SHOW), the free-text `tags` column plus tag-tree tag names (`post_tags`),
 the titles of the cards it is on (`project_items`), the uploader's note (`description`) and
 `extracted_text`. Not indexed: `agent_notes` (an item's or its card's, #745), `type_metadata`, `provenance`, the slug.
@@ -2046,7 +2078,9 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
   all re-index exactly the items they touch. The table is contentless with `contentless_delete=1`
   (SQLite >= 3.43; the image has 3.46) so there is no second copy of the OCR text and the triggers
   never need old values. A NEW table or column that should be searchable goes into
-  `item_search_src` + `_search_sync_triggers()`, and needs a rebuild migration.
+  `item_search_src` + `_search_sync_triggers()`, and needs a rebuild migration (#542's is
+  `search_short_title_542`). `_ensure_search_schema` re-creates the view and any trigger whose
+  stored definition differs from the code's, so an existing DB never keeps an old one.
 - **Schema vs data:** `_ensure_search_schema()` (table, view, triggers; idempotent) runs at every
   boot in both processes; the one-time backfill is the `search_index_543` migration (web process),
   which logs the item count and the time. `db.rebuild_search_index()` is the repair for any drift
@@ -2150,11 +2184,21 @@ configuration gap for that session, not evidence the server itself is gone.
      block (name, type, description, OCR text truncated). It uses the types' own thumbnail renderers
      (`thumbnails.render_view`), so a PDF page, an STL render or a video frame work wherever the type
      has a thumbnail; `not_viewable` when there is no picture (or the item is redacted).
-  3. `constructicon_set_caption(slug, text, accept=False)` (`items.set_caption`): stores the text as
-     `type_metadata.auto_caption`, status `done`, model `mcp-agent`, in ONE imaged batch (actor
-     `mcp`, undoable). `accept=False` leaves it in `/captions/review` for the owner to approve;
-     `accept=True` also sets `content_description`, like "Use this caption" there. No model runs, so
-     it works with captions off.
+  3. `constructicon_set_caption(slug, text=None, title=None, accept=False, replace=False)`
+     (`items.set_caption`): stores the text as `type_metadata.auto_caption` and the short title as
+     `type_metadata.auto_caption_title`, status `done`, model `mcp-agent`, in ONE imaged batch (actor
+     `mcp`, undoable). `accept=False` leaves them in `/captions/review` for the owner to approve;
+     `accept=True` also sets `content_description` and `short_title` (the item's name), like Accept
+     there. Give a `title` with every caption: the long caption is never the title (#542). No model
+     runs, so it works with captions off. **#787, never overwrite silently:** replacing a suggestion,
+     description or short title that a local model didn't write (an agent's, the owner's, a hand
+     edit) is refused with 409 `would_replace_suggestion` (`details.existing` holds each text that
+     would go) unless `replace=true`; a moondream draft is replaced freely. Every answer carries
+     `replaced_suggestion` (the old suggestion text or null) and `replaced` (every replaced text, by
+     field). The review page's Accept (`POST /api/captions/{slug}/accept`, editor) runs the same op:
+     on that refusal it shows the existing text and offers "Replace it" / "Keep what is there". A hand
+     edit of a description or short title (`items.update` without saying who wrote it) drops its
+     recorded model, so it is protected from then on.
   4. `constructicon_update(..., content_description=...)` corrects a description or caption (same
      `items.update` merge and validation as the web route).
   With captions off, the processing drawer shows the Caption stage as `off` (settled, not pending),
@@ -2421,7 +2465,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
     `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live),
     `check_type_samples` and `test_type_samples_720` (the type sampler covers every type and sniffs right, #720);
-  - pages, search, dates, UI: `test_search_543`, `test_mcp_search_cap_697` (MCP text previews), `test_item_title_542`, `test_mountain_time_544` (`.py` and
+  - pages, search, dates, UI: `test_search_543`, `test_mcp_search_cap_697` (MCP text previews), `test_item_title_542`,
+    `test_captions_titles_787_743` (short titles, the set_caption guard, mid-word captions, the backfill), `test_mountain_time_544` (`.py` and
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and
     `test_timeline_drag_ui` (`.js`), `test_radio_dial_775` (`.py` and `.js`) with `test_radio_dial_ui_775` (`.js`),

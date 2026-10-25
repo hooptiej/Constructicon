@@ -106,10 +106,14 @@ os.environ["CONSTRUCTICON_ROLE"] = ""
 captions._breaker_reason = "test breaker"
 check("breaker open: worker leaves queue alone", captions._drain_one() is False and db.peek_caption_queue()["slug"] == slug)
 captions._breaker_reason = None
-check("worker drains oldest first", captions._drain_one() is True and len(calls) == 1)
+def caption_calls():  # #542: each caption is followed by a short-title call; count the caption calls
+    return [c for c in calls if c[1].get("prompt") != captions.TITLE_PROMPT]
+
+
+check("worker drains oldest first", captions._drain_one() is True and len(caption_calls()) == 1)
 check("drained row done", db.get_by_slug(slug)["type_metadata"].get(captions.STATUS_KEY) == "done")
 check("drained row dequeued", db.peek_caption_queue()["slug"] == slug2)
-check("second drain", captions._drain_one() is True and len(calls) == 2)
+check("second drain", captions._drain_one() is True and len(caption_calls()) == 2)
 check("queue empty -> no work", captions._drain_one() is False and db.peek_caption_queue() is None)
 
 print("\n%s" % ("ALL PASS" if not FAILS else "FAILED: " + ", ".join(FAILS)))

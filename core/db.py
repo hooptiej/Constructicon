@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS capture_events (
     content_date REAL,
     type_metadata TEXT NOT NULL DEFAULT '{}',
     display_name TEXT,
+    short_title TEXT,
     agent_notes TEXT,
     provenance TEXT,
     highlight INTEGER NOT NULL DEFAULT 0,
@@ -185,7 +186,9 @@ CREATE TABLE IF NOT EXISTS caption_queue (
     slug TEXT PRIMARY KEY,
     start_step INTEGER NOT NULL DEFAULT 0,
     cascade INTEGER NOT NULL DEFAULT 1,
-    enqueued_at REAL NOT NULL
+    enqueued_at REAL NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'caption',
+    batch_id TEXT
 );
 CREATE TABLE IF NOT EXISTS schema_migrations (
     name TEXT PRIMARY KEY,
@@ -565,7 +568,7 @@ class _DryRunRollback(Exception):
 # Two thin read helpers returning the same column shape. The caller (app.py's
 # /api/processing) derives the per-stage state, since that needs object_types.
 _PROCESSING_COLS = (
-    "slug, filename, display_name, content_description, media_type, "
+    "slug, filename, display_name, short_title, content_description, media_type, "
     "ocr_status, type_metadata, (embedding IS NOT NULL) AS has_embedding, timestamp, "
     "sensitive, uploaded_by_user_id"  # #603: the item policy needs these (processing drawer)
 )
@@ -635,7 +638,7 @@ def _trash_expires_nullable(conn):
 # ONE searchable text per item in an FTS5 table. `item_search_src` is the view that defines that
 # text; `item_search` indexes it (rowid = capture_events.id). Columns, in bm25 weight order (a
 # title match outranks a match inside OCR text):
-#   display_name, content_description, filename   every name an item has ever worn (a rename must
+#   display_name (+ short_title, #542), content_description, filename   every name an item has ever worn (a rename must
 #                                                  not make the old filename unfindable; title_of()
 #                                                  in core/item_title.py picks only ONE of them)
 #   tags          the free-text `tags` JSON column + the names of its tag-tree tags (post_tags)
@@ -658,7 +661,7 @@ _SEARCH_COLS_SQL = ", ".join(SEARCH_COLUMNS)
 _SEARCH_VIEW = """
 CREATE VIEW IF NOT EXISTS item_search_src AS
 SELECT ce.id AS id,
-       COALESCE(ce.display_name, '') AS display_name,
+       TRIM(COALESCE(ce.display_name, '') || ' ' || COALESCE(ce.short_title, '')) AS display_name,
        COALESCE(ce.content_description, '') AS content_description,
        COALESCE(ce.filename, '') AS filename,
        COALESCE(ce.tags, '') || ' ' || COALESCE((SELECT group_concat(name, ' ') FROM (
@@ -691,7 +694,7 @@ def _search_sync_triggers():
         return (f"id IN (SELECT ce.id FROM capture_events ce JOIN project_items pi ON pi.post_slug = ce.slug "
                 f"WHERE pi.project_id = {ref})")
 
-    cols = "display_name, content_description, filename, tags, description, extracted_text"
+    cols = "display_name, short_title, content_description, filename, tags, description, extracted_text"
     trig = {}
 
     def add(name, when, table, body):
@@ -727,8 +730,23 @@ def _ensure_search_schema(conn):
         raise RuntimeError(
             f"cannot create the search index table item_search: {e}. This needs SQLite >= 3.43 built with "
             f"FTS5; this Python has SQLite {sqlite3.sqlite_version} (#543).") from e
+    # #542: the view and triggers are re-created when their definition changed (short_title joined
+    # the display_name column), so an existing DB never keeps the old ones. sqlite_master stores the
+    # statement without "IF NOT EXISTS"; compare with whitespace collapsed.
+    def _norm(sql):
+        return " ".join((sql or "").replace("IF NOT EXISTS ", "").split())
+
+    stored = {r["name"]: r["sql"] for r in conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type IN ('view', 'trigger') AND name LIKE 'item_search%'")}
+    if "item_search_src" in stored and _norm(stored["item_search_src"]) != _norm(_SEARCH_VIEW):
+        for name in _search_sync_triggers():
+            conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+        conn.execute("DROP VIEW IF EXISTS item_search_src")
+        stored = {}
     conn.execute(_SEARCH_VIEW)
-    for ddl in _search_sync_triggers().values():
+    for name, ddl in _search_sync_triggers().items():
+        if name in stored and _norm(stored[name]) != _norm(ddl):
+            conn.execute(f"DROP TRIGGER IF EXISTS {name}")
         conn.execute(ddl)
 
 
@@ -861,9 +879,18 @@ def init_db(migrate=True):
             _add_column(conn, "projects", "tag_id", "INTEGER REFERENCES blog_tags(id)")
         # display_name (#11): an optional per-object title override (core/item_title.py). Its twin,
         # the per-object `icon` override, was never used and is dropped by #704.
-        for column, ddl_type in (("display_name", "TEXT"),):
+        # short_title (#542, owner decision 2026-10-18): the item's short name, between the rename and
+        # the filename in the title chain; the long caption (content_description) is never the title.
+        # Schema DDL (both processes); the `short_title_seed_542` migration fills it once.
+        for column, ddl_type in (("display_name", "TEXT"), ("short_title", "TEXT")):
             if column not in existing_columns:
                 _add_column(conn, "capture_events", column, ddl_type)
+        # #542 / #743: the caption queue also carries short-title proposals (mode 'title') and the
+        # change-log batch they belong to, so one undo takes a whole backfill back.
+        existing_queue_columns = {row["name"] for row in conn.execute("PRAGMA table_info(caption_queue)")}
+        for column, ddl_type in (("mode", "TEXT NOT NULL DEFAULT 'caption'"), ("batch_id", "TEXT")):
+            if column not in existing_queue_columns:
+                _add_column(conn, "caption_queue", column, ddl_type)
         # parent_id (#133): support for nested projects — projects can now have a
         # parent project, enabling a simple hierarchy. Mirrors the same self-referencing
         # pattern as blog_tags.parent_id for consistency.
@@ -1565,6 +1592,28 @@ def _mig_search_index_543():
     print(f"schema_migrations: search_index_543 indexed {rows} item(s) in {secs:.2f}s", flush=True)
 
 
+def _mig_short_title_seed_542():
+    # #542 (owner decision 2026-10-18): the long caption is no longer the title. Every item whose
+    # content_description already reads as a name (one line; at most item_title.SHORT_TITLE_MAX
+    # characters for a content's own title, item_title.CAPTION_AS_TITLE_MAX for an accepted caption)
+    # gets it as its short_title, so its name doesn't change. A longer accepted caption is left for
+    # the short-title proposals (captions.propose_short_titles). ONE imaged change-log row as actor
+    # `migration` (the generic undo refuses migration rows; the pre-deploy snapshot is the way back).
+    # Idempotent: fill-only, a second run finds nothing.
+    from . import actor as actor_ctx, items
+    with actor_ctx.acting_as(actor_ctx.ACTOR_MIGRATION):
+        res = items.seed_short_titles()
+    print(f"schema_migrations: short_title_seed_542 gave {len(res.data['seeded'])} item(s) a short title from "
+          f"their own title-shaped description; {res.data['left_long']} long caption(s) left for proposals "
+          f"(batch {res.batch_id})", flush=True)
+
+
+def _mig_search_short_title_542():
+    # #542: the search view's name column now carries short_title too; re-read every item once.
+    rows, secs = rebuild_search_index()
+    print(f"schema_migrations: search_short_title_542 re-indexed {rows} item(s) in {secs:.2f}s", flush=True)
+
+
 MIGRATIONS = [
     ("drop_legacy_uploads", _mig_drop_legacy_uploads),
     ("curator_snooze_519", _mig_curator_snooze_519),
@@ -1588,6 +1637,8 @@ MIGRATIONS = [
     ("link_page_text_724d", _mig_link_page_text_724d),
     ("transcripts_724e", _mig_transcripts_724e),
     ("date_guess_backfill_725", _mig_date_guess_backfill_725),
+    ("short_title_seed_542", _mig_short_title_seed_542),
+    ("search_short_title_542", _mig_search_short_title_542),
 ]
 
 
@@ -1831,7 +1882,7 @@ def _row_to_dict(row):
 def insert_upload(slug, filename, stored_filename, uploaded_by, description="", tags=None,
                    file_size=None, source_modified_at=None, ocr_status=None,
                    media_type="image", external_url=None, content_description=None, content_date=None,
-                   type_metadata=None, sensitive=False):
+                   type_metadata=None, sensitive=False, short_title=None):
     """Creates a capture_events row. filename/stored_filename are for uploaded files and can be
     None for content that lives elsewhere (media_type='youtube' + external_url, for example) —
     there's no requirement that a row correspond to an actual file on disk.
@@ -1849,8 +1900,14 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
     the free-text Source label (`tech`), unrelated.
     #603: `sensitive=True` (the upload dialog's checkbox) sets the flag in the same INSERT, so the
     item is never visible unlocked, not even for a moment.
+    #542: a content_description given at creation is the content's OWN title (a video's, a
+    write-up's, a link's; never a caption, which arrives later as a suggestion), so it is also the
+    short title unless `short_title` is given or the text isn't name-shaped (one line, at most
+    item_title.SHORT_TITLE_MAX characters).
     """
-    from . import actor as actor_ctx, users  # lazy: users imports this module
+    from . import actor as actor_ctx, item_title, users  # lazy: users imports this module
+    if short_title is None and item_title.title_shaped(content_description, item_title.SHORT_TITLE_MAX):
+        short_title = content_description.strip()
     who = actor_ctx.current_actor()
     owner_id = users.user_id_for_actor(who)
     conn = get_conn()
@@ -1860,13 +1917,13 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
             "INSERT INTO capture_events (slug, timestamp, tech, description, "
             "extracted_text, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
             "media_type, external_url, content_description, content_date, type_metadata, uploaded_by_user_id, "
-            "sensitive, sensitive_by, sensitive_at) "
-            "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "sensitive, sensitive_by, sensitive_at, short_title) "
+            "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (slug, now, uploaded_by, description,
              json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
              now if ocr_status == "pending" else None,
              media_type, external_url, content_description, content_date, json.dumps(type_metadata or {}), owner_id,
-             1 if sensitive else 0, who if sensitive else None, now if sensitive else None),
+             1 if sensitive else 0, who if sensitive else None, now if sensitive else None, short_title or None),
         )
         conn.commit()
 
@@ -1910,7 +1967,7 @@ def _set_type_metadata(slug, metadata):
         conn.close()
 
 
-def _update_content_metadata(slug, content_description=None, type_metadata=None):
+def _update_content_metadata(slug, content_description=None, type_metadata=None, short_title=None):
     """Partial update for the two content-description-shaped fields that
     neither update_tags (description/tags — see
     api_update_image in web/app.py) nor rename_object (display_name,
@@ -1940,6 +1997,7 @@ def _update_content_metadata(slug, content_description=None, type_metadata=None)
     if existing is None:
         return None
     new_content_description = content_description if content_description is not None else existing["content_description"]
+    new_short_title = short_title if short_title is not None else existing.get("short_title")  # #542: same rule
     if type_metadata:
         merged = dict(existing.get("type_metadata") or {})
         merged.update(type_metadata)
@@ -1948,8 +2006,8 @@ def _update_content_metadata(slug, content_description=None, type_metadata=None)
     conn = get_conn()
     try:
         conn.execute(
-            "UPDATE capture_events SET content_description = ?, type_metadata = ? WHERE slug = ?",
-            (new_content_description, json.dumps(merged), slug),
+            "UPDATE capture_events SET content_description = ?, type_metadata = ?, short_title = ? WHERE slug = ?",
+            (new_content_description, json.dumps(merged), new_short_title or None, slug),
         )
         conn.commit()
         return get_by_slug(slug)
@@ -1959,13 +2017,25 @@ def _update_content_metadata(slug, content_description=None, type_metadata=None)
 
 # --- Caption queue (#549): the MCP process enqueues, the web process's worker drains ---
 
-def enqueue_caption(slug, start_step=0, cascade=True):
+def enqueue_caption(slug, start_step=0, cascade=True, mode="caption", batch_id=None):
+    """Queues one item for web's caption worker. mode 'caption' = caption it (and suggest a short
+    title with it); 'title' = only propose a short title (#542 backfill), written into `batch_id`.
+    A caption request replaces a queued title proposal for the same item (it suggests a title
+    too); a title proposal never displaces a queued caption."""
     conn = get_conn()
     try:
+        if mode == "title":
+            conn.execute(
+                "INSERT INTO caption_queue (slug, start_step, cascade, enqueued_at, mode, batch_id) "
+                "VALUES (?, 0, 1, ?, 'title', ?) ON CONFLICT(slug) DO NOTHING",
+                (slug, time.time(), batch_id))
+            conn.commit()
+            return
         conn.execute(
-            "INSERT INTO caption_queue (slug, start_step, cascade, enqueued_at) VALUES (?, ?, ?, ?) "
+            "INSERT INTO caption_queue (slug, start_step, cascade, enqueued_at, mode, batch_id) "
+            "VALUES (?, ?, ?, ?, 'caption', NULL) "
             "ON CONFLICT(slug) DO UPDATE SET start_step = excluded.start_step, "
-            "cascade = excluded.cascade, enqueued_at = excluded.enqueued_at",
+            "cascade = excluded.cascade, enqueued_at = excluded.enqueued_at, mode = 'caption', batch_id = NULL",
             (slug, int(start_step), 1 if cascade else 0, time.time()))
         conn.commit()
     finally:
@@ -1974,10 +2044,12 @@ def enqueue_caption(slug, start_step=0, cascade=True):
 
 def peek_caption_queue():
     """Oldest queued caption (not removed: it is dequeued only after it has run, so a crash
-    mid-caption leaves it queued for the next boot)."""
+    mid-caption leaves it queued for the next boot). #542: a real caption goes before any queued
+    short-title proposal, so a backfill never holds up a new upload's caption."""
     conn = get_conn()
     try:
-        r = conn.execute("SELECT * FROM caption_queue ORDER BY enqueued_at, slug LIMIT 1").fetchone()
+        r = conn.execute("SELECT * FROM caption_queue ORDER BY CASE mode WHEN 'title' THEN 1 ELSE 0 END, "
+                         "enqueued_at, slug LIMIT 1").fetchone()
         return dict(r) if r else None
     finally:
         conn.close()
@@ -3167,18 +3239,77 @@ def list_unaccepted_captions(limit=500):
     """Rows with an auto_caption suggestion that hasn't been accepted into
     content_description and hasn't been skipped — the confirm_caption bulk
     review queue (#409). Mirrors curator_needs._count_unaccepted_captions'
-    filter, plus the auto_caption_dismissed skip flag."""
+    filter, plus the auto_caption_dismissed skip flag.
+    #542: plus the rows with a short-title suggestion (auto_caption_title) and no short_title or
+    rename yet, not skipped (auto_caption_title_dismissed): the backfill's proposals for items
+    whose long caption used to be their title, and the title a new caption came with."""
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT * FROM capture_events WHERE redacted=0 "
-            "AND json_extract(type_metadata, '$.auto_caption') IS NOT NULL "
+            "SELECT * FROM capture_events WHERE redacted=0 AND (("
+            "json_extract(type_metadata, '$.auto_caption') IS NOT NULL "
             "AND json_extract(type_metadata, '$.auto_caption') != '' "
             "AND (content_description IS NULL OR content_description = '') "
-            "AND json_extract(type_metadata, '$.auto_caption_dismissed') IS NULL "
-            "ORDER BY timestamp DESC LIMIT ?",
+            "AND json_extract(type_metadata, '$.auto_caption_dismissed') IS NULL"
+            ") OR ("
+            "json_extract(type_metadata, '$.auto_caption_title') IS NOT NULL "
+            "AND json_extract(type_metadata, '$.auto_caption_title') != '' "
+            "AND (short_title IS NULL OR short_title = '') AND (display_name IS NULL OR display_name = '') "
+            "AND json_extract(type_metadata, '$.auto_caption_title_dismissed') IS NULL"
+            ")) ORDER BY timestamp DESC LIMIT ?",
             (limit,),
         ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_short_title_candidates():
+    """#542: rows with a content_description and no short_title (the seed migration reads them; it
+    decides which descriptions read as a name)."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE (short_title IS NULL OR short_title = '') "
+            "AND content_description IS NOT NULL AND TRIM(content_description) != '' ORDER BY id").fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_long_caption_items(media_types, limit=1000):
+    """#542: the items whose title USED to be their long caption: no rename, no short title, a
+    content_description, a caption-capable type (a short-title proposal needs a picture), not
+    redacted, no short-title proposal queued, written or waiting in review (skipped ones count as
+    answered). Newest first. The caller filters by the item policy."""
+    types = sorted(set(media_types))
+    if not types:
+        return []
+    marks = ",".join("?" for _ in types)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE redacted = 0 "
+            "AND (display_name IS NULL OR display_name = '') AND (short_title IS NULL OR short_title = '') "
+            "AND content_description IS NOT NULL AND TRIM(content_description) != '' "
+            f"AND COALESCE(media_type, 'image') IN ({marks}) "
+            "AND COALESCE(json_extract(type_metadata, '$.short_title_proposal_status'), '') NOT IN ('queued', 'done') "
+            "AND COALESCE(json_extract(type_metadata, '$.auto_caption_title'), '') = '' "
+            "ORDER BY timestamp DESC LIMIT ?", (*types, int(limit))).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_done_captions():
+    """#743: every non-redacted row whose caption status is `done` and that has a suggestion (the
+    mid-word scan filters them in Python; there are a few thousand at most)."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE redacted = 0 "
+            "AND json_extract(type_metadata, '$.auto_caption_status') = 'done' "
+            "AND COALESCE(json_extract(type_metadata, '$.auto_caption'), '') != '' ORDER BY timestamp DESC").fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
@@ -3205,7 +3336,7 @@ def list_needs_caption(media_types, include_failed=True, limit=50, count_only=Fa
         if count_only:
             return conn.execute(f"SELECT COUNT(*) FROM capture_events {where}", types).fetchone()[0]
         rows = conn.execute(
-            "SELECT slug, display_name, filename, content_description, media_type, type_metadata, tags, "
+            "SELECT slug, display_name, short_title, filename, content_description, media_type, type_metadata, tags, "
             f"extracted_text, timestamp FROM capture_events {where} ORDER BY timestamp DESC LIMIT ?",
             (*types, int(limit)),
         ).fetchall()

@@ -323,7 +323,7 @@ def candidates_for(slug):
     conn = db.get_conn()
     try:
         rows = conn.execute(
-            "SELECT slug, filename, display_name, content_description, media_type, timestamp, source_modified_at, stored_filename "
+            "SELECT slug, filename, display_name, short_title, content_description, media_type, timestamp, source_modified_at, stored_filename "
             "FROM capture_events "
             "WHERE filename IS NOT NULL AND slug != ? AND redacted = 0 AND is_brand_asset = 0 AND media_type IS ? "
             "ORDER BY timestamp DESC", (slug, row.get("media_type"))).fetchall()
@@ -347,7 +347,7 @@ def identical_items(slug):
     conn = db.get_conn()
     try:
         rows = conn.execute(
-            "SELECT slug, filename, display_name, content_description, media_type, timestamp, source_modified_at, "
+            "SELECT slug, filename, display_name, short_title, content_description, media_type, timestamp, source_modified_at, "
             "stored_filename, file_size FROM capture_events "
             "WHERE slug != ? AND redacted = 0 AND file_size = ? AND stored_filename IS NOT NULL "
             "ORDER BY timestamp ASC, id ASC", (slug, row["file_size"])).fetchall()

@@ -206,7 +206,8 @@ check("undo of accept=True reverts description and caption in one go",
       not row["content_description"] and row["type_metadata"].get("auto_caption_status") == "failed"
       and "auto_caption" not in row["type_metadata"], row["type_metadata"])
 
-items.update(SKIPPED, type_metadata={"auto_caption": "old", "auto_caption_status": "done", "auto_caption_dismissed": True})
+items.update(SKIPPED, type_metadata={"auto_caption": "old", "auto_caption_status": "done", "auto_caption_dismissed": True,
+                                     "auto_caption_model": "moondream"})  # #787: a model's draft, replaced freely
 check("a dismissed suggestion is out of the review queue", SKIPPED not in [r["slug"] for r in db.list_unaccepted_captions()])
 items.set_caption(SKIPPED, "a new suggestion")
 check("a new agent caption re-opens it in the review queue", SKIPPED in [r["slug"] for r in db.list_unaccepted_captions()])

@@ -4,9 +4,9 @@
 Throwaway SQLite DB and storage (scripts/_testenv.py), built by the real `db.init_db()`; the real
 FastAPI app through TestClient, the MCP tool functions called directly and the real static export.
 Covers:
-  - the order: display_name -> content_description -> filename -> slug, and `description` (the
-    uploader's note) NEVER a title, on a renamed item, a captioned item, a note-only item and a
-    bare one;
+  - the order (owner decision 2026-10-18): display_name -> short_title -> filename -> slug; the long
+    caption (content_description) and `description` (the uploader's note) are NEVER a title, on a
+    renamed item, a captioned item, a short-titled item, a note-only item and a bare one;
   - a renamed item shows its display_name on every converted surface: the item card payload, the
     search result shape, the object page, the project grid, the project timeline, a pile, the blog
     entry payload, the MCP get / search / project items, the revision and curation-queue labels and
@@ -68,11 +68,13 @@ def mk(slug, filename, description=""):
 
 
 # ---- 1. the function itself ------------------------------------------------------------------
-base = {"slug": "s1", "filename": "f.png", "content_description": "cap", "display_name": "Name", "description": NOTE}
+base = {"slug": "s1", "filename": "f.png", "content_description": "cap", "display_name": "Name", "description": NOTE,
+        "short_title": "Short"}
 check("title_of: display_name wins", item_title.title_of(base) == "Name")
-check("title_of: then content_description", item_title.title_of({**base, "display_name": None}) == "cap")
-check("title_of: then filename", item_title.title_of({**base, "display_name": "", "content_description": None}) == "f.png")
-check("title_of: then slug", item_title.title_of({**base, "display_name": None, "content_description": "",
+check("title_of: then short_title", item_title.title_of({**base, "display_name": None}) == "Short")
+check("title_of: then filename (the long caption is never the title)",
+      item_title.title_of({**base, "display_name": "", "short_title": None}) == "f.png")
+check("title_of: then slug", item_title.title_of({**base, "display_name": None, "short_title": "",
                                                   "filename": None}) == "s1")
 check("title_of: description is never a title",
       item_title.title_of({"slug": "s1", "filename": None, "description": NOTE}) == "s1")
@@ -95,7 +97,7 @@ NOTEONLY = mk("noteonly01", "IMG_0003.png", description=NOTE)
 # #725: a real date, so it has a marker on the project timeline (an undated item is off the axis)
 items.update(RENAMED, display_name="Tension Biped, one leg standing", content_description="A walker on a bench",
              content_date=1500000000.0)
-items.update(CAPTIONED, content_description="Caption wins over filename")
+items.update(CAPTIONED, content_description="A long caption that must never be the title")
 NAME = "Tension Biped, one leg standing"
 
 proj = cards.create("Biped", kind="thing").data["card"]
@@ -148,9 +150,24 @@ check("static export, project page: alt text is the rename", f'alt="{NAME}"' in 
 check("static export, blog page: alt text is the rename", blog_html is not None and f'alt="{NAME}"' in blog_html.read_text())
 
 # ---- 4. caption and filename steps, and the note never a title -------------------------------
-check("captioned item: caption beats filename on card and project grid",
-      _card_items([rows[CAPTIONED]])[0]["display_name"] == "Caption wins over filename"
-      and _to_content_public(rows[CAPTIONED])["title"] == "Caption wins over filename")
+check("captioned item: the long caption is NOT the title (the filename is), card and project grid",
+      _card_items([rows[CAPTIONED]])[0]["display_name"] == "IMG_0002.png"
+      and _to_content_public(rows[CAPTIONED])["title"] == "IMG_0002.png")
+items.update(CAPTIONED, short_title="Short wins over filename")
+crow = db.get_by_slug(CAPTIONED)
+check("short-titled item: the short title beats the filename on card, project grid, MCP and pile",
+      _card_items([crow])[0]["display_name"] == "Short wins over filename"
+      and _to_content_public(crow)["title"] == "Short wins over filename"
+      and server.constructicon_get(CAPTIONED)["display_name"] == "Short wins over filename"
+      and "Short wins over filename" in [c["title"] for p in cards.file_stacks(proj["id"], thumb_fn=lambda r: None)
+                                         for c in p["cards"]])
+r = client.get("/api/search", params={"query": "wins over"})
+check("search finds an item by its short title", r.status_code == 200 and any(x["slug"] == CAPTIONED for x in r.json()),
+      r.status_code)
+# a content's own title given at creation is its short title (db.insert_upload)
+db.insert_content("ytown00001", "tester", "youtube", external_url="https://youtu.be/x", content_description="A video's own title")
+check("insert: a content's own title becomes its short title", db.get_by_slug("ytown00001")["short_title"] == "A video's own title"
+      and item_title.title_of(db.get_by_slug("ytown00001")) == "A video's own title")
 n = rows[NOTEONLY]
 surfaces = {
     "card": _card_items([n])[0]["display_name"],

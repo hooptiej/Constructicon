@@ -28,9 +28,9 @@ capture timestamp is to a photo what publishedAt is to that video:
 
   - the title -> content_description (the content's own title, as opposed
     to `description`, the uploader's note about it — see the
-    capture_events comments in core/db.py) AND display_name. Both, because
-    core/item_title.py's chain is display_name -> content_description ->
-    filename -> slug; display_name is still set too, so the title is the
+    capture_events comments in core/db.py), short_title (#542: the name in
+    core/item_title.py's chain, display_name -> short_title -> filename ->
+    slug; the long caption is never the title) AND display_name, so the title is the
     owner-visible name from the start and a later rename or caption edit
     can't change what the upload carried in. display_name is documented (#11) as "a
     per-object override of the filename"; a tag title is precisely that,
@@ -63,7 +63,7 @@ client that saw a 500 would retry straight into a 409 duplicate).
 
 import time
 
-from . import db, object_types, parse_limits, storage
+from . import db, item_title, object_types, parse_limits, storage
 
 # A content_date a hook returns is only accepted inside this window. Real
 # file metadata does carry sentinels — an MP4 whose creation time was never
@@ -139,8 +139,13 @@ def fill_missing(slug):
         # None means "leave alone" to update_content_metadata, same as the
         # /api/image/{slug} route's own partial-update convention.
         content_description = title if title and not row.get("content_description") else None
-        if content_description is not None or new_tm:
-            row = db._update_content_metadata(slug, content_description=content_description, type_metadata=new_tm or None)
+        # #542: the content's own title is also its short title (the name in the title chain), same
+        # fill-only rule. A title too long or multi-line to be a name stays a description only.
+        short_title = (title if title and not row.get("short_title")
+                       and item_title.title_shaped(title, item_title.SHORT_TITLE_MAX) else None)
+        if content_description is not None or new_tm or short_title is not None:
+            row = db._update_content_metadata(slug, content_description=content_description, type_metadata=new_tm or None,
+                                              short_title=short_title)
         if title and row is not None and not row.get("display_name"):
             row = db._rename_object(slug, display_name=title)
         # content_date (#265): same fill-only-missing rule. `is None`, not

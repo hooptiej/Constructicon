@@ -454,28 +454,66 @@ def api_mark_caption_used(slug: str):
 @router.get("/api/captions/unreviewed", dependencies=requires(roles.VIEWER))
 def api_captions_unreviewed(request: Request):
     """#409: objects with an auto-caption suggestion awaiting review — feeds the
-    bulk caption-review page. Accept reuses POST /api/image/{slug} (sets
-    content_description) + caption/mark-used; skip is POST /api/captions/{slug}/skip."""
+    bulk caption-review page. #542: each carries the suggested short title too, and `kind`:
+    "caption" (a caption, maybe with a title, waiting to become the description) or "title" (only
+    a short title: the item's description is already accepted, typically a backfill proposal for
+    an item whose long caption used to be its name). Accept is POST /api/captions/{slug}/accept;
+    skip is POST /api/captions/{slug}/skip."""
     out = []
     for r in policy.filter_visible(db.list_unaccepted_captions()):  # #603: a flagged image can be captioned
         tm = r.get("type_metadata") or {}
+        has_desc = bool((r.get("content_description") or "").strip())
         out.append({
             "slug": r["slug"],
             "name": item_title.title_of(r),
-            "caption": (tm.get("auto_caption") or "").strip(),
+            "kind": "title" if has_desc else "caption",
+            "caption": "" if has_desc else (tm.get("auto_caption") or "").strip(),
+            "caption_by": tm.get("auto_caption_model"),
+            "description": (r.get("content_description") or "").strip() if has_desc else "",
+            "title": (tm.get(captions.TITLE_KEY) or "").strip() if not (r.get("short_title") or r.get("display_name")) else "",
+            "title_by": tm.get(captions.TITLE_MODEL_KEY) or tm.get("auto_caption_model"),
             "thumb_url": f"/f/{r['slug']}/thumb",
             "detail_url": f"/object/{r['slug']}",
         })
     return JSONResponse(out)
 
 
+@router.post("/api/captions/{slug}/accept")
+def api_caption_accept(slug: str, text: str = Form(""), title: str = Form(""), replace: bool = Form(False)):
+    """#787 / #542: the review page's Accept. `text` becomes the description (content_description)
+    and `title` the short title (the item's name), as ONE undoable batch (core/items.set_caption,
+    accept=True, model "owner" when the text was edited). Refused with 409
+    `would_replace_suggestion` (details.existing = each text that would go) when it would replace
+    something a local model didn't write, unless replace=true: the page shows that and offers
+    Replace. Answers {ok, batch_id, replaced_suggestion, replaced, item}."""
+    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    tm = row.get("type_metadata") or {}
+    text = (text or "").strip() or None
+    title = (title or "").strip() or None
+    # Unedited suggestion text keeps the model that wrote it; anything else is the owner's.
+    unedited = (text is None or text == (tm.get(captions.METADATA_KEY) or "").strip()) and \
+               (title is None or title == (tm.get(captions.TITLE_KEY) or "").strip())
+    res = items.set_caption(slug, text, title=title, accept=True, replace=replace,
+                            model=None if unedited else captions.OWNER_MODEL)
+    return JSONResponse({"ok": True, "batch_id": res.batch_id, "replaced_suggestion": res.data["replaced_suggestion"],
+                         "replaced": res.data["replaced"], "item": _to_public(res.item)})
+
+
 @router.post("/api/captions/{slug}/skip")
-def api_caption_skip(slug: str):
+def api_caption_skip(slug: str, what: str = Form("all")):
     """#409: mark an auto-caption suggestion reviewed-but-not-used, so it drops
-    out of the confirm_caption queue without being copied into the description."""
+    out of the confirm_caption queue without being copied into the description.
+    #542: `what` = "all" (default: the caption and its title), "caption" or "title"."""
+    if what not in ("all", "caption", "title"):
+        raise HTTPException(status_code=400, detail="what must be all, caption or title")
     policy.viewable_item(slug)  # #467: 404 if missing or not viewable
-    items.update(slug, type_metadata={"auto_caption_dismissed": True})
-    return JSONResponse({"ok": True})
+    meta = {}
+    if what in ("all", "caption"):
+        meta["auto_caption_dismissed"] = True
+    if what in ("all", "title"):
+        meta[captions.TITLE_DISMISSED_KEY] = True
+    res = items.update(slug, type_metadata=meta)
+    return JSONResponse({"ok": True, "batch_id": res.batch_id})
 
 
 @router.post("/api/image/{slug}")
@@ -485,6 +523,7 @@ def api_update_image(
     description: str | None = Form(None),
     tags: str | None = Form(None),
     display_name: str | None = Form(None),
+    short_title: str | None = Form(None),
     content_description: str | None = Form(None),
     type_metadata: str | None = Form(None),
     content_date: float | None = Form(None),
@@ -518,6 +557,9 @@ def api_update_image(
     # fields are gone (dead imagerepo columns); a form that still sends them is ignored.
     if "display_name" in form_data:
         fields["display_name"] = form_data.get("display_name")
+    # short_title (#542): the item's short name, after the rename in the title chain; "" clears.
+    if "short_title" in form_data:
+        fields["short_title"] = form_data.get("short_title")
     # content_description/type_metadata (#54): corrections after creation (e.g.
     # scripts/full_youtube_channel_sync.py). type_metadata is a JSON object string, MERGED
     # into whatever the row already has, never a wholesale replace; the #425 physical-piece

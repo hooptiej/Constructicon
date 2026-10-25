@@ -6,7 +6,7 @@ row written through `db.ImageLog` (row images in the change log), and a `Result`
 actor context, core/actor.py). Undo is the generic `cards.undo` / POST /api/changes/{id}/undo /
 constructicon_undo(batch_id); it calls back into this module for the file side of the trash.
 
-  update(slug, **fields)   title, description, content_description, type_metadata
+  update(slug, **fields)   title (display_name), short_title (#542), description, content_description, type_metadata
                            (merged; physical-piece keys cleaned), file provenance, highlight, brand
                            asset/role, display-date override, content_date. One Save = one batch.
   redact(slug)             "remove file, keep info": the file goes to the trash as a HOLD (no expiry),
@@ -81,7 +81,7 @@ TRASH_DAYS = 7
 TRASH_TTL_SECONDS = TRASH_DAYS * 24 * 3600
 EMPTY_TRASH_PHRASE = "EMPTY TRASH"
 
-UPDATE_FIELDS = ("display_name", "description", "content_description", "type_metadata",
+UPDATE_FIELDS = ("display_name", "short_title", "description", "content_description", "type_metadata",
                  "provenance", "highlight", "is_brand_asset", "brand_role", "display_date_override",
                  "content_date", "agent_notes")
 
@@ -102,7 +102,7 @@ def _slim(table, img):
     """Change summaries echo whole-row images; an item row can carry a megabyte of OCR text."""
     if img is None or table != "capture_events":
         return img
-    return {k: img.get(k) for k in ("slug", "display_name", "filename", "media_type", "stored_filename")}
+    return {k: img.get(k) for k in ("slug", "display_name", "short_title", "filename", "media_type", "stored_filename")}
 
 
 def _flat(op, muts):
@@ -172,6 +172,16 @@ def _plan_update(row, fields):
     if "display_name" in fields:
         v = fields["display_name"]
         cols["display_name"] = str(v) if v not in (None, "") else None
+    if "short_title" in fields:  # #542: the short name (core/item_title.py); None / "" clears
+        v = fields["short_title"]
+        if v not in (None, "") and not isinstance(v, str):
+            raise InvalidInput("short_title must be text", code="bad_short_title")
+        clean = item_title.clean_short_title(v, limit=10 ** 6) if v else None
+        if clean and len(clean) > item_title.SHORT_TITLE_MAX:
+            raise InvalidInput(f"The short title is {len(clean)} characters; the limit is {item_title.SHORT_TITLE_MAX}. "
+                               "A short title is a few words; the long caption is the description.",
+                               code="bad_short_title")
+        cols["short_title"] = clean
     if "description" in fields:
         cols["description"] = "" if fields["description"] is None else str(fields["description"])
     if "content_description" in fields:
@@ -206,7 +216,27 @@ def _plan_update(row, fields):
         cols["content_date"] = _epoch("content_date", fields["content_date"])
     if "agent_notes" in fields:  # #206 agent-only scratch notes (MCP set_agent_notes); None clears
         cols["agent_notes"] = fields["agent_notes"]
+    _plan_hand_edits(row, fields, cols)
     return cols
+
+
+def _plan_hand_edits(row, fields, cols):
+    """#787: a description or short title changed by hand (this update didn't also say who wrote it)
+    is no longer a model's draft, so set_caption must not replace it silently any more: drop the
+    recorded model for it (captions.DESCRIPTION_MODEL_KEY / SHORT_TITLE_MODEL_KEY)."""
+    given = fields.get("type_metadata") if isinstance(fields.get("type_metadata"), dict) else {}
+    current = json.loads(cols["type_metadata"]) if "type_metadata" in cols else dict(row.get("type_metadata") or {})
+    drop = []
+    if ("content_description" in cols and (cols["content_description"] or None) != (row.get("content_description") or None)
+            and captions.DESCRIPTION_MODEL_KEY not in given and current.get(captions.DESCRIPTION_MODEL_KEY)):
+        drop.append(captions.DESCRIPTION_MODEL_KEY)
+    if ("short_title" in cols and cols["short_title"] != (row.get("short_title") or None)
+            and captions.SHORT_TITLE_MODEL_KEY not in given and current.get(captions.SHORT_TITLE_MODEL_KEY)):
+        drop.append(captions.SHORT_TITLE_MODEL_KEY)
+    if drop:
+        for k in drop:
+            current.pop(k, None)
+        cols["type_metadata"] = json.dumps(current)
 
 
 def _plan_text_sources(row, merged_meta, cols):
@@ -277,43 +307,237 @@ def set_display_date(slug, epoch, *, dry_run=False, actor=None, batch_id=None):
 CAPTION_MAX_CHARS = 2000
 
 
-def set_caption(slug, text, *, accept=False, dry_run=False, actor=None, batch_id=None):
-    """(#588) Writes `text` as the item's caption SUGGESTION, the way the vision model's result
-    lands (type_metadata.auto_caption, status "done", model "mcp-agent"), so it shows up in the
-    caption-review queue (/captions/review) and the processing view reads it as done. With
-    accept=True it is also copied into content_description exactly like "Use this caption" in
-    the review page (replaces the description, records which caption was used). ONE imaged batch
-    through update(), so one undo reverts all of it; works with CAPTION_DISABLED, since no model runs.
-    A new suggestion re-opens a previously skipped one (auto_caption_dismissed cleared)."""
-    text = (text or "").strip()
-    if not text:
-        raise InvalidInput("The caption text is empty.", code="bad_caption")
-    if len(text) > CAPTION_MAX_CHARS:
+def _model_label(model):
+    if model == captions.AGENT_MODEL:
+        return "written by an agent (MCP)"
+    if model == captions.OWNER_MODEL:
+        return "written or edited by hand on the caption review page"
+    return f"suggested by {model}" if model else "written by hand"
+
+
+def set_caption(slug, text=None, *, title=None, accept=False, replace=False, model=None, dry_run=False,
+                actor=None, batch_id=None):
+    """(#588, #787, #542) Writes a caption SUGGESTION (`text`, the long caption, into
+    type_metadata.auto_caption) and/or a short-title suggestion (`title`, into
+    type_metadata.auto_caption_title), the way the vision model's result lands (status "done"), so
+    they show up in the caption review queue (/captions/review). `model` says who wrote them
+    (default "mcp-agent"; the review page passes "owner"). With accept=True the caption also becomes
+    the item's content_description and the title its short_title (the name, core/item_title.py),
+    like "Accept" on the review page. ONE imaged batch through update(), so one undo reverts all of
+    it; works with CAPTION_DISABLED, since no model runs.
+
+    #787, never overwrite silently: replacing text a local captioner did NOT write (an agent's or the
+    owner's suggestion, a hand-written or agent-accepted description or short title) is refused with
+    409 `would_replace_suggestion`, details.existing holding each text that would go, unless
+    `replace=True`. A local model's draft (moondream) is replaced freely. Every answer reports
+    `replaced_suggestion` (the caption suggestion this call replaced, or None) and `replaced` (every
+    text it replaced, by field). A new suggestion re-opens a previously skipped one."""
+    text = (text or "").strip() or None
+    if title is not None and not isinstance(title, str):
+        raise InvalidInput("The title must be text.", code="bad_title")
+    if title is not None and title.strip():
+        clean = item_title.clean_short_title(title, limit=10 ** 6)
+        if clean is None:
+            raise InvalidInput("The short title is empty once quotes and spaces are taken off.", code="bad_title")
+        if len(clean) > item_title.SHORT_TITLE_MAX:
+            raise InvalidInput(f"The short title is {len(clean)} characters; the limit is {item_title.SHORT_TITLE_MAX}. "
+                               "A short title is a few words; the long caption goes in `text`.", code="bad_title")
+        title = clean
+    else:
+        title = None
+    if text is None and title is None:
+        raise InvalidInput("Give the caption text, a short title, or both.", code="bad_caption")
+    if text is not None and len(text) > CAPTION_MAX_CHARS:
         raise InvalidInput(f"The caption is {len(text)} characters; the limit is {CAPTION_MAX_CHARS}.", code="bad_caption")
     row = get_item(slug, actor)
     if row.get("redacted"):
         raise InvalidInput("File was redacted: there's no image left to caption.", code="redacted")
     existing = row.get("type_metadata") or {}
-    tm = {
-        captions.METADATA_KEY: text,
-        captions.STATUS_KEY: "done",
-        "auto_caption_model": captions.AGENT_MODEL,
-        "auto_caption_dismissed": None,  # null = not dismissed (the review query tests IS NULL)
-    }
-    if "auto_caption_failed_reason" in existing:
-        tm["auto_caption_failed_reason"] = None
+    model = model or captions.AGENT_MODEL
+
+    # What this call would replace, and which of those a local model did not write (#787).
+    replaced, protected = {}, {}
+
+    def consider(field, old, old_model, new, what):
+        old = (old or "").strip()
+        if not old or new is None or old == new:
+            return
+        replaced[field] = old
+        if not captions.is_local_model(old_model):
+            protected[field] = {"text": old, "by": old_model or "by hand", "what": what}
+
+    old_sugg_model = existing.get("auto_caption_model")
+    consider("suggestion", existing.get(captions.METADATA_KEY), old_sugg_model, text, "the caption suggestion")
+    consider("title_suggestion", existing.get(captions.TITLE_KEY),
+             existing.get(captions.TITLE_MODEL_KEY) or old_sugg_model, title, "the short-title suggestion")
+    if accept:
+        consider("description", row.get("content_description"), existing.get(captions.DESCRIPTION_MODEL_KEY),
+                 text, "the item's description (its accepted caption)")
+        consider("short_title", row.get("short_title"), existing.get(captions.SHORT_TITLE_MODEL_KEY),
+                 title, "the item's short title (its name)")
+    if protected and not replace:
+        names = "; ".join(f"{v['what']} ({_model_label(None if v['by'] == 'by hand' else v['by'])}): {v['text'][:120]!r}"
+                          for v in protected.values())
+        raise Conflict(f"Nothing was changed: this would replace {names}. Read it first; to replace it anyway, "
+                       "send replace=true.", code="would_replace_suggestion",
+                       details={"existing": protected, "slug": slug})
+
+    tm = {}
+    if text is not None:
+        same = (existing.get(captions.METADATA_KEY) or "").strip() == text
+        tm.update({
+            captions.METADATA_KEY: text,
+            captions.STATUS_KEY: "done",
+            "auto_caption_model": old_sugg_model if (same and old_sugg_model) else model,
+            "auto_caption_dismissed": None,  # null = not dismissed (the review query tests IS NULL)
+        })
+        if "auto_caption_failed_reason" in existing:
+            tm["auto_caption_failed_reason"] = None
+    if title is not None:
+        same_t = (existing.get(captions.TITLE_KEY) or "").strip() == title
+        old_t_model = existing.get(captions.TITLE_MODEL_KEY)
+        tm.update({captions.TITLE_KEY: title,
+                   captions.TITLE_MODEL_KEY: old_t_model if (same_t and old_t_model) else model,
+                   captions.TITLE_DISMISSED_KEY: None})
     fields = {"type_metadata": tm}
     if accept:
-        fields["content_description"] = text
-        tm.update({
-            captions.DESCRIPTION_STEP_KEY: None,
-            captions.DESCRIPTION_STEP_LABEL_KEY: "written by an agent (MCP)",
-            captions.DESCRIPTION_MODEL_KEY: captions.AGENT_MODEL,
-            captions.DESCRIPTION_USED_AT_KEY: time.time(),
-        })
+        if text is not None:
+            text_model = tm["auto_caption_model"]
+            local = captions.is_local_model(text_model)
+            fields["content_description"] = text
+            tm.update({
+                captions.DESCRIPTION_STEP_KEY: existing.get(captions.STEP_KEY, 0) if local else None,
+                captions.DESCRIPTION_STEP_LABEL_KEY: (captions.describe_step(existing.get(captions.STEP_KEY, 0))
+                                                      if local else _model_label(text_model)),
+                captions.DESCRIPTION_MODEL_KEY: text_model,
+                captions.DESCRIPTION_USED_AT_KEY: time.time(),
+            })
+        if title is not None:
+            fields["short_title"] = title
+            tm[captions.SHORT_TITLE_MODEL_KEY] = tm[captions.TITLE_MODEL_KEY]
+        elif (text is not None and not (row.get("short_title") or "").strip()
+              and item_title.title_shaped(text, item_title.CAPTION_AS_TITLE_MAX)):
+            # #542: an accepted caption short enough to read as a name, with no title given and none
+            # on the item, is also its short title (the same rule the seed migration applied).
+            fields["short_title"] = text
+            tm[captions.SHORT_TITLE_MODEL_KEY] = tm["auto_caption_model"]
     res = update(slug, dry_run=dry_run, actor=actor, batch_id=batch_id, **fields)
-    res.data.update(accepted=bool(accept))
+    res.data.update(accepted=bool(accept), replaced_suggestion=replaced.get("suggestion"), replaced=replaced)
     return res
+
+
+# --- short titles (#542) and mid-word captions (#743) -------------------------------------
+
+OP_SHORT_TITLE_SEED = "item_short_title_seed"
+OP_TITLE_PROPOSALS = "item_short_title_proposals"
+OP_TITLE_PROPOSAL = "item_short_title_proposal"
+OP_REJECT_MIDWORD = "item_caption_midword_requeue"
+
+
+def _is_caption_text(row):
+    """True when the row's content_description came from a caption (accepted on the review page or
+    by set_caption, or still identical to the suggestion), not from the content itself."""
+    tm = row.get("type_metadata") or {}
+    cd = (row.get("content_description") or "").strip()
+    return bool(tm.get(captions.DESCRIPTION_USED_AT_KEY) or tm.get(captions.DESCRIPTION_MODEL_KEY)
+                or (cd and cd == (tm.get(captions.METADATA_KEY) or "").strip()))
+
+
+def seed_short_titles(*, dry_run=False, actor=None, batch_id=None):
+    """(#542) The `short_title_seed_542` migration's write: every item with no short_title whose
+    content_description already reads as a name gets it, verbatim, as its short_title (so its name
+    doesn't change when the long caption leaves the title chain). A content's own title counts up to
+    item_title.SHORT_TITLE_MAX characters, an accepted caption up to CAPTION_AS_TITLE_MAX; either on
+    one line. ONE imaged row (op item_short_title_seed). data: {seeded: [slugs], left_long: n}."""
+    rows = db.list_short_title_candidates()
+    batch_id = batch_id or changes.new_batch_id()
+    seeded, left_long = [], 0
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_SHORT_TITLE_SEED, actor, batch_id, [r["slug"] for r in rows]) as log:
+            for row in rows:
+                cd = row.get("content_description") or ""
+                limit = item_title.CAPTION_AS_TITLE_MAX if _is_caption_text(row) else item_title.SHORT_TITLE_MAX
+                if item_title.title_shaped(cd, limit):
+                    log.update("capture_events", {"slug": row["slug"]}, {"short_title": cd.strip()})
+                    seeded.append(row["slug"])
+                else:
+                    left_long += 1
+            muts = list(log.muts)
+    return _result(OP_SHORT_TITLE_SEED, muts, batch_id, dry_run, None, seeded=seeded, left_long=left_long)
+
+
+def queue_title_proposals(slugs, *, dry_run=False, actor=None, batch_id=None):
+    """(#542) Marks items as waiting for a short-title proposal from the local captioner
+    (type_metadata.short_title_proposal_status = "queued"), as ONE imaged row; the proposals the
+    caption worker then writes (record_title_proposal) join the SAME batch, so one undo takes the
+    whole backfill back: every proposal written so far, and the marks, so the worker skips the rest.
+    Nothing is applied: a proposal only waits in the caption review queue. Items must be visible to
+    the actor (#709). data: {queued: [slugs]}."""
+    from . import policy
+    wanted = list(dict.fromkeys(s for s in (slugs or []) if s))
+    if not wanted:
+        raise InvalidInput("No items to propose short titles for.", code="no_items")
+    rows, _missing = policy.viewable_rows(wanted, actor=actor)
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_TITLE_PROPOSALS, actor, batch_id, [r["slug"] for r in rows]) as log:
+            for row in rows:
+                meta = {**(row.get("type_metadata") or {}), captions.TITLE_STATUS_KEY: "queued"}
+                meta.pop("short_title_proposal_note", None)
+                log.update("capture_events", {"slug": row["slug"]}, {"type_metadata": json.dumps(meta)})
+            muts = list(log.muts)
+    return _result(OP_TITLE_PROPOSALS, muts, batch_id, dry_run, None, queued=[r["slug"] for r in rows])
+
+
+def record_title_proposal(slug, title, *, model, batch_id, note=None, actor=None):
+    """(#542) The caption worker's answer to one queued proposal, imaged into the backfill's own
+    batch: the suggested short title (or, when the model gave nothing usable, status "failed" and
+    the reason in short_title_proposal_note). Never touches short_title itself."""
+    row = get_item(slug, actor)
+    meta = dict(row.get("type_metadata") or {})
+    if title:
+        meta.update({captions.TITLE_KEY: title, captions.TITLE_MODEL_KEY: model, captions.TITLE_DISMISSED_KEY: None,
+                     captions.TITLE_STATUS_KEY: "done"})
+        meta.pop("short_title_proposal_note", None)
+    else:
+        meta.update({captions.TITLE_STATUS_KEY: "failed", "short_title_proposal_note": note or "no usable title"})
+    with db.transaction():
+        with db.ImageLog(OP_TITLE_PROPOSAL, actor, batch_id, [slug]) as log:
+            log.update("capture_events", {"slug": slug}, {"type_metadata": json.dumps(meta)})
+            muts = list(log.muts)
+    return _result(OP_TITLE_PROPOSAL, muts, batch_id, False, db.get_by_slug(slug), slug=slug)
+
+
+def requeue_midword_captions(slugs, *, dry_run=False, actor=None, batch_id=None):
+    """(#743) Puts `done` captions that start mid-word back in the needs-caption queue as ONE imaged
+    row (op item_caption_midword_requeue), undoable: the fragment moves to
+    type_metadata.auto_caption_rejected, the suggestion is cleared (so it leaves the review queue)
+    and the status becomes "failed" with the reason, which is what needs_caption, the MCP's
+    needs(view="caption") and Admin's "Caption skipped items" pick up. No model runs here: Admin's
+    button (or an agent) re-captions them, and the caption ladder now treats a fragment as garbage.
+    An item whose suggestion no longer starts mid-word, or is not `done`, is skipped. A
+    content_description is never touched. data: {requeued: [slugs], skipped: [{slug, reason}]}."""
+    from . import policy
+    wanted = list(dict.fromkeys(s for s in (slugs or []) if s))
+    if not wanted:
+        raise InvalidInput("No captions to re-queue.", code="no_items")
+    rows, _missing = policy.viewable_rows(wanted, actor=actor)
+    batch_id = batch_id or changes.new_batch_id()
+    requeued, skipped = [], []
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_REJECT_MIDWORD, actor, batch_id, [r["slug"] for r in rows]) as log:
+            for row in rows:
+                meta = dict(row.get("type_metadata") or {})
+                cap = meta.get(captions.METADATA_KEY) or ""
+                if meta.get(captions.STATUS_KEY) != "done" or not captions.starts_mid_word(cap):
+                    skipped.append({"slug": row["slug"], "reason": "not a done mid-word caption"})
+                    continue
+                meta.update({"auto_caption_rejected": cap, captions.METADATA_KEY: None, captions.STATUS_KEY: "failed",
+                             "auto_caption_failed_reason": "the caption started mid-word (#743), re-queued"})
+                log.update("capture_events", {"slug": row["slug"]}, {"type_metadata": json.dumps(meta)})
+                requeued.append(row["slug"])
+            muts = list(log.muts)
+    return _result(OP_REJECT_MIDWORD, muts, batch_id, dry_run, None, requeued=requeued, skipped=skipped)
 
 
 # --- the sensitive flag (#603, #604 step 2) ------------------------------------------------

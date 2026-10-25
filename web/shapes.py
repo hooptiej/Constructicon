@@ -107,6 +107,7 @@ def _to_public(row):
         # first page, once a stream/URL capture is wired up) picks this up
         # for free instead of always falling back to the file icon.
         "has_thumbnail": has_thumb,
+        "short_title": row.get("short_title"),  # #542: the short name (display_name is the resolved title)
         "description": row["description"],
         "tags": row["tags"],
         "uploaded_at": row["timestamp"],
@@ -310,6 +311,7 @@ def _to_object_detail(row):
         "thumb_url": f"/f/{row['slug']}/thumb" if has_thumb else None,
         "external_url": row.get("external_url"),
         "content_description": row.get("content_description"),
+        "short_title": row.get("short_title"),  # #542: the short name (the long caption is never the title)
         "content_date_display": _friendly_date(row.get("content_date")),
         # #54: freeform per-type metadata (view/like/comment counts, full
         # description, uploading channel if not the owner's own — see

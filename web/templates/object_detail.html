@@ -170,7 +170,7 @@
     <div class="dp-side">
       <div>
         {# #241: click the name (or the pencil) to set/clear the display_name override in place. item.display_name
-           is the already-resolved chain (override → filename → content_description → slug). #}
+           is the already-resolved chain (override → short title → filename → slug, #542). #}
         <div class="mono" style="font-size:18px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span class="title-edit" id="object-title-edit" style="min-width:0">
             <span class="title-edit-text" id="object-title-text" title="Click to rename" style="overflow-wrap:anywhere">{{ item.display_name }}</span>
@@ -196,6 +196,8 @@
       {% set about_view %}
       <dl class="dp-rows">
         <div class="dp-row"><dt>Type</dt><dd>{{ item.type_icon }} {{ item.type_label }}</dd></div>
+        {# #542: the short name, after a rename in the title chain (core/item_title.py); the long caption is never the title #}
+        <div class="dp-row"><dt>Short title</dt><dd>{% if item.short_title %}{{ item.short_title }}{% else %}<span class="dp-muted">None yet (the name falls back to the file name)</span>{% endif %}</dd></div>
         <div class="dp-row"><dt>Description</dt><dd>{% if item.description %}<span class="dp-pre">{{ item.description }}</span>{% else %}<span class="dp-muted">None yet</span>{% endif %}</dd></div>
         <div class="dp-row"><dt>Tags</dt><dd>{% if item.tags %}<span class="dp-chips">{% for t in item.tags %}<span class="chip">{{ t }}</span>{% endfor %}</span>{% else %}<span class="dp-muted">None yet</span>{% endif %}</dd></div>
         {% for f in item.edit_fields %}
@@ -205,6 +207,10 @@
       </dl>
       {% endset %}
       {% set about_edit %}
+      <div class="dp-field">
+        <label for="item-short-title">Short title</label>
+        <input class="input" id="item-short-title" type="text" maxlength="100" placeholder="A few words: the name on tiles" value="{{ item.short_title or '' }}">
+      </div>
       <div class="dp-field">
         <label for="item-description">Description</label>
         <textarea class="input" id="item-description" name="description" rows="3" placeholder="What does this show?">{{ item.description }}</textarea>
@@ -1253,6 +1259,7 @@ document.getElementById('timeline-date-reset').addEventListener('click', async (
     save: async () => {
       const form = new FormData();
       form.append('description', document.getElementById('item-description').value);
+      form.append('short_title', document.getElementById('item-short-title').value);  // #542
       form.append('tags', JSON.stringify(tags));
       const fields = {};
       document.querySelectorAll('.edit-field').forEach((el) => { fields[el.dataset.key] = el.value; });

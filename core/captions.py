@@ -159,6 +159,30 @@ DESCRIPTION_STEP_LABEL_KEY = "description_caption_step_label"  # precomputed des
 DESCRIPTION_MODEL_KEY = "description_caption_model"
 DESCRIPTION_USED_AT_KEY = "description_caption_used_at"
 
+# #542 (owner decision 2026-10-18): a caption comes with a SHORT TITLE. The suggestion lives beside
+# the caption suggestion until the owner (or an agent with accept=true) takes it into the item's
+# `short_title` column, the name in core/item_title.py's chain.
+TITLE_KEY = "auto_caption_title"                  # the suggested short title
+TITLE_MODEL_KEY = "auto_caption_title_model"      # who suggested it (a local model, "mcp-agent", "owner")
+TITLE_DISMISSED_KEY = "auto_caption_title_dismissed"
+TITLE_STATUS_KEY = "short_title_proposal_status"  # a backfill proposal: queued | done | failed
+SHORT_TITLE_MODEL_KEY = "short_title_model"       # who wrote the accepted short_title (absent = by hand)
+OWNER_MODEL = "owner"  # a caption or title the owner wrote or edited on the caption review page
+TITLE_PROMPT = ("Give this image a short title of three to six words, like a photo caption in an album. "
+                "Answer with the title only.")
+TITLE_STEPS = ((TITLE_PROMPT, DEFAULT_TEMPERATURE), (TITLE_PROMPT, 0.15))
+TITLE_NUM_PREDICT = 24
+
+
+def local_models():
+    """The captioners that run on this install's own GPU. Their suggestions are drafts: a new
+    caption may replace one freely (#787); anything else (an agent's, the owner's) is protected."""
+    return {"moondream", OLLAMA_MODEL}
+
+
+def is_local_model(model):
+    return bool(model) and model in local_models()
+
 
 def describe_step(step_index):
     """Short human label for STEPS[step_index] — 'default (temp 0.0)' for
@@ -196,7 +220,7 @@ def is_ollama_up(timeout=3):
         return False
 
 
-def generate_caption(image_path, prompt=None, temperature=None, num_predict=None):
+def generate_caption(image_path, prompt=None, temperature=None, num_predict=None, keep_alive=0):
     """One model call. Returns (caption_text, elapsed_seconds). Raises on any
     failure — callers decide whether that's fatal (the tuning endpoint
     surfaces it, the pipeline records it as a failed attempt).
@@ -211,8 +235,10 @@ def generate_caption(image_path, prompt=None, temperature=None, num_predict=None
         "images": [image_b64],
         "stream": False,
         # Unload the model as soon as the response is done — the primary
-        # unload now, not insurance. Releases GPU memory to 1-4 MiB.
-        "keep_alive": 0,
+        # unload now, not insurance. Releases GPU memory to 1-4 MiB. #542: the caption call that a
+        # short-title call follows straight away (same lock, same image) keeps it a few seconds, and
+        # that second call unloads it.
+        "keep_alive": keep_alive,
         "options": {
             "temperature": DEFAULT_TEMPERATURE if temperature is None else float(temperature),
             "num_predict": DEFAULT_NUM_PREDICT if num_predict is None else int(num_predict),
@@ -345,7 +371,7 @@ def reset_breaker():
 
 # --- The one-image cycle ---
 
-def caption_once(image_path, prompt=None, temperature=None, num_predict=None, label=None):
+def caption_once(image_path, prompt=None, temperature=None, num_predict=None, label=None, keep_alive=0):
     """#454: The full per-image cycle under CAPTION_LOCK: one model call,
     optional guarded restart (on failure, via the #643 sidecar), then release.
     Returns dict {caption, elapsed_seconds, restarted, restart_seconds,
@@ -367,7 +393,8 @@ def caption_once(image_path, prompt=None, temperature=None, num_predict=None, la
         caption, elapsed, error = None, 0.0, None
         restarted, restart_seconds, restart_reason = False, 0.0, None
         try:
-            caption, elapsed = generate_caption(image_path, prompt=prompt, temperature=temperature, num_predict=num_predict)
+            caption, elapsed = generate_caption(image_path, prompt=prompt, temperature=temperature, num_predict=num_predict,
+                                                keep_alive=keep_alive)
             _consecutive_failures = 0  # reset on success
         except Exception as e:
             error = repr(e)
@@ -460,6 +487,8 @@ def _drain_one():
     spec = object_types.get_object_type(row.get("media_type")) if row else None
     if row is None or row["redacted"]:
         pass
+    elif item.get("mode") == "title":
+        _run_title_now(slug, item.get("batch_id"))  # #542: a short-title proposal only, never the caption
     elif DISABLED or not spec.caption_capable:
         db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
     else:
@@ -529,6 +558,162 @@ def should_caption(spec):
     return bool(spec.caption_capable) and not DISABLED
 
 
+# --- Short titles (#542) ---
+
+WARM_SECONDS = "20s"  # how long the caption call keeps the model loaded for the title call after it
+PROPOSE_MAX = 2000     # one backfill call queues at most this many proposals; it can be repeated
+
+
+def _unload_model():
+    """Best-effort: the cascade's last call may have asked to keep the model warm; with no title call
+    following, ask Ollama to unload it now (keep_alive 0, no prompt). Logged when it fails: the model
+    then unloads on its own after WARM_SECONDS."""
+    try:
+        with CAPTION_LOCK:
+            _ollama_post_json("/api/generate", {"model": OLLAMA_MODEL, "keep_alive": 0}, timeout=10)
+    except Exception as e:
+        besteffort.warn(log, "captions: asking Ollama to unload the model", e)
+
+
+def _clean_title(raw):
+    """A model's title answer, cleaned (core/item_title.clean_short_title), or (None, why)."""
+    from . import item_title
+    title = item_title.clean_short_title(raw or "")
+    if not title:
+        return None, "empty answer"
+    if _is_garbage(title):
+        return None, _bad_response_label(title)
+    if len(title.split()) > 12:
+        return None, f"not a short title ({len(title.split())} words)"
+    return title, None
+
+
+def suggest_title(image_path, label=None):
+    """#542: asks the local model for a short title of the image (TITLE_STEPS: the prompt at temp 0,
+    then 0.15 when the first answer is garbage: empty, no letters, mid-word or a whole sentence).
+    The last call unloads the model. Returns (title or None, reason when None). Never raises."""
+    why = "not run"
+    for i, (prompt, temperature) in enumerate(TITLE_STEPS):
+        last = i == len(TITLE_STEPS) - 1
+        result = caption_once(image_path, prompt=prompt, temperature=temperature, num_predict=TITLE_NUM_PREDICT,
+                              label=f"{label} (title)" if label else None, keep_alive=0 if last else WARM_SECONDS)
+        if result["error"]:
+            return None, f"model call failed: {result['error']}"
+        title, why = _clean_title(result["caption"])
+        if title:
+            if not last:
+                _unload_model()
+            return title, None
+    return None, why
+
+
+def _run_title_now(slug, batch_id):
+    """#542: one queued short-title proposal (the backfill), run by web's worker. Skipped when the
+    item is no longer waiting for one (the backfill was undone, the owner named it meanwhile, or it
+    was answered). The answer is written into the backfill's own batch (items.record_title_proposal),
+    so one undo removes every proposal. Never raises."""
+    from . import items  # lazy: items imports this module
+    try:
+        row = db.get_by_slug(slug)
+        if row is None or row["redacted"]:
+            return
+        tm = row.get("type_metadata") or {}
+        if tm.get(TITLE_STATUS_KEY) != "queued":
+            print(f"caption: short-title proposal for {slug} skipped (no longer queued: undone or answered)", flush=True)
+            return
+        if row.get("display_name") or row.get("short_title"):
+            items.record_title_proposal(slug, None, model=OLLAMA_MODEL, batch_id=batch_id,
+                                        note="the item got a name meanwhile")
+            return
+        spec = object_types.get_object_type(row.get("media_type"))
+        if not should_caption(spec):
+            items.record_title_proposal(slug, None, model=OLLAMA_MODEL, batch_id=batch_id,
+                                        note="captioning is off or paused, or this type has no picture to read")
+            return
+        image_path = _caption_source_path(row, spec)
+        if image_path is None:
+            items.record_title_proposal(slug, None, model=OLLAMA_MODEL, batch_id=batch_id, note="no picture to read")
+            return
+        title, why = suggest_title(image_path, label=slug)
+        items.record_title_proposal(slug, title, model=OLLAMA_MODEL, batch_id=batch_id, note=why)
+        print(f"caption: short-title proposal for {slug}: {title!r}" if title else
+              f"caption: no short-title proposal for {slug}: {why}", flush=True)
+    except Exception as e:
+        print(f"caption: short-title proposal failed for {slug}: {e!r}", flush=True)
+
+
+def title_backfill_candidates(limit=PROPOSE_MAX):
+    """#542: the items whose title used to be their long caption (no rename, no short title, a
+    description longer than a name), with a picture the local model can read; the actor's view."""
+    from . import item_title
+    rows = db.list_long_caption_items(caption_capable_types(), limit=max(1, min(int(limit), PROPOSE_MAX)))
+    rows = [r for r in rows if not item_title.title_shaped(r.get("content_description"), item_title.CAPTION_AS_TITLE_MAX)]
+    return policy.filter_visible(rows)
+
+
+def propose_short_titles(limit=PROPOSE_MAX, dry_run=True):
+    """#542 backfill: has the local captioner PROPOSE a short title for every item whose title used
+    to be its long caption, into the caption review queue. Nothing is applied: each proposal waits
+    for the owner (Accept / edit / Skip on /captions/review). Dry run by DEFAULT: answers what it
+    would queue. A real run marks the items in ONE imaged batch (items.queue_title_proposals) and
+    queues them for web's worker (behind any real caption); the proposals join that batch as they
+    land, so constructicon_undo / POST /api/changes/<batch>/undo takes back every proposal written
+    so far and the worker skips the rest. Refuses with `captions_disabled` when captioning is off.
+    Returns {dry_run, count, batch_id, examples: [{slug, title, description}]}."""
+    from . import item_title, items  # lazy: items imports this module
+    if DISABLED:
+        raise Conflict("Captions are off on this install (CAPTION_DISABLED), so the local model can't propose "
+                       "short titles. Turn captioning on and restart, or write them through the MCP "
+                       "(constructicon_set_caption with title=).", code="captions_disabled")
+    rows = title_backfill_candidates(limit)
+    examples = [{"slug": r["slug"], "title": item_title.title_of(r),
+                 "description": (r.get("content_description") or "")[:120]} for r in rows[:10]]
+    if dry_run or not rows:
+        return {"dry_run": bool(dry_run), "count": len(rows), "batch_id": None, "examples": examples}
+    res = items.queue_title_proposals([r["slug"] for r in rows])
+    for slug in res.data["queued"]:
+        db.enqueue_caption(slug, mode="title", batch_id=res.batch_id)
+    wake_worker()
+    print(f"caption: queued {len(res.data['queued'])} short-title proposal(s), batch {res.batch_id}", flush=True)
+    return {"dry_run": False, "count": len(res.data["queued"]), "batch_id": res.batch_id, "examples": examples}
+
+
+# --- Mid-word captions (#743) ---
+
+def scan_mid_word():
+    """#743, read-only: every `done` caption suggestion that starts mid-word (starts_mid_word), the
+    actor's view. Returns {count, by_model, accepted, items: [{slug, title, caption, model, step,
+    accepted}]} where accepted = the fragment was also taken into content_description."""
+    from . import item_title
+    out = []
+    for r in policy.filter_visible(db.list_done_captions()):
+        tm = r.get("type_metadata") or {}
+        cap = tm.get(METADATA_KEY) or ""
+        if not starts_mid_word(cap):
+            continue
+        out.append({"slug": r["slug"], "title": item_title.title_of(r), "caption": cap,
+                    "model": tm.get("auto_caption_model"), "step": tm.get(STEP_KEY),
+                    "accepted": (r.get("content_description") or "").strip() == cap.strip()})
+    by_model = {}
+    for it in out:
+        by_model[it["model"] or "unknown"] = by_model.get(it["model"] or "unknown", 0) + 1
+    return {"count": len(out), "by_model": by_model, "accepted": sum(1 for it in out if it["accepted"]), "items": out}
+
+
+def requeue_mid_word(dry_run=True):
+    """#743: re-queues every `done` mid-word caption as ONE undoable batch
+    (items.requeue_midword_captions; dry run by DEFAULT). Answers {dry_run, count, batch_id,
+    slugs}. They then show in needs_caption / Admin's "Caption skipped items"."""
+    from . import items  # lazy: items imports this module
+    found = scan_mid_word()["items"]
+    slugs = [it["slug"] for it in found]
+    if not slugs:
+        return {"dry_run": bool(dry_run), "count": 0, "batch_id": None, "slugs": []}
+    res = items.requeue_midword_captions(slugs, dry_run=dry_run)
+    return {"dry_run": bool(dry_run), "count": len(res.data["requeued"]),
+            "batch_id": None if dry_run else res.batch_id, "slugs": res.data["requeued"]}
+
+
 # --- Items that still need a caption (#585, #588) ---
 
 AGENT_MODEL = "mcp-agent"  # auto_caption_model for a caption an MCP agent wrote (#588)
@@ -590,15 +775,52 @@ def _is_garbage(caption):
     garbage — it's a weak suggestion the owner can see and Regenerate,
     whereas a hidden retry costs a full Ollama restart cycle per rung and
     risks skipping past a usable caption. str.isalpha is Unicode-aware, so
-    real letters in any script count."""
-    return not any(ch.isalpha() for ch in (caption or ""))
+    real letters in any script count.
+
+    #743: a caption that starts MID-WORD is garbage too ("urn with wires...", "ids and numbers...":
+    37 such moondream captions sat on prod as `done`, every one at step 0). There is no prefix
+    strip anywhere in this pipeline that could have cut them (checked: the model's text is stored
+    as Ollama returns it, only .strip()'d), so the fragment is the model's own output; see
+    starts_mid_word for the rule."""
+    return not any(ch.isalpha() for ch in (caption or "")) or starts_mid_word(caption)
+
+
+# A sentence may legitimately start with one of these in lower case (moondream sometimes drops the
+# capital); any other lower-case first word is a fragment of a longer one.
+_LOWER_STARTS = frozenset("""a an the this that these those one two three four five six seven eight nine ten
+    some several many few two-tone close-up closeup black white red blue green yellow""".split())
+_LEAD_PUNCT = "\"'`([{“‘*-_ "
+
+
+def starts_mid_word(text):
+    """#743: True when `text` begins with a lower-case fragment of a word: its first word starts with
+    a lower-case letter, has no capital in it (so "iPhone", "eBay" pass) and is not an article or a
+    plain sentence start (_LOWER_STARTS). A leading quote or bracket is skipped first; a text whose
+    first character is not a letter (a digit, "(video) ...") is not a fragment."""
+    t = (text or "").lstrip()
+    if t.startswith("(") and 0 < t.find(")") <= 20:  # an agent's "(video) ..." / "(animated) ..." label
+        t = t[t.find(")") + 1:]
+    t = t.lstrip(_LEAD_PUNCT)
+    if not t or not t[0].isalpha() or not t[0].islower():
+        return False
+    word = ""
+    for ch in t:
+        if ch.isalpha() or ch in "-'":
+            word += ch
+        else:
+            break
+    if any(c.isupper() for c in word):
+        return False
+    return word.lower().strip("-'") not in _LOWER_STARTS
 
 
 def _bad_response_label(caption):
     """Log wording for a response _is_garbage rejected — tells the owner
-    reading `docker logs` whether the model said nothing or said '!!!!'."""
+    reading `docker logs` whether the model said nothing, said '!!!!', or started mid-word."""
     if not caption:
         return "empty response"
+    if any(ch.isalpha() for ch in caption) and starts_mid_word(caption):
+        return f"mid-word fragment {caption[:30]!r} (#743)"
     return f"degenerate response {caption[:20]!r}{'…' if len(caption) > 20 else ''} ({len(caption)} chars, no letters)"
 
 
@@ -640,25 +862,38 @@ def _run_caption_now(slug, start_step=0, cascade=True):
             return
         step_index = start_step % len(STEPS)
         step_prompt, step_temperature = STEPS[step_index]
-        result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug)
+        result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug,
+                              keep_alive=WARM_SECONDS)
         if cascade:
             for next_index in range(step_index + 1, len(STEPS)):
                 if result["error"] or not _is_garbage(result["caption"]):
                     break
                 step_prompt, step_temperature = STEPS[next_index]
                 print(f"caption {_bad_response_label(result['caption'])} for {slug} — retrying with prompt {step_prompt!r} at temperature {step_temperature}", flush=True)
-                result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug)
+                result = caption_once(image_path, prompt=step_prompt, temperature=step_temperature, label=slug,
+                                      keep_alive=WARM_SECONDS)
                 step_index = next_index
         if result["error"] or _is_garbage(result["caption"]):
             print(f"caption failed for {slug} at step {step_index}: {result['error'] or _bad_response_label(result['caption'])}", flush=True)
-            db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed", STEP_KEY: step_index})
+            reason = result["error"] or _bad_response_label(result["caption"])
+            db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed", STEP_KEY: step_index,
+                                                             "auto_caption_failed_reason": reason[:300]})
+            _unload_model()
             return
-        db._update_content_metadata(slug, type_metadata={
+        # #542: the caption comes with a short title (a second, short model call on the same image).
+        title, title_note = suggest_title(image_path, label=slug)
+        meta = {
             METADATA_KEY: result["caption"],
             STATUS_KEY: "done",
             STEP_KEY: step_index,
             "auto_caption_model": OLLAMA_MODEL,
-        })
+            "auto_caption_failed_reason": None,
+        }
+        if title:
+            meta.update({TITLE_KEY: title, TITLE_MODEL_KEY: OLLAMA_MODEL, TITLE_DISMISSED_KEY: None})
+        else:
+            print(f"caption: no short title for {slug}: {title_note}", flush=True)
+        db._update_content_metadata(slug, type_metadata=meta)
         restart_note = ""
         if result["restarted"]:
             restart_note = f" restart=yes ({result['restart_seconds']}s, {result['restart_reason']})"

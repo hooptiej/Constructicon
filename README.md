@@ -203,21 +203,27 @@ cp docker-compose.yml.example docker-compose.yml
 ```
 
 Edit `docker-compose.yml`: delete the `constructicon-test` service (a second test instance you
-don't need), set `IMAGEREPO_BASE_URL` to this host's address, and either run captions (`docker
-compose --profile captions ...`, or `COMPOSE_PROFILES=captions` in `.env`) or set
-`CAPTION_DISABLED=1` on the web service. Per-install settings live here and in `.env`; nothing about
-your host is baked into the image.
+don't need), and either run captions (`docker compose --profile captions ...`, or
+`COMPOSE_PROFILES=captions` in `.env`) or set `CAPTION_DISABLED=1` on the web service. Host-specific
+values go in a `.env` next to it (gitignored; #736), each with a default the compose file's header
+lists: `CONSTRUCTICON_URL` (this host's address), `DOCKER_SOCKET_GID` (`stat -c %g
+/var/run/docker.sock`, only for the captions profile's restart sidecar), `BACKUP_HOST_DIR` (where
+backup zips go, default `./backups`). Nothing about your host is baked into the image.
 
 **2. Secrets**
 
 ```bash
 mkdir -p secrets && chmod 700 secrets
 python3 -m core.manage.mcp_token generate secrets/constructicon_token     # the install token
-python3 -m core.manage.mcp_token generate secrets/ollama_restart_token    # the compose file mounts it
+python3 -m core.manage.mcp_token generate secrets/ollama_restart_token    # optional: captions profile only
 ```
 
 The install token is what claims the install at first sign-in, and what scripts and MCP clients send
-as `Authorization: Bearer`. Never put it in git or chat.
+as `Authorization: Bearer`. Never put it in git or chat. The web service mounts the whole `secrets/`
+folder read-only, so the optional restart token can simply be absent (the web log then says the
+caption safety valve is off and how to turn it on). At startup both app processes check they can
+read their secret files as uid 1000; a token they can't read (wrong owner, or a root-owned empty
+directory Docker made where a missing file should have been) stops them with the exact fix.
 
 **3. Data folders, owned by uid 1000 (do this before the first start)**
 
@@ -233,8 +239,8 @@ chmod 0750 storage db backups exports
 
 No sudo? Once the image exists (`docker compose build constructicon-web`), the image can do it:
 `docker run --rm --user 0 --entrypoint chown -v "$PWD/db":/d constructicon:latest -R 1000:1000 /d`
-(once per folder). The example compose file mounts `storage` and `db`; create and chown `backups`
-and `exports` too if you mount them.
+(once per folder). The example compose file mounts `storage`, `db` and `backups` (or your
+`BACKUP_HOST_DIR`); create and chown `exports` too if you mount it.
 
 **4. First deploy**
 
@@ -247,6 +253,15 @@ builds the image tagged with the release version (and `constructicon:latest`), a
 `docker compose up -d`. Then open `http://<host>:8000`: the first visit goes to `/setup`, which
 asks for the install token (`sudo cat secrets/constructicon_token` on the host) and creates the first
 admin. If a container keeps restarting, `docker compose logs constructicon-web` says why.
+
+It also builds every other service with a `build:` section (the captions profile's restart
+sidecar), so a change to one ships with the deploy (#741). Run from the wrong folder, or with a
+compose file it can't read, it stops and says what is wrong and what to do (#740).
+
+**Without the repo:** a host with only the compose file, `.env`, `secrets/` and a copy of
+`scripts/deploy.sh` can run a published image by tag: `./scripts/deploy.sh --image
+<registry/repo:version>` pulls it, tags it as the compose file's image, and starts it (no git, no
+build). The same command with an older tag is a rollback (#736).
 
 **Upgrade:** `./scripts/deploy.sh` again. **Roll back** to an earlier version's image:
 `./scripts/deploy.sh --rollback <version>` (`docker image ls constructicon` lists them; the newest 5
@@ -263,6 +278,14 @@ one whose web service sets `CONSTRUCTICON_ENV=dev`, skips it):
   Uploaded files (`storage/`) are not in it: back them up your own way, or with Admin's "Back up now" (a zip of the database and storage).
 
 `--no-snapshot` deploys without a backup.
+
+**Download a backup (#442).** Admin > Maintenance's "Back up now" writes a zip of the database and
+every stored file to the backup folder (the newest 3 are kept). The same panel lists them with a
+download link each (streamed, so multi-GB zips work; a download never makes a new backup), shows
+the folder, and warns when the app can't write there. Account > "Backups" has "Download the newest
+backup" too. Both are admin only: other users see the control greyed, labelled "admins only", with
+the reason. The folder is `CONSTRUCTICON_BACKUP_DIR` (the compose example sets it to `/app/backups`
+and mounts `BACKUP_HOST_DIR` there); unset, it is `backups/` beside the storage folder.
 
 ## Running locally
 

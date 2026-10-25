@@ -143,7 +143,7 @@ the date and commit forward when you re-verify.
   (gitignored; not baked into the Docker image). Random unguessable slugs
   (`secrets.token_urlsafe`), not sequential IDs.
 - **`core/paths.py`** (#578, #576) — every on-disk location (storage, `<storage>/.trash`,
-  `<storage>/../backups`, `exports/` with its `current` and `.publish`) comes from here and is
+  `<storage>/../backups` or `CONSTRUCTICON_BACKUP_DIR` (#442), `exports/` with its `current` and `.publish`) comes from here and is
   **resolved on each call** from `CONSTRUCTICON_STORAGE_DIR` / `CONSTRUCTICON_EXPORTS_DIR` (defaults =
   `<repo>/storage`, `<repo>/exports`). Never compute one of these at import time or from `__file__`.
   `build_site(config, out_dir=X)` writes only `X`: the `exports/current` refresh and the prune of old
@@ -2545,6 +2545,17 @@ origin/main` (nothing if already there); then one of two modes:
   into the checkout (the mount hides the baked one); with `--build`, builds the versioned image and
   `up -d`; (5) always `sudo docker compose restart` (re-reads the mounted files).
 Both end by waiting 3 s, printing `docker compose ps` and the version the running web process reports.
+**#741: every other compose service with a `build:` section** (`BUILD_SVCS`, e.g. the restarter) is
+built too, plainly (no version args): in baked mode and mounted `--build` right after web, and in
+plain mounted mode on its own followed by `up -d <those services>`. `--backup-plan` prints the list.
+**#740:** it stops with a plain message (what it tried, what happened, the fix; never a traceback or
+`unbound variable`) when there is no compose file in the folder above its `scripts/` (a copy run from
+`/tmp`), when `docker compose config` fails (its stderr is shown), prints nothing or not-JSON, and
+when no web service is found (it lists the services). Not a git checkout = it says to use `--image`.
+**#736: `--image REF`** pulls a published image (falls back to a local copy if the pull fails), takes
+the pre-deploy backup, tags it as the compose file's image and `up -d`s: no git, no build, so it
+works on a host with only the compose file, `.env`, `secrets/` and the script. There is no registry
+publishing step yet; this is the consuming half.
 `--write-version-only` runs the VERSION.json step alone. `--rollback VER` (no git, no build): checks
 `<repo>:VER` exists, snapshots, retags it as the compose tag, `up -d`. Migrations only go forward: if
 the newer version migrated the DB in a way the old code can't read, restore the DB from the snapshot
@@ -2634,6 +2645,17 @@ Every other install, ZFS or not (e.g. the work install), still takes one.
 - `POST /api/backup` (full DB+storage zip, retention 3) is now for manual or
   off-box exports, not a routine pre-deploy step. Its result includes
   `integrity` (#453).
+- **Download + destination (#442, owner decision 2026-10-25):** `GET /api/backups` (admin) lists the
+  newest 3 zips and `paths.backup_dir_status()` (folder, where it came from, writable, `problem`);
+  `GET /api/backups/download[?name=]` (admin) streams the newest or a named zip (`FileResponse`,
+  attachment, nosniff, no-store). **A GET never builds a backup** (none yet = 404 saying "Back up
+  now"); `core/backup.backup_file` accepts only names matching `constructicon-backup-YYYYMMDD-HHMMSS.zip`
+  that exist. UI: Admin > Maintenance (folder line, "Not writable" warning, list with links) and the
+  Account page (`/account/password`), where non-admins see the control greyed "(admins only)" with
+  the reason (#779 rule). The folder is env `CONSTRUCTICON_BACKUP_DIR` (default unchanged:
+  `<storage>/../backups`), read-only in Admin. An unwritable backup folder still stops startup (#699
+  check, unchanged); the Admin warning covers a folder that goes bad later. Check:
+  `scripts/test_plumbing_batch1.py`.
 - The fallback tar-over-ssh path doesn't snapshot: run
   `sudo zfs snapshot "Storage Pool/Media/constructicon@predeploy-<ts>-manual"`
   first.
@@ -2648,6 +2670,15 @@ create-and-delete test, a missing folder judged by its nearest parent; import/ i
 checked) and refuse to start with the path, its owner and mode, the uid they run as and the chown fix
 (`paths.data_dirs_error`): web raises from its startup hook (uvicorn exits 3), the MCP `sys.exit`s (1).
 Check with `scripts/test_data_dirs_699.py`. README "Install on a new host" is the non-NAS guide.
+**#736: secret files too.** `paths.secret_file_problems()` checks every set `*_FILE` secret variable
+(`CONSTRUCTICON_INSTALL_TOKEN_FILE`, `CONSTRUCTICON_MCP_TOKEN_FILE`, `CAPTION_RESTART_TOKEN_FILE`) is a
+readable, non-empty file for this uid: missing, a directory (what Docker makes when a single-file
+mount's host file is missing: root-owned and empty), empty or unreadable, each with the fix. A broken
+install token stops web and MCP; the optional restart secret only prints "... is OFF ... to turn it
+on". The compose example now mounts the whole `./secrets` folder into web (an absent optional secret
+is just absent) and uses `create_host_path: false` for the single-file mounts (MCP token, restarter),
+so `up` fails instead of making a directory. Host-specific values (URL, docker socket gid, backup
+folder) come from `.env` with defaults listed in the example's header.
 
 **Data files are private to the app user (#652).** Target on the host: `storage/`, `db/`, `backups/`, `exports/` are directories `0750` owned by the app uid (1000:1000), the files in them `0640`, backup zips `0600`. The app keeps new files that way itself: `core/paths.restrict_new_files()` sets the process umask to `027` when `web/app.py` and `mcp_server/server.py` load (it covers every thread and subprocess; `CONSTRUCTICON_UMASK`, octal, overrides it, a bad value falls back to 027), and `core/backup.py` writes each zip `0600` whatever the umask. SQLite gives `-wal`/`-shm` the DB file's own mode, so an existing DB stays as loose as it was until fixed by hand. **Existing installs:** `bash ops/fix-data-permissions.sh DATA_ROOT` prints what it would change (dry run), `--apply` changes it (idempotent; never chowns, lists entries not owned by uid 1000). It leaves `DATA_ROOT` itself and `import/` alone: the import inbox is the owner's drop folder, mounted read-only into the MCP and never written by the app. **Check before applying on the NAS:** the `Media` SMB share (`/mnt/Storage Pool/Media`, which holds both instances' data) is `guestok` with guest = `nobody`, so today any guest on the LAN can read the DB and the backups over SMB; after the fix a guest can't open `storage/` / `db/` / `backups/` / `exports/` at all, and only an SMB session authenticated as `hoop` (uid 1000) can. Check with `scripts/test_private_files_652.py` (throwaway DB, Linux).
 

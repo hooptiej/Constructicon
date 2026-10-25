@@ -16,10 +16,15 @@ and the files are meaningless without the rows describing them.
 Destination: paths.backup_dir() is derived from paths.storage_dir() the same way
 the storage dir itself is derived (sibling of storage/, alongside imagerepo.db)
 so it naturally lands at .../constructicon/backups/ wherever the app is
-deployed, without hardcoding any particular environment's path.
+deployed, without hardcoding any particular environment's path. #442: CONSTRUCTICON_BACKUP_DIR
+moves it anywhere else (Admin > Maintenance shows where, and warns when it can't be written).
+
+Download (#442): GET /api/backups lists the newest zips; GET /api/backups/download streams the
+newest (or a named one) to the browser. Reading only: a GET never builds a backup.
 """
 
 import os
+import re
 import sqlite3
 import tempfile
 import zipfile
@@ -27,6 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core import db, paths
+from core.errors import NotFound
 
 # Simple retention: keep only the N most recent backups, deleting older ones
 # on every new backup. Not a config knob — just a constant, per the issue's
@@ -79,6 +85,46 @@ def _existing_backups():
     if not backup_dir.is_dir():
         return []
     return sorted(backup_dir.glob("constructicon-backup-*.zip"), key=lambda p: p.name)
+
+
+BACKUP_NAME_RE = re.compile(r"constructicon-backup-\d{8}-\d{6}\.zip")
+
+
+def list_backups(limit=BACKUP_RETENTION_COUNT):
+    """#442: the newest `limit` finished backup zips, newest first, as {filename, size, created_at}.
+    Reads the folder only: never makes a backup. A half-written `.zip.part` is never listed."""
+    out = []
+    for p in reversed(_existing_backups()):
+        if not BACKUP_NAME_RE.fullmatch(p.name):
+            continue
+        try:
+            st = p.stat()
+        except OSError:  # silent-ok: pruned by a concurrent backup between the glob and the stat
+            continue
+        out.append({"filename": p.name, "size": st.st_size, "created_at": st.st_mtime})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def backup_file(filename=None):
+    """#442: the Path of a finished backup to download: `filename` (one of list_backups()' names,
+    nothing else, so no path can be smuggled in), or the newest when None. NotFound, saying what
+    to do, when there is none."""
+    folder = paths.backup_dir()
+    if filename is None:
+        newest = list_backups(limit=1)
+        if not newest:
+            raise NotFound(f"There is no backup yet in {folder}. Make one with \"Back up now\" in "
+                           "Admin > Maintenance, then download it.")
+        filename = newest[0]["filename"]
+    if not BACKUP_NAME_RE.fullmatch(filename or ""):
+        raise NotFound(f"{filename!r} is not a backup name (constructicon-backup-YYYYMMDD-HHMMSS.zip).")
+    path = folder / filename
+    if not path.is_file():
+        raise NotFound(f"No backup named {filename} in {folder} (only the newest "
+                       f"{BACKUP_RETENTION_COUNT} are kept; older ones are pruned).")
+    return path
 
 
 def _enforce_retention():

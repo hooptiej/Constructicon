@@ -76,6 +76,12 @@ if __name__ == "__main__":
     _unwritable = paths.unwritable_data_dirs(db.DB_PATH)
     if _unwritable:
         sys.exit(paths.data_dirs_error("constructicon-mcp", _unwritable))
+    # #736: the install token file must be readable by this uid (the MCP never uses the caption
+    # valve's secret, so only the token variables are checked here).
+    _secret_problems = paths.secret_file_problems(
+        variables=("CONSTRUCTICON_INSTALL_TOKEN_FILE", "CONSTRUCTICON_MCP_TOKEN_FILE"))
+    if _secret_problems:
+        sys.exit(paths.secret_files_message("constructicon-mcp", _secret_problems))
 
 BASE_URL = os.environ.get("CONSTRUCTICON_BASE_URL", "http://constructicon-web:8000")
 

@@ -17,6 +17,8 @@
 #   ./scripts/deploy.sh --no-snapshot    # skip the pre-deploy backup (ZFS snapshot or db/ copy)
 #   ./scripts/deploy.sh --backup-plan    # print which pre-deploy backup a deploy would take; change nothing
 #   ./scripts/deploy.sh --rollback VER   # run the image built for VER again (no git, no build)
+#   ./scripts/deploy.sh --image REF      # #736: pull a published image (e.g. ghcr.io/x/constructicon:2026.10.25)
+#                                        # and run it (no git, no build; works on a host without the repo)
 #   ./scripts/deploy.sh --write-version-only   # just write core/VERSION.json (mounted mode)
 #
 # #688: two modes, picked from the checkout's EFFECTIVE compose config (docker-compose.yml plus
@@ -56,6 +58,15 @@
 # your own file backups). Restore: stop the app, copy the files back into the db folder, start it.
 # The dev/test instance (web service CONSTRUCTICON_ENV=dev) takes NO pre-deploy backup at all
 # (owner decision 2026-10-17); every other install takes one of the two above.
+#
+# #741: every compose service with a `build:` section is built on every deploy, not just web (the
+# ollama-restarter sidecar used to keep its old image forever). Web gets the version build args;
+# the others are built plainly, and `up -d` recreates whichever image changed.
+#
+# #740: it works in the folder ABOVE its own scripts/ folder. Run from anywhere else (a copy in
+# /tmp), or with a broken compose file, it stops with what it tried, what happened and the fix,
+# never a Python traceback. Note (#442): a change to this script takes effect on the deploy AFTER
+# the one that installs it (the running copy is the one doing the git reset).
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -67,6 +78,7 @@ SNAPSHOT=1
 WRITE_VERSION_ONLY=""
 BACKUP_PLAN=""
 ROLLBACK=""
+IMAGE_REF=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --build) BUILD=1 ;;
@@ -77,6 +89,10 @@ while [ $# -gt 0 ]; do
       shift
       ROLLBACK="${1:-}"
       if [ -z "$ROLLBACK" ]; then echo "--rollback needs a version (see: docker image ls)" >&2; exit 2; fi ;;
+    --image)
+      shift
+      IMAGE_REF="${1:-}"
+      if [ -z "$IMAGE_REF" ]; then echo "--image needs an image reference, e.g. --image ghcr.io/you/constructicon:2026.10.25" >&2; exit 2; fi ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -126,11 +142,17 @@ detect_docker() {
 
 # #688: one read of the effective compose config. Sets WEB_SVC (the app's web service: "web" on
 # the NAS, "constructicon-web" in the example), WEB_IMAGE (its image: tag), CODE_MOUNTED (1 when
-# /app/core is bind-mounted), DATA_SRC (host path mounted at /app/data) and WEB_ENV (the web
-# service's CONSTRUCTICON_ENV, "dev" on the test/dev instance, #310).
-read_compose() {
-  eval "$("${DOCKER[@]}" compose config --format json | python3 -c 'import json, shlex, sys
-c = json.load(sys.stdin).get("services", {})
+# /app/core is bind-mounted), DATA_SRC (host path mounted at /app/data), WEB_ENV (the web
+# service's CONSTRUCTICON_ENV, "dev" on the test/dev instance, #310) and, #741, BUILD_SVCS (every
+# OTHER service with a build: section, space-separated, e.g. the ollama-restarter).
+# #740: each way this can fail says what was tried, what happened and what to do; no traceback.
+READ_COMPOSE_PY='import json, shlex, sys
+raw = sys.stdin.read()
+try:
+    c = json.loads(raw).get("services", {})
+except ValueError as exc:
+    shown = raw.strip()[:300] or "(nothing at all)"
+    sys.exit(f"deploy.sh: docker compose config printed something that is not JSON ({exc}). It printed: {shown}")
 name = next((n for n in ("web", "constructicon-web") if n in c), "")
 if not name:
     name = next((n for n, s in c.items() if "web.app:app" in " ".join(s.get("command") or [])), "")
@@ -145,11 +167,53 @@ out = {
     "CODE_MOUNTED": "1" if any(v.get("target") == "/app/core" for v in vols) else "",
     "DATA_SRC": next((v.get("source", "") for v in vols if v.get("target") == "/app/data"), ""),
     "WEB_ENV": str(env.get("CONSTRUCTICON_ENV") or "").strip().lower(),
+    "BUILD_SVCS": " ".join(sorted(n for n, svc in c.items() if svc.get("build") and n != name)),
+    "ALL_SVCS": ", ".join(sorted(c)) or "(none)",
 }
 for k, v in out.items():
-    print(f"{k}={shlex.quote(v)}")')"
+    print(f"{k}={shlex.quote(v)}")'
+
+read_compose() {
+  local f found="" errfile cfg parsed
+  # #740 check 1: a compose file must be here (unless COMPOSE_FILE names one).
+  if [ -z "${COMPOSE_FILE:-}" ]; then
+    for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+      if [ -f "$f" ]; then found="$f"; break; fi
+    done
+    if [ -z "$found" ]; then
+      echo "deploy.sh: no docker-compose.yml in $PWD." >&2
+      echo "  It works in the folder above its own scripts/ folder (this copy is $0), so a copy run from" >&2
+      echo "  anywhere else looks in the wrong place. Nothing was changed." >&2
+      echo "  Run it as ./scripts/deploy.sh from inside the instance's checkout (the folder holding" >&2
+      echo "  docker-compose.yml)." >&2
+      exit 1
+    fi
+  fi
+  # #740 check 2: compose must accept the file; show ITS error, not a JSON traceback.
+  errfile="$(mktemp)"
+  if ! cfg="$("${DOCKER[@]}" compose config --format json 2>"$errfile")"; then
+    echo "deploy.sh: '${DOCKER[*]} compose config' failed in $PWD, so there is nothing to deploy. It said:" >&2
+    sed 's/^/  /' "$errfile" >&2
+    rm -f "$errfile"
+    echo "  Nothing was changed. Fix the compose file (or the .env it reads), then run this again." >&2
+    exit 1
+  fi
+  rm -f "$errfile"
+  if [ -z "$cfg" ]; then
+    echo "deploy.sh: '${DOCKER[*]} compose config' printed nothing in $PWD. Nothing was changed." >&2
+    echo "  Check that ${found:-the files in COMPOSE_FILE} define services, then run this again." >&2
+    exit 1
+  fi
+  if ! parsed="$(printf '%s' "$cfg" | python3 -c "$READ_COMPOSE_PY")"; then
+    echo "  Nothing was changed. Run '${DOCKER[*]} compose config' yourself to see the full output." >&2
+    exit 1
+  fi
+  eval "$parsed"
+  # #740 check 3: say which services there are, never "WEB_SVC: unbound variable".
   if [ -z "$WEB_SVC" ]; then
-    echo "Can't find the web service in this checkout's compose config." >&2
+    echo "deploy.sh: can't find the web service in $PWD's compose config. Services found: $ALL_SVCS." >&2
+    echo "  It looks for a service named 'web' or 'constructicon-web', or one whose command runs" >&2
+    echo "  web.app:app. Nothing was changed. Rename the service, or check you're in the right checkout." >&2
     exit 1
   fi
 }
@@ -197,7 +261,7 @@ plan_backup() {
 backup_name() {
   local ver
   ver="$(git describe --tags --always 2>/dev/null | tr -c 'A-Za-z0-9._:\n-' '_' | tr -d '\n' || true)"
-  printf 'predeploy-%s-%s-v%s' "$(date +%Y%m%d-%H%M%S)" "$(git rev-parse --short HEAD)" "${ver:-unversioned}"
+  printf 'predeploy-%s-%s-v%s' "$(date +%Y%m%d-%H%M%S)" "$(git rev-parse --short HEAD 2>/dev/null || echo nogit)" "${ver:-unversioned}"
 }
 
 snapshot_before_deploy() {
@@ -355,6 +419,28 @@ build_versioned_image() {
     "${DOCKER[@]}" tag "$WEB_IMAGE" "$repo:$ver"
   fi
   echo "Image: $repo:$ver (also $WEB_IMAGE)"
+  build_sidecars
+}
+
+# #741: build every other service that has a build: section (the ollama-restarter, ...). Plain
+# builds, no version args (they don't take them). Cached layers make an unchanged one near-instant.
+build_sidecars() {
+  local svcs=()
+  read -r -a svcs <<< "${BUILD_SVCS:-}"
+  if [ "${#svcs[@]}" -eq 0 ]; then
+    return 0
+  fi
+  echo "Building the other services with a build: section: ${svcs[*]}..."
+  "${DOCKER[@]}" compose build "${svcs[@]}"
+}
+
+# #736: no git checkout = can't fetch and build; say what works instead.
+require_git_checkout() {
+  if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    echo "deploy.sh: $PWD is not a git checkout, so it can't fetch and build a new version. Nothing was changed." >&2
+    echo "  On a host without the repo, run a published image instead: ./scripts/deploy.sh --image <repo:tag>" >&2
+    exit 1
+  fi
 }
 
 # Keep the newest $IMAGE_KEEP version tags of this repo (never the compose file's own tag; an
@@ -389,6 +475,8 @@ if [ -n "$BACKUP_PLAN" ]; then
   echo "Pre-deploy backup plan: $BACKUP_KIND ($BACKUP_WHY)"
   if [ "$BACKUP_KIND" = zfs ]; then echo "  would run: ${SUDO[*]:-} zfs snapshot $ZFS_DS@predeploy-..."; fi
   if [ "$BACKUP_KIND" = copy ]; then echo "  would copy $DATA_SRC into $(dirname "$DATA_SRC")/predeploy-backups/ (SQLite backup API)"; fi
+  # #741: what a deploy would build.
+  echo "Images a deploy builds: $WEB_SVC (versioned)${BUILD_SVCS:+, $BUILD_SVCS}"
   exit 0
 fi
 
@@ -426,6 +514,41 @@ if [ -n "$ROLLBACK" ]; then
   exit 0
 fi
 
+# #736: run a published image by tag (pull it, retag it as the compose tag, up -d). No git, no
+# build: the path for a host that has only the compose file and this script, and for "rollback =
+# run the previous tag" from a registry. Services with their own build: (the restarter) are not
+# rebuilt here.
+if [ -n "$IMAGE_REF" ]; then
+  require_image_name
+  echo "Pulling $IMAGE_REF..."
+  if ! "${DOCKER[@]}" pull "$IMAGE_REF"; then
+    if "${DOCKER[@]}" image inspect "$IMAGE_REF" >/dev/null 2>&1; then
+      echo "Couldn't pull $IMAGE_REF (see above), but it is already on this host: using that copy."
+    else
+      echo "deploy.sh: couldn't pull $IMAGE_REF (see the error above), and it isn't on this host either." >&2
+      echo "  Nothing was changed. Check the name and tag (and 'docker login' for a private registry)." >&2
+      exit 1
+    fi
+  fi
+  if [ -n "$CODE_MOUNTED" ]; then
+    echo "Note: this checkout bind-mounts its code, so the containers keep running the checkout's" >&2
+    echo "files, not the image's. Drop the override to run the image as published." >&2
+  fi
+  if [ -n "$SNAPSHOT" ]; then
+    snapshot_before_deploy
+  fi
+  echo "Running $IMAGE_REF as $WEB_IMAGE..."
+  "${DOCKER[@]}" tag "$IMAGE_REF" "$WEB_IMAGE"
+  "${DOCKER[@]}" compose up -d
+  echo "Waiting for startup..."
+  sleep 3
+  "${DOCKER[@]}" compose ps
+  report_running_version
+  exit 0
+fi
+
+require_git_checkout
+
 if [ -n "$SNAPSHOT" ]; then
   snapshot_before_deploy
 fi
@@ -458,6 +581,11 @@ else
     require_image_name
     build_versioned_image
     "${DOCKER[@]}" compose up -d
+  elif [ -n "${BUILD_SVCS:-}" ]; then
+    # #741: sidecars carry no code mount, so they ship only by being built; do it on every deploy.
+    build_sidecars
+    read -r -a _sidecars <<< "$BUILD_SVCS"
+    "${DOCKER[@]}" compose up -d "${_sidecars[@]}"
   fi
   # Always restart: `up -d` leaves a container whose image and config didn't change running the old
   # code, and only a restart re-reads the bind-mounted files.

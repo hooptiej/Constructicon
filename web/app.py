@@ -273,6 +273,13 @@ async def startup():
 
 
 def _startup_as_system():
+    _startup_checks()
+    _startup_work()
+
+
+def _startup_checks():
+    """Refuse to start, loudly and with the fix, on a broken install (#699 data folders, #736
+    secret files, #467 the install token). Runs before anything touches the DB."""
     # #699: data folders owned by another uid used to fail later and cryptically ("unable to open
     # database file", a Permission denied on the first upload). Refuse here, loudly, with the fix.
     unwritable = paths.unwritable_data_dirs(db.DB_PATH)
@@ -280,6 +287,14 @@ def _startup_as_system():
         message = paths.data_dirs_error("constructicon-web", unwritable)
         print(message, file=sys.stderr, flush=True)
         raise RuntimeError(message)
+    # #736: secret files the app (uid 1000) can't read: the install token refuses the start; the
+    # caption valve's secret only prints what is off and how to turn it on.
+    secret_problems = paths.secret_file_problems()
+    if secret_problems:
+        message = paths.secret_files_message("constructicon-web", secret_problems)
+        print(message, file=sys.stderr, flush=True)
+        if any(p["required"] for p in secret_problems):
+            raise RuntimeError(message)
     # #467 step 2: a broken install-token configuration (unreadable/empty file, too short) stops the
     # app here, loudly, like the MCP. No token at all is fine: sessions work, bearer clients get 401.
     try:
@@ -288,6 +303,9 @@ def _startup_as_system():
         raise RuntimeError(f"constructicon-web: refusing to start: {exc}") from None
     print(f"install token: {'configured (Bearer clients = admin)' if token_on else 'NOT configured (Bearer clients refused)'}",
           flush=True)
+
+
+def _startup_work():
     db.init_db()  # #704: also drops the dead imagerepo columns/tables (or keeps one holding data, loudly)
     # #551 item 3: once at startup, after the migrations; then hourly (_decision_sweep_loop).
     _sweep_stale_decisions()

@@ -19,6 +19,15 @@ imagerepo.db-journal
 # Site exports — generated builds, not source code
 exports/
 
+# #736: the other data folders docker-compose.yml.example mounts beside the checkout: the DB folder,
+# backup zips (#442) and the read-only import inbox (plus the example's test-instance twins).
+/db/
+/db-test/
+/backups/
+/backups-test/
+/storage-test/
+/import/
+
 # #698: scripts/deploy.sh's db/ copies on a host without ZFS (<instance>/predeploy-backups/)
 predeploy-backups/
 

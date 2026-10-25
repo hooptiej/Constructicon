@@ -9,6 +9,8 @@ frozen in at import time.
                                 (<storage>/.trash) and backups sit beside it (<storage>/../backups).
     CONSTRUCTICON_EXPORTS_DIR   static-export builds (default <repo>/exports): timestamped builds,
                                 `current` (what /preview serves) and `.publish` work trees.
+    CONSTRUCTICON_BACKUP_DIR    backup zips (#442; default <storage>/../backups, as before). Shown,
+                                read-only, in Admin > Maintenance with a warning if it can't be written.
 
 Unset, the defaults are exactly the paths the app has always used. The database has its own override
 (CONSTRUCTICON_DB_PATH, core/db.py).
@@ -74,8 +76,55 @@ def trash_dir(batch_id=None):
     return root / batch_id if batch_id else root
 
 
+BACKUP_DIR_ENV = "CONSTRUCTICON_BACKUP_DIR"
+
+
 def backup_dir():
-    return storage_dir().parent / "backups"
+    """Where backup zips go (#442): CONSTRUCTICON_BACKUP_DIR, else beside the storage folder."""
+    return _override(BACKUP_DIR_ENV, storage_dir().parent / "backups")
+
+
+def backup_dir_status():
+    """What Admin shows about the backup folder (#442), read-only: {path, source, source_text,
+    exists, writable, problem}. `writable` is a real create-and-delete test (an existing folder) or
+    the nearest existing parent's permission (a folder the first backup will create). `problem` is
+    None, or a plain sentence saying what's wrong and what to do."""
+    path = backup_dir()
+    from_env = bool((os.environ.get(BACKUP_DIR_ENV) or "").strip())
+    status = {
+        "path": str(path),
+        "source": "env" if from_env else "default",
+        "source_text": (f"set by {BACKUP_DIR_ENV}" if from_env
+                        else f"the default, next to the storage folder ({BACKUP_DIR_ENV} is not set)"),
+        "exists": path.is_dir(),
+        "writable": False,
+        "problem": None,
+    }
+    fix = (f"Fix the folder's owner or mode on the server (the app runs as uid {_uid_text()}), or point "
+           f"{BACKUP_DIR_ENV} at a folder it can write, then restart the app.")
+    if path.exists() and not path.is_dir():
+        status["problem"] = f"{path} exists but is not a folder, so backups can't be written there. {fix}"
+        return status
+    if path.is_dir():
+        error = _try_write(path)
+        status["writable"] = error is None
+        if error:
+            status["problem"] = (f"Backups can't be written to {path}: creating a test file there failed "
+                                 f"({error}; {_owner_text(path)}). {fix}")
+        return status
+    parent = path.parent
+    while not parent.exists() and parent != parent.parent:
+        parent = parent.parent
+    status["writable"] = os.access(parent, os.W_OK | os.X_OK)
+    if not status["writable"]:
+        status["problem"] = (f"{path} doesn't exist yet and can't be created: {parent} isn't writable "
+                             f"({_owner_text(parent)}). {fix}")
+    return status
+
+
+def _uid_text():
+    uid = getattr(os, "getuid", lambda: None)()
+    return str(uid) if uid is not None else "?"
 
 
 def exports_dir():
@@ -141,7 +190,7 @@ def unwritable_data_dirs(db_path):
     targets = [
         (db_path.parent, f"the database folder (CONSTRUCTICON_DB_PATH={db_path})"),
         (storage_dir(), "uploaded files (CONSTRUCTICON_STORAGE_DIR)"),
-        (backup_dir(), "backups (next to the storage folder)"),
+        (backup_dir(), f"backups ({BACKUP_DIR_ENV}, default next to the storage folder)"),
         (exports_dir(), "static-site exports (CONSTRUCTICON_EXPORTS_DIR)"),
     ]
     seen = set()
@@ -211,4 +260,88 @@ def data_dirs_error(process_name, problems):
     for h in known:
         lines.append(f"    docker run --rm --user 0 --entrypoint chown -v \"$PWD/{h[2:]}\":/d constructicon:latest -R {ids} /d")
     lines.append("Then start it again. See README.md, \"Install on a new host\".")
+    return "\n".join(lines)
+
+
+# --- Can the app read its secrets? (#736) ---------------------------------------------------------
+# A secret file is bind-mounted from the host's ./secrets/. Two ways that goes wrong quietly: the host
+# file is owned by root (or mode 600 for another uid), so the app (uid 1000) can't read it; or the
+# host file didn't exist when the container started, and Docker created an empty ROOT-OWNED DIRECTORY
+# in its place. Both processes check at startup: a required secret (the install token) refuses the
+# start, an optional one (the caption restart valve's) prints what is off and how to turn it on.
+
+# (variable, required, what it's for, the file name docker-compose.yml.example uses)
+SECRET_FILES = (
+    ("CONSTRUCTICON_INSTALL_TOKEN_FILE", True, "the install token", "constructicon_token"),
+    ("CONSTRUCTICON_MCP_TOKEN_FILE", True, "the install token (older name)", "constructicon_token"),
+    ("CAPTION_RESTART_TOKEN_FILE", False, "the caption safety valve's shared secret (#643)",
+     "ollama_restart_token"),
+)
+
+
+def secret_file_problems(env=None, variables=None):
+    """Secret files named by SECRET_FILES variables (or just `variables`) that this process can't
+    read, as dicts {var, path, required, role, kind, detail, fix}. kind: missing | directory |
+    unreadable | empty. Never reads the secret into anything returned."""
+    env = os.environ if env is None else env
+    problems = []
+    for var, required, role, host_name in SECRET_FILES:
+        if variables is not None and var not in variables:
+            continue
+        value = (env.get(var) or "").strip()
+        if not value:
+            continue
+        path = Path(value)
+        make = f"python3 -m core.manage.mcp_token generate ./secrets/{host_name}"
+        chown = f"sudo chown 1000:1000 ./secrets/{host_name} && chmod 600 ./secrets/{host_name}"
+        if path.is_dir():
+            kind = "directory"
+            detail = (f"{path} is a directory, not a file. Docker makes an empty root-owned directory "
+                      f"there when the host file didn't exist at container start.")
+            fix = (f"on the host, from the folder holding docker-compose.yml: remove that empty "
+                   f"directory (sudo rmdir ./secrets/{host_name}), create the file ({make}), then "
+                   f"`docker compose up -d`.")
+        elif not path.exists():
+            kind = "missing"
+            detail = f"{path} doesn't exist"
+            fix = f"create it on the host ({make}) and mount it there, then `docker compose up -d`."
+        elif not os.access(path, os.R_OK):
+            kind = "unreadable"
+            detail = f"{path} can't be read by this process (uid {_uid_text()}; {_owner_text(path)})"
+            fix = f"on the host: {chown}, then restart the container."
+        else:
+            try:
+                empty = path.stat().st_size == 0
+            except OSError as exc:
+                empty, kind = False, "unreadable"
+                detail, fix = f"{path} can't be read ({exc.strerror or exc})", f"on the host: {chown}."
+            if not empty:
+                continue
+            kind = "empty"
+            detail = f"{path} is empty"
+            fix = f"regenerate it on the host ({make} --force), then restart."
+        problems.append({"var": var, "path": str(path), "required": required, "role": role,
+                         "kind": kind, "detail": detail, "fix": fix})
+    return problems
+
+
+def secret_files_message(process_name, problems):
+    """Startup text for secret_file_problems(): a refusal when any required secret is broken, else a
+    notice per optional one ("... is OFF: why. To turn it on: how."). '' when there's nothing to say."""
+    if not problems:
+        return ""
+    required = [p for p in problems if p["required"]]
+    lines = []
+    if required:
+        lines.append(f"{process_name}: refusing to start: it can't read {len(required)} required secret "
+                     f"file(s). (#736)")
+        for p in required:
+            lines += [f"  {p['var']}={p['path']}  ({p['role']})", f"    what happened: {p['detail']}",
+                      f"    fix: {p['fix']}"]
+    for p in problems:
+        if p["required"]:
+            continue
+        lines += [f"{process_name}: notice: {p['role']} is OFF: {p['var']}={p['path']}: {p['detail'].rstrip('.')}. "
+                  f"Captions still run, just without the automatic Ollama restart. (#736)",
+                  f"    to turn it on: {p['fix']} (optional: only installs running the captions profile need it)"]
     return "\n".join(lines)

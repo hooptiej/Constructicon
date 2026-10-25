@@ -4,7 +4,7 @@ storage stats, provenance options, caption tuning + breaker."""
 from pathlib import Path
 
 from fastapi import Request, Form, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from core import backup, captions, db, install_config, items, object_types, paths, reset, storage
 from core import provenance_options
@@ -60,8 +60,33 @@ def api_backup():
     try:
         info = backup.create_backup()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
+        folder = paths.backup_dir_status()
+        hint = f" {folder['problem']}" if folder["problem"] else ""
+        raise HTTPException(status_code=500, detail=f"Backup failed: {e}. Nothing was saved.{hint}")
     return JSONResponse(info)
+
+
+@router.get("/api/backups")
+def api_backups():
+    """#442: the newest backup zips (at most the BACKUP_RETENTION_COUNT kept) and where they live:
+    {backups: [{filename, size, created_at, download_url}], retention, dir: paths.backup_dir_status()}.
+    Read-only: it never makes a backup."""
+    rows = backup.list_backups()
+    for r in rows:
+        r["download_url"] = f"/api/backups/download?name={r['filename']}"
+    return JSONResponse({"backups": rows, "retention": backup.BACKUP_RETENTION_COUNT,
+                         "dir": paths.backup_dir_status()})
+
+
+@router.get("/api/backups/download")
+def api_backup_download(name: str = ""):
+    """#442: stream a finished backup zip to the browser: the newest, or `name` (one of
+    GET /api/backups' filenames). Admin only (a backup is the whole archive: sensitive items,
+    password hashes). Streamed from disk in chunks, so a multi-GB zip never sits in memory.
+    NEVER builds a backup: none yet = 404 saying to press "Back up now" first."""
+    path = backup.backup_file(name or None)
+    return FileResponse(path, media_type="application/zip", filename=path.name,
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
 
 # API Keys (#55) — the admin page's allowlist of settings keys it knows how

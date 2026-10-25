@@ -391,6 +391,14 @@
         Back up now
       </button>
       <span id="admin-backup-status" class="backup-status"></span>
+      {#- #442: download a finished backup in the browser (streamed; a GET never makes one), and
+          where backups are written (CONSTRUCTICON_BACKUP_DIR, read-only here). -#}
+      <div class="admin-backup-files" id="admin-backup-files">
+        <div class="admin-row-hint" id="admin-backup-dir">Backup folder: loading…</div>
+        <p class="backup-status backup-status-error" id="admin-backup-dir-warning" role="alert" hidden></p>
+        <a class="btn-ms admin-full-btn" id="admin-backup-download" href="/api/backups/download" download hidden>Download the newest backup</a>
+        <ul class="admin-backup-list" id="admin-backup-list" aria-label="Backups on the server"></ul>
+      </div>
       <div class="admin-divider"></div>
       <button type="button" class="btn-danger admin-full-btn" id="admin-delete-all-btn"
               title="Development convenience while content is still in flux">Delete all</button>
@@ -400,6 +408,11 @@
 
 <style>
 /* (#345) Curator-nudge styles moved to style.css with the Nudges drawer. */
+
+/* #442: backup downloads */
+.admin-backup-files { margin-top: 0.75rem; display: grid; gap: 0.5rem; }
+.admin-backup-list { margin: 0; padding-left: 1.1rem; font-size: 0.9em; }
+.admin-backup-list a { word-break: break-all; }
 
 /* Provenance options (#529) */
 .prov-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }
@@ -1395,15 +1408,60 @@
       backupStatus.className = 'backup-status backup-status-ok';
       // Refresh storage stats after backup
       setTimeout(loadStorageStats, 500);
+      loadBackupFiles();
+      setTimeout(() => { backupStatus.textContent = ''; backupStatus.className = 'backup-status'; }, 8000);
     } catch (err) {
+      // An error stays on screen until the next try (never fades away unread).
       backupStatus.textContent = err.message || 'Backup failed';
       backupStatus.className = 'backup-status backup-status-error';
     } finally {
       backupBtn.disabled = false;
       backupBtn.textContent = originalText;
-      setTimeout(() => { backupStatus.textContent = ''; backupStatus.className = 'backup-status'; }, 8000);
     }
   });
+
+  // #442: the backups on the server (newest first, the kept 3) with a download link each, and
+  // where they are written. Download links are plain GETs the browser streams to disk.
+  const backupDirLine = document.getElementById('admin-backup-dir');
+  const backupDirWarn = document.getElementById('admin-backup-dir-warning');
+  const backupDownload = document.getElementById('admin-backup-download');
+  const backupList = document.getElementById('admin-backup-list');
+  async function loadBackupFiles() {
+    backupList.textContent = '';
+    try {
+      const res = await fetch('/api/backups');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data.error && data.error.message) || data.detail || `Failed (${res.status})`);
+      const dir = data.dir || {};
+      backupDirLine.textContent = `Backup folder: ${dir.path} (${dir.source_text}). Change it with CONSTRUCTICON_BACKUP_DIR in the install's compose file, then restart.`;
+      backupDirWarn.hidden = !dir.problem;
+      backupDirWarn.textContent = dir.problem ? `Not writable: ${dir.problem}` : '';
+      const rows = data.backups || [];
+      backupDownload.hidden = rows.length === 0;
+      if (!rows.length) {
+        const li = document.createElement('li');
+        li.className = 'dp-muted';
+        li.textContent = 'No backups yet. "Back up now" makes one; then it can be downloaded here.';
+        backupList.appendChild(li);
+        return;
+      }
+      for (const b of rows) {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = b.download_url;
+        a.setAttribute('download', b.filename);
+        a.textContent = b.filename;
+        li.appendChild(a);
+        li.appendChild(document.createTextNode(` · ${formatBytes(b.size || 0)} · ${new Date(b.created_at * 1000).toLocaleString()}`));
+        backupList.appendChild(li);
+      }
+    } catch (err) {
+      backupDirLine.textContent = 'Backup folder: unknown';
+      backupDirWarn.hidden = false;
+      backupDirWarn.textContent = `Couldn't list the backups: ${err.message}. Reload the page to try again.`;
+    }
+  }
+  loadBackupFiles();
 })();
 </script>
 {% endblock %}

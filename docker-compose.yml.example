@@ -1,3 +1,17 @@
+# #736: nothing here names one particular host. Per-install values come from a `.env` file next to
+# this one (compose reads it on its own; it is gitignored), each with the default shown:
+#   CONSTRUCTICON_URL=http://localhost:8000       how people reach this install (IMAGEREPO_BASE_URL)
+#   CONSTRUCTICON_TEST_URL=http://localhost:8001  the same for the test instance
+#   DOCKER_SOCKET_GID=999                         group owning /var/run/docker.sock on THIS host:
+#                                                 `stat -c %g /var/run/docker.sock` (restarter only)
+#   BACKUP_HOST_DIR=./backups                     host folder backup zips go to (#442; any path, e.g. a
+#                                                 second disk or a share; owned by uid 1000)
+#   CAPTION_OLLAMA_MODEL=moondream, OLLAMA_DATA_DIR=./ollama-data, COMPOSE_PROFILES=captions (#687)
+# Secrets live in ./secrets/ (gitignored, `chmod 700 secrets`), one file each, owned by uid 1000:
+#   constructicon_token    REQUIRED, the install token (web + MCP refuse to start without it)
+#   ollama_restart_token   OPTIONAL, only with the `captions` profile (the restart valve, #643)
+# Make each with `python3 -m core.manage.mcp_token generate ./secrets/<name>` BEFORE the first `up`.
+# Both app processes check at startup that they can read them (#736) and say exactly what is wrong.
 services:
   # #688: the app code is BAKED INTO THE IMAGE. No service here bind-mounts core/, web/,
   # mcp_server/ or assets/: prod runs exactly the image scripts/deploy.sh built and tagged with the
@@ -45,16 +59,24 @@ services:
     volumes:
       - ./storage:/app/storage
       - ./db:/app/data
-      # #467 step 2: the install token, ONE file shared with the MCP service below. Create it with
-      #   python3 -m core.manage.mcp_token generate ./secrets/constructicon_token   (mode 600)
-      # #648: it is also what claims a fresh install: /setup asks for it before it creates the
-      #   first admin, so create it BEFORE the first `up` (and before the site is reachable).
-      - ./secrets/constructicon_token:/run/secrets/constructicon_token:ro
-      # #643: the restart sidecar's shared secret (same file as ollama-restarter's).
-      - ./secrets/ollama_restart_token:/run/secrets/ollama_restart_token:ro
+      # #442: backup zips (Admin > Maintenance). Without a mount they'd sit inside the container and
+      # vanish when it is recreated. BACKUP_HOST_DIR in .env moves them anywhere on the host.
+      - ${BACKUP_HOST_DIR:-./backups}:/app/backups
+      # #736: the whole ./secrets FOLDER, read-only, so an OPTIONAL secret that isn't there is just
+      # absent (a single-file mount of a missing file makes Docker create a root-owned DIRECTORY in
+      # its place). It holds:
+      # - constructicon_token (#467 step 2): the install token, shared with the MCP service below.
+      #   #648: it also claims a fresh install (/setup asks for it before it creates the first
+      #   admin), so create it BEFORE the first `up` (and before the site is reachable).
+      # - ollama_restart_token (#643, optional): the restart sidecar's shared secret. Missing = the
+      #   web startup log says the caption safety valve is off and how to turn it on.
+      - ./secrets:/run/secrets:ro
     environment:
-      - IMAGEREPO_BASE_URL=http://10.0.1.78:8000
+      - IMAGEREPO_BASE_URL=${CONSTRUCTICON_URL:-http://localhost:8000}
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
+      # #442: where backup zips are written, as this container sees it (the mount above). Shown,
+      # read-only, in Admin > Maintenance, with a warning when the app can't write there.
+      - CONSTRUCTICON_BACKUP_DIR=/app/backups
       # Non-browser clients (scripts) send it as Authorization: Bearer.
       - CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token
       # #645: browser security headers (web/security_headers.py) are always on; these only tune them.
@@ -121,7 +143,9 @@ services:
   # Create the secret once:
   #   python3 -m core.manage.mcp_token generate ./secrets/ollama_restart_token   (mode 600)
   # It runs as UID 1000 (so it can read that file) plus the group that owns the socket:
-  # set group_add to `stat -c %g /var/run/docker.sock` on your host (999 on the NAS).
+  # DOCKER_SOCKET_GID in .env = `stat -c %g /var/run/docker.sock` on your host (default 999).
+  # Its secret is a single-file mount with create_host_path: false, so a missing file stops `up`
+  # with "bind source path does not exist" instead of mounting a root-owned empty directory.
   # #687: in the `captions` profile with Ollama itself, so an install without captions runs
   # no container holding the Docker socket (web treats the missing sidecar as "no valve").
   ollama-restarter:
@@ -130,12 +154,17 @@ services:
     profiles: ["captions"]
     user: "1000:1000"
     group_add:
-      - "999"
+      - "${DOCKER_SOCKET_GID:-999}"
     networks:
       - restart-valve
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./secrets/ollama_restart_token:/run/secrets/ollama_restart_token:ro
+      - type: bind
+        source: ./secrets/ollama_restart_token
+        target: /run/secrets/ollama_restart_token
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
       - RESTARTER_CONTAINER=ollama
       - RESTARTER_TOKEN_FILE=/run/secrets/ollama_restart_token
@@ -189,10 +218,20 @@ services:
     volumes:
       - ./storage:/app/storage
       - ./db:/app/data
-      - ./secrets/constructicon_token:/run/secrets/constructicon_token:ro
+      - ${BACKUP_HOST_DIR:-./backups}:/app/backups   # #442: constructicon_backup writes here too
+      # #736: the install token only (the MCP never uses the restart secret). Required, so a
+      # missing file stops `up` ("bind source path does not exist") instead of mounting a
+      # root-owned empty directory there.
+      - type: bind
+        source: ./secrets/constructicon_token
+        target: /run/secrets/constructicon_token
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
       - CONSTRUCTICON_BASE_URL=http://constructicon-web:8000
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
+      - CONSTRUCTICON_BACKUP_DIR=/app/backups
       # #561 / #467 step 2: the same install token file as the web service. Required: with roles
       # enforced the MCP refuses to start without one. Clients send Authorization: Bearer <token>.
       - CONSTRUCTICON_INSTALL_TOKEN_FILE=/run/secrets/constructicon_token
@@ -222,8 +261,9 @@ services:
     volumes:
       - ./storage-test:/app/storage
       - ./db-test:/app/data
+      - ./backups-test:/app/backups
     environment:
-      - IMAGEREPO_BASE_URL=http://10.0.1.78:8001
+      - IMAGEREPO_BASE_URL=${CONSTRUCTICON_TEST_URL:-http://localhost:8001}
       - CONSTRUCTICON_DB_PATH=/app/data/imagerepo.db
       - CAPTION_OLLAMA_URL=http://ollama:11434
       - CAPTION_OLLAMA_MODEL=${CAPTION_OLLAMA_MODEL:-moondream}

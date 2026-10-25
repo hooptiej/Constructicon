@@ -375,6 +375,31 @@ def api_captions_queue_skipped(limit: int = Form(captions.QUEUE_SKIPPED_MAX)):
     return JSONResponse({"ok": True, **captions.queue_skipped(limit)})
 
 
+@router.get("/api/captions/mid-word")
+def api_captions_mid_word():
+    """#743, read-only: every `done` caption suggestion that starts mid-word ("urn with...", "ids
+    and..."), with counts by model and how many were also accepted as the description. Admin."""
+    return JSONResponse({"ok": True, **captions.scan_mid_word()})
+
+
+@router.post("/api/captions/mid-word/requeue")
+def api_captions_mid_word_requeue(dry_run: bool = Form(True)):
+    """#743: puts every `done` mid-word caption back in the needs-caption queue as ONE undoable batch
+    (dry run unless dry_run=false). The answer's batch_id undoes it (POST /api/changes/<batch>/undo).
+    No model runs here: "Caption skipped items" (or an agent) re-captions them."""
+    return JSONResponse({"ok": True, **captions.requeue_mid_word(dry_run=dry_run)})
+
+
+@router.post("/api/captions/propose-titles")
+def api_captions_propose_titles(dry_run: bool = Form(True), limit: int = Form(captions.PROPOSE_MAX),
+                                source: str = Form("auto")):
+    """#542 backfill: proposes a short title for every item whose title used to be its long
+    description; the proposals wait in /captions/review, nothing is applied. source: auto (cut from
+    the item's own words when they are hand-written, else the local captioner), words, model. Dry run
+    unless dry_run=false; a real run answers the batch_id that undoes every proposal."""
+    return JSONResponse({"ok": True, **captions.propose_short_titles(limit=limit, dry_run=dry_run, source=source)})
+
+
 @router.post("/api/captions/reset-breaker")
 def api_captions_reset_breaker():
     """#454: Reset the circuit breaker and consecutive-failure counter,

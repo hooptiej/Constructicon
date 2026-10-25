@@ -10,10 +10,11 @@
   <div class="home-col-header">
     <div>
       <h1 class="page-title">Caption Review</h1>
-      <p class="page-subtitle">Accept, edit, or skip the vision model's suggested captions. Accept copies it into the object's description; skip drops it from the queue.</p>
+      <p class="page-subtitle">Accept, edit, or skip suggested captions and short titles. Accept makes the caption the object's description and the short title its name; skip drops it from the queue. Nothing written by hand or by an agent is replaced without asking.</p>
     </div>
     <span id="cr-count" style="font-size:13px;color:var(--text-2)"></span>
   </div>
+  <p id="cr-load-error" class="error-text" role="alert" style="display:none"></p>
   <div id="cr-list"></div>
   <p id="cr-empty" class="empty-state" style="display:none">All caught up — no captions to review.</p>
 </div>
@@ -23,9 +24,16 @@
 .cr-thumb img { width:120px; height:120px; object-fit:cover; border-radius:8px; background:var(--chip); display:block; }
 .cr-body { flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
 .cr-name { font-size:12px; color:var(--icon-muted); font-family:monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.cr-text { width:100%; resize:vertical; }
-.cr-actions { display:flex; gap:10px; align-items:center; }
+.cr-label { font-size:12px; color:var(--text-2); }
+.cr-desc { font-size:13px; color:var(--text-2); margin:0; white-space:pre-wrap; }
+.cr-text, .cr-title { width:100%; }
+.cr-text { resize:vertical; }
+.cr-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 .cr-msg { font-size:12px; color:var(--hazard-red); }
+.cr-refusal { font-size:13px; border:1px solid var(--hazard-red); border-radius:8px; padding:8px 10px; display:none; }
+.cr-refusal p { margin:0 0 6px; }
+.cr-refusal blockquote { margin:0 0 6px; padding-left:8px; border-left:3px solid var(--border); white-space:pre-wrap; }
+@media (max-width: 600px) { .cr-card { flex-direction:column; } .cr-thumb img { width:100%; height:180px; } }
 </style>
 
 <script nonce="{{ csp_nonce() }}">
@@ -33,52 +41,105 @@
   const list = document.getElementById('cr-list');
   const empty = document.getElementById('cr-empty');
   const countEl = document.getElementById('cr-count');
+  const loadErr = document.getElementById('cr-load-error');
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function who(by) { return by === 'mcp-agent' ? 'an agent (MCP)' : by === 'owner' ? 'you, by hand' : by === 'words' ? 'cutting its own description' : by ? by : 'by hand'; }
   function updateCount() {
     const n = list.querySelectorAll('.cr-card').length;
     countEl.textContent = n ? n + ' to review' : '';
     empty.style.display = n ? 'none' : 'block';
   }
+  async function readError(r) {
+    const body = await r.json().catch(() => ({}));
+    return { status: r.status, code: body.error && body.error.code, message: (body.error && body.error.message) || body.detail || ('HTTP ' + r.status), details: (body.error && body.error.details) || {} };
+  }
   async function load() {
     let items = [];
-    try { const res = await fetch('/api/captions/unreviewed'); if (res.ok) items = await res.json(); } catch (e) {}
+    loadErr.style.display = 'none';
+    try {
+      const res = await fetch('/api/captions/unreviewed');
+      if (!res.ok) { const e = await readError(res); throw new Error(e.message); }
+      items = await res.json();
+    } catch (e) {
+      loadErr.textContent = 'Could not load the captions to review: ' + e.message + '. Reload the page to try again.';
+      loadErr.style.display = 'block';
+      return;
+    }
     list.innerHTML = '';
     items.forEach(it => {
       const card = document.createElement('div');
       card.className = 'cr-card';
+      const isTitle = it.kind === 'title';
       card.innerHTML =
         '<div class="cr-thumb"><a href="' + esc(it.detail_url) + '" target="_blank" rel="noopener"><img src="' + esc(it.thumb_url) + '" alt="" loading="lazy"></a></div>' +
         '<div class="cr-body">' +
           '<div class="cr-name">' + esc(it.name) + '</div>' +
-          '<textarea class="input cr-text" rows="3"></textarea>' +
+          '<label class="cr-label">Short title (the name on tiles)' + (it.title ? ', suggested by ' + esc(who(it.title_by)) : '') +
+            '<input class="input cr-title" type="text" maxlength="100" placeholder="A few words"></label>' +
+          (isTitle
+            ? '<span class="cr-label">Description (already accepted, unchanged)</span><p class="cr-desc"></p>'
+            : '<label class="cr-label">Caption (becomes the description)' + (it.caption_by ? ', suggested by ' + esc(who(it.caption_by)) : '') +
+              '<textarea class="input cr-text" rows="3"></textarea></label>') +
+          '<div class="cr-refusal" role="alert"><p class="cr-refusal-msg"></p><div class="cr-refusal-old"></div>' +
+            '<div class="cr-actions"><button type="button" class="btn-primary cr-replace">Replace it</button>' +
+            '<button type="button" class="btn-secondary cr-keep">Keep what is there</button></div></div>' +
           '<div class="cr-actions">' +
-            '<button type="button" class="btn-primary cr-accept">Accept as description</button>' +
+            '<button type="button" class="btn-primary cr-accept">' + (isTitle ? 'Use this title' : 'Accept') + '</button>' +
             '<button type="button" class="btn-secondary cr-skip">Skip</button>' +
-            '<span class="cr-msg"></span>' +
+            '<span class="cr-msg" role="status"></span>' +
           '</div>' +
         '</div>';
       const ta = card.querySelector('.cr-text');
-      ta.value = it.caption || '';
+      const ti = card.querySelector('.cr-title');
+      if (ta) ta.value = it.caption || '';
+      ti.value = it.title || '';
+      const desc = card.querySelector('.cr-desc');
+      if (desc) desc.textContent = it.description || '';
       const msg = card.querySelector('.cr-msg');
-      card.querySelector('.cr-accept').addEventListener('click', async () => {
-        const text = ta.value.trim();
-        if (!text) { msg.textContent = 'Enter a caption first'; return; }
-        msg.textContent = '';
-        const fd = new FormData(); fd.append('content_description', text);
+      const refusal = card.querySelector('.cr-refusal');
+      async function accept(replace) {
+        const text = ta ? ta.value.trim() : '';
+        const title = ti.value.trim();
+        if (!text && !title) { msg.textContent = isTitle ? 'Enter a short title first' : 'Enter a caption or a short title first'; return; }
+        msg.textContent = 'Saving…';
+        const fd = new FormData();
+        if (text) fd.append('text', text);
+        if (title) fd.append('title', title);
+        if (replace) fd.append('replace', 'true');
         try {
-          const r = await fetch('/api/image/' + encodeURIComponent(it.slug), { method: 'POST', body: fd });
-          if (!r.ok) throw new Error();
-          fetch('/api/image/' + encodeURIComponent(it.slug) + '/caption/mark-used', { method: 'POST' }).catch(() => {});
+          const r = await fetch('/api/captions/' + encodeURIComponent(it.slug) + '/accept', { method: 'POST', body: fd });
+          if (!r.ok) {
+            const e = await readError(r);
+            if (e.code === 'would_replace_suggestion') {
+              // #787: never overwrite silently. Show what would be replaced and ask.
+              msg.textContent = 'Nothing was saved yet.';
+              card.querySelector('.cr-refusal-msg').textContent = e.message;
+              const old = card.querySelector('.cr-refusal-old');
+              old.innerHTML = '';
+              Object.values(e.details.existing || {}).forEach(v => {
+                const p = document.createElement('p'); p.textContent = 'Now: ' + v.what + ' (by ' + who(v.by === 'by hand' ? null : v.by) + '):';
+                const q = document.createElement('blockquote'); q.textContent = v.text;
+                old.appendChild(p); old.appendChild(q);
+              });
+              refusal.style.display = 'block';
+              return;
+            }
+            throw new Error(e.message);
+          }
           card.remove(); updateCount();
-        } catch (e) { msg.textContent = 'Failed to save'; }
-      });
+        } catch (err) { msg.textContent = 'Not saved: ' + err.message; }
+      }
+      card.querySelector('.cr-accept').addEventListener('click', () => accept(false));
+      card.querySelector('.cr-replace').addEventListener('click', () => { refusal.style.display = 'none'; accept(true); });
+      card.querySelector('.cr-keep').addEventListener('click', () => { refusal.style.display = 'none'; msg.textContent = 'Kept as it was; nothing changed.'; });
       card.querySelector('.cr-skip').addEventListener('click', async () => {
         msg.textContent = '';
         try {
-          const r = await fetch('/api/captions/' + encodeURIComponent(it.slug) + '/skip', { method: 'POST' });
-          if (!r.ok) throw new Error();
+          const fd = new FormData(); fd.append('what', isTitle ? 'title' : 'all');
+          const r = await fetch('/api/captions/' + encodeURIComponent(it.slug) + '/skip', { method: 'POST', body: fd });
+          if (!r.ok) { const e = await readError(r); throw new Error(e.message); }
           card.remove(); updateCount();
-        } catch (e) { msg.textContent = 'Failed'; }
+        } catch (e) { msg.textContent = 'Skip failed: ' + e.message; }
       });
       list.appendChild(card);
     });

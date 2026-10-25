@@ -478,7 +478,8 @@ def mask_725(value):
 # Schema added AFTER the golden file was written: a new column shows up in row images, a new table in
 # delete-all's counts. Leave those keys out of the comparison (the golden file stays the pre-#746 record).
 ADDED_SINCE_746 = {"private",        # #604 step 3: projects.private, hobby_settings.private
-                   "share_members"}  # #604 step 3: delete-all clears the member lists
+                   "share_members",  # #604 step 3: delete-all clears the member lists
+                   "short_title"}    # #542: capture_events.short_title, in item answers and row images
 
 
 def _strip_added(value):
@@ -513,7 +514,8 @@ for label, alias, akw, new, nkw, read in SCEN:
             check(f"new {new} for {label}: refused with the same code",
                   new_err and new_out["error"]["code"] == (got.get("error") or {}).get("code"), new_out)
         else:
-            check(f"new {new} for {label}: same answer", as_json(read(new_out)) == got,
+            # `got` had ADDED_SINCE_746 stripped; strip the same keys from the new call's answer
+            check(f"new {new} for {label}: same answer", _strip_added(as_json(read(new_out))) == got,
                   f"{json.dumps(as_json(new_out))[:300]}")
 all_aliases = {n for n in S._ALIAS_OF}
 check("every alias has a parity scenario", all_aliases <= aliases_seen, sorted(all_aliases - aliases_seen))

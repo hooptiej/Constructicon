@@ -525,13 +525,14 @@ def _to_public(row):
         "url": f"{BASE_URL}/f/{row['slug']}",
         "filename": row["filename"],
         # display_name (#11) here is the item's one canonical title (core/item_title.py, #542):
-        # rename, then caption, then filename, then slug. "icon" is the type's badge (#704: the
+        # rename, then short title, then filename, then slug. "icon" is the type's badge (#704: the
         # per-object icon override column is gone).
         "display_name": item_title.title_of(row),
         "icon": spec.badge_icon,
         "media_type": row.get("media_type") or "image",
         "description": row["description"],
-        "content_description": row.get("content_description"),  # #588: the item's own title/caption
+        "content_description": row.get("content_description"),  # #588: the item's long caption / description
+        "short_title": row.get("short_title"),  # #542: the short name; the long caption is never the title
         "tags": row["tags"],
         "redacted": bool(row["redacted"]),
         "extracted_text": row["extracted_text"],
@@ -996,10 +997,11 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
                    display_name: str | None = None,
                    type_metadata: dict | None = None, display_date: float | None = None,
                    reset_display_date: bool = False, content_description: str | None = None,
-                   fields: dict | None = None, dry_run: bool = False) -> dict:
+                   fields: dict | None = None, dry_run: bool = False, short_title: str | None = None) -> dict:
     """Edit an item, every change in ONE batch. Parameters left out (None) are left alone.
-    description: the uploader's note. content_description: the item's own title/caption ("" clears).
-    display_name: its title override. tags: the full free-text tag list (replaces it).
+    description: the uploader's note. content_description: the item's long caption/description ("" clears).
+    display_name: its title override. short_title: its short name, a few words ("" clears); the title
+    is display_name, else short_title, else the filename. tags: the full free-text tag list (replaces it).
     type_metadata: MERGED by top-level key; a key set to "" is cleared.
     display_date: timeline position override (unix seconds); reset_display_date=true clears it.
     fields: more fields, key present = set it, absent = leave it:
@@ -1020,6 +1022,8 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
         cols["display_name"] = display_name
     if content_description is not None:
         cols["content_description"] = content_description
+    if short_title is not None:
+        cols["short_title"] = short_title
     if type_metadata is not None:
         # #563: merge (top-level keys), same as the web route; #425 keys cleaned in core.
         cols["type_metadata"] = dict(type_metadata)
@@ -1136,19 +1140,32 @@ def constructicon_view(slug: str, size: str = "preview") -> list[McpImage | str]
 
 
 @mcp.tool()
-def constructicon_set_caption(slug: str, text: str, accept: bool = False) -> dict:
-    """Write a caption for an item you have looked at (constructicon_view). No model runs.
-    The text becomes the item's caption SUGGESTION (type_metadata.auto_caption, model "mcp-agent"),
-    which waits in the owner's caption review. accept=true also sets content_description to it
-    (like "Use this caption"). Workflow: constructicon_needs(view="caption") -> view -> set_caption.
-    text: 1-2000 characters. Errors: bad_caption, redacted.
-    Returns the item plus batch_id, accepted, in_review_queue.
+def constructicon_set_caption(slug: str, text: str | None = None, title: str | None = None, accept: bool = False,
+                              replace: bool = False) -> dict:
+    """Write a caption and/or a short title for an item you have looked at (constructicon_view). No model runs.
+    text: the long caption (1-2000 characters), the item's caption SUGGESTION (model "mcp-agent").
+    title: a short title of a few words (at most 100 characters), the item's NAME on tiles; the long
+    caption is never the title, so give one with every caption. Both wait in the owner's caption
+    review; accept=true also sets content_description to the text and short_title to the title.
+    Never overwrites silently: replacing a suggestion, description or short title that the local
+    model did not write (yours, another agent's, the owner's) is refused with would_replace_suggestion
+    (details.existing has each text that would go). Read it; pass replace=true only to replace it.
+    E.g. set_caption(slug, text="Kendall's buggy airborne off the berm, dust trailing.",
+    title="Kendall's 8IGHT-T carving the berm", accept=true).
+    Errors: bad_caption, bad_title, redacted, would_replace_suggestion.
+    Returns the item plus batch_id, accepted, replaced_suggestion (the suggestion text this call
+    replaced, or null), replaced (every replaced text, by field) and in_review_queue.
     """
     row = items.get_item(slug)
     policy.require_view(row, message=f"No item {slug!r}.")  # #557
-    result = items.set_caption(slug, text, accept=accept)
-    return {**_to_public(result.item), "batch_id": result.batch_id, "accepted": bool(accept),
-            "in_review_queue": not (result.item.get("content_description") or "").strip()}
+    result = items.set_caption(slug, text, title=title, accept=accept, replace=replace)
+    it = result.item
+    tm = it.get("type_metadata") or {}
+    waiting_caption = bool((tm.get("auto_caption") or "").strip()) and not (it.get("content_description") or "").strip()
+    waiting_title = bool((tm.get("auto_caption_title") or "").strip()) and not (it.get("short_title") or it.get("display_name"))
+    return {**_to_public(it), "batch_id": result.batch_id, "accepted": bool(accept),
+            "replaced_suggestion": result.data["replaced_suggestion"], "replaced": result.data["replaced"],
+            "in_review_queue": waiting_caption or waiting_title}
 
 
 _DESTRUCTIVE = ToolAnnotations(destructiveHint=True)

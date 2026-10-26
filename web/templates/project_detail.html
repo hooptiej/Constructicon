@@ -176,8 +176,9 @@
         <label for="whereabouts-select">Whereabouts</label>
         <select id="whereabouts-select" class="input">
           <option value="">— not recorded —</option>
-          {% for o in card_whereabouts_options %}<option value="{{ o.key }}" {% if card_extra.whereabouts == o.key %}selected{% endif %}>{{ o.label }}</option>{% endfor %}
+          {% for o in card_whereabouts_options %}<option value="{{ o.key }}" title="{{ o.help }}" {% if card_extra.whereabouts == o.key %}selected{% endif %}>{{ o.label }}</option>{% endfor %}
         </select>
+        <p class="dp-note">Anything but "Have it" greys the card's picture. "Abandoned" means you left the thing itself behind; walking away from the project is the stage Stopped (Abandoned).</p>
         <label class="dp-sr-label" for="whereabouts-note">Whereabouts note</label>
         <input type="text" id="whereabouts-note" class="input" list="whereabouts-note-suggest" autocomplete="off" placeholder="note (e.g. 'on the shelf in the garage')" value="{{ card_extra.whereabouts_note or '' }}" maxlength="200">
         <datalist id="whereabouts-note-suggest">{% for v in suggest_whereabouts_note %}<option value="{{ v }}">{% endfor %}</datalist>

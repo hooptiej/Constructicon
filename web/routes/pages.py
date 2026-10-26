@@ -332,7 +332,8 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             # #523: autocomplete suggestions for the free-text credit / whereabouts-note inputs.
             "suggest_credit": db.distinct_card_values("provenance_credit"),
             "suggest_whereabouts_note": db.distinct_card_values("whereabouts_note"),
-            "card_whereabouts_options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
+            "card_whereabouts_options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k],
+                                          "help": card_rules.WHEREABOUTS_HELP[k]} for k in card_rules.WHEREABOUTS],
             # #529: the live editable list, plus this card's own value if it has since been retired.
             "card_provenance_options": provenance_options.picker_options("card", project.get("provenance")),
             "card_queue": _card_queue_strip(project["slug"]),

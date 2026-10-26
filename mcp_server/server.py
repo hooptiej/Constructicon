@@ -1646,8 +1646,10 @@ def constructicon_update_project(project_id: str | int | None = None, title: str
     start_date / end_date: timeline overrides (unix seconds); reset_start_date / reset_end_date clear.
     fields: more fields, key present = set it, absent = leave it; null or "" clears:
       activity (must agree with the stage), force_kind (bool: leave a family/collection that has
-      members), whereabouts (have_it | partial | parted_out | sold | gifted | lost | never_built;
-      thing / project / collection only), whereabouts_note, provenance (an active card key,
+      members), whereabouts (have_it | partial | parted_out | sold | gifted | lost | abandoned |
+      never_built; thing / project / collection only; anything but have_it greys the card's art;
+      abandoned = the object was left behind (towed, impound), not stop_reason abandoned, which
+      is walking away from the project), whereabouts_note, provenance (an active card key,
       constructicon_list_provenance_options(scope="card")), provenance_credit, highlight (bool),
       home ("card:<slug>" | "hobby:<slug>" | a card; null = automatic), synopsis (max 600: a few
       sentences saying what the card is; set it whenever you write a write-up), flavor (one italic

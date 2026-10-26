@@ -102,7 +102,14 @@
   box-shadow: inset 0 0 0 .19em var(--band), 0 0 0 1px rgba(0, 0, 0, .5);
 }
 .cx-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.cx-stopped .cx-art img { filter: grayscale(1) brightness(.75); }
+/* #770: grey art = "I don't have it" (whereabouts gone); Stopped keeps color and gets a tag */
+.cx-gone .cx-art img, .cx-gone .cx-art-empty { filter: grayscale(1) brightness(.75); }
+.cx-art { position: relative; }
+.cx-tag {
+  position: absolute; top: .4em; left: .4em; padding: .1em .45em; border-radius: .3em;
+  font-family: var(--card-font-mono); font-size: .625em; letter-spacing: .04em; line-height: 1.3;
+  background: rgba(21, 22, 26, .82); color: #fff; box-shadow: 0 0 0 1px rgba(255, 255, 255, .3);
+}
 .cx-art-empty {
   width: 100%; height: 100%; display: flex; flex-direction: column; gap: .5em; align-items: center; justify-content: center;
   color: #C9CDD4; font-family: var(--card-font-mono); font-size: .75em; letter-spacing: .04em;

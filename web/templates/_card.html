@@ -29,7 +29,7 @@
 {%- set kind = c.kind or "asset" -%}
 {%- set href = c.href or ("/project/" ~ c.slug) -%}
 {%- set inactive = c.activity == "inactive" -%}
-<a class="cx cx-{{ size }} cx-kind-{{ kind }}{% if inactive %} cx-inactive{% endif %}{% if c.stage == 'stopped' %} cx-stopped{% endif %}" href="{{ href }}" data-card-kind="{{ kind }}"{% if c.slug %} data-card-slug="{{ c.slug }}"{% endif %}>
+<a class="cx cx-{{ size }} cx-kind-{{ kind }}{% if inactive %} cx-inactive{% endif %}{% if c.stopped_tag %} cx-stopped{% endif %}{% if c.gone %} cx-gone{% endif %}" href="{{ href }}" data-card-kind="{{ kind }}"{% if c.slug %} data-card-slug="{{ c.slug }}"{% endif %}>
   <span class="cx-namebar">
     <span class="cx-name">{{ c.title }}</span>
     <span class="cx-kind" title="{{ c.kind_label or c.type_line }}">{{ kind_icon(kind) }}<span class="cx-sr">{{ c.kind_label or "File" }}: </span></span>
@@ -48,6 +48,9 @@
     {% else %}
     <span class="cx-art-empty">{{ kind_icon(kind) }}<span>No cover yet</span></span>
     {% endif %}
+    {#- #770: a Stopped card keeps its color and gets this small tag; grey (cx-gone) means only
+        "I don't have it" (its whereabouts), with no reason tag (the reason is on the card page). -#}
+    {% if c.stopped_tag %}<span class="cx-tag cx-tag-stopped">Stopped</span>{% endif %}
   </span>
   <span class="cx-typeline">
     <span class="cx-type">{{ c.type_line }}</span>

@@ -176,6 +176,9 @@ except CardError as e:
     check("family: whereabouts refused", e.code == "bad_whereabouts", e.code)
 ll = card_level.card_level(card("Lego Bucket"))
 check("file-bucket collection (4 files, 0 members) earns the stack pip", ll["checks"]["stack"], ll["reasons"]["stack"])
+check("a member-less collection's dates reason is the plain files reason (no '0 members')",
+      "of 0 members" not in ll["reasons"]["dates"] and "files have real dates" in ll["reasons"]["dates"],
+      ll["reasons"]["dates"])
 check("family with 2 members and no files: no stack pip", not jl["checks"]["stack"], jl["reasons"]["stack"])
 
 print("ALL PASS" if not FAILS else "FAILED: " + ", ".join(FAILS))

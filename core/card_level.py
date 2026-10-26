@@ -116,12 +116,17 @@ def shared_checks(card, files, members=None):
         if loose:
             units.append(dates["passed"])
         ok = sum(1 for u in units if u)
-        if units:
-            reason = (f"{ok} of {n} members are dated" + (" (and its loose files are)" if loose and units[-1]
-                                                          else " (its loose files aren't)" if loose else "")
-                      + f" (need {int(GROUP_SHARE * 100)}%).")
-        else:
+        need = f"(need {int(GROUP_SHARE * 100)}%)"
+        if not units:
             reason = f"No members to date, and no start/end dates set on the {word}."
+        elif not n:  # a collection with loose files only: graded like any card
+            reason = dates["reason"]
+        else:
+            member_ok = ok - (1 if loose and units[-1] else 0)
+            reason = f"{member_ok} of {n} members are dated"
+            if loose:
+                reason += f"; its loose files {'are' if units[-1] else 'are not'} ({dates['reason'].rstrip('.')})"
+            reason += f" {need}."
         dates = {**dates, "passed": _share(ok, len(units)), "reason": reason,
                  "units_dated": ok, "units": len(units)}
     return {"cover": cover, "writeup": writeup, "dates": dates}

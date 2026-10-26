@@ -82,7 +82,17 @@ WHEREABOUTS_HELP = {
 # Only have_it (and not recorded) keep full color. Kinds outside WHEREABOUTS_KINDS never grey.
 WHEREABOUTS_GONE = ("partial", "parted_out", "sold", "gifted", "lost", "abandoned", "never_built")
 # Kinds a whereabouts value applies to (an action, event or family has no physical whereabouts).
+# #554 (owner, 2026-10-18): a family's whereabouts live on its members; a collection (a set you
+# own) keeps its own. Whereabouts on a collection of events / places is the V2 place question (#771).
 WHEREABOUTS_KINDS = ("thing", "project", "collection")
+# #554: kinds the Curator never nags for provenance (missing provenance, missing credit). A
+# family's provenance lives on its members, like its whereabouts. It can still be set by hand.
+NO_PROVENANCE_NAG_KINDS = ("family",)
+
+
+def provenance_nag_applies(kind):
+    """True when a card of `kind` is nagged for a missing provenance / credit (#554)."""
+    return (kind or DEFAULT_KIND) not in NO_PROVENANCE_NAG_KINDS
 
 # --- Card-level provenance (3.5) ---------------------------------------------
 # #529: these constants are the SEED for the editable lists (core/provenance_options.py,

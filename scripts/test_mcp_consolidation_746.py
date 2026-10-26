@@ -437,7 +437,7 @@ def golden_view(label, value):
     created_at, no longer an upload time), so list_needs compares as a set (sorted by key); and the queue
     gained `needs_date` items (an undated file with no card range to borrow), so curation_queue compares
     without them (empty groups dropped, counts recomputed)."""
-    value = mask_725(value)
+    value = mask_765(mask_725(value))
     if label == "list_needs" and isinstance(value, list):
         return sorted(value, key=lambda n: n.get("nudge_key", ""))
     if label == "curation_queue" and isinstance(value, dict) and "groups" in value:
@@ -459,6 +459,30 @@ def golden_view(label, value):
         out["counts"] = c
         return out
     return value
+
+
+# #765 (batch 4, "Family values"): a family / collection's write-up and dates checks are graded by its
+# members, so the REASON of those two nudges on a group card is worded differently ("0 of 1 members are
+# dated ..."). The same nudges still fire; only that text is masked, and only on group cards.
+MASKED_765_KINDS = ("missing_writeup", "missing_dates")
+
+
+def _group_card_ids():
+    return {p["id"] for p in db.list_projects() if (p.get("kind") or "project") in ("family", "collection")}
+
+
+def mask_765(value):
+    groups = {f":project:{i}" for i in _group_card_ids()}
+
+    def walk(v):
+        if isinstance(v, dict):
+            key = str(v.get("nudge_key") or v.get("key") or "")
+            hit = v.get("kind") in MASKED_765_KINDS and any(key.endswith(g) for g in groups)
+            return {k: ("<reason>" if hit and k in ("summary", "detail") else walk(x)) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return v
+    return walk(value)
 
 
 def mask_725(value):

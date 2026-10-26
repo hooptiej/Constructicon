@@ -199,7 +199,10 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
         writeup_doc = db.get_by_slug(project["writeup_slug"])
         if writeup_doc:
             writeup_body = object_types.writeup_body(writeup_doc) or ""
-    effective_start, effective_end = timeline.resolve_project_span(project, raw_items)
+    # #772: a family / collection's span also covers its members' (the ones this viewer can see).
+    effective_start, effective_end = cards.card_span(
+        project, raw_items, filter_cards=lambda cs: policy.filter_visible_cards(cs, access=access),
+        filter_items=policy.filter_visible)
     # Timeline feature: per-item effective dates for this project's own
     # content rail -- single points (no endDate), unlike the gallery
     # rail's project spans. Built from raw_items, not `items`, since

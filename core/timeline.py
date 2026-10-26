@@ -178,7 +178,14 @@ def is_blank_writeup_document(item):
     return not str((meta or {}).get("body") or "").strip()
 
 
-def resolve_project_span(project, items, first_upload=AUTO):
+def member_span_dates(member_spans):
+    """#772: the endpoints of a group card's members' spans ((start, end) pairs, None ends
+    skipped) as dates a span can be built from. One level only: a member's span is its own
+    (members of a family or collection can't be groups, card_rules.validate_membership)."""
+    return [d for span in (member_spans or ()) for d in span if d is not None]
+
+
+def resolve_project_span(project, items, first_upload=AUTO, member_spans=()):
     """project is a core.db projects dict. items is that project's
     capture_events rows (core.db.list_project_items shape) — may be empty.
     Returns (start, end) from REAL dates only (#725), or (None, None) when the card has none: no
@@ -199,13 +206,17 @@ def resolve_project_span(project, items, first_upload=AUTO):
 
     #672: an EMPTY write-up document (a written post with no body, e.g. the blank write-up a card
     was born with, left behind when the card got a different write-up) is skipped too, whether
-    or not it is the current write-up."""
+    or not it is the current write-up.
+
+    #772: `member_spans` is a family's or collection's members' own spans ((start, end) pairs,
+    core/cards.py member_spans): the group's span covers them as well as its own files, earliest
+    member start to latest member end. The group's own start/end overrides still win."""
     if project.get("start_date_override") is not None and project.get("end_date_override") is not None:
         return project["start_date_override"], project["end_date_override"]
     writeup_slug = project.get("writeup_slug")
     dated_items = [item for item in items
                    if item["slug"] != writeup_slug and not is_blank_writeup_document(item)]
-    return span_from_dates(project, real_dates(dated_items, first_upload))
+    return span_from_dates(project, real_dates(dated_items, first_upload) + member_span_dates(member_spans))
 
 
 def span_from_dates(project, item_dates):

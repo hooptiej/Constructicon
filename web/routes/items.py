@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from core import access_log, besteffort, captions, db, ingest, item_title, items, membership, object_types, ocr, parse_limits, revisions, similarity, storage, thumbnails
-from core import item_dates, tags as tags_svc, timeline
+from core import cards, item_dates, tags as tags_svc, timeline
 from web import content_security, files_feed
 from web.common import from_request_thread
 from web.shapes import _friendly_date, _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
@@ -639,7 +639,8 @@ def api_set_item_date(slug: str, display_date: float | None = Form(None), reset:
         if card is None or not policy.can_view_card(card):  # #604 step 3: a hidden private card = missing
             raise HTTPException(status_code=404, detail="no such card")
         rows, _ = _split_revisions(policy.filter_visible(db.list_project_items(card["id"])), False)
-        start, end = timeline.resolve_project_span(card, rows)
+        start, end = cards.card_span(card, rows, filter_cards=policy.filter_visible_cards,
+                                     filter_items=policy.filter_visible)  # #772
         out["span"] = {"start": start, "end": end,
                        "start_display": _friendly_datetime(start) or item_dates.NO_SPAN_LABEL,
                        "end_display": _friendly_datetime(end) or item_dates.NO_SPAN_LABEL,

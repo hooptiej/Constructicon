@@ -338,9 +338,10 @@ CREDIT_PROVENANCE = ("found", "collected")
 
 
 def provenance_whereabouts_needs(kind=None, hobby_ids=None, only_id=None):
-    """Computed needs (never stored): missing_provenance (every non-family card with
-    no provenance; carries the majority-file suggestion when there is one),
-    missing_provenance_credit (found / collected card with no credit) and
+    """Computed needs (never stored): missing_provenance (every card with no provenance whose
+    kind is nagged, card_rules.provenance_nag_applies: not a family, #554; carries the
+    majority-file suggestion when there is one), missing_provenance_credit (found / collected
+    card with no credit; not a family either) and
     missing_whereabouts (a Thing with no whereabouts). `only_id` limits it to one card."""
     from . import provenance_options  # lazy, as elsewhere in this module
     prov_options = provenance_options.list_options("card")  # #529: the live, editable list
@@ -352,7 +353,8 @@ def provenance_whereabouts_needs(kind=None, hobby_ids=None, only_id=None):
         if (kind and ck != kind) or (hobby_ids is not None and c["id"] not in hobby_ids):
             continue
         prov = c.get("provenance")
-        if not prov and ck != "family":
+        nag = card_rules.provenance_nag_applies(ck)
+        if not prov and nag:
             sug = suggest_provenance(c)
             rows.append({
                 "need": NEED_MISSING_PROVENANCE, "card_slug": c["slug"], "title": c["title"],
@@ -364,7 +366,7 @@ def provenance_whereabouts_needs(kind=None, hobby_ids=None, only_id=None):
                 "decision_id": None,
                 "options": [{"key": o["key"], "label": o["label"]} for o in prov_options],
             })
-        elif prov in CREDIT_PROVENANCE and not (c.get("provenance_credit") or "").strip():
+        elif nag and prov in CREDIT_PROVENANCE and not (c.get("provenance_credit") or "").strip():
             rows.append({
                 "need": NEED_MISSING_PROVENANCE_CREDIT, "card_slug": c["slug"], "title": c["title"],
                 "detail": f"{card_rules.card_provenance_label(prov)} card with no credit (who designed it / where it came from).",
@@ -380,6 +382,40 @@ def provenance_whereabouts_needs(kind=None, hobby_ids=None, only_id=None):
                 "options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
             })
     return rows
+
+
+# --- Group spans (#772) -------------------------------------------------------------
+
+def member_spans(card, *, filter_cards=None, filter_items=None):
+    """#772: the (start, end) of each member of a family / collection, for
+    timeline.resolve_project_span(member_spans=...). [] for any other kind. One level only: a
+    member's span is its own (members can't be groups, card_rules.validate_membership), so there
+    is no cycle to guard. `filter_cards` / `filter_items` let a page keep to what its viewer may
+    see (policy.filter_visible_cards / filter_visible); omitted = every member and file."""
+    if (card.get("kind") or "project") not in card_rules.GROUP_KINDS:
+        return []
+    members = db.list_family_members(card["id"])
+    if filter_cards is not None:
+        members = filter_cards(members)
+    spans = []
+    for m in members:
+        items = db.list_project_items(m["id"])
+        if filter_items is not None:
+            items = filter_items(items)
+        spans.append(timeline.resolve_project_span(m, items))
+    return spans
+
+
+def card_span(card, items=None, *, filter_cards=None, filter_items=None):
+    """A card's effective (start, end): timeline.resolve_project_span over its own items, rolled up
+    over its members' spans for a family / collection (#772). The card's own Timeline start/end
+    overrides still win. `items` = its own rows (fetched when omitted)."""
+    if items is None:
+        items = db.list_project_items(card["id"])
+        if filter_items is not None:
+            items = filter_items(items)
+    return timeline.resolve_project_span(
+        card, items, member_spans=member_spans(card, filter_cards=filter_cards, filter_items=filter_items))
 
 
 # --- Nesting ("part of") and families (3.6, 3.7) ----------------------------------
@@ -2132,7 +2168,7 @@ def card_face(card, items=None):
     if items is None:
         items = db.list_project_items(row["id"])
     kind = row.get("kind") or "project"
-    start, end = timeline.resolve_project_span(row, items)
+    start, end = card_span(row, items)
     status = status_fields(row)
     level = card_level.card_level(row, items)
     home = resolve_home(row["id"])
@@ -2359,7 +2395,7 @@ def hobby_card_face(hobby_row, projects, items_by_project, needs_input=False, co
     id -> db.list_project_items rows."""
     status = hobby_row.get("hobby_status") or "active"
     status_label = card_rules.HOBBY_ACTIVITY_LABELS.get(status, status)
-    spans = [timeline.resolve_project_span(p, items_by_project.get(p["id"], [])) for p in projects]
+    spans = [card_span(p, items_by_project.get(p["id"], [])) for p in projects]
     starts = [s for s, _ in spans if s is not None]
     ends = [e for _, e in spans if e is not None]
     start = min(starts) if starts else None

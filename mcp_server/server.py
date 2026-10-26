@@ -632,7 +632,7 @@ def _to_public_listed(row, query=None, text_chars=TEXT_PREVIEW_CHARS):
 
 def _to_public_project(project):
     items = db.list_project_items(project["id"])
-    effective_start, effective_end = timeline.resolve_project_span(project, items)
+    effective_start, effective_end = cards.card_span(project, items)  # #772: groups roll up members
     return {
         "id": project["id"],
         "slug": project["slug"],

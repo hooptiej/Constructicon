@@ -5585,13 +5585,26 @@ def date_lending_rows():
     conn = get_conn()
     try:
         cards = [dict(r) for r in conn.execute(
-            "SELECT id, slug, title, writeup_slug, start_date_override, end_date_override FROM projects")]
+            "SELECT id, slug, title, kind, writeup_slug, start_date_override, end_date_override FROM projects")]
         links = [dict(r) for r in conn.execute(
             f"SELECT pi.project_id, pi.rowid AS link_order, {_DATE_COLS}, "
             "CASE WHEN ce.media_type = 'document' AND json_valid(ce.type_metadata) "
             "THEN trim(COALESCE(json_extract(ce.type_metadata, '$.body'), '')) = '' ELSE 0 END AS blank_doc "
             "FROM project_items pi JOIN capture_events ce ON ce.slug = pi.post_slug")]
         return cards, links
+    finally:
+        conn.close()
+
+
+def family_member_pairs():
+    """#772: every (family_id, member_id) membership row of the group cards, in one query (the
+    member-inclusive spans of core/item_dates.py). [] before the family_members table exists."""
+    conn = get_conn()
+    try:
+        if not _table_exists(conn, "family_members"):
+            return []
+        return [(r["family_id"], r["member_id"]) for r in
+                conn.execute("SELECT family_id, member_id FROM family_members")]
     finally:
         conn.close()
 

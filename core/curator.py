@@ -4,8 +4,8 @@ Scores a card's completeness across several dimensions; curator_needs.py turns t
 unmet checks into nudges. The model is declarative and separated from policy.
 
 One report card (#545): the checks this score shares with the card pips (cover,
-write-up, dates) are NOT defined here. They call core/card_level.py's check_cover /
-check_writeup / check_dates, so the two can never grade the same card differently
+write-up, dates) are NOT defined here. They come from core/card_level.py's shared_checks
+(check_cover / check_writeup / check_dates, kind-aware for families and collections, #765), so the two can never grade the same card differently
 (write-up >= 200 characters, >= 80% of files with a real date). And the card's
 STAGE is the only status it reads: the frozen v1 `projects.status` word is not an
 input any more (STAGE_APPLICABILITY below is keyed on card_rules.STAGES).
@@ -197,6 +197,9 @@ def score_project(project_id_or_dict):
     # the write-up doc (which is scored separately as story/writeup_body).
     content = content_items(project, items)
     project_tags = _get_project_tags(project, items)
+    # #545 / #765: the checks shared with the pips, kind-aware (a family / collection is graded
+    # by its members), from ONE call so the score and the pips can't disagree.
+    shared = card_level.shared_checks(project, content)
 
     # Build checklist
     checklist = []
@@ -224,7 +227,7 @@ def score_project(project_id_or_dict):
     # Check 1: writeup_body. #545: the pips' rule (card_level.check_writeup), so the score and
     # the pips agree. The narrative lives in the write-up document's type_metadata.body (#156:
     # every card gets an empty one on creation, so having a writeup_slug proves nothing).
-    writeup_check = card_level.check_writeup(project)
+    writeup_check = shared["writeup"]
     writeup_body_passed = writeup_check["passed"]
     excused = not dim_applicable[0]
     if not excused:
@@ -266,7 +269,7 @@ def score_project(project_id_or_dict):
     weight_per_item = dim_rules["weight"] / len(dim_rules["items"])
 
     # Check 1: cover_image (card_level.check_cover, the pips' rule)
-    cover_check = card_level.check_cover(project)
+    cover_check = shared["cover"]
     cover_passed = cover_check["passed"]
     excused = not dim_applicable[0]
     if not excused:
@@ -326,7 +329,7 @@ def score_project(project_id_or_dict):
 
     # Check 1: content_dates. #545: the pips' rule (card_level.check_dates): >= 80% of the
     # files have a real date (never the upload time), or the card's start and end are both set.
-    dates_check = card_level.check_dates(project, content)
+    dates_check = shared["dates"]
     content_dates_passed = dates_check["passed"]
     excused = not dim_applicable[0]
     if not excused:

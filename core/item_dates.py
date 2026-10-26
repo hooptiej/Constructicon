@@ -31,7 +31,7 @@ core/items.py `apply_dates` (one batch, undoable).
 
 import threading
 
-from . import datefmt, date_guess, db, item_title, policy, timeline
+from . import card_rules, datefmt, date_guess, db, item_title, policy, timeline
 
 APPROX = "≈"
 UNDATED_LABEL = "Undated"
@@ -73,6 +73,22 @@ def _build():
         start, end = timeline.span_from_dates(card, dates.get(cid, []))
         if start is not None:
             ranges[cid] = (start, end)
+    # #772: a family / collection lends the range rolled up over its members (one level: members
+    # can't be groups), with its own overrides still winning. The members' ranges are the ones just
+    # built, so the same visible-to-everyone rule applies to them.
+    members = {}
+    for fid, mid in db.family_member_pairs():
+        members.setdefault(fid, []).append(mid)
+    for fid, mids in members.items():
+        card = by_id.get(fid)
+        if card is None or (card.get("kind") or "project") not in card_rules.GROUP_KINDS:
+            continue
+        if card.get("start_date_override") is not None and card.get("end_date_override") is not None:
+            continue  # both overrides set: already its range
+        rolled = dates.get(fid, []) + timeline.member_span_dates(ranges.get(m) for m in mids if m in ranges)
+        start, end = timeline.span_from_dates(card, rolled)
+        if start is not None:
+            ranges[fid] = (start, end)
     writeups = {c["writeup_slug"] for c in cards if c.get("writeup_slug")}
     writeups |= {r["slug"] for r in links if r.get("blank_doc")}
     return {"cards": by_id, "first": {s: cid for s, (_o, cid) in first.items()},

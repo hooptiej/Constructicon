@@ -1500,6 +1500,13 @@ time (`timestamp`) is shown only as **"Imported <date>"** (the item page's heade
   start/end overrides win; an ongoing card's open end ("... - now") stays. A card with nothing real and no
   overrides has span **(None, None)**, not its `created_at` (faces show no date line, the home page's
   radio dial leaves it off, the DATES group says "No real dates yet").
+- **Group spans roll up their members (#772).** A family's or collection's span also covers its
+  members' spans (earliest member start to latest member end), as well as its own files; its own
+  Timeline start/end overrides still win. One level only (members can't be groups). Callers use
+  `cards.card_span(card, items, filter_cards=, filter_items=)` (pages pass the viewer's policy filters),
+  never a bare `timeline.resolve_project_span` for a card that may be a group; the pure part is
+  `resolve_project_span(..., member_spans=)`. `item_dates` lends the rolled-up range too (the "≈ ... · from
+  <card>" of a loose file on a collection). Not rolled up: a hobby's staleness flag (`db.hobby_flags`).
 - **What an item SHOWS** is `core/item_dates.py` `item_date(row)`: the real date; else, **when its card
   has a real-dated range, that range, approximately: "≈ Nov 2019 - Jul 2021 · from Desk Build"**; else
   **"Undated"**. Derived at read time, NEVER stored as `content_date`, and never an input to any span (spans
@@ -1607,6 +1614,15 @@ Two ideas share the nav rail's "Curator" tab and one queue:
   (`card_rules.curator_status`, `export_status`, `cards.curator_status_for`, `STATUS_APPLICABILITY`,
   the means-to-an-end scoring, `db.PROJECT_STATUSES`) are gone. Check with
   `scripts/test_one_report_card_545.py`.
+- **Group cards are graded by their members (#765, #554 rules; owner decisions 2026-10-18).**
+  `card_level.shared_checks(card, files)` is the one kind-aware entry point the pips AND
+  `curator.score_project` call. For a family / collection: cover = its own (the art its face shows);
+  write-up = its own passes, or >= `GROUP_SHARE` (80%) of its members' write-ups pass; dates = its own
+  start and end set, or >= 80% of its units pass `check_dates` (each member, plus, for a collection only,
+  its own loose files as one unit). The stack pip for a group counts files OR members (3 of either). A
+  family is never nagged for provenance or credit (`card_rules.provenance_nag_applies`) and has no
+  whereabouts (`WHEREABOUTS_KINDS`); a collection keeps both (whereabouts on a collection of events /
+  places is the V2 place question, #771). Check: `scripts/test_family_values_554_765_772.py`.
 - **Where it surfaces:** the **Curator tab in the nav rail** (`_nav_tabs.html`) opens the Curator drawer
   (`_nudges_drawer.html`, rendered by `static/js/curator-queue.js`); its count badge is
   `GET /api/curator/queue?summary=1` and refreshes on the `pending-decisions-changed` /

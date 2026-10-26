@@ -53,7 +53,7 @@ EVENT_STAGES = ("idea", "in_progress", "done", "stopped")
 
 # --- Whereabouts (3.4) -------------------------------------------------------
 # Where the physical thing is now. NULL = not recorded / not applicable.
-WHEREABOUTS = ("have_it", "partial", "parted_out", "sold", "gifted", "lost", "never_built")
+WHEREABOUTS = ("have_it", "partial", "parted_out", "sold", "gifted", "lost", "abandoned", "never_built")
 WHEREABOUTS_LABELS = {
     "have_it": "Have it",
     "partial": "Partial",
@@ -61,8 +61,26 @@ WHEREABOUTS_LABELS = {
     "sold": "Sold",
     "gifted": "Gifted",
     "lost": "Lost",
+    "abandoned": "Abandoned (left it behind)",
     "never_built": "Never built",
 }
+# One-line help per value, shown by the card edit UI and the MCP docs. #773: whereabouts
+# `abandoned` (you walked away from the OBJECT: towed, left at the impound) is not the
+# stop_reason `abandoned` (you walked away from the PROJECT).
+WHEREABOUTS_HELP = {
+    "have_it": "You still have it.",
+    "partial": "Some of it is left.",
+    "parted_out": "Taken apart; the pieces went elsewhere.",
+    "sold": "Sold to someone.",
+    "gifted": "Given away.",
+    "lost": "Gone and you don't know where.",
+    "abandoned": ("You left the thing itself behind (towed, left at the impound). Not the same as "
+                  "stopping the project: that is the stage Stopped, reason Abandoned."),
+    "never_built": "It never got built.",
+}
+# #770: whereabouts that mean "I don't have it": the card's art goes grey on every face.
+# Only have_it (and not recorded) keep full color. Kinds outside WHEREABOUTS_KINDS never grey.
+WHEREABOUTS_GONE = ("partial", "parted_out", "sold", "gifted", "lost", "abandoned", "never_built")
 # Kinds a whereabouts value applies to (an action, event or family has no physical whereabouts).
 WHEREABOUTS_KINDS = ("thing", "project", "collection")
 
@@ -175,6 +193,12 @@ def validate_kind(kind):
 
 def whereabouts_label(value):
     return WHEREABOUTS_LABELS.get(value, value or "")
+
+
+def whereabouts_gone(kind, value):
+    """#770: True when a card's whereabouts says it's gone (WHEREABOUTS_GONE), so its face art
+    goes grey. A kind whereabouts doesn't apply to never greys, whatever the column holds."""
+    return (kind or DEFAULT_KIND) in WHEREABOUTS_KINDS and value in WHEREABOUTS_GONE
 
 
 def _po():

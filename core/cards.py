@@ -374,7 +374,7 @@ def provenance_whereabouts_needs(kind=None, hobby_ids=None, only_id=None):
         if ck == "thing" and not c.get("whereabouts"):
             rows.append({
                 "need": NEED_MISSING_WHEREABOUTS, "card_slug": c["slug"], "title": c["title"],
-                "detail": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, never built).",
+                "detail": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, abandoned, never built).",
                 "suggested": None, "suggested_reason": None, "confidence": None,
                 "decision_id": None,
                 "options": [{"key": k, "label": card_rules.WHEREABOUTS_LABELS[k]} for k in card_rules.WHEREABOUTS],
@@ -2168,6 +2168,9 @@ def card_face(card, items=None):
         "slug": row["slug"], "title": row["title"], "description": row.get("description") or "",
         **status,
         "highlight": bool(row.get("highlight")),
+        # #770: grey art = "I don't have it" (whereabouts gone); Stopped only adds a small tag.
+        "gone": card_rules.whereabouts_gone(kind, row.get("whereabouts")),
+        "stopped_tag": row.get("stage") == "stopped",
         "effective_start": start, "effective_end": end, "created_at": row["created_at"],
         "dates": date_range_label(start, end, active=row.get("activity") == "active"),
         "level": level["score"], "level_checks": level["checks"],

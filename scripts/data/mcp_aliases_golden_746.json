@@ -946,7 +946,7 @@
        "id": null,
        "key": "need:missing_whereabouts:shelf-thing",
        "kind": "missing_whereabouts",
-       "label": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, never built).",
+       "label": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, abandoned, never built).",
        "suggested": null,
        "type": "need"
       }
@@ -1919,7 +1919,7 @@
     "card_slug": "shelf-thing",
     "confidence": null,
     "decision_id": null,
-    "detail": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, never built).",
+    "detail": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, abandoned, never built).",
     "need": "missing_whereabouts",
     "options": [
      {
@@ -1945,6 +1945,10 @@
      {
       "key": "lost",
       "label": "Lost"
+     },
+     {
+      "key": "abandoned",
+      "label": "Abandoned (left it behind)"
      },
      {
       "key": "never_built",
@@ -1997,7 +2001,7 @@
     "card_slug": "shelf-thing",
     "confidence": null,
     "decision_id": null,
-    "detail": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, never built).",
+    "detail": "No whereabouts recorded (have it, partial, parted out, sold, gifted, lost, abandoned, never built).",
     "need": "missing_whereabouts",
     "options": [
      {
@@ -2023,6 +2027,10 @@
      {
       "key": "lost",
       "label": "Lost"
+     },
+     {
+      "key": "abandoned",
+      "label": "Abandoned (left it behind)"
      },
      {
       "key": "never_built",

@@ -1289,6 +1289,15 @@ matching the V2 mockup's Card template:
   on the right for an ordered family member.
 - **No provenance, credit or whereabouts on any face** (project, file or hobby). They live in the
   details panel (ORIGIN / STATUS) only. Mini cards carry no text box, stat or footer at all.
+- **Grey art = "I don't have it" (#770, owner decisions 2026-10-18).** `card_face` sets `gone` from
+  `card_rules.whereabouts_gone(kind, whereabouts)`: any of `WHEREABOUTS_GONE` (partial, parted_out,
+  sold, gifted, lost, abandoned, never_built) greys the art (`cx-gone`) at every size, with no reason
+  tag (the reason stays in the details panel); a kind outside `WHEREABOUTS_KINDS` never greys. Stage
+  Stopped no longer greys: it sets `stopped_tag` (`cx-stopped` + a small "Stopped" tag on the art),
+  independent of grey. Hobby and file faces have neither. `cards.js` builds file faces only, so it
+  has nothing to match. Whereabouts `abandoned` (#773, "Abandoned (left it behind)", the object was
+  left behind) is not stop_reason `abandoned` (the project was); `WHEREABOUTS_HELP` says so in the
+  picker. Check: `scripts/test_gone_grey_770_773.py`.
 - Hobby face text box: its synopsis, then "Projects: A, B, C, +N more." and "Every card in this hobby
   carries its group code, CODE.".
 - **Hobby covers (#686, owner decision: chosen, with an automatic fallback).** `hobby_settings.cover_slug`

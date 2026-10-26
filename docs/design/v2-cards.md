@@ -32,7 +32,7 @@ User-facing labels (pages, MCP result text, card faces). Internal enum values ar
 | Activity | Active / Inactive | `activity` |
 | Stage | In progress, In use, Idea, Paused, Done, Stopped | `stage` |
 | Stop reason | Failed, Abandoned | `stop_reason` |
-| Whereabouts | Have it, Partial, Parted out, Sold, Gifted, Lost, Never built | `whereabouts` |
+| Whereabouts | Have it, Partial, Parted out, Sold, Gifted, Lost, Abandoned (left it behind, #773), Never built | `whereabouts` |
 | Origin | Created, Found, Collected, Referenced, Client-owned | `provenance` |
 | Membership | "In family", "In hobby" | `family_members`, `project_hobbies` |
 | Nesting | "Part of" | `projects.parent_id` |
@@ -189,7 +189,7 @@ ALTER TABLE projects ADD COLUMN whereabouts      TEXT   -- NULL = not recorded /
 ALTER TABLE projects ADD COLUMN whereabouts_note TEXT
 ```
 
-`WHEREABOUTS = (have_it, partial, parted_out, sold, gifted, lost, never_built)`. Applicable kinds: `thing`,
+`WHEREABOUTS = (have_it, partial, parted_out, sold, gifted, lost, abandoned, never_built)`. Applicable kinds: `thing`,
 `project`, `collection` (a nested *project* such as the Skyhawk conversion parts is legitimately `partial`). Not
 applicable to `action`, `event`, `family`. `NULL` is the default and means "not recorded"; `list_needs_decision`
 reports a `thing` with `NULL` whereabouts as a computed need, but nothing blocks on it. Cross-rules are in 3.2 (5).

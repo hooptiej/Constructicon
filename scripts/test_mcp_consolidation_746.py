@@ -438,6 +438,16 @@ def golden_view(label, value):
     gained `needs_date` items (an undated file with no card range to borrow), so curation_queue compares
     without them (empty groups dropped, counts recomputed)."""
     value = mask_555(mask_765(mask_725(value)))
+    if label in ("move_files", "copy_files") and isinstance(value, dict):
+        # #555: a transfer used to count a file that had the card's tag but not its CHIP as gaining the
+        # tag (the #590 chip stamp). Chips are derived now, so only real post_tags changes count; the
+        # tag rows and counts are left out here and covered by scripts/test_move_tags_590.py.
+        value = {k: v for k, v in value.items() if k not in ("tags_added", "tags_removed")}
+        value["changes"] = [c for c in value.get("changes", []) if c.get("field") != "tag"]
+    return golden_view_rest(label, value)
+
+
+def golden_view_rest(label, value):
     if label == "list_needs" and isinstance(value, list):
         return sorted(value, key=lambda n: n.get("nudge_key", ""))
     if label == "curation_queue" and isinstance(value, dict) and "groups" in value:

@@ -437,7 +437,7 @@ def golden_view(label, value):
     created_at, no longer an upload time), so list_needs compares as a set (sorted by key); and the queue
     gained `needs_date` items (an undated file with no card range to borrow), so curation_queue compares
     without them (empty groups dropped, counts recomputed)."""
-    value = mask_765(mask_725(value))
+    value = mask_555(mask_765(mask_725(value)))
     if label == "list_needs" and isinstance(value, list):
         return sorted(value, key=lambda n: n.get("nudge_key", ""))
     if label == "curation_queue" and isinstance(value, dict) and "groups" in value:
@@ -469,6 +469,24 @@ MASKED_765_KINDS = ("missing_writeup", "missing_dates")
 
 def _group_card_ids():
     return {p["id"] for p in db.list_projects() if (p.get("kind") or "project") in ("family", "collection")}
+
+
+def mask_555(value):
+    """#555 changed an item's chips on purpose: they are derived from the tag tree (one store), never
+    the linked tag of a card the item is on, and nothing writes the free-text column any more. So an
+    item's `tags` list and change rows of capture_events.tags (the old #274 / #590 chip stamping) are
+    left out of the golden comparison; the tree itself (post_tags rows) is still compared."""
+    drop = object()
+
+    def walk(v):
+        if isinstance(v, dict):
+            if v.get("table") == "capture_events" and v.get("field") == "tags":
+                return drop
+            return {k: ("<chips #555>" if k == "tags" and isinstance(x, list) else walk(x)) for k, x in v.items()}
+        if isinstance(v, list):
+            return [w for w in (walk(x) for x in v) if w is not drop]
+        return v
+    return walk(value)
 
 
 def mask_765(value):

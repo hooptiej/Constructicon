@@ -2062,7 +2062,7 @@ One generated file of every registered type and extension, to drop-test a new in
   `item_chips_*` triggers (`db._chip_triggers`; they exist once the `tags_one_store_555` migration has
   run) and never imaged (`db.invert_image` ignores the column in old row images). Nothing writes it as
   truth; `db.check_chip_cache()` lists rows that drift (none, by construction). Kept for one release;
-  dropping it is the follow-up issue.
+  dropping it is #799.
 - **`projects`** — hand-curated portfolio collections, deliberately
   *distinct* from the tag tree (auto-grouping by tag was the original plan
   and was rejected in favor of manual curation — "projects are how the

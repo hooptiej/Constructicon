@@ -1317,6 +1317,53 @@ matching the V2 mockup's Card template:
   `web.shapes._to_hobby_face`, with the computed flags as `cx-flag` lines); the drawer fetches the same
   fragment from `GET /api/hobbies/html`; their JS is `static/js/hobbies.js`. The user-visible word is
   `card_rules.HOBBY_LABEL` (#700 will make it renameable). Check: `scripts/test_hobby_covers_686.py`.
+  **#554 (batch 5):** the hobby page's COVER picker dropdown is gone (owner decision 2026-10-25): the
+  cover pick on its cards and loose objects (below) is the one control, and the COVER group is a fact
+  sheet with "Back to the automatic cover". A hobby can also BORROW a member card's cover
+  (`hobby_settings.cover_project_id`, ALTER loop, NULL = none; never set together with `cover_slug`):
+  `hobbies.set_cover(hobby, cover_slug=None, *, cover_card=)`, source `picked_card`; it follows that
+  card's resolved cover, and a card that left the hobby or lost its cover falls back to automatic
+  (`picked_unavailable`). Web `POST /api/hobby/{id}/cover` `cover_card=`; MCP
+  `constructicon_update_hobby(cover_card=)`.
+
+## Card pages per kind, the cover pick, renames (#554 pages part, batch 5 "Every Kind Gets Its Own Room")
+
+- **Per-kind page config, not `is_group` switches:** `card_rules.CARD_PAGES` / `page_config(kind)`
+  (`members`, `nests`, `lead`, `date_banner`, `members_label`, `member_noun`); `project_detail.html`
+  reads `page.*`. A family / collection shows its MEMBERS in the hobby member layout
+  (`_hobby_nodes.html` `project_nodes(nodes, zone, remove_label=, cover=)`, built by
+  `pages._card_nodes`, shared with the hobby page) under its Stacks, each with the cover pick and
+  "Remove from family|collection" (undo bar). An **event** leads with the date banner, then its
+  write-up, then the card and details (owner decision 2026-10-18; the "where" link waits for the V2
+  place kind #771; no attendee field).
+- **The cover pick, the same everywhere** (`templates/_cover_pick.html` `cover_pick(kind, ref, title,
+  checked, can_edit)` + `cover_pick_config(cfg)` once per page; `static/js/cover-pick.js`; the item
+  grids draw the same markup in `cards.js` when the grid config carries `cover_pick`). It sits where
+  the cards are seen: the card page's Stacks fans (files), the nested cards beside the piles, the
+  member layout, the All files grid; the hobby page's cards and loose-object grid. Ticking a file
+  makes it the cover; ticking a card BORROWS its cover and follows it. One at a time (the JS re-syncs
+  every pick on the page). Card writes: `cards.set_cover(card, slug= | from_card=)` (web `POST
+  /api/projects/{id}/cover` `slug` | `card`, editor; MCP `constructicon_update_project(fields=
+  {"cover_card": ...})`), one imaged `update_card` row, undoable, Undo bar. A card may lend to its
+  parent (nested, #356) or to a family / collection it is a member of (`cards.can_lend_to`; the
+  `cover_project_id` check in `cards.update` is widened the same way). **Every refusal says why**
+  (422 `bad_cover`, `details.reason`): `not_related`, `no_cover` (give it a cover first), `cover_loop`,
+  `hidden` (a file the actor can't see), `redacted`, `no_picture`, `missing`
+  (`cards.cover_file_problem` / `lend_problem`). **Viewers** see every pick greyed (`is-locked`,
+  `aria-disabled`, "Cover · editors", tooltip "needs the editor role"); a click shows
+  `pages.LOCKED_COVER_MESSAGE` in the bar; the API refuses them 403.
+- **Rename a hobby:** `hobbies.rename(hobby, name)` (op `hobby_rename`, one imaged `blog_tags` row,
+  undoable): new name, slug from it (`tags._slugify`, `-2` on a clash); 409 `hobby_name_conflict` when
+  another tag has the name in any case. Every slug it has had goes in `hobby_slug_history` (NOT imaged,
+  so an undo keeps both addresses working; cleared by delete-all), and `/hobby/<old slug>` 308s to
+  `hobby_label.url(<current>)`, query kept (`pages.hobby_detail_page`; a hidden hobby stays 404).
+  Web: the hobby page's IDENTITY Name field (`POST /api/hobby/{id}/rename`); MCP
+  `constructicon_update_hobby(name=)`. Not changed: the free-text tag chips items carry (#555).
+- **Undo after deleting a card:** the card page's Delete answers with `batch_id` and shows the Undo bar;
+  closing it (or 30 s) goes home, Undo reloads the restored card. No persistent "Recent changes" strip
+  (owner: no).
+- Check: `scripts/test_rooms_554.py` (throwaway DB: the page config, card and hobby cover picks with
+  every refusal, rename + redirects + undo, delete + undo, the pages, a viewer).
 
 **The text, in this order** (`cards.face_text(card)` -> `(text, source)`; never whereabouts or provenance):
 1. `projects.synopsis`: a few hand-written sentences (max 600; one paragraph per line);

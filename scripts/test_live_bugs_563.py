@@ -169,7 +169,8 @@ check("detach works on an existing tag", isinstance(r, dict) and r.get("ok") is 
 tpl_path = os.path.join(ROOT, "web", "templates", "project_detail.html")
 tpl = open(tpl_path, encoding="utf-8").read()
 check("delete confirm no longer says 'can't be undone'", "This can't be undone" not in tpl.split("Delete project (#367)")[1].split("Orphan child projects")[0])
-check("delete confirm mentions the change log undo", "undone afterwards from the change log" in tpl)
+# #554 (batch 5): the delete now offers Undo in the bar right after, so the wording says that.
+check("delete confirm mentions the undo", "You can undo it right after" in tpl and "showUndoBar(summary, body.batch_id" in tpl)
 from jinja2 import Environment  # noqa: E402
 Environment(extensions=[]).parse(tpl)  # syntax only
 check("project_detail.html parses", True)

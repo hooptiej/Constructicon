@@ -18,7 +18,7 @@ FastAPI app through TestClient and the MCP tool functions called directly. Cover
   - /hobbies and /api/hobbies/html render the shared card (cx cx-small cx-kind-hobby) with an <img>
     from the thumb route and NO hardcoded placeholder when a cover exists; a hobby with no cover gets
     the card's own empty art; flags, group code, project count and activity still show; the page
-    has no inline script any more; the hobby page's COVER group lists the choices;
+    has no inline script any more; the hobby page's COVER group says where the cover comes from (#554: picked with the cards' cover checkboxes);
   - scripts/check_layering.py passes.
 No server needed:
 
@@ -343,10 +343,14 @@ drawer = client.get("/").text
 check("drawer: no inline template left, loads hobbies.js", "project-cover-placeholder" not in drawer
       and 'id="hobbies-drawer-grid"' in drawer and "/static/js/hobbies.js" in drawer)
 hp = client.get(f"/hobby/{H['slug']}").text
-check("hobby page: COVER group with Automatic + the choices, the chosen one checked",
-      'data-group="cover"' in hp and 'name="hobby-cover" value=""' in hp
-      and re.search(r'name="hobby-cover" value="%s" checked' % re.escape(loose), hp) is not None
-      and f'value="{p_new}"' in hp, hp[hp.find('data-group="cover"'):][:600])
+# #554 (batch 5): the COVER dropdown is gone (owner, 2026-10-25); the cover pick on the cards and the
+# loose-object grid is the one control, and the COVER group says where the cover comes from.
+_grid_cfg = json.loads(re.search(r'<script type="application/json" id="loose-config"[^>]*>(.*?)</script>', hp, re.S).group(1))
+check("hobby page: COVER group is a fact sheet (no picker), the cover pick on each card + the loose grid",
+      'data-group="cover"' in hp and 'name="hobby-cover"' not in hp
+      and 'data-cover-kind="card"' in hp and 'id="cover-pick-config"' in hp
+      and _grid_cfg.get("cover_pick", {}).get("current") == {"kind": "item", "ref": loose},
+      hp[hp.find('data-group="cover"'):][:600])
 check("hobby page: its own card shows the chosen cover", re.search(
     r'<div class="detail-header-card">\s*<a class="cx cx-full cx-kind-hobby.*?<img src="/f/%s/thumb"' % re.escape(loose),
     hp, flags=re.S) is not None)

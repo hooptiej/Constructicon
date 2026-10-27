@@ -230,7 +230,9 @@ def main():
         check(f"{name}: loads item-grid.js, item-sort.js and undo-bar.js (cache-busted)",
               all(re.search(r'<script src="/static/js/%s\?v=\d+"></script>' % re.escape(f), html)
                   for f in ("item-grid.js", "item-sort.js", "undo-bar.js")))
-        check(f"{name}: one grid, one config block", html.count("data-item-grid=") == 1 and html.count('type="application/json"') == 1)
+        check(f"{name}: one grid, one config block", html.count("data-item-grid=") == 1
+              # #554: the hobby page also carries the cover pick's config block (one more JSON block)
+              and html.count('type="application/json"') == (2 if 'id="cover-pick-config"' in html else 1))
         check(f"{name}: the config block carries this response's CSP nonce",
               re.search(r'<script type="application/json" id="%s-config" nonce="([^"]+)"' % gid, html) is not None
               and re.search(r'<script type="application/json" id="%s-config" nonce="([^"]+)"' % gid, html).group(1)

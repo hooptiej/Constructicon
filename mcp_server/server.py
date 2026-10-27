@@ -1611,6 +1611,7 @@ CARD_FIELDS = {
     "flavor": (str, type(None)),
     "writeup_slug": (str,),
     "owner_words": (bool,),
+    "cover_card": (str, int),  # #554: borrow a nested child's or a member's cover (cards.set_cover)
 }
 
 
@@ -1654,7 +1655,9 @@ def constructicon_update_project(project_id: str | int | None = None, title: str
       home ("card:<slug>" | "hobby:<slug>" | a card; null = automatic), synopsis (max 600: a few
       sentences saying what the card is; set it whenever you write a write-up), flavor (one italic
       line, max 140), writeup_slug (an item that can be a write-up; it joins the card),
-      owner_words (bool: the write-up is the owner's own words).
+      owner_words (bool: the write-up is the owner's own words), cover_card (a nested part or a
+      family / collection member, id or slug: the card borrows its cover and follows it; bad_cover
+      with details.reason when it can't: not_related, no_cover, cover_loop, hidden, ...).
     E.g. fields={"whereabouts": "have_it", "synopsis": "A 3D-printed rover."}.
     dry_run=true answers as the call would and writes nothing.
     Returns the card plus batch_id, changes and warnings (if any). Codes: bad_status, bad_kind,
@@ -1716,6 +1719,10 @@ def constructicon_update_project(project_id: str | int | None = None, title: str
             take(items.update(current, type_metadata={"owner_words": f["owner_words"]}, batch_id=batch_id))
         take(cards.update(cid, title=title, description=description, cover_slug=cover_slug,
                           start=new_start, end=new_end, batch_id=batch_id))
+        if "cover_card" in f:
+            if cover_slug:
+                raise InvalidInput("Pass cover_slug or fields.cover_card, not both: a card has one cover.")
+            take(cards.set_cover(cid, from_card=f["cover_card"], batch_id=batch_id))
         result = {**_to_public_project(db.get_project(cid)), "batch_id": None if dry_run else batch_id}
     collected = take.result()
     result["changes"] = collected["changes"]
@@ -2007,26 +2014,33 @@ def _hobby_or_404(hobby):
 def constructicon_update_hobby(hobby: str | int, status: str | None = None, group_code: str | None = None,
                                cover_slug: str | None = None, clear_cover: bool = False,
                                synopsis: str | None = None, flavor: str | None = None,
+                               name: str | None = None, cover_card: str | int | None = None,
                                dry_run: bool = False) -> dict:
     """Edit a hobby, every change in ONE batch. hobby: id or slug. Left out (None) = left alone.
+    name: rename it; its page address (slug) follows and the old address redirects.
     status: active | inactive (the old words dormant / abandoned are stored as inactive, with a
       warning). group_code: 2-4 letters/digits shown on cards, unique, stored upper case.
-    cover_slug: an item with a picture as its cover; clear_cover=true goes back to the automatic
-      cover (its highlighted project's, else its latest project's).
+    cover_slug: an item with a picture as its cover; cover_card: one of its cards (id or slug) whose
+      cover it borrows and follows; clear_cover=true goes back to the automatic cover (its
+      highlighted project's, else its latest project's). Only one of the three.
     synopsis (max 600) / flavor (max 140): its card face text; "" clears.
     dry_run=true answers as the call would and writes nothing.
     -> {ok, id, name, slug, status, group_code, flags, synopsis, flavor, cover: {cover_slug,
     cover_picked, cover_source, ...}, changes, warnings, batch_id, dry_run}.
-    Codes: bad_hobby_activity, bad_group_code, group_code_conflict, bad_cover, bad_card_text.
+    Codes: bad_hobby_activity, bad_group_code, group_code_conflict, bad_cover (details.reason),
+    bad_card_text, hobby_name_conflict.
     """
-    if clear_cover and cover_slug:
-        raise InvalidInput("Pass either cover_slug or clear_cover=true, not both.")
+    if sum(1 for x in (cover_slug, cover_card) if x not in (None, "")) + bool(clear_cover) > 1:
+        raise InvalidInput("Pass only one of cover_slug, cover_card or clear_cover=true.")
     hid = _hobby_or_404(hobby)["id"]
     take = _Collect()
     batch_id = changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
-        if cover_slug is not None or clear_cover:  # first: set_cover reports the whole batch so far
-            take(hobbies.set_cover(hid, None if clear_cover else cover_slug, batch_id=batch_id))
+        if cover_slug is not None or cover_card not in (None, "") or clear_cover:  # first: set_cover reports the batch so far
+            take(hobbies.set_cover(hid, None if clear_cover else cover_slug,
+                                   cover_card=None if clear_cover else cover_card, batch_id=batch_id))
+        if name is not None:
+            take(hobbies.rename(hid, name, batch_id=batch_id))
         if status is not None:
             take(cards.set_hobby_activity(hid, status, batch_id=batch_id))
         if group_code is not None:

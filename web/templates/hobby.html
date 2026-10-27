@@ -6,6 +6,7 @@
 {% from "_hobby_nodes.html" import project_nodes %}
 {% from "_card_text.html" import about_view, about_edit, about_script %}
 {% from "_sharing.html" import sharing_panel %}
+{% from "_cover_pick.html" import cover_pick_config %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
@@ -71,7 +72,8 @@
       </div>
       {% endset %}
 
-      {# ---- IDENTITY: name (read-only: a hobby is renamed on its tag) and the group code ---- #}
+      {# ---- IDENTITY: the name (#554: renamed here; its page address follows, the old one redirects)
+           and the group code ---- #}
       {% set identity_view %}
       <dl class="dp-rows">
         <div class="dp-row"><dt>Name</dt><dd>{{ hobby.name }}</dd></div>
@@ -79,6 +81,10 @@
       </dl>
       {% endset %}
       {% set identity_edit %}
+      <div class="dp-field">
+        <label for="hobby-name-input">Name</label>
+        <input id="hobby-name-input" class="input" maxlength="200" value="{{ hobby.name }}" title="Renaming moves its page to a new address; the old one keeps working and redirects there">
+      </div>
       <div class="dp-field">
         <label for="hobby-code-input">Group code</label>
         <input id="hobby-code-input" class="input" style="width:96px;text-transform:uppercase" maxlength="4" value="{{ hobby.group_code or '' }}" title="2-4 letters or digits, shown on cards">
@@ -108,32 +114,21 @@
       </dl>
       {% endset %}
 
-      {# ---- COVER (#686): chosen by hand, else automatic (highlighted project's cover, else the most
-           recently updated project's). Same radio-per-picture idea as a project's "Set as cover". ---- #}
+      {# ---- COVER (#686; #554): picked with the Cover checkbox on any of its cards or loose objects below
+           (one at a time; a card's pick borrows that card's cover and follows it). Nothing ticked = automatic
+           (its highlighted project's cover, else the most recently updated project's). The old picker
+           dropdown is gone (owner decision 2026-10-25). ---- #}
       {% set cover_view %}
       <dl class="dp-rows">
         <div class="dp-row"><dt>Cover</dt><dd>{% if hobby_cover.cover_source %}{{ hobby_cover.cover_source_label }}{% if hobby_cover.cover_project %} (<a href="/project/{{ hobby_cover.cover_project }}">{{ hobby_card.cover.project_title }}</a>){% endif %}{% else %}<span class="dp-muted">None yet: no project has a cover</span>{% endif %}</dd></div>
       </dl>
       {% if hobby_cover.picked_cover_unavailable %}
-      <p class="dp-muted" role="note">The chosen cover can't be shown (its file was deleted, redacted or is hidden), so the automatic one is. Pick another, or go back to automatic.</p>
+      <p class="dp-muted" role="note">The chosen cover can't be shown (its file was deleted, redacted or is hidden, or the card it borrows from has none or left), so the automatic one is. Tick another, or go back to automatic.</p>
       {% endif %}
-      {% endset %}
-      {% set cover_edit %}
-      <fieldset class="dp-cover-choices" id="hobby-cover-choices">
-        <legend class="dp-sr-label">Cover</legend>
-        <label class="dp-cover-choice dp-cover-auto">
-          <input type="radio" name="hobby-cover" value="" {% if not hobby_cover.picked_cover_slug %}checked{% endif %}>
-          <span>Automatic</span>
-        </label>
-        {% for ch in cover_choices %}
-        <label class="dp-cover-choice" title="{{ ch.label }}">
-          <input type="radio" name="hobby-cover" value="{{ ch.slug }}" {% if ch.slug == hobby_cover.picked_cover_slug %}checked{% endif %}>
-          <img src="{{ ch.url }}" loading="lazy" alt="">
-          <span>{{ ch.label }}</span>
-        </label>
-        {% endfor %}
-      </fieldset>
-      {% if cover_choices | length >= cover_choices_max %}<p class="dp-muted">Showing the first {{ cover_choices_max }} pictures.</p>{% endif %}
+      <p class="dp-note">Tick <strong>Cover</strong> on a card or a loose object below to choose it.</p>
+      {% if hobby_cover.picked_cover_slug or hobby_cover.picked_cover_card_id %}
+      <button type="button" class="dp-btn{% if not can_edit %} is-locked{% endif %}" data-cover-auto{% if not can_edit %} aria-disabled="true" title="Picking the cover needs the editor role"{% endif %}>Back to the automatic cover</button>
+      {% endif %}
       {% endset %}
 
       {# ---- ABOUT (#596): the hobby card's own synopsis + flavor (shown above its project list) ---- #}
@@ -142,7 +137,7 @@
 
       <div class="dp-panel">
         {{ dp_group("about", "ABOUT", about_v, about_e) }}
-        {{ dp_group("cover", "COVER", cover_view, cover_edit) }}
+        {{ dp_group("cover", "COVER", cover_view, editable=false) }}
         {{ dp_group("status", "STATUS", status_view, status_edit) }}
         {{ dp_group("identity", "IDENTITY", identity_view, identity_edit) }}
         {{ dp_group("settings", "SETTINGS", settings_view, settings_edit) }}
@@ -182,10 +177,11 @@
     {# Owner, 2026-10-03: Active and Inactive share ONE flowing row (no dead space after a short
        Active zone); a vertical divider marks where the inactive cards start. #}
     <h3 class="zone-heading">{{ 'Active' if active_nodes else 'Inactive' }}</h3>
+    {% set remove_label = "Remove from " ~ hobby_label.one_lc %}
     <div class="hp-row" id="hobby-projects-row">
-      {{ project_nodes(active_nodes, 'a') }}
+      {{ project_nodes(active_nodes, 'a', remove_label=remove_label, cover=node_cover) }}
       {% if active_nodes and inactive_nodes %}<div class="hp-divider" role="separator" aria-label="Inactive projects follow"><span>Inactive</span></div>{% endif %}
-      {{ project_nodes(inactive_nodes, 'i') }}
+      {{ project_nodes(inactive_nodes, 'i', remove_label=remove_label, cover=node_cover) }}
     </div>
     {% else %}
     <p class="empty-state">No member projects yet.</p>
@@ -242,6 +238,7 @@
 {# undo-bar.js, item-sort.js: loaded by the file grid's include above (#553) #}
 <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
 <script src="/static/js/sharing.js?v={{ static_version('js/sharing.js') }}" defer></script>
+{{ cover_pick_config(cover_pick_cfg) }}
 <script nonce="{{ csp_nonce() }}">
 (function () {
   const DP = window.DetailsPanel;
@@ -264,29 +261,31 @@
   // STATUS / IDENTITY: Save calls the same endpoints the old inline controls called; details.js reloads on success.
   const statusSel = document.getElementById('hobby-status-select');
   const codeInput = document.getElementById('hobby-code-input');
+  const nameInput = document.getElementById('hobby-name-input');
   const savedStatus = {{ hobby.status | tojson }};
   const savedCode = {{ (hobby.group_code or '') | tojson }};
+  const savedName = {{ hobby.name | tojson }};
   DP.register('status', {
     save: async () => { if (statusSel.value !== savedStatus) await post('status', { status: statusSel.value }); },
   });
+  // #554: a rename moves the page (its slug follows the name): the address bar takes the new address
+  // before details.js reloads, so the reload lands there (the old address keeps redirecting). Like the
+  // other details Saves it is one undoable change (change log / constructicon_undo).
   DP.register('identity', {
-    save: async () => { if (codeInput.value.trim() !== savedCode) await post('group-code', { group_code: codeInput.value.trim() }); },
+    save: async () => {
+      if (codeInput.value.trim() !== savedCode) await post('group-code', { group_code: codeInput.value.trim() });
+      const name = nameInput.value.trim();
+      if (name && name !== savedName) {
+        const r = await post('rename', { name });
+        if (r.url && r.slug !== {{ hobby.slug | tojson }}) window.history.replaceState(null, '', r.url);
+      }
+    },
   });
   // SETTINGS (#562): the per-hobby physical-piece switch (POST /api/hobby/{id}/physical-piece, undoable).
   const ppInput = document.getElementById('hobby-physical-piece-input');
   const savedPP = {{ shows_physical_piece | tojson }};
   DP.register('settings', {
     save: async () => { if (ppInput.checked !== savedPP) await post('physical-piece', { enabled: ppInput.checked ? 'true' : 'false' }); },
-  });
-
-  // COVER (#686): POST /api/hobby/{id}/cover (blank = back to automatic; undoable).
-  const savedCover = {{ (hobby_cover.picked_cover_slug or '') | tojson }};
-  DP.register('cover', {
-    save: async () => {
-      const picked = document.querySelector('#hobby-cover-choices input[name="hobby-cover"]:checked');
-      const value = picked ? picked.value : '';
-      if (value !== savedCover) await post('cover', { cover_slug: value });
-    },
   });
 
   // Add / remove a project: the page is server-rendered, so a change reloads it.

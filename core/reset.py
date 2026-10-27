@@ -37,6 +37,7 @@ CLEARED_TABLES = (
     "blog_entry_items", "blog_entry_projects", "blog_entries",
     "project_relations", "family_members", "project_hobbies",
     "curator_dismissals", "pending_decisions", "trash", "hobby_settings",
+    "hobby_slug_history",  # #554: a renamed hobby's old addresses go with the hobbies
     "capture_events", "projects", "blog_tags",
 )
 KEPT_TABLES = ("app_settings", "audit_log", "install_config", "provenance_options",

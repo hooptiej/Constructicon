@@ -112,6 +112,13 @@
       if (cfg.href_from) opts.href = '/object/' + item.slug + '?from=' + encodeURIComponent(cfg.href_from);
       if (cfg.unfiled_lamp) opts.unfiledSlugs = unfiledSlugs;
       if (bulk.length) opts.selectable = 'row';
+      // #554: the cover pick (a hobby's loose objects): what is ticked comes from cover-pick.js once it runs
+      if (cfg.cover_pick) {
+        opts.coverPick = {
+          current: root.CoverPick ? root.CoverPick.current() : cfg.cover_pick.current,
+          can_edit: !!cfg.cover_pick.can_edit,
+        };
+      }
       return layout === 'list' ? IC.row(item, opts) : IC.html(item, opts);
     }
     var current = null;

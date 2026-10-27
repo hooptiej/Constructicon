@@ -16,7 +16,9 @@ group_code; cards join it through `project_hobbies` (#360, V2 cards 3.3 / 3.9).
   set_activity / set_group_code        = cards.set_hobby_activity / set_group_code (already logged)
   set_physical_piece(hobby, enabled)   #562: the "shows physical-piece fields" setting (hobby_settings)
   set_text(hobby, synopsis, flavor)    #596: the hobby card's own synopsis / flavor (hobby_settings)
-  set_cover(hobby, cover_slug)         #686: the chosen cover (hobby_settings.cover_slug; "" = automatic)
+  set_cover(hobby, cover_slug, cover_card=)  #686: the chosen cover (hobby_settings.cover_slug; "" = automatic);
+                                       #554: or a member card whose cover it borrows (cover_project_id)
+  rename(hobby, name)                  #554: new name + slug; old addresses redirect (hobby_slug_history)
   cover(hobby)                         #686: the resolved cover (chosen, else automatic), read-only
   convert_from_card(card)              project -> hobby (was db.convert_project_to_hobby, not
                                        undoable); now fully imaged
@@ -266,38 +268,119 @@ def cover(hobby, projects=None, usable=None):
     return cards.resolve_hobby_cover(get_hobby(hobby), projects, usable)
 
 
-def set_cover(hobby, cover_slug, *, dry_run=False, actor=None, batch_id=None):
+def set_cover(hobby, cover_slug=None, *, cover_card=None, dry_run=False, actor=None, batch_id=None):
     """#686: chooses the hobby's cover (hobby_settings.cover_slug), or clears the choice (None or
-    "") so the automatic cover shows again. The item must exist, be visible to the actor, not be
-    redacted and have a picture (404 not_found / 422 bad_cover). One imaged row (op hobby_cover),
-    undoable with the generic undo; choosing what is already chosen writes nothing. Deleting or
-    trashing the chosen item later doesn't touch this row: the hobby just shows its automatic
-    cover until the item comes back (cards.resolve_hobby_cover). data: {hobby, picked_cover_slug,
-    cover: the resolved cover fields (cards.hobby_cover_fields)}."""
+    "", with no `cover_card`) so the automatic cover shows again. The item must exist, be visible to
+    the actor, not be redacted and have a picture (404 not_found / 422 bad_cover).
+    #554: or `cover_card` (a member card's id or slug): the hobby BORROWS that card's cover and
+    follows it when it changes (hobby_settings.cover_project_id). The card must be in the hobby and
+    have a cover of its own the actor can see (422 bad_cover, details.reason, saying why). A file
+    and a card are never both chosen: picking one clears the other.
+    One imaged row (op hobby_cover), undoable with the generic undo; choosing what is already chosen
+    writes nothing. Deleting or trashing the chosen item later doesn't touch this row: the hobby just
+    shows its automatic cover until the item comes back (cards.resolve_hobby_cover). data: {hobby,
+    picked_cover_slug, picked_cover_card, cover: the resolved cover fields (cards.hobby_cover_fields)}."""
     from . import policy  # lazy, as cards does
     hob = get_hobby(hobby)
     slug = (cover_slug or "").strip() or None
+    lender = None
+    if slug is not None and cover_card not in (None, ""):
+        raise InvalidInput("Pick one cover: a file (cover_slug) or a card to borrow from (cover_card), not both.")
     if slug is not None:
         row = db.get_by_slug(slug)
         if row is None or not policy.can_view(row):
             raise CardError("not_found", f"No item {slug!r}.")
         if row.get("redacted"):
-            raise CardError("bad_cover", f"{slug} is redacted (its file was removed), so it can't be a cover.")
+            raise CardError("bad_cover", f"{slug} is redacted (its file was removed), so it can't be a cover.",
+                            {"reason": "redacted", "slug": slug})
         if not cards.hobby_cover_usable(slug):
-            raise CardError("bad_cover", f"{slug} has no picture to show as a cover.")
+            raise CardError("bad_cover", f"{slug} has no picture to show as a cover.",
+                            {"reason": "no_picture", "slug": slug})
+    elif cover_card not in (None, ""):
+        lender = cards.get_card(cover_card)
+        in_hobby = {p["id"] for p in db.list_projects_for_hobby(hob["id"])}
+        if lender["id"] not in in_hobby:
+            raise CardError("bad_cover", f"Nothing was changed: '{lender['title']}' isn't in {hob['name']}, so it "
+                            f"can't lend its cover here. Add it first, then tick it.",
+                            {"reason": "not_related", "card": lender["slug"]})
+        problem = cards.lend_problem(lender, None, actor)
+        if problem:
+            raise CardError("bad_cover", f"Nothing was changed: {problem[1]}",
+                            {"reason": problem[0], "card": lender["slug"]})
+    fields = {"cover_slug": slug, "cover_project_id": lender["id"] if lender else None}
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
-        with db.ImageLog(OP_COVER, actor, batch_id, [hob["slug"]] + ([slug] if slug else [])) as log:
+        with db.ImageLog(OP_COVER, actor, batch_id,
+                         [hob["slug"]] + ([slug] if slug else []) + ([lender["slug"]] if lender else [])) as log:
             key = {"hobby_tag_id": hob["id"]}
             if log.get("hobby_settings", key) is None:
-                if slug:
-                    log.insert("hobby_settings", key, {"cover_slug": slug})
+                if slug or lender:
+                    log.insert("hobby_settings", key, fields)
             else:
-                log.update("hobby_settings", key, {"cover_slug": slug})
+                log.update("hobby_settings", key, fields)
         rows = db.get_change_rows(batch_id=batch_id)
         resolved = cards.resolve_hobby_cover(hob)
     return Result(True, _flat(rows), [] if rows else ["Nothing changed."], batch_id if rows else None, dry_run,
-                  {"hobby": hob["slug"], "picked_cover_slug": slug, "cover": cards.hobby_cover_fields(resolved)})
+                  {"hobby": hob["slug"], "picked_cover_slug": slug,
+                   "picked_cover_card": lender["slug"] if lender else None,
+                   "cover": cards.hobby_cover_fields(resolved)})
+
+
+OP_RENAME = "hobby_rename"  # #554
+NAME_MAX = 200
+
+
+def rename(hobby, name, *, dry_run=False, actor=None, batch_id=None):
+    """#554: renames a hobby. Its tag gets the new name and a slug made from it (the same rule as a
+    new tag: lower case, `-` between words, `-2`, `-3` ... when another tag has that slug), so its page
+    address follows (install_config.hobby_label().url(slug)). Every slug it has had is remembered in
+    hobby_slug_history (not imaged: an undo puts the name back and still keeps both addresses working),
+    and the page 308-redirects an old one to the current one. One imaged row (op hobby_rename,
+    blog_tags), undoable; the same name again writes nothing. Search re-indexes the tagged items
+    (the blog_tags trigger). Refused: an empty or over-long name (400 bad_request), a name another tag
+    already has, in any case (409 hobby_name_conflict: two tags with one name would be ambiguous
+    everywhere a tag is looked up by name). Not changed (#555): the free-text tag chips items carry
+    keep the old words until the tag stores are unified. data: {hobby, old_name, old_slug, slug, url}."""
+    from . import install_config  # lazy: install_config reads settings at call time
+    hob = get_hobby(hobby)
+    new = " ".join((name or "").split())
+    if not new:
+        raise InvalidInput("A name can't be empty.")
+    if len(new) > NAME_MAX:
+        raise InvalidInput(f"That name is too long ({NAME_MAX} characters at most).")
+    if new == hob["name"]:
+        return Result(True, [], ["Nothing changed."], None, dry_run,
+                      {"hobby": hob["slug"], "old_name": hob["name"], "old_slug": hob["slug"], "slug": hob["slug"],
+                       "url": install_config.hobby_label().url(hob["slug"])})
+    conn = db.get_conn()
+    try:
+        clash = conn.execute("SELECT id, name FROM blog_tags WHERE lower(name) = lower(?) AND id != ?",
+                             (new, hob["id"])).fetchone()
+    finally:
+        conn.close()
+    if clash is not None:
+        raise CardError("hobby_name_conflict",
+                        f"Nothing was changed: there is already a tag called '{clash['name']}'. Pick another name "
+                        "(merging two tags is not built yet, #555).", {"tag_id": clash["id"]})
+    batch_id = batch_id or changes.new_batch_id()
+    with db.transaction(dry_run=dry_run):
+        with db.ImageLog(OP_RENAME, actor, batch_id, [hob["slug"]]) as log:
+            base = slug = tags_svc._slugify(new)
+            n = 2
+            while log.conn.execute("SELECT 1 FROM blog_tags WHERE slug = ? AND id != ?", (slug, hob["id"])).fetchone():
+                slug = f"{base}-{n}"
+                n += 1
+            log.update("blog_tags", {"id": hob["id"]}, {"name": new, "slug": slug})
+            if slug != hob["slug"]:
+                log.slugs.append(slug)
+                now = time.time()
+                for s in (hob["slug"], slug):  # both, so an undo of the rename leaves the new address working too
+                    log.conn.execute("INSERT OR REPLACE INTO hobby_slug_history (slug, hobby_tag_id, recorded_at) "
+                                     "VALUES (?, ?, ?)", (s, hob["id"], now))
+        rows = db.get_change_rows(batch_id=batch_id)
+    return Result(True, _flat(rows), [], batch_id, dry_run,
+                  {"hobby": slug, "old_name": hob["name"], "old_slug": hob["slug"], "slug": slug, "name": new,
+                   "url": install_config.hobby_label().url(slug)})
 
 
 def text_fields(hobby_row):

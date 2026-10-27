@@ -283,6 +283,17 @@ def api_orphan_child(project_id: str, child_id: str = Form(...)):
     return JSONResponse(db.get_project(child["id"]) or {})
 
 
+@router.post("/api/projects/{project_id}/cover")
+def api_set_card_cover(project_id: str, slug: str = Form(""), card: str = Form("")):
+    """#554: the one cover pick on a card page. `slug` = a file becomes the cover; `card` = a nested
+    child or a family / collection member (id or slug) lends its cover, which the card then follows.
+    Exactly one of the two. Editor. 404 not_found for an unknown or hidden file or card; 422
+    bad_cover with details.reason (no picture, redacted, hidden, not related, no cover to lend, a
+    loop) and a message saying what to do. One undoable change-log row (update_card); `batch_id`
+    feeds the Undo bar."""
+    return JSONResponse(cards.set_cover(project_id, slug=slug or None, from_card=card or None).to_dict())
+
+
 @router.post("/api/projects/{project_id}/whereabouts")
 def api_set_whereabouts(project_id: str, whereabouts: str = Form(""), note: str | None = Form(None)):
     """V2 cards 3.4: set (blank clears) where the physical thing is now, plus an

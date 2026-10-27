@@ -424,7 +424,9 @@ check("card Save, unknown write-up: 400 'writeup slug not found'", r.status_code
 r = client.post(f"/api/projects/{base['id']}", data={"writeup_slug": A})
 check("card Save, image as write-up: 400 with the type message", r.status_code == 400 and "can't be a project write-up" in r.json()["detail"])
 r = client.post(f"/api/projects/{base['id']}", data={"cover_project_id": str(other["id"])})
-check("card Save, cover from a non-child: 400 as before", r.status_code == 400 and r.json()["detail"] == "Project is not a child of this project")
+# #554: a member of a family / collection may lend its cover too, so the refusal names both (still 400)
+check("card Save, cover from a non-child: 400 as before", r.status_code == 400
+      and "isn't nested in" in r.json()["detail"] and "can't lend its cover" in r.json()["detail"], r.text[:200])
 before = snapshot()
 with actor.acting_as(actor.ACTOR_MCP):
     out = server.constructicon_update_project(base["slug"], title="Mcp Title", reset_start_date=True)

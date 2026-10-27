@@ -503,7 +503,10 @@ def mask_725(value):
 # delete-all's counts. Leave those keys out of the comparison (the golden file stays the pre-#746 record).
 ADDED_SINCE_746 = {"private",        # #604 step 3: projects.private, hobby_settings.private
                    "share_members",  # #604 step 3: delete-all clears the member lists
-                   "short_title"}    # #542: capture_events.short_title, in item answers and row images
+                   "short_title",    # #542: capture_events.short_title, in item answers and row images
+                   # #554 (batch 5): a hobby can borrow a member card's cover (hobby_settings.cover_project_id,
+                   # the answers' picked_cover_card_id), and a renamed hobby's old slugs are kept.
+                   "cover_project_id", "picked_cover_card_id", "picked_cover_card", "hobby_slug_history"}
 
 
 def _strip_added(value):

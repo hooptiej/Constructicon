@@ -1065,6 +1065,27 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .project-cover-selector:checked::after, .project-writeup-selector:checked::after {
   content: '✓'; color: var(--highlight-ink); font-weight: bold; font-size: 14px;  /* #785: dark on yellow */
 }
+/* #554: the cover pick, the same control on every page (templates/_cover_pick.html, cards.js). It
+   reuses the round cover selector above; the label says "Cover", and a viewer's is greyed with the
+   role it needs (a click explains, static/js/cover-pick.js). */
+.cx-cover-pick-row {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2);
+  cursor: pointer; user-select: none;
+}
+.cx-cover-pick-row .project-cover-selector { width: 18px; height: 18px; }
+.cx-cover-pick-row .project-cover-selector:checked::after { font-size: 11px; }
+.cx-cover-pick-row.is-locked { opacity: 0.55; cursor: not-allowed; }
+.cx-cover-pick-row.is-locked .project-cover-selector { cursor: not-allowed; border-style: dashed; }
+.cx-cover-pick-role { color: var(--text-3); }
+.stack-beside .cx-cover-pick-row, .hp-block > .cx-cover-pick-row { margin-top: 6px; }
+.stack-fan-card .cx-cover-pick-row { display: flex; justify-content: center; margin-top: 4px; }
+.project-item-selectors .cx-cover-pick-row { background: var(--card); border-radius: 100px; padding: 2px 8px 2px 3px; }
+.dp-btn.is-locked { opacity: 0.55; cursor: not-allowed; }
+/* #554: an event's date, big, at the top of its page; its write-up leads. */
+.card-date-banner {
+  font-size: 26px; font-weight: 700; letter-spacing: 0.3px; margin: 4px 0 14px; color: var(--text);
+}
+.project-writeup-lead { margin-top: 0; margin-bottom: 24px; }
 .media-type-pill {
   font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.3px; padding: 1px 7px; border-radius: 100px;
   background: var(--hazard-yellow); color: var(--hazard-black); font-weight: 600; display: inline-block;

@@ -1,0 +1,22 @@
+{#- #554 (batch 5): the cover pick, ONE control on every page that shows files or child cards (the card
+    page's Stacks fans, its nested / member cards and its All files grid; the hobby page's cards; the
+    item grids, where static/js/cards.js builds the same markup). Ticking a file makes it the cover;
+    ticking a card borrows that card's cover (and follows it). One at a time: static/js/cover-pick.js
+    keeps every pick on the page in step and posts to the page's endpoint (cover_pick_config).
+    A viewer sees it greyed with the role it needs; a click says why (permissions never hide features).
+
+    {% from "_cover_pick.html" import cover_pick, cover_pick_config %}
+    {{ cover_pick("item" | "card", slug_or_id, title, checked, can_edit) }}
+    {{ cover_pick_config(cfg) }}     once per page: {endpoint, file_field, card_field, current, ...} -#}
+
+{% macro cover_pick(kind, ref, title, checked=false, can_edit=true) -%}
+{%- set tip = ("Picking the cover needs the editor role" if not can_edit
+               else ("Borrow this card's cover (it follows that card's cover). One cover at a time." if kind == "card"
+                     else "Make this the cover. One cover at a time.")) -%}
+<label class="cx-cover-pick-row{% if not can_edit %} is-locked{% endif %}" title="{{ tip }}"><input type="radio" class="project-cover-selector cx-cover-pick{% if not can_edit %} is-locked{% endif %}" data-cover-kind="{{ kind }}" data-cover-ref="{{ ref }}" data-cover-title="{{ title }}" aria-label="Cover: {{ title }}"{% if not can_edit %} aria-disabled="true"{% endif %}{% if checked %} checked{% endif %}><span class="cx-cover-pick-label">Cover{% if not can_edit %} <span class="cx-cover-pick-role">&middot; editors</span>{% endif %}</span></label>
+{%- endmacro %}
+
+{% macro cover_pick_config(cfg) -%}
+<script type="application/json" id="cover-pick-config" nonce="{{ csp_nonce() }}">{{ cfg | tojson }}</script>
+<script src="/static/js/cover-pick.js?v={{ static_version('js/cover-pick.js') }}" defer></script>
+{%- endmacro %}

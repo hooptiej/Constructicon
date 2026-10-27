@@ -12,8 +12,8 @@ The owner's rule (2026-10-17, binding, see the issue's comments):
      clean file name over one with a copy marker ("AlbertusMT.otf" beats "AlbertusMT (1).otf"; owner,
      2026-10-18), then the oldest upload. A copy with no real date (#725) or a post-first-upload date only wins when no copy
      has an earlier real date.
-  3. The survivor INHERITS what the dropped copies had and it lacks: card memberships, tags in both
-     stores (post_tags and the free-text chips), description / caption / provenance / agent notes
+  3. The survivor INHERITS what the dropped copies had and it lacks: card memberships, tags (the tag
+     tree, #555: the one store; its chips follow), description / caption / provenance / agent notes
      when its own are blank, the highlight / brand-asset / sensitive flags when a dropped copy has
      them (sensitive is inherited so trashing a flagged copy can never expose the picture), related
      links, blog-entry placements, and any card cover, card write-up, hobby cover or blog cover that
@@ -130,8 +130,8 @@ def _facts(row, cutoff):
     early = date is not None and (cutoff is None or date < cutoff)
     cards_ = db.list_projects_for_post(slug)
     tag_rows = db.list_tags_for_post(slug)
-    free = [t for t in (row.get("tags") or []) if str(t).strip()]
-    tag_names = {t["name"] for t in tag_rows} | set(free)
+    free = []  # #555: the free-text column is a cache derived from tag_rows, so it adds nothing
+    tag_names = {t["name"] for t in tag_rows}
     metadata = (int(bool((row.get("description") or "").strip()))
                 + int(bool((row.get("content_description") or "").strip()))
                 + len(tag_names))
@@ -310,8 +310,6 @@ def _inherit(log, ops, who):
         membership.write_items(log, card_id, [keep])
     for tid in ops["tag_ids"]:
         tags_svc.link(log, keep, tid)
-    for name in ops["free"]:
-        tags_svc.merge_free_text_name(log, keep, name)
     if ops["fields"]:
         log.update("capture_events", {"slug": keep}, dict(ops["fields"]))
         if ops["fields"].get("sensitive"):

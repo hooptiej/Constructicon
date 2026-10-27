@@ -4,6 +4,7 @@ Moved verbatim from web/app.py."""
 
 from core import (captions, card_payload, cards, datefmt, db, install_config, item_dates, item_title, object_types, parse_limits, policy, revisions,
                   storage, thumbnails, timeline, users)
+from core import tags as tags_svc
 
 
 def _has_thumbnail(row, spec=None):
@@ -325,7 +326,7 @@ def _to_object_detail(row):
         "display_name": item_title.title_of(row),
         "icon": spec.badge_icon,
         "description": row["description"],
-        "tags": row["tags"],
+        "tags": tags_svc.visible_chip_names(row["tags"]),  # #555: the derived chips, none naming a hidden card
         # #47: current project membership — a project selector needs to
         # show what's already attached, not just a blank picker, and (per
         # #51's backfill) an object can now belong to a project it was

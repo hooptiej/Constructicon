@@ -95,7 +95,7 @@ with actor.acting_as(actor.ACTOR_SCRIPT):
     U1 = item("upload-only")                                        # nothing but the upload time
     U2 = item("post-mtime", up_offset=21 * 86400, source_modified_at=LATER)  # a download date
     DESK = cards.create("Desk Build").data["card"]
-    membership.add_files(DESK["id"], [A, B, C, U1, U2], link_tag=False, merge_free_tags=False, auto_cover=False)
+    membership.add_files(DESK["id"], [A, B, C, U1, U2], link_tag=False, auto_cover=False)
 
 # --- 1. real dates only ------------------------------------------------------------------------
 print("--- 1. real dates only; undated items inherit the card's real range ---")
@@ -135,16 +135,16 @@ with actor.acting_as(actor.ACTOR_SCRIPT):
     item("x-real", content_date=local(2015, 5, 5))
     item("y-real", content_date=local(2021, 1, 1))
     M = item("multi")
-    membership.add_files(X["id"], ["x-real"], link_tag=False, merge_free_tags=False, auto_cover=False)
-    membership.add_files(Y["id"], ["y-real"], link_tag=False, merge_free_tags=False, auto_cover=False)
-    membership.add_files(X["id"], [M], link_tag=False, merge_free_tags=False, auto_cover=False)   # first filed: X
-    membership.add_files(Y["id"], [M], link_tag=False, merge_free_tags=False, auto_cover=False)
+    membership.add_files(X["id"], ["x-real"], link_tag=False, auto_cover=False)
+    membership.add_files(Y["id"], ["y-real"], link_tag=False, auto_cover=False)
+    membership.add_files(X["id"], [M], link_tag=False, auto_cover=False)   # first filed: X
+    membership.add_files(Y["id"], [M], link_tag=False, auto_cover=False)
     E = item("on-empty-card")
-    membership.add_files(EMPTY["id"], [E], link_tag=False, merge_free_tags=False, auto_cover=False)
+    membership.add_files(EMPTY["id"], [E], link_tag=False, auto_cover=False)
     item("z-real", content_date=local(2016, 6, 6))
     item("z-secret", content_date=local(2005, 5, 5))
     ZU = item("z-undated")
-    membership.add_files(Z["id"], ["z-real", "z-secret", ZU], link_tag=False, merge_free_tags=False, auto_cover=False)
+    membership.add_files(Z["id"], ["z-real", "z-secret", ZU], link_tag=False, auto_cover=False)
     items.set_sensitive(["z-secret"], True)
     F = item("unfiled-ocr", filename="scan.png")
     setcol(F, extracted_text="Receipt. Date: May 12, 2019. Thank you.")
@@ -187,7 +187,7 @@ check("an editor who can't see a sensitive item gets no needs_date about it", "h
       sorted(s for s in ed_slugs if s))
 with actor.acting_as(actor.ACTOR_SCRIPT):
     item("hidden-on-empty")
-    membership.add_files(EMPTY["id"], ["hidden-on-empty"], link_tag=False, merge_free_tags=False, auto_cover=False)
+    membership.add_files(EMPTY["id"], ["hidden-on-empty"], link_tag=False, auto_cover=False)
     items.set_sensitive(["hidden-on-empty"], True)
 with actor.acting_as("user:ed725"):
     strip = curation_queue.build_queue(card=EMPTY["slug"])   # the project page's strip: no for_actor pass

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from core import card_rules, cards, curation_queue, curator, db, install_config, item_dates, item_title, markdown_render, object_types, revisions, timeline
 from core import hobbies, physical_piece, provenance_options
+from core import tags as tags_svc
 from core import hobby_label as hobby_label_rules
 from core.db import BRAND_ROLES
 from web import files_feed, item_grid
@@ -602,6 +603,10 @@ def object_detail_page(request: Request, slug: str):
     policy.require_view(row)  # #557: the item policy (today: served; #467: restricted needs admin)
     policy.note_access(row, access_log.HOW_PAGE)  # #604 follow-up 7: sensitive items only
     item = _to_object_detail(row)
+    # #555: the chips come from the tag tree (ids for the chip's rename / remove), without the linked
+    # tags of the cards the item is on (they show as the cards, in WHERE IT LIVES) or a hidden tag.
+    tag_chips = tags_svc.chips(slug)
+    item["tags"] = [c["name"] for c in tag_chips]
     full_url = str(request.base_url).rstrip("/") + item["url"] if item["is_file"] else None
     full_object_url = str(request.base_url).rstrip("/") + f"/object/{slug}"
     # #52: relations (core/db.py's add_relation/remove_relation, #16) are
@@ -648,7 +653,8 @@ def object_detail_page(request: Request, slug: str):
     }
     return templates.TemplateResponse(
         request, "object_detail.html",
-        {"item": item, "redact_hold": redact_hold, "sensitive_ctl": sensitive_ctl, "can_replace_file": roles.at_least(my_role, roles.EDITOR), "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
+        {"item": item, "tag_chips": tag_chips, "can_edit_tags": roles.at_least(my_role, roles.EDITOR),
+         "redact_hold": redact_hold, "sensitive_ctl": sensitive_ctl, "can_replace_file": roles.at_least(my_role, roles.EDITOR), "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
     )
 
 

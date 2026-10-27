@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Self-contained check for #590: moving / copying files between cards swaps the linked tag.
 
-Throwaway SQLite DB + storage (see _testenv). Covers, in BOTH tag stores (post_tags and the
-free-text chips):
+Throwaway SQLite DB + storage (see _testenv). Covers the tag tree (post_tags) and, since #555, that
+the chips (derived from the tree) never show the linked tag of a card the file is on:
   - move: files gain the destination's linked tag and lose the source's own linked tag; a tag
     added by hand stays; the cover is untouched; one batch, one undo restores everything;
   - the exception: a file still on another card with the same linked tag keeps it;
@@ -91,15 +91,15 @@ A, B = fresh("Pinball Desk", "Desk Build")
 from core import tags as tags_svc  # noqa: E402
 tags_svc.set_item_tags(F1, sorted(db.get_by_slug(F1)["tags"] + ["hand-made"]))
 before = snap([F1, F2, F3], [A["id"], B["id"]])
-check("setup: all three files carry A's tag in both stores; F1 also a hand tag",
-      all("Pinball Desk" in before["post_tags"][s] and "Pinball Desk" in before["chips"][s] for s in (F1, F2, F3))
+check("setup: all three files carry A's tag (no chip: #555); F1 also a hand tag",
+      all("Pinball Desk" in before["post_tags"][s] and "Pinball Desk" not in before["chips"][s] for s in (F1, F2, F3))
       and "hand-made" in before["chips"][F1] and "hand-made" in before["post_tags"][F1])
 res = cards.move_files([F1, F2], A["id"], B["id"])
 after = snap([F1, F2, F3], [A["id"], B["id"]])
 for s in (F1, F2):
     check(f"move: {s} has B's tag and not A's in post_tags", "Desk Build" in after["post_tags"][s]
           and "Pinball Desk" not in after["post_tags"][s], after["post_tags"][s])
-    check(f"move: {s} has B's chip and not A's", "Desk Build" in after["chips"][s]
+    check(f"move: {s} shows neither card's tag as a chip (#555)", "Desk Build" not in after["chips"][s]
           and "Pinball Desk" not in after["chips"][s], after["chips"][s])
 check("move: the hand-added tag survives in both stores",
       "hand-made" in after["post_tags"][F1] and "hand-made" in after["chips"][F1])
@@ -127,9 +127,9 @@ C = card("Pinball Desk copy", tag_id=A["tag_id"])
 membership.write(C["id"], [F1], [], "test_seed", None)
 res = cards.move_files([F1, F2], A["id"], B["id"])
 s = snap([F1, F2])
-check("exception: F1 is still on C (same linked tag), so it keeps A's tag in both stores",
-      "Pinball Desk" in s["post_tags"][F1] and "Pinball Desk" in s["chips"][F1]
-      and "Desk Build" in s["post_tags"][F1] and "Desk Build" in s["chips"][F1])
+check("exception: F1 is still on C (same linked tag), so it keeps A's tag (and no chip of either)",
+      "Pinball Desk" in s["post_tags"][F1] and "Pinball Desk" not in s["chips"][F1]
+      and "Desk Build" in s["post_tags"][F1] and "Desk Build" not in s["chips"][F1])
 check("exception: F2 (nowhere else) loses it",
       "Pinball Desk" not in s["post_tags"][F2] and "Pinball Desk" not in s["chips"][F2])
 cards.undo(res.batch_id)
@@ -148,18 +148,18 @@ check("move to a tagless card: undo restores", snap([F1, F2, F3], [A["id"], B["i
 # ---- copy -------------------------------------------------------------------------------
 res = cards.copy_files([F1], A["id"], B["id"])
 s = snap([F1])
-check("copy: F1 keeps A's tag and gains B's, in both stores",
+check("copy: F1 keeps A's tag and gains B's; the chips stay the hand tag only (#555)",
       s["post_tags"][F1] == sorted(["Pinball Desk", "Desk Build", "hand-made"])
-      and s["chips"][F1] == sorted(["Pinball Desk", "Desk Build", "hand-made"]), s)
+      and s["chips"][F1] == ["hand-made"], s)
 cards.undo(res.batch_id)
 check("copy: one undo restores", snap([F1, F2, F3], [A["id"], B["id"]]) == before)
 
 # ---- merge ------------------------------------------------------------------------------
 res = cards.merge_cards(B["id"], [A["id"]])
 s = snap([F1, F2, F3])
-check("merge: files take the kept card's tag and shed the absorbed card's (both stores)",
+check("merge: files take the kept card's tag and shed the absorbed card's (no card chips, #555)",
       all("Desk Build" in s["post_tags"][f] and "Pinball Desk" not in s["post_tags"][f]
-          and "Desk Build" in s["chips"][f] and "Pinball Desk" not in s["chips"][f] for f in (F1, F2, F3)), s)
+          and "Desk Build" not in s["chips"][f] and "Pinball Desk" not in s["chips"][f] for f in (F1, F2, F3)), s)
 check("merge: the hand tag stays", "hand-made" in s["post_tags"][F1] and "hand-made" in s["chips"][F1])
 cards.undo(res.batch_id)
 check("merge: one undo restores the absorbed card, its files and their tags",
@@ -168,7 +168,9 @@ check("merge: one undo restores the absorbed card, its files and their tags",
 # ---- split: left alone ---------------------------------------------------------------------
 res = cards.split_card(A["id"], [{"title": "Split Part", "file_slugs": [F3]}])
 check("split: tags unchanged (the new card has no linked tag)", snap([F1, F2, F3])["post_tags"] == before["post_tags"]
-      and snap([F1, F2, F3])["chips"] == before["chips"])
+      and snap([F1, F2])["chips"] == {k: v for k, v in before["chips"].items() if k != F3})
+# #555: F3 is off card A now, so the tag it kept is an ordinary tag again and shows as a chip
+check("split: the split-off file shows the tag it kept as a chip", "Pinball Desk" in snap([F3])["chips"][F3])
 cards.undo(res.batch_id)
 
 # ---- the MCP tool --------------------------------------------------------------------------

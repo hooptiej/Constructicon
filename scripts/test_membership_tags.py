@@ -130,14 +130,15 @@ res = membership.add_files(P["id"], [A, B], **membership.UI_EFFECTS)
 after = state(P["id"], [A, B])
 check("UI flags: both files on the card, in order", after["members"] == [A, B], after["members"])
 check("UI flags: linked tag attached to both", all(TAG["id"] in after["post_tags"][s] for s in (A, B)))
-check("UI flags: tag name merged into free-text tags", all(TAG["name"] in after["free"][s] for s in (A, B)))
+check("#555: the linked tag is plumbing, never a chip (the card shows as a link)",
+      all(TAG["name"] not in after["free"][s] for s in (A, B)), after["free"])
 check("UI flags: coverless card takes the FIRST file as cover", after["cover"] == (A, None), after["cover"])
 rows = changes_of(res.batch_id)
 check("add_files is ONE change-log row (op add_files, actor owner-ui)",
       [(r["op"], r["actor"]) for r in rows] == [("add_files", "owner-ui")], rows)
 tables = sorted({m["table"] for m in json.loads(rows[0]["mutations"])})
-check("add_files images project_items, post_tags, capture_events (free text) and projects (cover)",
-      tables == ["capture_events", "post_tags", "project_items", "projects"], tables)
+check("add_files images project_items, post_tags and projects (cover); #555: no free-text write",
+      tables == ["post_tags", "project_items", "projects"], tables)
 cards.undo(res.batch_id)
 check("undo add_files reverts membership, linked tag, free-text tag and cover", state(P["id"], [A, B]) == before,
       state(P["id"], [A, B]))
@@ -180,7 +181,7 @@ before = state(P["id"], [C])
 r = ingest.attach_to_project(C, P["id"])
 s = state(P["id"], [C])
 check("ingest.attach_to_project = UI flags", s["members"] == [C] and TAG["id"] in s["post_tags"][C]
-      and TAG["name"] in s["free"][C] and s["cover"] == (C, None))
+      and TAG["name"] not in s["free"][C] and s["cover"] == (C, None))
 check("attach_to_project ignores an unknown card, as before", ingest.attach_to_project(C, 999999) is None)
 cards.undo(r.batch_id)
 check("undo upload-style add", state(P["id"], [C]) == before)
@@ -195,7 +196,7 @@ before = state(P["id"], [A])
 r = client.post(f"/api/image/{A}/project", data={"project_id": str(P["id"])})
 s = state(P["id"], [A])
 check("web item page add: 200 + UI flags", r.status_code == 200 and s["members"] == [A] and s["cover"] == (A, None)
-      and TAG["name"] in s["free"][A] and TAG["id"] in s["post_tags"][A], r.text[:200])
+      and TAG["name"] not in s["free"][A] and TAG["id"] in s["post_tags"][A], r.text[:200])
 b = last_batch("add_files")
 check("web add recorded as token", changes_of(b)[0]["actor"] == "token")
 r = client.post(f"/api/changes/{b}/undo")
@@ -222,8 +223,10 @@ r = client.post(f"/api/projects/{P['id']}/remove-item", data={"slug": B})
 s = state(P["id"], [A, B, C])
 check("project page x: 200 + batch_id, membership only (tags + cover stay)",
       r.status_code == 200 and r.json().get("success") is True and r.json().get("batch_id")
-      and s["members"] == [A, C] and s["post_tags"] == before["post_tags"] and s["free"] == before["free"]
+      and s["members"] == [A, C] and s["post_tags"] == before["post_tags"]
       and s["cover"] == before["cover"], r.text[:200])
+# #555: off the card, the tag it still wears is an ordinary tag again, so it shows as a chip
+check("#555: a file taken off the card shows the tag it kept as a chip", TAG["name"] in s["free"][B], s["free"])
 client.post(f"/api/changes/{r.json()['batch_id']}/undo")
 check("undo of x restores the row in place (rowid + sort_order)", state(P["id"], [A, B, C]) == before)
 r = client.post(f"/api/image/{A}/project/remove", data={"project_id": str(P["id"])})
@@ -251,8 +254,8 @@ before = state(R["id"], [C, D])
 with actor.acting_as(actor.ACTOR_MCP):
     server.constructicon_card_files(R["id"], [C])
 s = state(R["id"], [C, D])
-check("MCP card_files(add) = web flags (linked tag + free-text name + cover)",
-      s["members"] == [C] and RT["id"] in s["post_tags"][C] and RT["name"] in s["free"][C] and s["cover"] == (C, None), s)
+check("MCP card_files(add) = web flags (linked tag + cover; #555: no chip)",
+      s["members"] == [C] and RT["id"] in s["post_tags"][C] and RT["name"] not in s["free"][C] and s["cover"] == (C, None), s)
 b = last_batch("add_files")
 check("MCP add recorded as mcp", changes_of(b)[0]["actor"] == "mcp")
 cards.undo(b)
@@ -262,7 +265,7 @@ with actor.acting_as(actor.ACTOR_MCP):
 s = state(R["id"], [C, D])
 check("MCP card_files(add, missing_ok): same flags, skips unknown, returns the added objects",
       [o["slug"] for o in out["items"]] == [D, C] and s["members"] == [D, C] and s["cover"] == (D, None)
-      and RT["name"] in s["free"][C] and RT["id"] in s["post_tags"][D])
+      and RT["name"] not in s["free"][C] and RT["id"] in s["post_tags"][D])
 b = last_batch("add_files")
 check("MCP bulk add is one mcp row", [(x["op"], x["actor"]) for x in changes_of(b)] == [("add_files", "mcp")])
 with actor.acting_as(actor.ACTOR_MCP):
@@ -345,8 +348,8 @@ base_c = tag_names(C)
 with actor.acting_as(actor.ACTOR_MCP):
     server.constructicon_item_tags(C, ["mcp-made", "alpha"])
 b = last_batch("tag_attach")
-check("MCP item_tags(attach): post_tags only (free text untouched), creates missing, actor mcp",
-      tag_names(C) == sorted(base_c + ["alpha", "mcp-made"]) and "mcp-made" not in db.get_by_slug(C)["tags"]
+check("MCP item_tags(attach): the tree, creates missing, actor mcp; #555: the chips follow",
+      tag_names(C) == sorted(base_c + ["alpha", "mcp-made"]) and "mcp-made" in db.get_by_slug(C)["tags"]
       and changes_of(b)[0]["actor"] == "mcp", (tag_names(C), db.get_by_slug(C)["tags"], changes_of(b)))
 with actor.acting_as(actor.ACTOR_MCP):
     server.constructicon_item_tags(D, ["mcp-made"])

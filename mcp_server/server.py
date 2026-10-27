@@ -307,6 +307,15 @@ ACTION_ROLES = {
     ("constructicon_update_blog_entry", None): E,
     ("constructicon_list_tags", None): V,
     ("constructicon_create_tag", None): E,
+    # #555: tag management. Reads viewer; every write is one undoable batch, so editor (like a card edit).
+    ("constructicon_tags", "tree"): V,
+    ("constructicon_tags", "get"): V,
+    ("constructicon_tags", "sweep"): E,
+    ("constructicon_tags", "rename"): E,
+    ("constructicon_tags", "merge"): E,
+    ("constructicon_tags", "move"): E,
+    ("constructicon_tags", "delete"): E,
+    ("constructicon_tags", "sweep_apply"): E,
     ("constructicon_list_provenance_options", None): V,
     ("constructicon_needs", "queue"): V,
     ("constructicon_needs", "nudges"): V,
@@ -533,7 +542,7 @@ def _to_public(row):
         "description": row["description"],
         "content_description": row.get("content_description"),  # #588: the item's long caption / description
         "short_title": row.get("short_title"),  # #542: the short name; the long caption is never the title
-        "tags": row["tags"],
+        "tags": tags_svc.visible_chip_names(row["tags"]),  # #555: the derived chips, none naming a hidden card
         "redacted": bool(row["redacted"]),
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
@@ -822,8 +831,8 @@ def constructicon_search(query: str | None = None, tags: list[str] | None = None
     """Search items by name (title, any filename it has had), tags, card titles, note or extracted
     text. Each word matches the START of a word ("tun" finds "Tuning"); all words are required;
     best match first. Not a substring search. query and tags together: both must match.
-    A tag search here matches the item's own tags only; for everything under a tag (child tags
-    too) use constructicon_list_items(which="tag", tag=...). Redacted items are left out
+    tags (any of them, any case) filters on the tag tree: an item carrying one of these tags, or any
+    tag under one (a card's own tag counts). Redacted items are left out
     (constructicon_list_items(which="redacted")). The text preview is centred on the first query
     word found. Older revisions are found too, marked superseded_by.
     """
@@ -1001,7 +1010,7 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
     """Edit an item, every change in ONE batch. Parameters left out (None) are left alone.
     description: the uploader's note. content_description: the item's long caption/description ("" clears).
     display_name: its title override. short_title: its short name, a few words ("" clears); the title
-    is display_name, else short_title, else the filename. tags: the full free-text tag list (replaces it).
+    is display_name, else short_title, else the filename. tags: the item's full tag list (replaces its chips in the tag tree).
     type_metadata: MERGED by top-level key; a key set to "" is cleared.
     display_date: timeline position override (unix seconds); reset_display_date=true clears it.
     fields: more fields, key present = set it, absent = leave it:
@@ -2250,6 +2259,69 @@ def constructicon_create_tag(name: str, parent_name: str | None = None) -> dict:
     return tags_svc.create(name, parent_name).data["tag"]
 
 
+@mcp.tool(selector="action", annotations=_DESTRUCTIVE)
+def constructicon_tags(action: typing.Literal["tree", "get", "rename", "merge", "move", "delete", "sweep",
+                                              "sweep_apply"] = "tree",
+                       tag: str | int | None = None, name: str | None = None, into: str | int | None = None,
+                       parent: str | int | None = None, tag_ids: list[int] | None = None,
+                       dry_run: bool = False) -> dict:
+    """Manage the tag tree (the one tag store; an item's chips are derived from it). `tag` / `into` /
+    `parent` take a tag id or its name. Every write is one batch (constructicon_undo reverses it).
+    "tree": {tags: [{id, name, path, items, cards, hobby, children}]}.
+    "get": tag= -> {tags: [every tag with that name (any case), each with path, items, children, cards, hobby]}.
+    "rename": tag=, name= -> {tag, old_name, items, batch_id}. A card's linked tag follows the card's
+      title (rename the card); a name another tag has is refused (merge instead).
+    "merge": tag= (the one that goes), into= -> its items and sub-tags move to `into`, then it is deleted.
+    "move": tag=, parent= (omit or "" = the top level) -> no cycles.
+    "delete": tag= -> it comes off every item. A card's or grouping's tag, or one with sub-tags, is refused.
+    "sweep": the cleanup list, read-only: {entries: [{id, path, kinds (orphan | empty | near_duplicate),
+      deletable, why_not, suggestion, duplicates}]}. Nothing is deleted.
+    "sweep_apply": tag_ids= the picked entries -> deletes exactly those (all still deletable, sub-tags
+      picked too, else the whole call is refused), ONE batch.
+    dry_run=true answers as the write would and writes nothing.
+    E.g. constructicon_tags(action="merge", tag="Ancient projects.", into="Ancient Projects").
+    """
+    if action == "tree":
+        _only_for('action="tree"', tag=(tag, None), name=(name, None), into=(into, None), parent=(parent, None),
+                  tag_ids=(tag_ids, None), dry_run=(dry_run, False))
+        return {"tags": tags_svc.tree()}
+    if action == "sweep":
+        _only_for('action="sweep"', tag=(tag, None), name=(name, None), into=(into, None), parent=(parent, None),
+                  tag_ids=(tag_ids, None), dry_run=(dry_run, False))
+        return {"entries": tags_svc.sweep(), "kinds": list(tags_svc.SWEEP_KINDS)}
+    if action == "sweep_apply":
+        _only_for('action="sweep_apply"', tag=(tag, None), name=(name, None), into=(into, None), parent=(parent, None))
+        if not tag_ids:
+            raise InvalidInput('action="sweep_apply" needs tag_ids (the ids of the sweep entries to delete).')
+        return tags_svc.sweep_apply(tag_ids, dry_run=dry_run).to_dict()
+    if tag is None or (isinstance(tag, str) and not tag.strip()):
+        raise InvalidInput(f'action="{action}" needs tag (a tag id or name).')
+    if action == "get":
+        _only_for('action="get"', name=(name, None), into=(into, None), parent=(parent, None), tag_ids=(tag_ids, None),
+                  dry_run=(dry_run, False))
+        if isinstance(tag, int) or str(tag).strip().isdigit():
+            row = tags_svc.get_tag(tag)
+            return {"tags": [{**row, **tags_svc.usage(row["id"])}]}
+        return {"tags": tags_svc.get_by_name(str(tag))}
+    if action == "rename":
+        _only_for('action="rename"', into=(into, None), parent=(parent, None), tag_ids=(tag_ids, None))
+        if not (name or "").strip():
+            raise InvalidInput('action="rename" needs name (the new name).')
+        return tags_svc.rename(tag, name, dry_run=dry_run).to_dict()
+    if action == "merge":
+        _only_for('action="merge"', name=(name, None), parent=(parent, None), tag_ids=(tag_ids, None))
+        if into is None or (isinstance(into, str) and not into.strip()):
+            raise InvalidInput('action="merge" needs into (the tag to keep).')
+        return tags_svc.merge(tag, into, dry_run=dry_run).to_dict()
+    if action == "move":
+        _only_for('action="move"', name=(name, None), into=(into, None), tag_ids=(tag_ids, None))
+        return tags_svc.move(tag, parent if parent not in ("",) else None, dry_run=dry_run).to_dict()
+    if action == "delete":
+        _only_for('action="delete"', name=(name, None), into=(into, None), parent=(parent, None), tag_ids=(tag_ids, None))
+        return tags_svc.delete(tag, dry_run=dry_run).to_dict()
+    raise InvalidInput(f"Unknown action {action!r}: use tree, get, rename, merge, move, delete, sweep or sweep_apply.")
+
+
 @mcp.tool(alias_of=("constructicon_list_items", "tag"))
 def constructicon_get_posts_for_tag(tag_name: str, text_chars: int = TEXT_PREVIEW_CHARS) -> list[dict]:
     return _posts_for_tag(tag_name, text_chars_arg(text_chars))
@@ -2269,7 +2341,7 @@ def constructicon_item_tags(slug: str, tag_names: list[str],
                             action: typing.Literal["attach", "detach"] = "attach") -> dict:
     """Add tags to an item ("attach", default; missing root tags are created) or take them off
     ("detach"; an unknown tag is not_found and nothing is changed). One batch either way. This is
-    the tag tree; constructicon_update(tags=[...]) replaces the free-text tag list.
+    the tag tree (an item's chips are derived from it); constructicon_update(tags=[...]) replaces the chips.
     -> the item + batch_id.
     """
     if isinstance(tag_names, str) or not isinstance(tag_names, list):

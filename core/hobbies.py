@@ -339,8 +339,8 @@ def rename(hobby, name, *, dry_run=False, actor=None, batch_id=None):
     blog_tags), undoable; the same name again writes nothing. Search re-indexes the tagged items
     (the blog_tags trigger). Refused: an empty or over-long name (400 bad_request), a name another tag
     already has, in any case (409 hobby_name_conflict: two tags with one name would be ambiguous
-    everywhere a tag is looked up by name). Not changed (#555): the free-text tag chips items carry
-    keep the old words until the tag stores are unified. data: {hobby, old_name, old_slug, slug, url}."""
+    everywhere a tag is looked up by name). #555: items carry no stale chip: their chips are derived
+    from the tag tree, so they follow the new name. data: {hobby, old_name, old_slug, slug, url}."""
     from . import install_config  # lazy: install_config reads settings at call time
     hob = get_hobby(hobby)
     new = " ".join((name or "").split())
@@ -360,8 +360,8 @@ def rename(hobby, name, *, dry_run=False, actor=None, batch_id=None):
         conn.close()
     if clash is not None:
         raise CardError("hobby_name_conflict",
-                        f"Nothing was changed: there is already a tag called '{clash['name']}'. Pick another name "
-                        "(merging two tags is not built yet, #555).", {"tag_id": clash["id"]})
+                        f"Nothing was changed: there is already a tag called '{clash['name']}'. Pick another name. "
+                        "If they mean the same thing, merge the tags in Admin > Tags (#555).", {"tag_id": clash["id"]})
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         with db.ImageLog(OP_RENAME, actor, batch_id, [hob["slug"]]) as log:

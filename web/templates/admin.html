@@ -174,6 +174,29 @@
       <div id="prov-status" class="backup-status" role="status" aria-live="polite"></div>
     </section>
 
+    <!-- Tags (#555): the tag tree, the one tag store, with rename / merge / move / delete (each one
+         undoable batch), and the cleanup sweep, which only LISTS orphan, empty and near-duplicate tags:
+         nothing is deleted until the owner ticks them and confirms. Rendered by static/js/admin-tags.js
+         from GET /api/tags/tree and GET /api/tags/sweep (core/tags.py). -->
+    <section class="admin-panel admin-panel-wide" id="admin-tags-section" aria-labelledby="admin-tags-heading">
+      <div class="admin-panel-header">
+        <div>
+          <h2 id="admin-tags-heading">Tags <span id="admin-tags-count" class="apikey-status"></span></h2>
+          <div class="admin-row-hint">Every tag, nested as it is filed. Renaming changes it on every item; merging moves one tag's items and sub-tags into another and removes it. A card's own tag follows the card's title, so rename the card instead. Every change can be undone.</div>
+        </div>
+      </div>
+      <div class="admin-tags-tools">
+        <label for="admin-tags-filter">Find a tag</label>
+        <input type="search" class="input" id="admin-tags-filter" placeholder="Type part of a name" autocomplete="off">
+      </div>
+      <ul class="admin-tags-tree" id="admin-tags-tree" aria-label="Tag tree"><li class="admin-row-hint">Loading the tags&hellip;</li></ul>
+      <h3 id="admin-tags-sweep-heading">Cleanup</h3>
+      <div class="admin-row-hint">Lists tags nothing uses, branches with nothing under them, and names that look like another tag's (case or a stray full stop). It only lists them: tick the ones to delete and confirm.</div>
+      <button type="button" class="btn-ms" id="admin-tags-sweep-btn">Find tags to clean up</button>
+      <div id="admin-tags-sweep" aria-labelledby="admin-tags-sweep-heading"></div>
+      <div id="admin-tags-status" class="backup-status" role="status" aria-live="polite"></div>
+    </section>
+
     <!-- Install (#562): who this install belongs to and where it publishes. Was hard-wired to the
          owner's name, domain and GitHub repositories; per-install data now (core/install_config.py,
          GET/POST /api/install-config). No secrets here: the publish token is an API key below. -->
@@ -503,6 +526,7 @@
 
 <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
 <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
+<script src="/static/js/admin-tags.js?v={{ static_version('js/admin-tags.js') }}"></script>
 <script nonce="{{ csp_nonce() }}">
 (function () {
   function escapeHtml(s) {

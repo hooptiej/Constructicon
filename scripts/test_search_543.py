@@ -70,7 +70,7 @@ from mcp_server import server as mcp  # noqa: E402  (after the DB env is set)
 
 
 # membership with NO side effects: the item gets no linked tag, so the card's title is the only way in
-NO_TAG = {"link_tag": False, "merge_free_tags": False, "auto_cover": False}
+NO_TAG = {"link_tag": False, "auto_cover": False}
 
 
 def slugs_of(rows):

@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SERVICE_MODULES = {
     "core/items.py": "item fields, redact, retype, delete-to-trash, related links (phase B/C)",
     "core/membership.py": "files on/off a card (phase C)",
-    "core/tags.py": "item tags and tag creation (phase C)",
+    "core/tags.py": "the tag tree, the one tag store: item tags, tag creation and management (phase C, #555)",
     "core/cards.py": "V2 card ops, card create/update, undo (pieces 1-7, phase D)",
     "core/hobbies.py": "hobbies: create, unmark, convert both ways (phase D)",
     "core/blog.py": "blog entries (phase D)",
@@ -49,7 +49,6 @@ RAW_ALLOWED = {
                         "it would make every later undo of a real edit conflict with the pipeline)",
     "core/embedded_metadata.py": "pipeline: upload-time file metadata (title, ID3 tags, EXIF date), fill-only",
     "core/object_types/youtube.py": "pipeline: a YouTube row's fetched publish date (embedded metadata)",
-    "core/automatch.py": "pipeline: the upload-time automatch tagging (#240)",
     "core/card_migration.py": "migrations: the one-time V2 card migration (actor 'migration', refused by undo)",
     # Retired one-offs that wrote directly against the DB (kept for reference; they refuse to run, #633).
     "scripts/archive/apply_project_groupings.py": "one-off 2026-09 grouping import, already applied",

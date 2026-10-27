@@ -32,6 +32,7 @@ from web.common import _STATIC_DIR
 from web.middleware import _scrub_secrets, ActorMiddleware, AuditLoggingMiddleware  # noqa: F401 (_scrub_secrets re-exported for scripts/test_request_guard.py)
 from web.security_headers import SecurityHeadersMiddleware
 from web.routes import meta, pages, admin, items, curator, files, cards, hobbies, blog_export, auth as auth_routes
+from web.routes import tags as tags_routes
 
 # #652: nothing the app writes (DB, uploads, thumbnails, backups, exports) is readable by other
 # users on the host. Set at import, before the startup hook's init_db creates or opens anything.
@@ -348,5 +349,6 @@ app.include_router(curator.router)
 app.include_router(files.router)
 app.include_router(cards.router)
 app.include_router(hobbies.router)
+app.include_router(tags_routes.router)  # #555: the tag tree, tag management, the cleanup sweep
 app.include_router(blog_export.router)
 app.include_router(auth_routes.router)  # #467 step 1: login, setup, logout, users, my password

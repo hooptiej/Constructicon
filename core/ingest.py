@@ -68,16 +68,9 @@ def attach_to_project(slug, project_id):
     resolve to a real project (bad/stale value) is silently ignored rather
     than failing the whole upload over a cosmetic mismatch.
 
-    #274: also merges the tag's own name into the row's free-text `tags`
-    column (db._add_tags — same merge path a person typing a tag by hand
-    goes through), not just post_tags. Before this, a project-linked tag
-    surfaced the item in tag-tree browsing but never showed up as a chip
-    in the item's own TAGS box on its detail page — an inconsistent, easy
-    to miss picture of "what tags does this item actually have." Once
-    merged in this way it's indistinguishable from a typed tag (by
-    design, per the owner's call on #274) — removing it later from the
-    free-text box fully detaches it, independent of project membership,
-    same as any other typed tag.
+    #274 used to also merge the tag's name into the row's free-text `tags` column so it showed as
+    a chip. #555: the tag tree is the one store and a card's linked tag is never a chip (the item
+    page shows the card itself, a link), so only the post_tags link is written.
 
     Also auto-sets the project's cover_slug to this item's slug if the
     project currently has no cover (issue #103) — fires only once per

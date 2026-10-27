@@ -1378,15 +1378,15 @@ def _transfer_files(slugs, from_card, to_card, move, dry_run, actor, batch_id):
             _membership().apply_transfer_tags(plan, dst_tag, src_tag, op, actor, batch_id,
                                               [src["slug"], dst["slug"]] + [d["slug"] for d in plan])
     return Result(True, rows, warnings, batch_id, dry_run,
-                  {"tags_added": sum(1 for d in plan if d["link_add"] or d["chip_add"]),
-                   "tags_removed": sum(1 for d in plan if d["link_drop"] or d["chip_drop"])})
+                  {"tags_added": sum(1 for d in plan if d["link_add"]),
+                   "tags_removed": sum(1 for d in plan if d["link_drop"])})
 
 
 def _tag_rows(plan, dst_tag, src_tag, src, dst):
     """Change-summary rows for a tag plan: one per card, naming the tag and how many files."""
     rows = []
-    gained = sum(1 for d in plan if d["link_add"] or d["chip_add"])
-    lost = sum(1 for d in plan if d["link_drop"] or d["chip_drop"])
+    gained = sum(1 for d in plan if d["link_add"])
+    lost = sum(1 for d in plan if d["link_drop"])
     if gained and dst_tag:
         rows.append({"card": dst["slug"], "field": "tag", "before": None, "after": f"{dst_tag['name']} (+{gained} file(s))"})
     if lost and src_tag:
@@ -1918,14 +1918,21 @@ def update(card, *, title=None, description=None, cover_slug=None, cover_project
     ghost = _blank_writeup_left_behind(row, writeup_slug)
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
+        warnings = []
         with db.ImageLog(OP_UPDATE_CARD, actor, batch_id, [row["slug"]]) as log:
             log.update("projects", {"id": row["id"]}, fields)
+            if title is not None and title != row["title"]:
+                # #555: the card's linked tag follows its title, in this same change-log row (one undo).
+                from . import tags as _tags  # lazy: tags imports Result from here
+                warn = _tags.follow_card_title(log, row, title)
+                if warn:
+                    warnings.append(warn)
             muts = [{"op": OP_UPDATE_CARD, "affected_slugs": [row["slug"]], "mutations": list(log.muts)}]
         changed = _changes_from_log(muts)
         if ghost:
             changed += _retire_blank_writeup(row, ghost, dry_run=dry_run, actor=actor, batch_id=batch_id)
         fresh = db.get_project(row["id"])
-    return Result(True, changed, [], batch_id, dry_run, {"card": fresh})
+    return Result(True, changed, warnings, batch_id, dry_run, {"card": fresh})
 
 
 # --- Cover picks, the same everywhere (#554, batch 5) ----------------------------------------

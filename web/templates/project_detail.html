@@ -5,13 +5,18 @@
 {% from "_details_group.html" import dp_group %}
 {% from "_card_text.html" import about_view, about_edit, about_script %}
 {% from "_sharing.html" import sharing_panel %}
+{% from "_cover_pick.html" import cover_pick, cover_pick_config %}
+{% from "_hobby_nodes.html" import project_nodes %}
 {% include "_header.html" %}
 {% include "_upload_drawer.html" %}
 {% include "_blog_builder.html" %}
 {% include "_export_builder.html" %}
 <div class="app-main dp-page">
   <span class="dp-status-live" id="dp-status-live" role="status" aria-live="polite"></span>
-  {% set is_group = card_status.kind in ('family', 'collection') %}
+  {#- #554: what this kind's page shows (core/card_rules.py CARD_PAGES), instead of the old is-group switches:
+      page.members (a family / collection: its members get the member layout), page.nests (the
+      Part of picker), page.lead ("writeup" = an event reads like a post), page.date_banner. -#}
+  {% set page = card_page %}
 
   {# #515: breadcrumb (the card's home chain, top first) + the More menu. The old "Back to projects"
      link is the Home crumb; Convert to hobby and Delete project moved into More. #}
@@ -35,6 +40,30 @@
       </div>
     </div>
   </div>
+
+  {% if page.date_banner %}
+  {# #554: an event's date (or range) up top, big. Set it in the DATES group (its files' real dates, or by hand). #}
+  <p class="card-date-banner" id="card-date-banner">{% if header_dates %}{{ header_dates }}{% else %}<span class="dp-muted">No date yet: set the start (and end) in the DATES group below.</span>{% endif %}</p>
+  {% endif %}
+  {% set writeup_section %}
+  {% if writeup_body %}
+  <div class="project-writeup-solo{% if page.lead == 'writeup' %} project-writeup-lead{% endif %}">
+    <div class="project-writeup-featured" id="project-writeup-featured">
+      <div class="hazard-stripe"></div>
+      <div class="project-writeup-featured-head">
+        <h2>Write-up</h2>
+        {% if project.writeup_slug %}
+        <a href="/object/{{ project.writeup_slug }}?from=project:{{ project.slug }}">Open document</a>
+        {% endif %}
+      </div>
+      <div class="project-writeup-featured-body markdown-body">{{ writeup_body | markdown }}</div>
+    </div>
+  </div>
+  {% elif page.lead == 'writeup' %}
+  <p class="dp-note project-writeup-missing">No write-up yet. An event's page leads with its story: write it in its write-up document (in the file grid below, tick a document as the write-up).</p>
+  {% endif %}
+  {% endset %}
+  {% if page.lead == 'writeup' %}{{ writeup_section }}{% endif %}
 
   {# Owner, 2026-10-03: the project timeline sits directly under the breadcrumb. #}
   {% if timeline_children or timeline_items %}
@@ -89,8 +118,8 @@
       <dl class="dp-rows">
         <div class="dp-row"><dt>Kind</dt><dd>{{ card_status.kind_label }}{% if card_queue['items'] | selectattr('kind', 'equalto', 'card_kind') | list %} <span class="dp-muted">(question open)</span>{% endif %}</dd></div>
         <div class="dp-row"><dt>{{ hobby_label.many }}</dt><dd>{% for h in project_hobbies %}<a href="{{ hobby_label.url(h.slug) }}">{{ h.name }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
-        <div class="dp-row"><dt>{{ 'Members' if is_group else 'Family' }}</dt><dd>{% for c in (family_info.members if is_group else family_info.families) %}<a href="/project/{{ c.slug }}">{{ c.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
-        {% if not is_group %}<div class="dp-row"><dt>Part of</dt><dd>{% if parent_card %}<a href="/project/{{ parent_card.slug }}">{{ parent_card.title }}</a>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>{% endif %}
+        <div class="dp-row"><dt>{{ 'Members' if page.members else 'Family' }}</dt><dd>{% for c in (family_info.members if page.members else family_info.families) %}<a href="/project/{{ c.slug }}">{{ c.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
+        {% if page.nests %}<div class="dp-row"><dt>Part of</dt><dd>{% if parent_card %}<a href="/project/{{ parent_card.slug }}">{{ parent_card.title }}</a>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>{% endif %}
       </dl>
       {% endset %}
       {% set identity_edit %}
@@ -113,26 +142,26 @@
       {# V2 cards 3.6: a family or collection lists its MEMBERS; any other card shows the families it is IN.
          Membership is not nesting: no file moves. Add / remove act immediately. #}
       <div class="dp-field" id="family-row">
-        <span class="dp-label" id="family-chips-label">{% if is_group %}Members{% else %}In family{% endif %}</span>
+        <span class="dp-label" id="family-chips-label">{% if page.members %}Members{% else %}In family{% endif %}</span>
         <div id="family-chips-container" class="dp-chips" role="group" aria-labelledby="family-chips-label">
-          {% for c in (family_info.members if is_group else family_info.families) %}
+          {% for c in (family_info.members if page.members else family_info.families) %}
           <span class="chip family-chip" data-card-id="{{ c.id }}">
             <a href="/project/{{ c.slug }}">{{ c.title }}</a>
             <span class="dp-muted">{{ c.kind_label }}</span>
             <button type="button" class="dp-chip-x family-chip-remove" data-card-id="{{ c.id }}" title="Remove" aria-label="Remove {{ c.title }}">&times;</button>
           </span>
           {% else %}
-          <span class="dp-muted">{% if is_group %}No members yet.{% else %}Not in any family or collection.{% endif %}</span>
+          <span class="dp-muted">{% if page.members %}No members yet.{% else %}Not in any family or collection.{% endif %}</span>
           {% endfor %}
         </div>
-        <label class="dp-sr-label" for="family-add-select">{% if is_group %}Add member{% else %}Add to family{% endif %}</label>
+        <label class="dp-sr-label" for="family-add-select">{% if page.members %}Add member{% else %}Add to family{% endif %}</label>
         <select id="family-add-select" class="input">
-          <option value="">{% if is_group %}+ Add member…{% else %}+ Add to family…{% endif %}</option>
+          <option value="">{% if page.members %}+ Add member…{% else %}+ Add to family…{% endif %}</option>
         </select>
         <p id="family-error" class="dp-error" role="alert"></p>
       </div>
       {# "Part of" nesting (3.7) is for cards that only make sense inside another; a family or collection can't be nested. #}
-      {% if not is_group %}
+      {% if page.nests %}
       <div class="dp-field">
         <label for="parent-project-select">Part of</label>
         <select id="parent-project-select" class="input">
@@ -328,20 +357,7 @@
     </div>
   </div>
 
-  {% if writeup_body %}
-  <div class="project-writeup-solo">
-    <div class="project-writeup-featured" id="project-writeup-featured">
-      <div class="hazard-stripe"></div>
-      <div class="project-writeup-featured-head">
-        <h2>Write-up</h2>
-        {% if project.writeup_slug %}
-        <a href="/object/{{ project.writeup_slug }}?from=project:{{ project.slug }}">Open document</a>
-        {% endif %}
-      </div>
-      <div class="project-writeup-featured-body markdown-body">{{ writeup_body | markdown }}</div>
-    </div>
-  </div>
-  {% endif %}
+  {% if page.lead != 'writeup' %}{{ writeup_section }}{% endif %}
 
   {# V2 cards 8.3: stacks and fans. One pile per file type (a real <button>); the full grid
      below it is the same markup v1 had (every file action lives there), inside a <details>
@@ -365,7 +381,7 @@
         <div class="stack-label"><strong>{{ pile.label }}</strong> &middot; {{ pile.count }}{% if pile.span %} &middot; {{ pile.span }}{% endif %}</div>
         <div class="stack-fan" id="fan-{{ loop.index }}" hidden>
           <div class="stack-fan-arc" style="--n: {{ pile.cards|length }}">
-            {% for c in pile.cards %}<span class="stack-fan-card" style="--i: {{ loop.index0 }}">{{ card(c, "mini") }}</span>{% endfor %}
+            {% for c in pile.cards %}<span class="stack-fan-card" style="--i: {{ loop.index0 }}">{{ card(c, "mini") }}{{ cover_pick("item", c.slug, c.title, c.slug == project.cover_slug and not project.cover_project_id, cover_can_edit) }}</span>{% endfor %}
             {% if pile.more %}<span class="stack-more">+{{ pile.more }}</span>{% endif %}
           </div>
           <button type="button" class="stack-showall" data-media-type="{{ pile.media_type }}">Show all {{ pile.count }}</button>
@@ -373,13 +389,27 @@
       </div>
       {% endfor %}
       {% for c in beside_cards %}
-      <div class="stack-beside">{{ card(c, "small") }}</div>
+      <div class="stack-beside">{{ card(c, "small") }}{{ cover_pick("card", c.card_id, c.title, project.cover_project_id == c.card_id, cover_can_edit) }}</div>
       {% endfor %}
     </div>
-    {% else %}
-    <p class="empty-state">This project has no items yet.</p>
+    {% elif not member_nodes %}
+    <p class="empty-state">This {{ card_status.kind_label | lower }} has no items yet.</p>
     {% endif %}
   </section>
+
+  {% if page.members %}
+  {# #554: a family's / collection's members in the hobby member layout (small card + a pile of its
+     files), each with the cover pick (borrow its cover) and a Remove button. #}
+  <section class="stacks-section hp-section" id="members" aria-labelledby="members-heading">
+    <h2 class="stacks-heading" id="members-heading">{{ page.members_label }}</h2>
+    <p class="dp-error hp-error" id="members-error" role="alert"></p>
+    {% if member_nodes %}
+    <div class="hp-row" id="members-row">{{ project_nodes(member_nodes, 'm', remove_label=member_remove_label, cover=node_cover) }}</div>
+    {% else %}
+    <p class="empty-state">No members yet. Add one in the IDENTITY group above.</p>
+    {% endif %}
+  </section>
+  {% endif %}
 
   {% if grid_entries %}
   <details class="all-files" id="all-files">
@@ -405,7 +435,7 @@
         </div>
       </a>
       <div class="project-item-selectors" style="position:absolute;top:8px;right:8px;display:flex;gap:8px;align-items:center">
-        <input type="radio" class="project-cover-selector-child" name="cover" data-project-id="{{ entry.id }}" title="Set as project cover (borrow child's cover)" {% if project.cover_project_id == entry.id %}checked{% endif %}>
+        {{ cover_pick("card", entry.id, entry.title, project.cover_project_id == entry.id, cover_can_edit) }}
         <button type="button" class="orphan-child-btn" title="Remove from this project" style="width:24px;height:24px;padding:0;border:1px solid var(--border);border-radius:4px;background:var(--bg);cursor:pointer;display:none;align-items:center;justify-content:center;font-size:14px;color:var(--text)">×</button>
       </div>
     </div>
@@ -425,7 +455,7 @@
         </div>
       </a>
       <div class="project-item-selectors">
-        <input type="radio" class="project-cover-selector" name="cover" data-slug="{{ entry.slug }}" title="Set as project cover" {% if entry.slug == project.cover_slug %}checked{% endif %}>
+        {{ cover_pick("item", entry.slug, entry.title, entry.slug == project.cover_slug and not project.cover_project_id, cover_can_edit) }}
         {% if entry.writeup_capable %}
         <input type="radio" class="project-writeup-selector" name="writeup" data-slug="{{ entry.slug }}" title="Set as write-up" {% if entry.slug == project.writeup_slug %}checked{% endif %}>
         {% endif %}
@@ -440,6 +470,7 @@
   <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
   <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
   <script src="/static/js/sharing.js?v={{ static_version('js/sharing.js') }}" defer></script>
+  {{ cover_pick_config(cover_pick_cfg) }}
 
   {% if timeline_children or timeline_items %}
   <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
@@ -564,32 +595,10 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   if (window.openBlogEntry) window.openBlogEntry(link.dataset.entrySlug);
 });
-let currentCoverSlug = {{ project.cover_slug | tojson }};
-let currentCoverProjectId = {{ project.cover_project_id | tojson }};
+// #554: the cover picks (files and child cards) are static/js/cover-pick.js now, the same on every page.
 let currentWriteupSlug = {{ project.writeup_slug | tojson }};
 let currentParentId = {{ project.parent_id | tojson }};
 const projectId = {{ project.id }};
-
-function revertCoverSelection(failedRadio) {
-  failedRadio.checked = false;
-  // Check if this was a child project cover selector
-  if (failedRadio.classList.contains('project-cover-selector-child')) {
-    if (currentCoverProjectId) {
-      const previous = document.querySelector(
-        `.project-cover-selector-child[data-project-id="${currentCoverProjectId}"]`
-      );
-      if (previous) previous.checked = true;
-    }
-  } else {
-    // Object cover selector
-    if (currentCoverSlug) {
-      const previous = document.querySelector(
-        `.project-cover-selector[data-slug="${CSS.escape(currentCoverSlug)}"]`
-      );
-      if (previous) previous.checked = true;
-    }
-  }
-}
 
 function revertWriteupSelection(failedRadio) {
   failedRadio.checked = false;
@@ -600,55 +609,6 @@ function revertWriteupSelection(failedRadio) {
     if (previous) previous.checked = true;
   }
 }
-
-document.querySelectorAll('.project-cover-selector').forEach(radio => {
-  radio.addEventListener('change', async function() {
-    if (!this.checked) return;
-    const slug = this.dataset.slug;
-    try {
-      const response = await fetch(`/api/projects/${projectId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `cover_slug=${encodeURIComponent(slug)}`
-      });
-      if (response.ok) {
-        currentCoverSlug = slug;
-        currentCoverProjectId = null; // Clear the child project cover when setting object cover
-      } else {
-        console.error('Failed to update cover:', response.status);
-        revertCoverSelection(this);
-      }
-    } catch (error) {
-      console.error('Error updating cover:', error);
-      revertCoverSelection(this);
-    }
-  });
-});
-
-// Child project cover selector (#356): borrow cover from a child project
-document.querySelectorAll('.project-cover-selector-child').forEach(radio => {
-  radio.addEventListener('change', async function() {
-    if (!this.checked) return;
-    const projectId_ = this.dataset.projectId;
-    try {
-      const response = await fetch(`/api/projects/${projectId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `cover_project_id=${encodeURIComponent(projectId_)}`
-      });
-      if (response.ok) {
-        currentCoverProjectId = parseInt(projectId_);
-        currentCoverSlug = null; // Clear the object cover when setting child project cover
-      } else {
-        console.error('Failed to update cover:', response.status);
-        revertCoverSelection(this);
-      }
-    } catch (error) {
-      console.error('Error updating cover:', error);
-      revertCoverSelection(this);
-    }
-  });
-});
 
 // Writeup selector (#156)
 document.querySelectorAll('.project-writeup-selector').forEach(radio => {
@@ -748,8 +708,8 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
   // Family / collection membership (V2 cards 3.6). On a group card the chips are its members; elsewhere
   // they are the families this card is in. Every change is a core operation (validated, logged).
   (function () {
-    const isGroup = {{ (card_status.kind in ('family', 'collection')) | tojson }};
-    const inChips = new Set({{ ((family_info.members if card_status.kind in ('family', 'collection') else family_info.families) | map(attribute='id') | list) | tojson }});
+    const isGroup = {{ page.members | tojson }};
+    const inChips = new Set({{ ((family_info.members if page.members else family_info.families) | map(attribute='id') | list) | tojson }});
     const select = document.getElementById('family-add-select');
     const errBox = document.getElementById('family-error');
     function showErr(msg) { errBox.textContent = msg || ''; }
@@ -780,6 +740,25 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
         const other = btn.dataset.cardId;
         if (isGroup) call(PROJECT_ID, other, 'members/remove');
         else call(other, PROJECT_ID, 'members/remove');
+      });
+    });
+    // #554: the member layout's Remove button (one undoable change; the bar offers Undo).
+    const membersErr = document.getElementById('members-error');
+    const groupWord = {{ (card_status.kind_label | lower) | tojson }};
+    document.querySelectorAll('#members .hp-remove').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (membersErr) membersErr.textContent = '';
+        btn.disabled = true;
+        try {
+          const body = await postForm(`/api/families/${PROJECT_ID}/members/remove`, { member: btn.dataset.projectId });
+          const block = btn.closest('.hp-block');
+          if (block) block.remove();
+          window.showUndoBar(`Took "${btn.dataset.projectTitle}" out of this ${groupWord}.`, body.batch_id,
+                             how => { if (how === 'undone') window.location.reload(); });
+        } catch (e) {
+          if (membersErr) membersErr.textContent = e.message;
+          btn.disabled = false;
+        }
       });
     });
   })();
@@ -1208,7 +1187,7 @@ convertHobbyConfirm.addEventListener('click', async () => {
     deleteProjectSuccess.style.display = 'none';
     deleteProjectConfirm.disabled = false;
     deleteProjectConfirm.textContent = 'Delete';
-    const message = `Delete "${projectTitle}"? Its ${projectChildCount} sub-project${projectChildCount === 1 ? '' : 's'} become top-level and its ${projectItemCount} object${projectItemCount === 1 ? '' : 's'} are detached — nothing else is deleted. It can be undone afterwards from the change log (the delete is recorded with its full row images), but not from this page.`;
+    const message = `Delete "${projectTitle}"? Its ${projectChildCount} sub-project${projectChildCount === 1 ? '' : 's'} become top-level and its ${projectItemCount} object${projectItemCount === 1 ? '' : 's'} are detached — nothing else is deleted. You can undo it right after, from the bar at the bottom of the page.`;
     deleteProjectMessage.textContent = message;
     deleteProjectBackdrop.style.display = 'flex';
   }
@@ -1235,12 +1214,20 @@ convertHobbyConfirm.addEventListener('click', async () => {
         throw new Error(body.detail || 'Deletion failed');
       }
 
-      deleteProjectSuccess.textContent = `Deleted "${projectTitle}" — orphaned ${body.children_orphaned} project${body.children_orphaned === 1 ? '' : 's'}, detached ${body.items_detached} object${body.items_detached === 1 ? '' : 's'}.` + (body.batch_id ? ` To undo: change ${body.batch_id}.` : '');
-      deleteProjectSuccess.style.display = 'block';
-
-      setTimeout(() => {
-        window.location.href = '/';
-      }, 1500);
+      // #554: the delete is one undoable batch: offer Undo in the bar (as after an item delete), and go
+      // home once the bar is closed (or after its 30 s). Undo brings the card back and stays here.
+      const summary = `Deleted "${projectTitle}": ${body.children_orphaned} nested card${body.children_orphaned === 1 ? '' : 's'} made top-level, ${body.items_detached} file${body.items_detached === 1 ? '' : 's'} detached (nothing else deleted).`;
+      if (body.batch_id && window.showUndoBar) {
+        hideDeleteDialog();
+        window.showUndoBar(summary, body.batch_id, (how) => {
+          if (how === 'undone') window.location.reload();
+          else window.location.href = '/';
+        });
+      } else {
+        deleteProjectSuccess.textContent = summary + ' (No undo was offered: reload the change log to undo it.)';
+        deleteProjectSuccess.style.display = 'block';
+        setTimeout(() => { window.location.href = '/'; }, 4000);
+      }
     } catch (err) {
       deleteProjectError.textContent = err.message;
       deleteProjectError.style.display = 'block';

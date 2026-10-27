@@ -3,15 +3,21 @@
      static/js/stacks.js fans it and the same cards.css styles it). A nested child renders
      inside its parent's block. Every value is autoescaped by Jinja; nothing is marked |safe.
 
-     {% from "_hobby_nodes.html" import project_nodes %}
-     {{ project_nodes(nodes, 'a') }}     nodes: the web layer's list (face, pile, children) -#}
-{% from "_card.html" import card %}
+     #554 (batch 5): the same layout shows a family's / collection's MEMBERS on its card page.
+     `remove_label` is the button's words ("Remove from <hobby>" / "Remove from family"); `cover`
+     (optional) = {"current": card id or None, "can_edit": bool} puts the cover pick on each card.
 
-{% macro project_nodes(nodes, zone, nested=false) -%}
+     {% from "_hobby_nodes.html" import project_nodes %}
+     {{ project_nodes(nodes, 'a', remove_label=..., cover=...) }}   nodes: the web layer's list (face, pile, children) -#}
+{% from "_card.html" import card %}
+{% from "_cover_pick.html" import cover_pick %}
+
+{% macro project_nodes(nodes, zone, nested=false, remove_label=none, cover=none) -%}
 {% for n in nodes %}
 <div class="hp-block{% if nested %} hp-nested{% endif %}" data-project-id="{{ n.id }}" data-project-slug="{{ n.slug }}"
      data-title="{{ n.title }}" data-start="{{ n.face.effective_start or n.face.created_at }}">
   <div class="hp-card">{{ card(n.face, "small") }}</div>
+  {% if cover %}{{ cover_pick("card", n.id, n.title, cover.current == n.id, cover.can_edit) }}{% endif %}
   {% if n.pile %}
   <div class="stack-pile hp-pile" data-media-type="project-{{ n.id }}" data-count="{{ n.pile.count }}">
     <div class="stack-face">
@@ -35,11 +41,11 @@
   {% else %}
   <p class="hp-nofiles">No files yet.</p>
   {% endif %}
-  <button type="button" class="dp-btn hp-remove" data-project-id="{{ n.id }}" data-project-title="{{ n.title }}" aria-label="Remove {{ n.title }} from this {{ hobby_label.one_lc }}">Remove from {{ hobby_label.one_lc }}</button>
+  {% if remove_label %}<button type="button" class="dp-btn hp-remove" data-project-id="{{ n.id }}" data-project-title="{{ n.title }}" aria-label="{{ remove_label }}: {{ n.title }}">{{ remove_label }}</button>{% endif %}
   {% if n.children %}
   <div class="hp-children" role="group" aria-label="Nested in {{ n.title }}">
     <div class="hp-children-label">Nested in {{ n.title }}</div>
-    <div class="hp-row">{{ project_nodes(n.children, zone, true) }}</div>
+    <div class="hp-row">{{ project_nodes(n.children, zone, true, remove_label, cover) }}</div>
   </div>
   {% endif %}
 </div>

@@ -28,6 +28,34 @@ KIND_LABELS = {
     "event": "Event",
 }
 
+# --- Per-kind page layout (#554, batch 5 "Every Kind Gets Its Own Room") --------------------
+# What a card's page shows, by kind, in one table instead of `is_group` switches in the template.
+#   members      the card has family/collection MEMBERS: they get their own section in the hobby
+#                member layout (templates/_hobby_nodes.html: small card + a pile of its files)
+#   nests        the card can be "part of" another card (the Part of picker; group kinds can't)
+#   lead         "writeup" = the write-up comes first, before the card and its details (an event
+#                reads like a post: story first, files after); "card" = the card and details first
+#   date_banner  the date or date range is shown big at the top (events)
+#   members_label / member_noun   the members section's heading and its "Remove from ..." noun
+PAGE_DEFAULT = {"members": False, "nests": True, "lead": "card", "date_banner": False,
+                "members_label": None, "member_noun": None}
+CARD_PAGES = {
+    "project": {},
+    "thing": {},
+    "action": {},
+    "family": {"members": True, "nests": False, "members_label": "Members", "member_noun": "family"},
+    "collection": {"members": True, "nests": False, "members_label": "In this collection", "member_noun": "collection"},
+    # #554 owner decision 2026-10-18: write-up front and centre, the date prominently up top. The
+    # "where" link waits for the V2 place kind (#771); no attendee field.
+    "event": {"lead": "writeup", "date_banner": True},
+}
+
+
+def page_config(kind):
+    """#554: the page layout for a card of `kind` (PAGE_DEFAULT overlaid with CARD_PAGES[kind];
+    an unknown kind gets the default)."""
+    return {**PAGE_DEFAULT, **CARD_PAGES.get(kind or DEFAULT_KIND, {})}
+
 # --- Status (3.2) ------------------------------------------------------------
 STAGES = ("in_progress", "in_use", "idea", "paused", "done", "stopped")
 STOP_REASONS = ("failed", "abandoned")
@@ -139,10 +167,12 @@ def __getattr__(name):
 # #686: where a hobby's cover came from (cards.resolve_hobby_cover). `picked` = chosen by hand
 # (hobby_settings.cover_slug); the other two are the automatic fallback, in this order.
 HOBBY_COVER_PICKED = "picked"
+HOBBY_COVER_CARD = "picked_card"  # #554: ticked on a member card (hobby_settings.cover_project_id)
 HOBBY_COVER_HIGHLIGHT = "highlighted_project"
 HOBBY_COVER_RECENT = "recent_project"
 HOBBY_COVER_SOURCE_LABELS = {
     HOBBY_COVER_PICKED: "Chosen by hand",
+    HOBBY_COVER_CARD: "Chosen by hand: borrowed from a card (it follows that card's cover)",
     HOBBY_COVER_HIGHLIGHT: "Automatic: its highlighted project's cover",
     HOBBY_COVER_RECENT: "Automatic: its most recently updated project with a cover",
 }

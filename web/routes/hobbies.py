@@ -130,15 +130,26 @@ async def api_set_hobby_text(request: Request, id_or_slug: str):
 
 
 @router.post("/api/hobby/{id_or_slug}/cover")
-def api_set_hobby_cover(id_or_slug: str, cover_slug: str = Form("")):
-    """#686: choose the hobby's cover (`cover_slug`, an item slug), or send it blank to go back to
-    the automatic cover (its highlighted project's, else its most recent project's). Editor, like
-    a card's cover. 404 not_found for an unknown or hidden item, 422 bad_cover for one with no
-    picture or a redacted one. One undoable change-log row (op hobby_cover). The answer carries
-    the resolved cover (`cover`, with `cover_url`)."""
-    result = hobbies.set_cover(id_or_slug, cover_slug or None).to_dict()
+def api_set_hobby_cover(id_or_slug: str, cover_slug: str = Form(""), cover_card: str = Form("")):
+    """#686: choose the hobby's cover (`cover_slug`, an item slug), or send both blank to go back to
+    the automatic cover (its highlighted project's, else its most recent project's). #554: or
+    `cover_card` (a member card's id or slug): the hobby borrows that card's cover and follows it.
+    Editor, like a card's cover. 404 not_found for an unknown or hidden item or card, 422 bad_cover
+    (details.reason) for one with no picture, a redacted one, a card outside the hobby or one with no
+    cover to lend. One undoable change-log row (op hobby_cover). The answer carries the resolved cover
+    (`cover`, with `cover_url`)."""
+    result = hobbies.set_cover(id_or_slug, cover_slug or None, cover_card=cover_card or None).to_dict()
     result["cover"] = _hobby_cover(hobbies.get_hobby(id_or_slug))[1]
     return JSONResponse(result)
+
+
+@router.post("/api/hobby/{id_or_slug}/rename")
+def api_rename_hobby(id_or_slug: str, name: str = Form(...)):
+    """#554: rename a hobby (its tag's name and slug). Editor, like its other details. The answer
+    carries the new `slug` and `url` (the page address in the install's label, #700); the old address
+    308-redirects to it. 409 hobby_name_conflict when another tag has that name. One undoable
+    change-log row (op hobby_rename)."""
+    return JSONResponse(hobbies.rename(id_or_slug, name).to_dict())
 
 
 @router.post("/api/hobby/{id_or_slug}/add-project")

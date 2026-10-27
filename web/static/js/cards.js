@@ -13,6 +13,8 @@
            unfiledSlugs  Set of slugs not filed into a project (amber lamp)
            selectable "row" shows the select checkbox row (Unfiled, user gallery)
            selected   Set of selected slugs (re-checks boxes on re-render)
+           coverPick  #554: {current: {kind, ref} | null, can_edit} draws the cover pick
+                      (the same markup as templates/_cover_pick.html; static/js/cover-pick.js runs it)
    The card is one real link. Lamps, badges, tags and the select checkbox sit in a tools
    strip directly under it (interactive controls can't live inside the link). */
 (function () {
@@ -101,6 +103,18 @@
     '</a>';
   }
 
+  // #554: the cover pick, the same markup templates/_cover_pick.html draws for a file.
+  function coverPick(item, cp) {
+    var cur = cp.current;
+    var on = !!cur && cur.kind === 'item' && String(cur.ref) === String(item.slug);
+    var tip = cp.can_edit ? 'Make this the cover. One cover at a time.' : 'Picking the cover needs the editor role';
+    var lock = cp.can_edit ? '' : ' is-locked';
+    return '<label class="cx-cover-pick-row' + lock + '" title="' + esc(tip) + '"><input type="radio" class="project-cover-selector cx-cover-pick' + lock +
+      '" data-cover-kind="item" data-cover-ref="' + esc(item.slug) + '" data-cover-title="' + esc(item.display_name) +
+      '" aria-label="' + esc('Cover: ' + item.display_name) + '"' + (cp.can_edit ? '' : ' aria-disabled="true"') + (on ? ' checked' : '') +
+      '><span class="cx-cover-pick-label">Cover' + (cp.can_edit ? '' : ' <span class="cx-cover-pick-role">&middot; editors</span>') + '</span></label>';
+  }
+
   // Everything the old gallery tiles carried that the card face has no slot for.
   function tools(item, opts) {
     var parts = [];
@@ -129,6 +143,7 @@
         '<input type="checkbox" class="card-select" data-slug="' + esc(item.slug) + '" title="Select for bulk actions"' +
         (opts.selected && opts.selected.has(item.slug) ? ' checked' : '') + '></label>');
     }
+    if (opts.coverPick) parts.push(coverPick(item, opts.coverPick));
     return '<div class="cx-item-tools">' + parts.join('') + '</div>';
   }
 
@@ -172,6 +187,7 @@
         '" aria-label="' + esc('Select ' + title) + '" title="Select for bulk actions"' +
         (opts.selected && opts.selected.has(item.slug) ? ' checked' : '') + '></label>';
     }
+    if (opts.coverPick) badges += coverPick(item, opts.coverPick);
     return '<div class="cx-row' + (item.redacted ? ' cx-row-redacted' : '') + '" role="listitem" data-slug="' + esc(item.slug) + '">' + select +
       '<a class="cx-row-link" href="' + esc(href) + '" data-card-slug="' + esc(item.slug) + '">' +
         '<span class="cx-row-thumb">' + thumb + '</span>' +

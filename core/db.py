@@ -128,6 +128,14 @@ CREATE TABLE IF NOT EXISTS hobby_settings (
     hobby_tag_id INTEGER PRIMARY KEY REFERENCES blog_tags(id),
     shows_physical_piece INTEGER NOT NULL DEFAULT 0
 );
+-- #554 (batch 5): every URL slug a hobby has had (written by hobbies.rename, never imaged and never
+-- dropped by an undo, like hobby_label_known), so /hobby/<old slug> 308-redirects to the hobby's
+-- current address instead of breaking. A slug that is some hobby's CURRENT slug always wins.
+CREATE TABLE IF NOT EXISTS hobby_slug_history (
+    slug TEXT PRIMARY KEY,
+    hobby_tag_id INTEGER NOT NULL REFERENCES blog_tags(id),
+    recorded_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     method TEXT NOT NULL,
@@ -1000,7 +1008,11 @@ def init_db(migrate=True):
         existing_hobby_settings_columns = {row["name"] for row in conn.execute("PRAGMA table_info(hobby_settings)")}
         # #686: cover_slug = the hobby's chosen cover (a capture_events slug, NULL = automatic: its
         # highlighted project's cover, else its most recent project's; see cards.resolve_hobby_cover).
-        for column, ddl_type in (("synopsis", "TEXT"), ("flavor", "TEXT"), ("cover_slug", "TEXT")):
+        # #554 (batch 5): cover_project_id = the member card whose cover the hobby borrows (and
+        # follows when that card's cover changes), like projects.cover_project_id. NULL = none;
+        # cover_slug and cover_project_id are never both set (hobbies.set_cover).
+        for column, ddl_type in (("synopsis", "TEXT"), ("flavor", "TEXT"), ("cover_slug", "TEXT"),
+                                 ("cover_project_id", "INTEGER")):
             if column not in existing_hobby_settings_columns:
                 _add_column(conn, "hobby_settings", column, ddl_type)
         # #604 step 1: ownership. The user who uploaded an item / created a card, hobby or blog entry
@@ -5537,13 +5549,26 @@ def physical_piece_hobbies():
 
 
 def get_hobby_settings(hobby_id):
-    """#562/#596/#686: one hobby's settings ({shows_physical_piece, synopsis, flavor, cover_slug});
-    defaults when the hobby has no settings row yet."""
+    """#562/#596/#686/#554: one hobby's settings ({shows_physical_piece, synopsis, flavor, cover_slug,
+    cover_project_id}); defaults when the hobby has no settings row yet."""
     conn = get_conn()
     try:
-        row = conn.execute("SELECT shows_physical_piece, synopsis, flavor, cover_slug FROM hobby_settings "
-                           "WHERE hobby_tag_id = ?", (hobby_id,)).fetchone()
-        return dict(row) if row else {"shows_physical_piece": 0, "synopsis": None, "flavor": None, "cover_slug": None}
+        row = conn.execute("SELECT shows_physical_piece, synopsis, flavor, cover_slug, cover_project_id "
+                           "FROM hobby_settings WHERE hobby_tag_id = ?", (hobby_id,)).fetchone()
+        return dict(row) if row else {"shows_physical_piece": 0, "synopsis": None, "flavor": None, "cover_slug": None,
+                                      "cover_project_id": None}
+    finally:
+        conn.close()
+
+
+def hobby_for_old_slug(slug):
+    """#554: the hobby that once had URL slug `slug` (hobby_slug_history), or None. Callers try the
+    current slug first (db.get_hobby); this is only the redirect fallback."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT bt.* FROM hobby_slug_history h JOIN blog_tags bt ON bt.id = h.hobby_tag_id "
+                           "WHERE h.slug = ? AND bt.is_hobby = 1", (slug,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 

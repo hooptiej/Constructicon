@@ -12,7 +12,7 @@ from core import hobby_label as hobby_label_rules
 from core.db import BRAND_ROLES
 from web import files_feed, item_grid
 from web.common import _build_breadcrumbs, _rev_note, templates
-from web.shapes import _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _hobby_cover, _hobby_cover_usable, _project_cover_url, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_hobby_face, _to_object_detail, _to_public, _to_timeline_project
+from web.shapes import _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _hobby_cover, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_hobby_face, _to_object_detail, _to_public, _to_timeline_project
 from core import access_log, actor as actor_ctx, policy, roles, sharing, users
 from web.shapes import actor_label
 from web.roles import RoleRouter, requires
@@ -175,6 +175,54 @@ def _card_queue_strip(slug=None, hobby=None):
     return {"items": items, "counts": q["counts"]}
 
 
+def _pile_thumb(r):
+    return f"/f/{r['slug']}/thumb" if _should_advertise_thumb(r) else None
+
+
+def _card_nodes(projects, items_by_project):
+    """The member layout (_hobby_nodes.html, #525; #554 also a family's / collection's members): one
+    node per card, its small card + a pile of its files. A nested child shows under its parent when
+    both are in the list; every card appears exactly once. -> {"roots": [...]} (newest first)."""
+    nodes = {}
+    for p in projects:
+        face = _to_card_face(p, items_by_project[p["id"]])
+        nodes[p["id"]] = {
+            "id": p["id"], "slug": p["slug"], "title": p["title"], "face": face,
+            "pile": cards.project_pile(p, items_by_project[p["id"]], thumb_fn=_pile_thumb),
+            "children": [], "parent_id": p.get("parent_id"),
+        }
+
+    def _newest(n):
+        return -(n["face"]["effective_start"] or n["face"]["created_at"] or 0)
+
+    roots = []
+    for n in nodes.values():
+        parent = nodes.get(n["parent_id"]) if n["parent_id"] != n["id"] else None
+        # Walk up the member chain to catch a (corrupt) cycle: a looping chain is treated as a root.
+        seen, cur = {n["id"]}, parent
+        while cur is not None and cur["id"] not in seen:
+            seen.add(cur["id"])
+            cur = nodes.get(cur["parent_id"])
+        if parent is not None and cur is None:
+            parent["children"].append(n)
+        else:
+            roots.append(n)
+    for n in nodes.values():
+        n["children"].sort(key=_newest)
+    roots.sort(key=_newest)
+    return {"roots": roots}
+
+
+def _can_edit():
+    """#554: editor or above (the cover pick, rename): viewers get the controls greyed, not hidden."""
+    return roles.at_least(roles.role_of(actor_ctx.current_actor()), roles.EDITOR)
+
+
+# #554: what a greyed control says when a viewer clicks it (permissions never hide features).
+LOCKED_COVER_MESSAGE = ("Only editors and admins can pick the cover. You are signed in as a viewer: "
+                        "ask an admin to give you the editor role.")
+
+
 @router.get("/project/{slug}", response_class=HTMLResponse)
 def project_detail_page(request: Request, slug: str, rev: str = ""):
     project = db.get_project(slug)
@@ -296,8 +344,20 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
     stacks = cards.file_stacks(project, raw_items, thumb_fn=lambda r: (
         f"/f/{r['slug']}/thumb" if _should_advertise_thumb(r) else None))
     family_info = cards.family_fields(project)
+    # #554: per-kind page layout (card_rules.CARD_PAGES). A family / collection shows its MEMBERS in the
+    # hobby member layout (small card + a pile of its files, _hobby_nodes.html); nested children stay
+    # beside the piles in the Stacks row. Both carry the cover pick.
+    page = card_rules.page_config(project.get("kind"))
     beside_cards = [_to_card_face(c) for c in child_projects]
-    beside_cards += [_to_card_face(db.get_project(m["id"])) for m in family_info["members"]]
+    member_nodes = []
+    if page["members"]:
+        members = [db.get_project(m["id"]) for m in family_info["members"]]
+        members = [m for m in members if m is not None]
+        member_items = {m["id"]: policy.filter_visible(db.list_project_items(m["id"])) for m in members}
+        member_nodes = _card_nodes(members, member_items)["roots"]
+    cover_can_edit = _can_edit()
+    cover_current = ({"kind": "card", "ref": project["cover_project_id"]} if project.get("cover_project_id")
+                     else {"kind": "item", "ref": project["cover_slug"]} if project.get("cover_slug") else None)
     home_crumbs = []
     for h in reversed(cards.home_chain(project["id"])):
         if h.get("title"):
@@ -359,6 +419,16 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "stacks": stacks,
             "rev_note": _rev_note(request, n_sup, rev == "all"),
             "beside_cards": beside_cards,
+            # #554: the page layout for this kind, the members in the member layout, the cover pick.
+            "card_page": page,
+            "member_nodes": member_nodes,
+            "member_remove_label": f"Remove from {page['member_noun']}" if page["member_noun"] else None,
+            "cover_can_edit": cover_can_edit,
+            "node_cover": {"current": project.get("cover_project_id"), "can_edit": cover_can_edit},
+            "cover_pick_cfg": {"endpoint": f"/api/projects/{project['id']}/cover", "file_field": "slug",
+                               "card_field": "card", "current": cover_current, "can_edit": cover_can_edit,
+                               "locked_message": LOCKED_COVER_MESSAGE, "target": "card"},
+            "header_dates": header_card.get("dates"),
             "home_crumbs": home_crumbs,
             "project_score": project_score,
             "project_hobbies": [{"id": h["id"], "name": h["name"], "slug": h["slug"]} for h in project_hobbies],
@@ -414,6 +484,15 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     this hobby, each member project as a small card with a pile of its files, and the loose
     objects (tagged with the hobby, in none of its member projects)."""
     hobby = db.get_hobby(slug)
+    if hobby is None:
+        # #554: a renamed hobby's old address (hobby_slug_history) 308s to its current one, in the
+        # install's label (#700), query kept. A hidden hobby stays a 404 either way.
+        moved = db.hobby_for_old_slug(slug)
+        if moved is not None and policy.can_view_hobby(moved):
+            target = install_config.hobby_label().url(moved["slug"])
+            if request.url.query:
+                target += "?" + request.url.query
+            return RedirectResponse(target, status_code=308)
     if hobby is None or not policy.can_view_hobby(hobby):  # #604 step 3: hidden = missing
         raise HTTPException(status_code=404, detail=f"{install_config.hobby_label().one_lc} not found")
 
@@ -422,38 +501,8 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     items_by_project = {p["id"]: policy.filter_visible(db.list_project_items(p["id"])) for p in projects}  # #557
     queue = _card_queue_strip(hobby=hobby["slug"])
 
-    def thumb_fn(r):
-        return f"/f/{r['slug']}/thumb" if _should_advertise_thumb(r) else None
-
-    # One node per member project: its small card + a pile of its files. A nested child
-    # shows under its parent when both are members; every project appears exactly once.
-    nodes = {}
-    for p in projects:
-        face = _to_card_face(p, items_by_project[p["id"]])
-        nodes[p["id"]] = {
-            "id": p["id"], "slug": p["slug"], "title": p["title"], "face": face,
-            "pile": cards.project_pile(p, items_by_project[p["id"]], thumb_fn=thumb_fn),
-            "children": [], "parent_id": p.get("parent_id"),
-        }
-
-    def _newest(n):
-        return -(n["face"]["effective_start"] or n["face"]["created_at"] or 0)
-
-    roots = []
-    for n in nodes.values():
-        parent = nodes.get(n["parent_id"]) if n["parent_id"] != n["id"] else None
-        # Walk up the member chain to catch a (corrupt) cycle: a looping chain is treated as a root.
-        seen, cur = {n["id"]}, parent
-        while cur is not None and cur["id"] not in seen:
-            seen.add(cur["id"])
-            cur = nodes.get(cur["parent_id"])
-        if parent is not None and cur is None:
-            parent["children"].append(n)
-        else:
-            roots.append(n)
-    for n in nodes.values():
-        n["children"].sort(key=_newest)
-    roots.sort(key=_newest)
+    nodes = _card_nodes(projects, items_by_project)
+    roots = nodes["roots"]
     active_roots = [n for n in roots if n["face"]["activity"] == "active"]
     inactive_roots = [n for n in roots if n["face"]["activity"] != "active"]
 
@@ -469,7 +518,12 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
                                     loaded=(files_feed.group_by_type(loose_rows), n_sup, files_feed.unfiled_slugs()),
                                     grid_class="cx-item-grid cx-item-grid-roomy", empty_text="No loose objects.",
                                     count_noun=("loose object", "loose objects"))
-    cover_choices = _hobby_cover_choices(cover, projects, loose_rows)
+    # #554: the cover pick on each card and loose object (the COVER dropdown is gone; owner, 2026-10-25).
+    can_edit = _can_edit()
+    current = ({"kind": "item", "ref": cover_fields["picked_cover_slug"]} if cover_fields["picked_cover_slug"]
+               else {"kind": "card", "ref": cover_fields["picked_cover_card_id"]} if cover_fields["picked_cover_card_id"]
+               else None)
+    loose_grid["cover_pick"] = {"current": current, "can_edit": can_edit, "locked_message": LOCKED_COVER_MESSAGE}
     start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
     return templates.TemplateResponse(
@@ -494,38 +548,16 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
             # #596: the hobby card's own synopsis / flavor (the ABOUT group).
             "hobby_text": hobbies.text_fields(hobby),
             "card_text_limits": card_rules.CARD_TEXT_LIMITS,
-            # #686: the COVER group (chosen / automatic, and what can be chosen here).
+            # #686: the COVER group (chosen / automatic); #554: picked with the checkboxes on the cards.
             "hobby_cover": cover_fields,
-            "cover_choices": cover_choices,
-            "cover_choices_max": HOBBY_COVER_CHOICES_MAX,
+            "can_edit": can_edit,
+            "node_cover": {"current": cover_fields["picked_cover_card_id"] if current and current["kind"] == "card" else None,
+                           "can_edit": can_edit},
+            "cover_pick_cfg": {"endpoint": f"/api/hobby/{hobby['id']}/cover", "file_field": "cover_slug",
+                               "card_field": "cover_card", "current": current, "can_edit": can_edit,
+                               "locked_message": LOCKED_COVER_MESSAGE, "target": "hobby"},
         },
     )
-
-
-HOBBY_COVER_CHOICES_MAX = 120  # #686: the picker lists at most this many; MCP can set any item
-
-
-def _hobby_cover_choices(cover, projects, loose_rows):
-    """#686: what the hobby page's COVER group offers: each member project's resolved cover (the
-    automatic candidates, most recent first), then its loose objects that have a picture, then the
-    current choice if it is neither. Only covers this actor can see and the thumb route serves
-    (web.shapes._hobby_cover_usable). [{slug, url, label}], capped at HOBBY_COVER_CHOICES_MAX."""
-    out, seen = [], set()
-
-    def add(slug, label):
-        if not slug or slug in seen or len(out) >= HOBBY_COVER_CHOICES_MAX or not _hobby_cover_usable(slug):
-            return
-        seen.add(slug)
-        out.append({"slug": slug, "url": _project_cover_url(slug), "label": label})
-
-    if cover.get("picked_slug"):
-        row = db.get_by_slug(cover["picked_slug"])
-        add(cover["picked_slug"], f"Current choice: {item_title.title_of(row)}" if row else "Current choice")
-    for p in cards.recent_first(projects):
-        add(db.resolve_project_cover_slug(p), f"{p['title']} (its cover)")
-    for r in loose_rows:
-        add(r["slug"], item_title.title_of(r))
-    return out
 
 
 @router.get("/brand", response_class=HTMLResponse)

@@ -1891,8 +1891,9 @@ def update(card, *, title=None, description=None, cover_slug=None, cover_project
         child = db.get_project(cover_project_id)
         if child is None:
             raise InvalidInput("Child project not found")
-        if child.get("parent_id") != row["id"]:
-            raise InvalidInput("Project is not a child of this project")
+        if not can_lend_to(row, child):  # #554: a nested child, or a member of this family / collection
+            raise InvalidInput(f"'{child['title']}' isn't nested in '{row['title']}' or a member of it, "
+                               "so it can't lend its cover.")
         cover_project_id = child["id"]
     fields = {}
     if title is not None:
@@ -1925,6 +1926,114 @@ def update(card, *, title=None, description=None, cover_slug=None, cover_project
             changed += _retire_blank_writeup(row, ghost, dry_run=dry_run, actor=actor, batch_id=batch_id)
         fresh = db.get_project(row["id"])
     return Result(True, changed, [], batch_id, dry_run, {"card": fresh})
+
+
+# --- Cover picks, the same everywhere (#554, batch 5) ----------------------------------------
+# One control on every page: tick a file to make it the cover, or tick a child card (a nested part,
+# a family / collection member, a hobby's card) to BORROW its cover, which then follows that card's
+# cover (projects.cover_project_id / hobby_settings.cover_project_id). One cover at a time. Every
+# refusal says what, why and what to do next (bad_cover 422, details.reason).
+
+def can_lend_to(card_row, lender):
+    """#554: may `lender` lend its cover to `card_row`? A card nested in it (#356), or a member of
+    it when it is a family / collection."""
+    if lender.get("id") == card_row.get("id"):
+        return False
+    if lender.get("parent_id") == card_row["id"]:
+        return True
+    return ((card_row.get("kind") or card_rules.DEFAULT_KIND) in card_rules.GROUP_KINDS
+            and db.is_family_member(card_row["id"], lender["id"]))
+
+
+def _cover_chain_ids(card_row, limit=12):
+    """The ids a card's cover goes through (itself, then each card it borrows from)."""
+    ids, cur = [], card_row
+    while cur is not None and len(ids) < limit and cur["id"] not in ids:
+        ids.append(cur["id"])
+        if cur.get("cover_slug") or not cur.get("cover_project_id"):
+            break
+        cur = db.get_project(cur["cover_project_id"])
+    return ids
+
+
+def cover_file_problem(slug, actor=None):
+    """#554: why the file `slug` can't be shown as a cover to this actor right now, as
+    (reason, message), or None when it can. Reasons: missing, hidden, redacted, no_picture."""
+    from . import object_types  # lazy: the registry imports a lot
+    row = db.get_by_slug(slug) if slug else None
+    if row is None:
+        return "missing", "its cover file no longer exists (deleted or in the trash)"
+    if not policy.can_view(row, actor):
+        return "hidden", ("its cover is a file you can't see (marked sensitive, a restricted type, or on a "
+                          "private card); only its uploader or an admin can pick it")
+    if row.get("redacted"):
+        return "redacted", "its cover file was removed (redacted), so there is no picture to show"
+    if object_types.get_object_type(row.get("media_type")).thumbnail_source == object_types.ThumbnailSource.NONE:
+        return "no_picture", f"{item_title.title_of(row)} is a file with no picture to show"
+    return None
+
+
+def lend_problem(lender, borrower_card_id=None, actor=None):
+    """#554: why `lender` (a card row) can't lend its cover right now, as (reason, message), or
+    None. Reasons: cover_loop (it already borrows from the borrower), no_cover, and the file reasons
+    of cover_file_problem."""
+    if borrower_card_id is not None and borrower_card_id in _cover_chain_ids(lender):
+        return "cover_loop", (f"'{lender['title']}' already borrows its cover from this card, so this card "
+                              "can't borrow it back. Give one of them a cover of its own first.")
+    slug = db.resolve_project_cover_slug(lender)
+    if not slug:
+        return "no_cover", (f"'{lender['title']}' has no cover yet, so there is nothing to borrow. Give it a "
+                            "cover first (tick one of its files on its page), then tick it here.")
+    problem = cover_file_problem(slug, actor)
+    if problem:
+        return problem[0], f"'{lender['title']}' can't lend its cover: {problem[1]}."
+    return None
+
+
+def _refuse_cover(reason, message, **details):
+    raise CardError("bad_cover", f"Nothing was changed: {message}", {"reason": reason, **details})
+
+
+def set_cover(card, *, slug=None, from_card=None, dry_run=False, actor=None, batch_id=None):
+    """#554: the one cover pick for a card page. Exactly one of `slug` (a file: it must exist, be
+    visible to the actor, not be redacted and have a picture) or `from_card` (a nested child or a
+    family / collection member, by id or slug: it must have a cover of its own that the actor can
+    see, and must not already borrow this card's). Picking a file clears a borrowed card and vice
+    versa. One imaged update_card row (cards.update), undoable; the same pick again writes nothing.
+    Refusals: not_found (no such file or card), bad_cover (422) with details.reason. data: {card,
+    cover_slug, cover_project_id, cover: the resolved slug}."""
+    row = get_card(card)
+    if (slug in (None, "")) == (from_card in (None, "")):
+        raise InvalidInput("Pick exactly one cover: a file (slug) or a card to borrow from (from_card).")
+    if slug not in (None, ""):
+        item = db.get_by_slug(slug)
+        if item is None:
+            raise CardError("not_found", f"No file {slug!r}.")
+        problem = cover_file_problem(slug, actor)
+        if problem:
+            _refuse_cover(problem[0], f"{item_title.title_of(item) if problem[0] != 'hidden' else 'that file'} "
+                                      f"can't be the cover of '{row['title']}': {problem[1]}.", slug=slug)
+        if row.get("cover_slug") == slug and not row.get("cover_project_id"):
+            return Result(True, [], ["Nothing changed."], None, dry_run, _cover_data(row))
+        res = update(row["id"], cover_slug=slug, dry_run=dry_run, actor=actor, batch_id=batch_id)
+    else:
+        lender = get_card(from_card)
+        if not can_lend_to(row, lender):
+            _refuse_cover("not_related", f"'{lender['title']}' isn't nested in '{row['title']}' or a member of it, "
+                                         "so it can't lend its cover here.", card=lender["slug"])
+        problem = lend_problem(lender, row["id"], actor)
+        if problem:
+            _refuse_cover(problem[0], problem[1], card=lender["slug"])
+        if row.get("cover_project_id") == lender["id"] and not row.get("cover_slug"):
+            return Result(True, [], ["Nothing changed."], None, dry_run, _cover_data(row))
+        res = update(row["id"], cover_project_id=lender["id"], dry_run=dry_run, actor=actor, batch_id=batch_id)
+    res.data = _cover_data(res.data["card"])
+    return res
+
+
+def _cover_data(row):
+    return {"card": row["slug"], "cover_slug": row.get("cover_slug") or None,
+            "cover_project_id": row.get("cover_project_id"), "cover": db.resolve_project_cover_slug(row)}
 
 
 OP_CARD_AGENT_NOTES = "card_agent_notes"
@@ -2345,9 +2454,11 @@ def resolve_hobby_cover(hobby_row, projects=None, usable=None):
     HOBBY_COVER_* or None), picked (bool), picked_slug, picked_unavailable, project (slug or None),
     project_title}."""
     usable = usable or hobby_cover_usable
-    picked = db.get_hobby_settings(hobby_row["id"]).get("cover_slug") or None
+    settings = db.get_hobby_settings(hobby_row["id"])
+    picked = settings.get("cover_slug") or None
+    picked_card = settings.get("cover_project_id")
     out = {"slug": None, "source": None, "picked": False, "picked_slug": picked, "picked_unavailable": False,
-           "project": None, "project_title": None}
+           "project": None, "project_title": None, "picked_card_id": picked_card}
     if picked:
         if usable(picked):
             out.update(slug=picked, source=card_rules.HOBBY_COVER_PICKED, picked=True)
@@ -2355,6 +2466,16 @@ def resolve_hobby_cover(hobby_row, projects=None, usable=None):
         out["picked_unavailable"] = True
     if projects is None:
         projects = policy.filter_visible_cards(db.list_projects_for_hobby(hobby_row["id"]))  # #604 step 3
+    if picked_card and not picked:
+        # #554: a member card ticked as the cover lends its RESOLVED cover, so the hobby follows it.
+        # Gone, out of the hobby, hidden from this actor or coverless = the automatic one, flagged.
+        lender = next((p for p in projects if p["id"] == picked_card), None)
+        slug = db.resolve_project_cover_slug(lender) if lender else None
+        if slug and usable(slug):
+            out.update(slug=slug, source=card_rules.HOBBY_COVER_CARD, picked=True,
+                       project=lender["slug"], project_title=lender["title"])
+            return out
+        out["picked_unavailable"] = True
     ranked = recent_first(projects)
     highlighted = [p for p in ranked if p.get("highlight")]
     rest = [p for p in ranked if not p.get("highlight")]
@@ -2378,6 +2499,7 @@ def hobby_cover_fields(cover):
         "cover_source_label": card_rules.HOBBY_COVER_SOURCE_LABELS.get(cover["source"]),
         "cover_project": cover["project"],
         "picked_cover_slug": cover["picked_slug"],
+        "picked_cover_card_id": cover.get("picked_card_id"),  # #554: the member card it borrows from
         "picked_cover_unavailable": cover["picked_unavailable"],
     }
 

@@ -833,16 +833,23 @@ def needs_caption(limit=50, include_failed=True):
 SKIP_WHAT = ("all", "caption", "title")
 
 
-def review_queue():
+def review_queue(limit=500, offset=0):
     """(#409, #542) Items with a caption or short-title suggestion waiting for review, as the
     caption review page lists them (GET /api/captions/unreviewed; MCP
     constructicon_caption_review(action="list")). Each: slug, name, kind ("caption": a caption, maybe
     with a title, waiting to become the description; "title": only a short title, the description is
     already accepted), caption, caption_by, description, title, title_by, thumb_url, detail_url.
-    The item policy decides what the actor sees (#603: a flagged image can be in it)."""
+    The item policy decides what the actor sees (#603: a flagged image can be in it).
+    limit / offset page it in SQL (the web page reads the first 500, as before; MCP caption_review pages
+    with review_entries over its own SQL page)."""
+    return review_entries(db.list_unaccepted_captions(limit=limit, offset=offset))
+
+
+def review_entries(rows):
+    """review_queue's entries for these db.list_unaccepted_captions rows, the item policy applied."""
     from . import item_title
     out = []
-    for r in policy.filter_visible(db.list_unaccepted_captions()):
+    for r in policy.filter_visible(rows):
         tm = r.get("type_metadata") or {}
         has_desc = bool((r.get("content_description") or "").strip())
         out.append({

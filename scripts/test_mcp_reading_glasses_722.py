@@ -372,22 +372,66 @@ add_file("cap1", "photo1.jpg", media_type="image",
 add_file("cap2", "photo2.jpg", media_type="image",
          type_metadata={"auto_caption": "A dachshund asleep on a couch.", "auto_caption_status": "done",
                         "auto_caption_model": "moondream"})
+LONG_CAP = "A very long caption about a rover on a bench. " * 20  # ~940 chars
+for i in range(5):
+    add_file(f"capq{i}", f"queue{i}.jpg", media_type="image", ts=1_600_000_000 + i,
+             type_metadata={"auto_caption": LONG_CAP, "auto_caption_status": "done", "auto_caption_model": "moondream"})
+
+
+def queue_slugs():
+    out, cur = [], None
+    for _ in range(50):
+        pg = S.constructicon_caption_review(limit=500, cursor=cur)
+        out += [r["slug"] for r in pg["items"]]
+        cur = pg["next_cursor"]
+        if cur is None:
+            return out
+    return out
+
+
 lst = S.constructicon_caption_review()
-check("caption_review list = the review page's queue", {r["slug"] for r in lst} >= {"cap1", "cap2"}
-      and lst == captions.review_queue())
-check("caption_review list is a viewer read", isinstance(as_user("vic", S.constructicon_caption_review), list))
+web_q = captions.review_queue()
+check("caption_review list: paged shape, default limit 50", set(lst) == {"items", "next_cursor", "more", "limit"}
+      and lst["limit"] == S.CAPTION_REVIEW_PAGE_DEFAULT and lst["next_cursor"] is None, sorted(lst))
+check("caption_review list = the review page's queue (same slugs, same order)",
+      [r["slug"] for r in lst["items"]] == [r["slug"] for r in web_q] and {"cap1", "cap2"} <= set(queue_slugs()))
+q0 = next(r for r in lst["items"] if r["slug"] == "capq0")
+check("caption_review list: a long caption is a preview with caption_chars / caption_truncated",
+      q0["caption_truncated"] is True and q0["caption_chars"] == len(LONG_CAP.strip())
+      and q0["caption"] == LONG_CAP.strip()[:S.TEXT_PREVIEW_CHARS] + "…", q0)
+c2 = next(r for r in lst["items"] if r["slug"] == "cap2")
+check("caption_review list: a short caption is whole, truncated false", c2["caption_truncated"] is False
+      and c2["caption"] == "A dachshund asleep on a couch.")
+check("the web queue still carries the whole caption",
+      next(r for r in web_q if r["slug"] == "capq0")["caption"] == LONG_CAP.strip())
+walk, cur, pages = [], None, 0
+while pages < 20:
+    pg = S.constructicon_caption_review(limit=2, cursor=cur)
+    walk += [r["slug"] for r in pg["items"]]
+    cur = pg["next_cursor"]
+    pages += 1
+    if cur is None:
+        break
+check("caption_review list: limit=2 pages walk the whole queue once, in order",
+      walk == [r["slug"] for r in web_q] and pages == (len(web_q) + 1) // 2, (walk, pages))
+check("caption_review list: bad limit / bad cursor / another list's cursor refused",
+      err(S.constructicon_caption_review(limit=501)) == "bad_limit"
+      and err(S.constructicon_caption_review(cursor="!!nope")) == "bad_cursor"
+      and err(S.constructicon_caption_review(cursor=tag_cur)) == "cursor_view_mismatch")
+check("limit does not apply to accept: refused", err(S.constructicon_caption_review(action="accept", slug="cap1", limit=5)) == "bad_request")
+check("caption_review list is a viewer read", isinstance(as_user("vic", S.constructicon_caption_review).get("items"), list))
 with actor.acting_as(actor.ACTOR_MCP):
     acc = S.constructicon_caption_review(action="accept", slug="cap1")
 check("accept: the suggestion becomes description + short title, one batch",
       acc["item"]["content_description"] == "A green monster truck on a workbench."
       and acc["item"]["short_title"] == "Green monster truck" and acc["batch_id"])
-check("accept: it left the queue", "cap1" not in {r["slug"] for r in S.constructicon_caption_review()})
+check("accept: it left the queue", "cap1" not in set(queue_slugs()))
 with actor.acting_as(actor.ACTOR_MCP):
     S.constructicon_undo(acc["batch_id"])
-check("accept: undoable (back in the queue)", "cap1" in {r["slug"] for r in S.constructicon_caption_review()})
+check("accept: undoable (back in the queue)", "cap1" in set(queue_slugs()))
 with actor.acting_as(actor.ACTOR_MCP):
     sk = S.constructicon_caption_review(action="skip", slug="cap2")
-check("skip: out of the queue, one batch", sk["batch_id"] and "cap2" not in {r["slug"] for r in S.constructicon_caption_review()})
+check("skip: out of the queue, one batch", sk["batch_id"] and "cap2" not in set(queue_slugs()))
 check("skip: what= must be one of all/caption/title", err(S.constructicon_caption_review(action="skip", slug="cap2", what="nah")) is not None)
 check("accept by a viewer: forbidden (editor needed)",
       err(as_user("vic", S.constructicon_caption_review, action="accept", slug="cap1")) == "forbidden")

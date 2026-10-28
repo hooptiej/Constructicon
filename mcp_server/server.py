@@ -1298,15 +1298,37 @@ def constructicon_set_caption(slug: str, text: str | None = None, title: str | N
             "in_review_queue": waiting_caption or waiting_title}
 
 
+CAPTION_REVIEW_PAGE_DEFAULT = 50  # #722: one review page; a caption can be a long paragraph
+
+
+def _caption_review_rows(rows):
+    """The review queue's entries for one SQL page (captions.review_entries applies the item policy),
+    with the caption and description cut to previews (+ *_chars, *_truncated)."""
+    out = []
+    for entry in captions.review_entries(rows):
+        for key in ("caption", "description"):
+            text = entry.get(key) or ""
+            entry[f"{key}_chars"] = len(text)
+            entry[f"{key}_truncated"] = len(text) > TEXT_PREVIEW_CHARS
+            if len(text) > TEXT_PREVIEW_CHARS:
+                entry[key] = text[:TEXT_PREVIEW_CHARS] + _ELLIPSIS
+        out.append(entry)
+    return out
+
+
 @mcp.tool(selector="action")
 def constructicon_caption_review(action: typing.Literal["list", "accept", "retry", "skip"] = "list",
                                  slug: str | None = None, text: str | None = None, title: str | None = None,
                                  replace: bool = False, what: typing.Literal["all", "caption", "title"] = "all",
-                                 advance: bool = False) -> list[dict] | dict:
+                                 advance: bool = False, limit: int | None = None,
+                                 cursor: str | None = None) -> dict:
     """The owner's caption review queue (the web's Captions review page), and its buttons:
-    "list": items whose caption or short-title suggestion waits for review: [{slug, name, kind
-      ("caption" | "title": only a title waits), caption, caption_by, description, title, title_by,
-      thumb_url, detail_url}].
+    "list": items whose caption or short-title suggestion waits for review, PAGED, newest first:
+      {items: [{slug, name, kind ("caption" | "title": only a title waits), caption, caption_chars,
+      caption_truncated, caption_by, description, description_chars, description_truncated, title,
+      title_by, thumb_url, detail_url}], next_cursor, more, limit}. limit 1..500 (default 50); pass
+      next_cursor back as cursor= (null = the end). caption / description are ~300-character previews;
+      read a whole suggestion with constructicon_get(slug) (type_metadata.auto_caption).
     "accept" (slug): the suggestion becomes the description and short title, one undoable batch;
       text= / title= accept your edited wording instead. Text a local model didn't write is not
       replaced silently: would_replace_suggestion unless replace=true. -> {item, batch_id,
@@ -1322,7 +1344,9 @@ def constructicon_caption_review(action: typing.Literal["list", "accept", "retry
     if action == "list":
         _only_for('action="list"', slug=(slug, None), text=(text, None), title=(title, None),
                   replace=(replace, False), what=(what, "all"), advance=(advance, False))
-        return captions.review_queue()
+        return _paged("captions", lambda n, o: db.list_unaccepted_captions(limit=n, offset=o), limit, cursor,
+                      TEXT_PREVIEW_CHARS, shape=_caption_review_rows, default=CAPTION_REVIEW_PAGE_DEFAULT)
+    _only_for(f'action="{action}"', limit=(limit, None), cursor=(cursor, None))
     if not (slug or "").strip():
         raise InvalidInput(f'action="{action}" needs slug (the item).')
     if action == "accept":
@@ -1486,9 +1510,9 @@ LIST_PAGE_DEFAULT = 100
 LIST_PAGE_MAX = 500
 
 
-def _page_limit(limit):
+def _page_limit(limit, default=None):
     if limit is None:
-        return LIST_PAGE_DEFAULT
+        return default or LIST_PAGE_DEFAULT
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= LIST_PAGE_MAX:
         raise InvalidInput(f"limit must be a whole number from 1 to {LIST_PAGE_MAX}.", code="bad_limit")
     return limit
@@ -1518,16 +1542,18 @@ def _read_cursor(cursor, view):
     return offset
 
 
-def _paged(view, fetch, limit, cursor, text_chars):
+def _paged(view, fetch, limit, cursor, text_chars, shape=None, default=None):
     """One page: {items (listed shape), next_cursor (null at the end), more, limit}. `fetch(limit,
     offset)` reads rows in SQL (the policy's browse clause applies there); the per-item policy then
-    drops any it hides, so a page can hold fewer than `limit` items while `more` is still true."""
-    limit = _page_limit(limit)
+    drops any it hides, so a page can hold fewer than `limit` items while `more` is still true.
+    `shape(rows)` (optional) replaces the listed shape and must apply the item policy itself."""
+    limit = _page_limit(limit, default)
     offset = _read_cursor(cursor, view)
     rows = fetch(limit + 1, offset)
     more = len(rows) > limit
     page = rows[:limit]
-    return {"items": [_to_public_listed(r, text_chars=text_chars) for r in policy.filter_visible(page)],
+    items_out = shape(page) if shape is not None else         [_to_public_listed(r, text_chars=text_chars) for r in policy.filter_visible(page)]
+    return {"items": items_out,
             "next_cursor": _make_cursor(view, offset + limit) if more else None, "more": more, "limit": limit}
 
 

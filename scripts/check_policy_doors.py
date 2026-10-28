@@ -92,7 +92,7 @@ DOORS = {
     ("core/project_export.py", "export_project"): "project zip export",
     # #603: a flagged item can be in flight or captioned, so these name items now.
     ("web/routes/items.py", "api_processing"): "GET /api/processing (in-flight items' names)",
-    ("core/captions.py", "review_queue"): "GET /api/captions/unreviewed (caption review page), MCP caption_review(list) (#556)",
+    ("core/captions.py", "review_entries"): "GET /api/captions/unreviewed (caption review page), MCP caption_review(list) (#556)",
     ("core/captions.py", "retry"): "POST /api/image/{slug}/caption, MCP caption_review(retry) (#556)",
     ("core/captions.py", "accept"): "POST /api/captions/{slug}/accept, MCP caption_review(accept) (#556)",
     ("core/captions.py", "skip"): "POST /api/captions/{slug}/skip, MCP caption_review(skip) (#556)",

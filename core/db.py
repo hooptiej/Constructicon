@@ -3387,7 +3387,7 @@ def list_related_projects(slug):
         conn.close()
 
 
-def list_unaccepted_captions(limit=500):
+def list_unaccepted_captions(limit=500, offset=0):
     """Rows with an auto_caption suggestion that hasn't been accepted into
     content_description and hasn't been skipped — the confirm_caption bulk
     review queue (#409). Mirrors curator_needs._count_unaccepted_captions'
@@ -3408,8 +3408,8 @@ def list_unaccepted_captions(limit=500):
             "AND json_extract(type_metadata, '$.auto_caption_title') != '' "
             "AND (short_title IS NULL OR short_title = '') AND (display_name IS NULL OR display_name = '') "
             "AND json_extract(type_metadata, '$.auto_caption_title_dismissed') IS NULL"
-            ")) ORDER BY timestamp DESC LIMIT ?",
-            (limit,),
+            ")) ORDER BY timestamp DESC, slug LIMIT ? OFFSET ?",  # #722: slug breaks ties, so MCP pages are stable
+            (limit, max(0, int(offset))),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:

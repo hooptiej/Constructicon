@@ -1505,6 +1505,74 @@ def _mig_link_page_text_724d():
           f"and summary", flush=True)
 
 
+def _mig_reread_xls_790():
+    # #790 (owner decision 2026-10-28): an .xls that holds no Excel workbook (the #720 sampler's stub,
+    # an OLE file of something else) now settles grey "not compatible" (spreadsheet.xls_check), like
+    # .doc / .ppt, instead of red "corrupt or unreadable .xls". The .xls rows that settled 'failed'
+    # before that go back to 'pending' once (fresh ocr_started_at, stale ocr_note removed); web's
+    # startup self-heal, right after init_db, re-runs OCR on every pending row and the reader decides
+    # afresh: grey for a non-workbook, still red for a real workbook that is damaged (owner: keep the
+    # split), text for one that reads. Matched by the stored file's extension, which the reader
+    # dispatches on. Redacted rows, 'done' / 'unsupported' rows and every other type are left alone.
+    # No file is read here. Idempotent: recorded once in schema_migrations; a second run would only
+    # re-queue rows a re-read settled 'failed' again.
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug FROM capture_events WHERE media_type = 'spreadsheet' AND ocr_status = 'failed' "
+        "AND COALESCE(redacted, 0) = 0 AND lower(COALESCE(stored_filename, '')) LIKE '%.xls'").fetchall()
+    note_sql, _ = _ocr_note_sql(None)
+    now = time.time()
+    for r in rows:
+        conn.execute(f"UPDATE capture_events SET ocr_status = 'pending', ocr_started_at = ?, {note_sql} WHERE slug = ?",
+                     (now, r["slug"]))
+    print(f"schema_migrations: reread_xls_790 re-queued {len(rows)} failed legacy .xls row(s) for OCR "
+          f"({', '.join(r['slug'] for r in rows[:20])}{' ...' if len(rows) > 20 else ''})", flush=True)
+
+
+CAPTION_BACKFILL_TYPES_556 = ("pdf", "ai")
+
+
+def _mig_caption_pdf_ai_556():
+    # #556 (owner decision 2026-10-28): PDF and Illustrator files are caption-capable now. Their
+    # existing rows with no caption go into the normal caption pipeline once, exactly what Admin's
+    # "Caption skipped items" (core/captions.queue_skipped) would pick: not redacted, no description
+    # (content_description) yet, caption status absent / '' / 'failed' / 'skipped'. Deleted items are
+    # not rows any more (they live in the trash), so they are never picked. Each is marked
+    # auto_caption_status 'pending' and given a caption_queue row (db.enqueue_caption); web's caption
+    # worker drains the queue one at a time behind the lock, the cooldown and the breaker (an open
+    # breaker leaves the queue alone until it is reset), like any upload. With captioning off on this
+    # install (CAPTION_DISABLED) nothing is queued and the log says how many were left and how to
+    # queue them later (Admin > Caption skipped items). No model call here. Idempotent: recorded once
+    # in schema_migrations; a second run finds them pending / done and picks nothing.
+    from . import captions  # lazy: core.captions imports this module
+    types = CAPTION_BACKFILL_TYPES_556
+    status = "json_extract(type_metadata, '$.auto_caption_status')"
+    conn = get_conn()
+    rows = conn.execute(
+        f"SELECT slug FROM capture_events WHERE media_type IN ({', '.join('?' * len(types))}) "
+        "AND COALESCE(redacted, 0) = 0 AND COALESCE(TRIM(content_description), '') = '' "
+        "AND (type_metadata IS NULL OR json_valid(type_metadata)) "
+        f"AND ({status} IS NULL OR {status} = '' OR {status} IN ('failed', 'skipped'))", types).fetchall()
+    garbled = conn.execute(
+        f"SELECT slug FROM capture_events WHERE media_type IN ({', '.join('?' * len(types))}) "
+        "AND type_metadata IS NOT NULL AND NOT json_valid(type_metadata)", types).fetchall()
+    if garbled:  # never silent: these can't be marked pending without losing what the column holds
+        print(f"schema_migrations: caption_pdf_ai_556 left out {len(garbled)} PDF / Illustrator row(s) whose "
+              f"type_metadata isn't valid JSON: {', '.join(r['slug'] for r in garbled[:20])}; caption them "
+              "from their page (Generate) once fixed", flush=True)
+    if captions.DISABLED:
+        print(f"schema_migrations: caption_pdf_ai_556 queued NOTHING: captions are off on this install "
+              f"(CAPTION_DISABLED), so {len(rows)} PDF / Illustrator item(s) wait uncaptioned. Turn captioning "
+              "on, then use Admin > Caption skipped items to queue them.", flush=True)
+        return
+    for r in rows:
+        conn.execute("UPDATE capture_events SET type_metadata = json_set(COALESCE(type_metadata, '{}'), "
+                     "'$.auto_caption_status', 'pending') WHERE slug = ?", (r["slug"],))
+        enqueue_caption(r["slug"])
+    print(f"schema_migrations: caption_pdf_ai_556 queued {len(rows)} PDF / Illustrator item(s) for a caption "
+          "(the web worker runs them one at a time)", flush=True)
+
+
 def _mig_transcripts_724e():
     # #724 part e (owner decision 2026-10-17: transcripts through youtube-transcript-api): every
     # existing row of a type with a network text source (YouTube today, ObjectTypeSpec.text_fetch_fn)
@@ -1811,6 +1879,8 @@ MIGRATIONS = [
     (MIGRATION_555, _mig_tags_one_store_555),
     ("search_tags_tree_555", _mig_search_tags_tree_555),
     ("search_filename_parts_762", _mig_search_filename_parts_762),
+    ("reread_xls_790", _mig_reread_xls_790),
+    ("caption_pdf_ai_556", _mig_caption_pdf_ai_556),
 ]
 
 

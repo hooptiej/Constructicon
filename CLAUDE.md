@@ -2050,6 +2050,9 @@ One generated file of every registered type and extension, to drop-test a new in
     to get past a bot check. The `link_page_text_724d` migration re-queued existing `failed` /
     `unsupported` url rows to `pending` once (web's startup self-heal re-runs them; the fetches go one
     at a time). Check with `scripts/test_safe_fetch_724d.py`.
+    The `reread_xls_790` migration (#790) re-queued existing `failed` legacy `.xls` rows to `pending` once
+    (spreadsheet type, stored name `*.xls`, not redacted; nothing else), so a non-workbook settles grey
+    "not compatible" and a damaged real workbook settles red again on the startup self-heal.
     **Outbound fetches (#724 d, `core/safe_fetch.py`).** A stored URL is untrusted input (it could aim
     the server at the NAS, the router or a metadata address), so `safe_fetch.fetch(url, accept=,
     max_bytes=, timeout=, headers=, polite=)` is the only fetch path (the page reader, and
@@ -2824,6 +2827,17 @@ allowlist: secrets, data, `.git`, worktrees, `*.bak*` / `web.bak-*` backups, tes
   checkout's code over the baked copy; compose merges it in automatically. "Copy files in, restart, no
   rebuild" works exactly as before. Delete the override (and `up -d`) to run the baked image the way
   prod does, e.g. as a last check before a prod deploy.
+- **Boot migrations that queue background work** run once in web's `init_db` (recorded in
+  `schema_migrations`, never in the MCP) and only mark rows; the work itself happens after boot, through the
+  normal pipelines, so expect a burst in the processing drawer after a deploy that carries one. Batch 10
+  (#790, #556) carries two: `reread_xls_790` (failed `.xls` rows -> OCR `pending`; the startup self-heal
+  re-reads them) and `caption_pdf_ai_556` (every un-redacted PDF / Illustrator item with no
+  `content_description` and a caption status absent / failed / skipped, exactly what Admin > "Caption
+  skipped items" picks, -> `auto_caption_status='pending'` + a `caption_queue` row; the caption worker runs
+  them one at a time behind the lock, cooldown and breaker). With `CAPTION_DISABLED` set the caption
+  migration queues nothing, logs how many items it left, and is still recorded: queue them later with
+  Admin > Caption skipped items. Both log their counts (`docker logs <web> | grep schema_migrations`).
+  Check: `scripts/test_type_casting_737_790_556.py` (picks only the right rows; a second run is a no-op).
 - **`scripts/` is not in the image, and not mounted (#634).** It holds tests, release and deploy tooling.
   The operational tools live in `core/manage/` and ride along in the image (`python3 -m
   core.manage.<tool>`); a maintenance script runs with `./scripts/run_tool.sh` (`--volumes-from <web>`

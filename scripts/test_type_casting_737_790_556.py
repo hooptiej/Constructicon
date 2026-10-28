@@ -20,7 +20,11 @@ scripts/test_type_samples_720.py; here they are uploaded through the real upload
      captionable files, and the nudge summary says so; explain_card carries it; a PDF with no
      picture to caption fails with a reason (not a bare "failed");
   5. #556 url: a web link never settles OCR 'failed' when there is nothing it could read (fetching
-     off on this install, no address): grey 'unsupported' with the reason (#754's reader).
+     off on this install, no address): grey 'unsupported' with the reason (#754's reader);
+  6. the one-off migrations (owner decisions 2026-10-28): reread_xls_790 re-queues only failed,
+     un-redacted .xls rows (which then settle grey), caption_pdf_ai_556 queues only un-redacted PDF / AI
+     items with no description and no caption (absent / failed / skipped), queues nothing with captions
+     off; each runs once and a second run is a no-op.
 Prints PASS/FAIL per check and ends with ALL PASS or FAILED: <names>.
 """
 
@@ -243,6 +247,125 @@ with actor.acting_as(actor.ACTOR_SYSTEM):
     ocr.run_ocr(bare)
     st = ocr_state(bare)
     check("no address: grey 'unsupported', not 'failed'", st[0] in ("unsupported", None) and st[0] != "failed", st)
+
+# ============================================================================================
+print("--- 6. the one-off migrations: reread_xls_790 and caption_pdf_ai_556 ---")
+import sqlite3  # noqa: E402
+
+
+def sql(statement, *args):
+    c = sqlite3.connect(os.environ["CONSTRUCTICON_DB_PATH"])
+    c.row_factory = sqlite3.Row
+    try:
+        rows = c.execute(statement, args).fetchall()
+        c.commit()
+        return rows
+    finally:
+        c.close()
+
+
+def rerun(name):
+    """Forget that `name` ran, then let init_db's runner apply it again (exactly once)."""
+    sql("DELETE FROM schema_migrations WHERE name = ?", name)
+    with actor.acting_as(actor.ACTOR_MIGRATION):
+        return db.run_pending_migrations()
+
+
+for name in ("reread_xls_790", "caption_pdf_ai_556"):
+    check(f"{name}: registered and applied by init_db", name in [n for n, _ in db.MIGRATIONS]
+          and name in db.applied_migrations())
+
+with actor.acting_as(actor.ACTOR_SYSTEM):
+    STUB_XLS = make_type_samples.legacy_office("Workbook", "Excel 97-2003")("x")  # what the sampler uploads
+    X = {k: mkfile(ext, mt, STUB_XLS if ext == ".xls" else b"x", ocr_status=st) for k, ext, mt, st in (
+        ("failed_xls", ".xls", "spreadsheet", "failed"), ("failed_xlsx", ".xlsx", "spreadsheet", "failed"),
+        ("grey_xls", ".xls", "spreadsheet", "unsupported"), ("done_xls", ".xls", "spreadsheet", "done"),
+        ("red_xls", ".xls", "spreadsheet", "failed"), ("failed_doc", ".doc", "word", "failed"))}
+sql("UPDATE capture_events SET redacted = 1 WHERE slug = ?", X["red_xls"])
+sql("UPDATE capture_events SET type_metadata = json_set(COALESCE(type_metadata, '{}'), '$.ocr_note', 'old red note') "
+    "WHERE slug = ?", X["failed_xls"])
+before = {k: ocr_state(s) for k, s in X.items()}
+ran = rerun("reread_xls_790")
+after = {k: ocr_state(s) for k, s in X.items()}
+check("reread_xls_790: ran once", ran == ["reread_xls_790"], ran)
+check("reread_xls_790: the failed .xls goes back to pending, its old note cleared",
+      after["failed_xls"] == ("pending", None), after["failed_xls"])
+check("reread_xls_790: nothing else moved (.xlsx, grey/done .xls, redacted .xls, .doc)",
+      all(after[k] == before[k] for k in X if k != "failed_xls"), {k: (before[k], after[k]) for k in X})
+with actor.acting_as(actor.ACTOR_SYSTEM):
+    ocr.run_ocr(X["failed_xls"])  # what web's startup self-heal does next
+check("reread_xls_790: re-read, a non-workbook .xls settles grey with the reason",
+      ocr_state(X["failed_xls"]) == ("unsupported", spreadsheet.UNRECOGNISED_NOTE), ocr_state(X["failed_xls"]))
+check("reread_xls_790: a second runner pass applies nothing", db.run_pending_migrations() == [])
+snap = {k: ocr_state(s) for k, s in X.items()}
+with db.transaction():  # as run_pending_migrations runs it
+    db._mig_reread_xls_790()
+check("reread_xls_790: run again by hand, none of these rows is picked (the grey one stays grey)",
+      {k: ocr_state(s) for k, s in X.items()} == snap, ({k: ocr_state(s) for k, s in X.items()}, snap))
+
+
+def cap_state(slug):
+    tm = db.get_by_slug(slug).get("type_metadata") or {}
+    return tm.get("auto_caption_status")
+
+
+def queued():
+    return {r["slug"] for r in sql("SELECT slug FROM caption_queue")}
+
+
+sql("DELETE FROM caption_queue")
+with actor.acting_as(actor.ACTOR_SYSTEM):
+    C = {
+        "pdf_new": mkfile(".pdf", "pdf"),
+        "ai_failed": mkfile(".ai", "ai", type_metadata={"auto_caption_status": "failed"}),
+        "pdf_skipped": mkfile(".pdf", "pdf", type_metadata={"auto_caption_status": "skipped"}),
+        "pdf_described": mkfile(".pdf", "pdf", content_description="A described PDF"),
+        "pdf_done": mkfile(".pdf", "pdf", type_metadata={"auto_caption_status": "done", "auto_caption": "A page"}),
+        "pdf_pending": mkfile(".pdf", "pdf", type_metadata={"auto_caption_status": "pending"}),
+        "pdf_redacted": mkfile(".pdf", "pdf"),
+        "image_new": mkfile(".png", "image"),
+        "word_new": mkfile(".docx", "word"),
+    }
+sql("UPDATE capture_events SET redacted = 1 WHERE slug = ?", C["pdf_redacted"])
+# Every item here was made AFTER every PDF row the earlier sections made: only look at these.
+sql("UPDATE capture_events SET content_description = 'earlier fixture' WHERE media_type IN ('pdf', 'ai') "
+    "AND slug NOT IN (%s)" % ", ".join("?" * len(C)), *C.values())
+PICK = {"pdf_new", "ai_failed", "pdf_skipped"}
+cap_before = {k: cap_state(s) for k, s in C.items()}
+
+real_disabled = captions.DISABLED
+captions.DISABLED = True
+try:
+    ran = rerun("caption_pdf_ai_556")
+finally:
+    captions.DISABLED = real_disabled
+check("caption_pdf_ai_556 with captions OFF: runs, queues nothing, marks nothing",
+      ran == ["caption_pdf_ai_556"] and not queued() and {k: cap_state(s) for k, s in C.items()} == cap_before,
+      (ran, queued()))
+
+captions.DISABLED = False
+try:
+    ran = rerun("caption_pdf_ai_556")
+finally:
+    captions.DISABLED = real_disabled
+picked = {k for k, s in C.items() if s in queued()}
+check("caption_pdf_ai_556: ran once", ran == ["caption_pdf_ai_556"], ran)
+check("caption_pdf_ai_556: queues exactly the uncaptioned PDF / AI items (new, failed, skipped)",
+      picked == PICK, sorted(picked))
+check("caption_pdf_ai_556: those show 'pending' (the lamp says captioning)",
+      all(cap_state(C[k]) == "pending" for k in PICK), {k: cap_state(C[k]) for k in PICK})
+check("caption_pdf_ai_556: described, done, already pending, redacted, image and Word rows untouched",
+      all(cap_state(C[k]) == cap_before[k] for k in C if k not in PICK), {k: cap_state(C[k]) for k in C})
+check("caption_pdf_ai_556: a second runner pass applies nothing", db.run_pending_migrations() == [])
+q_before = queued()
+captions.DISABLED = False
+try:
+    sql("DELETE FROM caption_queue")
+    with db.transaction():
+        db._mig_caption_pdf_ai_556()  # by hand: the queued rows are 'pending' now, so nothing qualifies
+finally:
+    captions.DISABLED = real_disabled
+check("caption_pdf_ai_556: run again by hand, it picks nothing", not queued(), (q_before, queued()))
 
 print()
 if FAILS:

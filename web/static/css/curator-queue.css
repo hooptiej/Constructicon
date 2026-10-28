@@ -58,3 +58,12 @@ a.dp-btn { text-decoration: none; display: inline-block; }
 .cq-deferred { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border-strong); }
 .cq-deferred-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--text-2); }
 .cq-item button:focus-visible, .cq-item a:focus-visible { outline: 2px solid var(--card-pip-on, #E8B93A); outline-offset: 2px; }
+/* #759: look-alike photos side by side, each with its own "Same photo, keep this one". */
+.cq-lookalike { flex-basis: 100%; list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px; }
+.cq-lookalike-copy {
+  flex: 1 1 180px; max-width: 260px; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  border-radius: 6px; box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.cq-lookalike-copy.is-suggested { box-shadow: inset 0 0 0 2px var(--card-pip-on, #E8B93A); }
+.cq-lookalike-thumb img { display: block; width: 100%; height: 160px; object-fit: contain; background: #111; border-radius: 4px; }
+.cq-lookalike-facts { min-width: 0; }

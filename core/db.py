@@ -3239,6 +3239,28 @@ def _unlink_revision(conn, slug):
         conn.execute("DELETE FROM item_revisions WHERE new_slug = ?", (slug,))
 
 
+LOOKALIKE_IMAGE_CLAUSE = "(media_type = 'image' OR media_type IS NULL OR media_type = '')"
+
+
+def list_lookalike_images():
+    """(#759) Every un-redacted image item with an uploaded file, as row dicts without the embedding
+    BLOB, oldest first: what the look-alike pass (core/lookalikes.py) considers. Rows with no usable
+    perceptual hash are included (the pass counts them)."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM capture_events WHERE COALESCE(redacted, 0) = 0 AND stored_filename IS NOT NULL "
+            f"AND stored_filename != '' AND {LOOKALIKE_IMAGE_CLAUSE} ORDER BY id").fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d.pop("embedding", None)
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
 def revision_pairs():
     """{old_slug: new_slug} for every direct supersedes link. One small query."""
     conn = get_conn()

@@ -103,6 +103,9 @@ DOORS = {
     ("core/decisions.py", "list_open"): "the decision queue",
     ("core/revisions.py", "chain_detail"): "revision chains on the item page / MCP",
     ("core/duplicates.py", "_build"): "#615 duplicate groups: a group with a copy the actor may not see is left out",
+    ("core/lookalikes.py", "_groups"): "#759 look-alike groups: a group with a photo the actor may not see is left out",
+    ("core/lookalikes.py", "confirm"): "#759 fold a look-alike group: every slug named must be visible (viewable_rows)",
+    ("core/lookalikes.py", "dismiss"): "#759 'Not the same': every slug named must be visible (viewable_rows)",
     # #709: the write side. Every slug a write names must be visible (else 404, nothing written),
     # checked in the service op itself so web, MCP and any future per-user token are covered.
     ("web/routes/items.py", "api_delete_selected"): "POST /api/delete (bulk delete)",
@@ -227,13 +230,16 @@ CORE_GUARDED = {
     ("core/tags.py", "detach"): "_get_item",
     ("core/duplicates.py", "plan"): "_build",   # #615: plans through the visibility filter
     ("core/duplicates.py", "apply"): "_build",  # #615: re-plans through it, then policy.viewable_rows
+    ("core/lookalikes.py", "plan"): "_groups",     # #759: lists through the visibility filter
+    ("core/lookalikes.py", "confirm"): "viewable_rows",  # #759: then re-groups through _groups
+    ("core/lookalikes.py", "dismiss"): "viewable_rows",
 }
 # How server.py names the core modules (for `items.delete(...)` -> core/items.py:delete).
 MODULE_FILES = {"items": "core/items.py", "tags_svc": "core/tags.py", "membership": "core/membership.py",
                 "captions": "core/captions.py", "curation_queue": "core/curation_queue.py",
                 "decisions": "core/decisions.py", "revisions": "core/revisions.py", "cards": "core/cards.py",
                 "hobbies": "core/hobbies.py", "blog": "core/blog.py", "reset": "core/reset.py",
-                "duplicates": "core/duplicates.py"}
+                "duplicates": "core/duplicates.py", "lookalikes": "core/lookalikes.py"}
 # The policy calls that decide visibility (`policy.restriction_reason` in a shaper is not a gate).
 POLICY_GATES = {"require_view", "filter_visible", "viewable_rows", "can_view", "viewable_item", "require_file",
                 "filter_exportable"}
@@ -277,6 +283,7 @@ MCP_TOOLS = {
     "constructicon_empty_trash": (ADM, "alias"),
     "constructicon_backup": (ADM, "a backup file's name"),
     "constructicon_duplicates": (I, "duplicate groups (duplicates.plan / apply, filtered per actor); the copies it trashed"),
+    "constructicon_lookalikes": (I, "look-alike photo groups (lookalikes.plan / confirm / dismiss, filtered per actor)"),
     "constructicon_set_sensitive": (I, "alias (items.set_sensitive)"),
     "constructicon_related": (I, "related items"),
     "constructicon_add_related": (I, "alias"),

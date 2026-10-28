@@ -3,7 +3,7 @@
      nothing is marked |safe. -#}
 {% macro item_row(i) -%}
 <li class="cq-item{% if i.deferred %} cq-item-deferred{% endif %}" data-cq-key="{{ i.key }}" data-cq-type="{{ i.type }}"{% if i.id %} data-cq-id="{{ i.id }}"{% endif %}
-    data-cq-multi="{{ 1 if i.multi else 0 }}" data-cq-param="{{ i.answer_param or 'choice' }}" data-cq-suggested='{{ (i.suggested.picks if i.suggested else []) | tojson }}'{% if i.accept_source %} data-cq-item="{{ i.item_slug }}" data-cq-source="{{ i.accept_source }}"{% endif %}>
+    data-cq-multi="{{ 1 if i.multi else 0 }}" data-cq-param="{{ i.answer_param or 'choice' }}" data-cq-suggested='{{ (i.suggested.picks if i.suggested else []) | tojson }}'{% if i.accept_source %} data-cq-item="{{ i.item_slug }}" data-cq-source="{{ i.accept_source }}"{% endif %}{% if i.kind == 'lookalike' and i.lookalike %} data-cq-members='{{ i.lookalike.slugs | tojson }}'{% endif %}>
   <div class="cq-item-main">
     <span class="cq-tag cq-tag-{{ i.type }}">{{ 'Question' if i.type == 'question' else ('Nudge' if i.type == 'nudge' else 'Need') }}</span>
     <div class="cq-item-text">
@@ -23,13 +23,36 @@
         <button type="button" class="dp-btn" data-cq-action="choose" aria-expanded="false">Choose&hellip;</button>
       {% endif %}
       {% if i.accept_source %}<button type="button" class="dp-btn dp-btn-primary" data-cq-action="accept-date" title="Write this date as the file's date (one undoable change)">Use {{ i.suggested.labels[0].split(',')[0] }}</button>{% endif %}
-      {% if i.type != 'question' or i.kind in ('project_match', 'retype', 'item_supersedes') %}
+      {% if i.kind == 'lookalike' %}
+        <button type="button" class="dp-btn" data-cq-action="lookalike-not-same" title="These are different photos. Remembered: you won't be asked about them again.">Not the same</button>
+      {% elif i.type != 'question' or i.kind in ('project_match', 'retype', 'item_supersedes') %}
         <a class="dp-btn" href="{{ i.href }}">{{ i.fix_label }}</a>
       {% endif %}
       <button type="button" class="dp-btn" data-cq-action="defer" title="Move to the Deferred list. No timer: it stays there until you bring it back.">Defer</button>
       {% if i.dismissible %}<button type="button" class="dp-btn" data-cq-action="dismiss" title="Remove for good">Dismiss</button>{% endif %}
     {% endif %}
   </div>
+  {% if i.kind == 'lookalike' and i.lookalike %}
+  {#- #759: the copies side by side, each with its own "keep this one". -#}
+  <ul class="cq-lookalike" aria-label="The look-alike photos">
+    {% for m in i.lookalike.members %}
+    <li class="cq-lookalike-copy{% if m.slug == i.lookalike.keep %} is-suggested{% endif %}{% if m.slug in i.lookalike.new_members %} is-new{% endif %}" data-cq-slug="{{ m.slug }}">
+      <a href="{{ m.url }}" class="cq-lookalike-thumb"><img src="{{ m.thumb_url }}" alt="{{ m.title }}" loading="lazy"></a>
+      <div class="cq-lookalike-facts">
+        <div class="cq-label">{{ m.filename or m.title }}</div>
+        <div class="cq-detail">{% if m.width %}{{ m.width }} &times; {{ m.height }} px{% else %}size unknown{% endif %}{% if m.file_size is not none %} &middot; {{ '%.0f' | format(m.file_size / 1024) }} KB{% endif %}</div>
+        <div class="cq-detail">{% if m.date_is_real %}Dated {{ m.date }}{% else %}No real date{% endif %} &middot; imported {{ m.uploaded }}</div>
+        <div class="cq-detail">{% if m.cards %}On {{ m.cards | join(', ') }}{% else %}On no card{% endif %}</div>
+        {% if m.copy_marker %}<div class="cq-detail">Name carries {{ m.copy_marker }}</div>{% endif %}
+        {% if m.dimensions_error %}<div class="cq-detail">{{ m.dimensions_error }}</div>{% endif %}
+        {% if m.slug == i.lookalike.keep %}<div class="cq-suggest">Suggested keeper</div>{% endif %}
+        {% if m.slug in i.lookalike.new_members %}<div class="cq-suggest">New since your last answer</div>{% endif %}
+      </div>
+      {% if not i.deferred %}<button type="button" class="dp-btn{% if m.slug == i.lookalike.keep %} dp-btn-primary{% endif %}" data-cq-action="lookalike-keep" data-cq-keep="{{ m.slug }}" title="Keep this copy; the others go to the trash (7-day undo) and it takes over their cards, tags and notes.">Same photo, keep this one</button>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   {% if i.type == 'question' and not i.deferred %}
   <form class="cq-chooser" hidden>
     <fieldset>

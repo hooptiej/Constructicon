@@ -3,7 +3,7 @@
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from core import automatch, cards, curation_queue, curator, curator_needs, db, decisions, revisions
+from core import automatch, cards, curation_queue, curator, curator_needs, db, decisions, lookalikes, revisions
 from web.common import templates
 from web.shapes import _friendly_datetime, _project_effective_cover_url, _to_card_face, _to_content_public
 from core import policy, roles
@@ -217,3 +217,32 @@ def api_curator_queue_defer(key: str = Form(...)):
 def api_curator_queue_bring_back(key: str = Form(...)):
     """Bring a deferred item back into the main queue."""
     return _queue_action(curation_queue.bring_back, key)
+
+
+# --- Look-alike photos (#759): the same picture under different bytes, confirmed by a person ---
+
+@router.get("/api/curator/lookalikes")
+def api_curator_lookalikes():
+    """Every look-alike group the actor may see (core/lookalikes.plan, read-only): {summary, groups:
+    [{id, slugs, keep, why, members, pairs, answered, new_members}], unreadable}. A group with a photo
+    the actor can't see is left out and counted (summary.hidden_groups; policy.can_view)."""
+    return JSONResponse(lookalikes.plan())
+
+
+@router.post("/api/curator/lookalikes/confirm", dependencies=requires(roles.EDITOR))
+def api_curator_lookalikes_confirm(keep: str = Form(...), slugs: list[str] = Form([]), shown: list[str] = Form([]),
+                                   dry_run: bool = Form(False)):
+    """"Same photo, keep this one": fold the look-alike group holding `keep` into it (#615's fold: it
+    inherits the others' cards, tags and notes; they go to the trash, 7-day undo; one batch). `shown` =
+    the members on screen (the Curator's buttons send them; only those are folded, and one already
+    answered "Not the same" against the keeper is left out and named in `left_out`); `slugs` = explicit
+    picks (a conflicting pick is refused). Neither = the whole group. Refusals in the shared error shape:
+    not_found, forbidden, not_in_group, lookalike_conflict, nothing_to_fold, bad_request."""
+    return JSONResponse(lookalikes.confirm(keep, slugs or None, shown=shown or None, dry_run=dry_run).to_dict())
+
+
+@router.post("/api/curator/lookalikes/dismiss", dependencies=requires(roles.EDITOR))
+def api_curator_lookalikes_dismiss(slugs: list[str] = Form([]), dry_run: bool = Form(False)):
+    """"Not the same": remember every open look-alike pair among `slugs`, so they are never asked
+    about again (one undoable batch). Refusals: bad_request (fewer than two), not_lookalikes."""
+    return JSONResponse(lookalikes.dismiss(slugs, dry_run=dry_run).to_dict())

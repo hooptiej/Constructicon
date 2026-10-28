@@ -10,8 +10,9 @@ The owner's rule (2026-10-17, binding, see the issue's comments):
      upload come first; among those the EARLIEST date wins (compared by Mountain-Time day). Ties go to
      the copy on more cards, then the one with more metadata (description, caption, tags), then a
      clean file name over one with a copy marker ("AlbertusMT.otf" beats "AlbertusMT (1).otf"; owner,
-     2026-10-18), then the oldest upload. A copy with no real date (#725) or a post-first-upload date only wins when no copy
-     has an earlier real date.
+     2026-10-18; #768: the macOS Finder's "name 2.ext" counts too, but only when the group also holds
+     "name.ext"), then the oldest upload. The plan's `why` names the rule that decided. A copy with no
+     real date (#725) or a post-first-upload date only wins when no copy has an earlier real date.
   3. The survivor INHERITS what the dropped copies had and it lacks: card memberships, tags (the tag
      tree, #555: the one store; its chips follow), description / caption / provenance / agent notes
      when its own are blank, the highlight / brand-asset / sensitive flags when a dropped copy has
@@ -32,6 +33,8 @@ The owner's rule (2026-10-17, binding, see the issue's comments):
                                         `expect_trash`: the slugs a dry run showed; when the fresh plan
                                         would trash anything else (or less), it refuses (plan_changed)
                                         and writes nothing. Idempotent: a second run finds no groups.
+  fold_group(keep, drop, op=...)        the same fold for one group someone confirmed (the look-alike
+                                        pass, core/lookalikes.py, #759): a forced survivor, one batch.
 
 Files that can't be read are never silently skipped: each is listed under `unreadable` with the
 reason, and the group it might have belonged to is planned without it.
@@ -143,25 +146,65 @@ def _facts(row, cutoff):
 
 # Copy markers a browser, OS or user adds to a second copy's file name: "name (1).ext",
 # "name - Copy.ext", "name copy 2.ext", "Copy of name.ext". Matched on the name without its extension.
+# Each carries the plain words a plan's `why` uses to name the rule that decided a tie (#768).
 _COPY_MARKERS = (
-    re.compile(r"\s*\(\d+\)$"),                          # "AlbertusMT (1)", "photo(2)"
-    re.compile(r"[\s_-]+copy(?:\s*\d+)?$", re.IGNORECASE),  # "name copy", "name - Copy", "name copy 2"
-    re.compile(r"^copy\s+of\s+", re.IGNORECASE),            # "Copy of name"
+    (re.compile(r"\s*\(\d+\)$"), "a '(n)' copy number"),                               # "AlbertusMT (1)", "photo(2)"
+    (re.compile(r"[\s_-]+copy(?:\s*\d+)?$", re.IGNORECASE), "a ' copy' / ' - Copy' suffix"),  # "name copy", "name - Copy", "name copy 2"
+    (re.compile(r"^copy\s+of\s+", re.IGNORECASE), "a 'Copy of' prefix"),                # "Copy of name"
 )
+# #768: the macOS Finder's duplicate suffix, "name 2.ext" (a space and a bare number 2..99 before the
+# extension). Only a copy marker when the SAME group also holds "name.ext" itself: "IMG 2.jpg" on its
+# own is an ordinary name, never a copy.
+_MAC_SUFFIX = re.compile(r"^(?P<base>.*\S) (?P<n>[2-9]|[1-9]\d)$")
+MAC_SUFFIX_RULE = "the macOS ' 2' copy suffix"
 
 
-def has_copy_marker(filename):
-    """True when a file name carries a copy marker such as "(1)", " - Copy" or "Copy of"."""
-    stem = os.path.splitext(os.path.basename(filename or ""))[0].strip()
-    return any(rx.search(stem) for rx in _COPY_MARKERS)
+def copy_marker(filename, group_filenames=()):
+    """The copy-marker rule `filename` carries, in plain words, or None. `group_filenames` are the
+    other copies' names: the macOS " 2" suffix counts only when one of them is the same name without
+    it (any case), so "IMG 2.jpg" alone is not a copy (#768)."""
+    base = os.path.basename(filename or "")
+    stem, ext = os.path.splitext(base)
+    stem = stem.strip()
+    for rx, label in _COPY_MARKERS:
+        if rx.search(stem):
+            return label
+    m = _MAC_SUFFIX.match(stem)
+    if m:
+        plain = (m.group("base") + ext).lower()
+        if any(os.path.basename(o or "").lower() == plain for o in group_filenames if o and o != filename):
+            return MAC_SUFFIX_RULE
+    return None
+
+
+def has_copy_marker(filename, group_filenames=()):
+    """True when a file name carries a copy marker such as "(1)", " - Copy", "Copy of", or (only when
+    `group_filenames` holds the unsuffixed name) the macOS " 2" suffix."""
+    return copy_marker(filename, group_filenames) is not None
+
+
+def _marker_of(f):
+    """The copy marker a ranked copy carries: set by rank_copies (group context), else on its own name."""
+    return f["copy_marker"] if "copy_marker" in f else copy_marker(f["row"].get("filename"))
 
 
 def _rank_key(f):
     # bucket 0 = a real date before the first upload; 1 = no real date, or one on/after it.
     # On a full tie a clean file name beats one with a copy marker, before upload order (owner, 2026-10-18).
     return (0 if f["early"] else 1, f["day"] or "9999-99-99", -len(f["cards"]), -f["metadata"],
-            1 if has_copy_marker(f["row"].get("filename")) else 0,
+            1 if _marker_of(f) else 0,
             f["row"].get("timestamp") or 0, f["slug"])
+
+
+def rank_copies(rows, cutoff):
+    """The survivor rule over copies of one thing: their facts, best first. Each copy's copy marker is
+    judged against the group's other names (#768), so the macOS " 2" suffix counts only beside the
+    plain name. Shared with the look-alike pass (core/lookalikes.py, #759)."""
+    names = [r.get("filename") for r in rows]
+    facts = [_facts(r, cutoff) for r in rows]
+    for f in facts:
+        f["copy_marker"] = copy_marker(f["row"].get("filename"), names)
+    return sorted(facts, key=_rank_key)
 
 
 def _why(survivor, runner_up):
@@ -177,9 +220,14 @@ def _why(survivor, runner_up):
         return f"same date; on more cards ({len(s['cards'])} vs {len(r['cards'])})"
     if s["metadata"] != r["metadata"]:
         return f"same date and cards; more description/caption/tags ({s['metadata']} vs {r['metadata']})"
-    if has_copy_marker(r["row"].get("filename")) and not has_copy_marker(s["row"].get("filename")):
-        return f"same date, cards and metadata; clean file name (the other is a copy: {r['row'].get('filename')})"
-    return "same date, cards and metadata; uploaded first"
+    rm, sm = _marker_of(r), _marker_of(s)
+    if rm and not sm:
+        # #768: say which rule decided the tie, naming both files.
+        return (f"same date, cards and metadata; clean file name (kept {s['row'].get('filename')}: the other "
+                f"name carries {rm}, {r['row'].get('filename')})")
+    if sm and rm:
+        return "same date, cards and metadata, and both names carry a copy marker; uploaded first"
+    return "same date, cards and metadata, and neither name carries a copy marker; uploaded first"
 
 
 def _face(f):
@@ -190,12 +238,18 @@ def _face(f):
             "cards": [c["title"] for c in f["cards"]]}
 
 
-def _plan_group(key, rows, cutoff):
-    """One group's plan, or (None, skip reason) when it can't be folded safely."""
+def _plan_group(key, rows, cutoff, keep=None):
+    """One group's plan, or (None, skip reason) when it can't be folded safely. `keep` (a slug in
+    `rows`) forces the survivor (the look-alike pass, #759: the owner picked it); `why` then says so and
+    names the rule's own pick when it differs. `key` is (size, sha256), or (None, None) for look-alikes."""
     stored = [r["stored_filename"] for r in rows]
     if len(set(stored)) != len(stored):
         return None, "two items share one stored file, so trashing one would take the other's file too"
-    facts = sorted((_facts(r, cutoff) for r in rows), key=_rank_key)
+    ranked = rank_copies(rows, cutoff)
+    suggested = ranked[0]
+    facts = ranked
+    if keep is not None:
+        facts = [f for f in ranked if f["slug"] == keep] + [f for f in ranked if f["slug"] != keep]
     survivor, dropped = facts[0], facts[1:]
     surv_cards = {c["id"] for c in survivor["cards"]}
     surv_tag_ids = {t["id"] for t in survivor["tag_rows"]}
@@ -225,7 +279,9 @@ def _plan_group(key, rows, cutoff):
     plan = {
         "sha256": digest, "size_bytes": size,
         "keep": _face(survivor),
-        "why": _why(survivor, dropped[0]),
+        "why": (_why(survivor, dropped[0]) if survivor is suggested
+                else f"you picked it (the rule would keep {suggested['slug']} ({suggested['row'].get('filename')}): "
+                     f"{_why(suggested, ranked[1])})"),
         "trash": [_face(d) for d in dropped],
         "dates_differ": len({f["day"] for f in facts}) > 1,
         "has_post_constructicon_copy": any(f["date"] is not None and not f["early"] for f in facts),
@@ -359,7 +415,6 @@ def apply(*, dry_run=True, expect_trash=None, actor=None, batch_id=None):
         raise AppError("forbidden", "Folding duplicates trashes items across the whole library, so it needs an "
                        "admin. Nothing was changed.", status=403)
     batch_id = batch_id or changes.new_batch_id()
-    moved_muts = []
     with db.transaction(dry_run=dry_run):
         built = _build(who)
         groups = built["groups"]
@@ -377,17 +432,52 @@ def apply(*, dry_run=True, expect_trash=None, actor=None, batch_id=None):
         if not groups:
             return Result(True, [], [], batch_id, dry_run, {**_public(built), "trashed": [], "kept": []})
         keep = [g["_ops"]["survivor"] for g in groups]
-        policy.viewable_rows(keep + drop, actor=who)  # every slug written must be visible (#709)
-        for g in groups:
-            ops = g["_ops"]
-            with db.ImageLog(OP_MERGE, who, batch_id, [ops["survivor"]] + ops["dropped"]) as log:
-                _inherit(log, ops, who)
-                moved_muts += list(log.muts)
-        res = items.delete(drop, dry_run=dry_run, actor=who, batch_id=batch_id)
-    out = Result(True, items._flat(OP_MERGE, moved_muts) + res.changes, [], batch_id, dry_run,
+        flat = _fold(groups, who, batch_id, dry_run, OP_MERGE)
+    out = Result(True, flat["changes"], [], batch_id, dry_run,
                  {**_public(built), "trashed": drop, "kept": keep,
-                  "expires_at": res.data.get("expires_at"), "trash_days": items.TRASH_DAYS})
+                  "expires_at": flat["expires_at"], "trash_days": items.TRASH_DAYS})
     return out
+
+
+def _fold(groups, who, batch_id, dry_run, op):
+    """THE fold, shared by apply() and the look-alike pass (fold_group, #759). Inside the caller's
+    transaction: per planned group one imaged `op` row (the survivor inherits, _inherit), then ONE
+    items.delete of every dropped copy under the same batch. {changes, expires_at}."""
+    keep = [g["_ops"]["survivor"] for g in groups]
+    drop = [s for g in groups for s in g["_ops"]["dropped"]]
+    policy.viewable_rows(keep + drop, actor=who)  # every slug written must be visible (#709)
+    moved_muts = []
+    for g in groups:
+        ops = g["_ops"]
+        with db.ImageLog(op, who, batch_id, [ops["survivor"]] + ops["dropped"]) as log:
+            _inherit(log, ops, who)
+            moved_muts += list(log.muts)
+    res = items.delete(drop, dry_run=dry_run, actor=who, batch_id=batch_id)
+    return {"changes": items._flat(op, moved_muts) + res.changes, "expires_at": res.data.get("expires_at")}
+
+
+def fold_group(keep, drop, *, op, dry_run=False, actor=None, batch_id=None):
+    """Folds the copies `drop` into `keep` exactly as apply() folds a byte-identical group (the same
+    inheritance, the same trash, ONE batch, one undo), for a group someone else decided is one thing:
+    the look-alike pass (#759), where the owner confirmed "same photo, keep this one". The caller checks
+    the role and that the slugs belong together; this refuses an unknown slug (404) or one the actor
+    may not see (403, #709), and a pair sharing one stored file (409 `shared_stored_file`). Returns a
+    Result; data: {plan (keep, why, trash, inherit), trashed, kept, expires_at, trash_days}."""
+    who = actor_ctx.resolve(actor)
+    batch_id = batch_id or changes.new_batch_id()
+    drop = [s for s in dict.fromkeys(drop) if s and s != keep]
+    if not drop:
+        raise AppError("bad_request", "Nothing to fold: name at least one copy besides the one to keep.", status=400)
+    with db.transaction(dry_run=dry_run):
+        rows, _ = policy.viewable_rows([keep] + drop, actor=who)
+        plan_, why_not = _plan_group((None, None), rows, first_upload_cutoff(), keep=keep)
+        if why_not:
+            raise Conflict(f"Nothing was changed: {why_not}.", code="shared_stored_file")
+        flat = _fold([plan_], who, batch_id, dry_run, op)
+    public = {k: v for k, v in plan_.items() if k not in ("_ops", "sha256", "size_bytes")}
+    return Result(True, flat["changes"], [], batch_id, dry_run,
+                  {"plan": public, "trashed": drop, "kept": keep, "expires_at": flat["expires_at"],
+                   "trash_days": items.TRASH_DAYS})
 
 
 def summary_text(built):

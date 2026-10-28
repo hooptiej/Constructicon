@@ -56,7 +56,7 @@ from mcp.server.mcpserver import Image as McpImage, MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from core import access_log, actor as actor_ctx, policy, roles, users
-from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, duplicates, errors, ingest, item_dates, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
+from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, duplicates, errors, ingest, lookalikes, item_dates, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
 from core import blog, changes, hobbies, membership, parse_limits, reset, sharing
@@ -255,6 +255,9 @@ ACTION_ROLES = {
     ("constructicon_trash", "empty"): A,  # permanent
     ("constructicon_duplicates", "plan"): E,   # #615: read-only, filtered per actor (policy.can_view)
     ("constructicon_duplicates", "apply"): A,  # #615: trashes copies library-wide (undoable)
+    ("constructicon_lookalikes", "list"): V,     # #759: GET /api/curator/lookalikes (viewer)
+    ("constructicon_lookalikes", "confirm"): E,  # POST /api/curator/lookalikes/confirm (editor; one undoable fold)
+    ("constructicon_lookalikes", "dismiss"): E,  # POST /api/curator/lookalikes/dismiss (editor; remembered)
     ("constructicon_item_tags", "attach"): E,
     ("constructicon_item_tags", "detach"): E,
     ("constructicon_related", "add"): E,
@@ -1784,6 +1787,46 @@ def constructicon_duplicates(action: typing.Literal["plan", "apply"] = "plan", d
         res["summary_text"] = duplicates.summary_text(res)
         return res
     raise InvalidInput(f"Unknown action {action!r}: use plan or apply.")
+
+
+@mcp.tool(selector="action", annotations=_DESTRUCTIVE)
+def constructicon_lookalikes(action: typing.Literal["list", "confirm", "dismiss"] = "list", keep: str | None = None,
+                             slugs: list[str] | None = None, dry_run: bool = True, limit: int | None = None,
+                             cursor: str | None = None) -> dict:
+    """Look-alike photos: the same picture under different bytes (resized, recompressed, re-exported),
+    found by perceptual hash and never folded without a yes. Byte-identical copies are
+    constructicon_duplicates' job; items in one revision chain are never look-alikes.
+    "list" (default, read-only, paged: limit 1..500, default 20, cursor): {items: [{id, slugs, keep,
+      why, members: [{slug, title, filename, width, height, file_size, date, date_is_real, uploaded,
+      cards, copy_marker}], pairs: [{a, b, distance}], answered, new_members}], next_cursor, more,
+      limit, summary}. `keep` is the suggested keeper (same rule as duplicates), `why` says what
+      decided; `answered` = pairs already said "Not the same", `new_members` = what is being asked now.
+    "confirm" and "dismiss" are DRY-RUN BY DEFAULT: they answer as the write would and write nothing;
+      pass dry_run=false to fold / record.
+    "confirm" (keep=<slug>, slugs=optional subset of the group): "same photo, keep this one". The kept
+      photo inherits the others' cards, tags, blank text fields, flags, related links and covers; the
+      others go to the trash (7-day undo), ONE batch. A member answered "Not the same" against the
+      keeper is left out (left_out). -> {ok, dry_run, batch_id, kept, trashed, left_out, plan, ...}.
+      Refusals: not_found, forbidden, not_in_group, lookalike_conflict, nothing_to_fold.
+    "dismiss" (slugs=[2+ photos of one group]): "not the same", remembered per pair so it is never
+      asked again. -> {ok, batch_id, pairs}. Refusal: not_lookalikes.
+    Example: constructicon_lookalikes(action="confirm", keep="abc123") (a dry run), then again with
+    dry_run=False to fold.
+    """
+    if action == "list":
+        _only_for('action="list"', keep=(keep, None), slugs=(slugs, None), dry_run=(dry_run, True))
+        built = lookalikes.plan()
+        groups = built["groups"]
+        page = _paged("lookalikes", lambda n, o: groups[o:o + n], limit, cursor, 0, shape=lambda rows: rows,
+                      default=20)
+        return {**page, "summary": built["summary"], "unreadable": built["unreadable"]}
+    _only_for(f'action="{action}"', limit=(limit, None), cursor=(cursor, None))
+    if action == "confirm":
+        return lookalikes.confirm(keep, slugs, dry_run=dry_run).to_dict()
+    if action == "dismiss":
+        _only_for('action="dismiss"', keep=(keep, None))
+        return lookalikes.dismiss(slugs, dry_run=dry_run).to_dict()
+    raise InvalidInput(f"Unknown action {action!r}: use list, confirm or dismiss.")
 
 
 @mcp.tool()

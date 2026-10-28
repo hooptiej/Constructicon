@@ -14,6 +14,10 @@
          choose       show the options; the form's submit resolves with the picked key(s)
          accept-date  (#725) a needs_date item's "Use <date>": POST /api/image/{slug}/date-guess with
                       its source; the answer's batch_id offers Undo
+         lookalike-keep      (#759) "Same photo, keep this one": POST /api/curator/lookalikes/confirm with
+                             keep + the slugs on screen (shown); the answer's batch_id offers Undo, and any copy
+                             left out (answered "Not the same" before) is named in the message
+         lookalike-not-same  (#759) "Not the same": POST /api/curator/lookalikes/dismiss with the slugs
          defer / bring-back / dismiss
        Resolve uses POST /api/pending-decisions/{id}/resolve, the same route the project page's strip uses.
    Updates are announced through an aria-live region; every control is a real button, link or form. */
@@ -168,6 +172,50 @@
       }
     }
 
+    function members(item) {
+      try { return JSON.parse(item.dataset.cqMembers || '[]'); } catch (x) { return []; }
+    }
+
+    function withSlugs(params, slugs, name) {
+      var p = new URLSearchParams(params);
+      slugs.forEach(function (s) { p.append(name, s); });
+      return p;
+    }
+
+    async function lookalikeKeep(item, keep) {
+      busy(item, true);
+      fail(item, '');
+      try {
+        var res = await fetch('/api/curator/lookalikes/confirm', { method: 'POST', body: withSlugs({ keep: keep }, members(item), 'shown') });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error((data.error && data.error.message) || data.detail || ('Could not fold the copies (' + res.status + ').'));
+        var n = (data.trashed || []).length;
+        var msg = 'Kept one copy; ' + n + ' other' + (n === 1 ? '' : 's') + ' went to the trash (7-day undo).';
+        (data.left_out || []).forEach(function (x) { msg += ' Left alone: ' + x.slug + ' (' + x.reason + ').'; });
+        if (data.batch_id && window.showUndoBar) window.showUndoBar(msg, data.batch_id, null);
+        changed(msg, item);
+      } catch (e) {
+        busy(item, false);
+        fail(item, (e && e.message) || 'Network error.');
+      }
+    }
+
+    async function lookalikeNotSame(item) {
+      busy(item, true);
+      fail(item, '');
+      try {
+        var res = await fetch('/api/curator/lookalikes/dismiss', { method: 'POST', body: withSlugs({}, members(item), 'slugs') });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error((data.error && data.error.message) || data.detail || ('Could not save that answer (' + res.status + ').'));
+        var msg = 'Noted: not the same photo. You will not be asked about these again.';
+        if (data.batch_id && window.showUndoBar) window.showUndoBar(msg, data.batch_id, null);
+        changed(msg, item);
+      } catch (e) {
+        busy(item, false);
+        fail(item, (e && e.message) || 'Network error.');
+      }
+    }
+
     async function simple(item, url, msg, param) {
       busy(item, true);
       fail(item, '');
@@ -206,6 +254,10 @@
         resolve(item, keys);
       } else if (action === 'accept-date') {
         acceptDate(item);
+      } else if (action === 'lookalike-keep') {
+        lookalikeKeep(item, btn.dataset.cqKeep);
+      } else if (action === 'lookalike-not-same') {
+        lookalikeNotSame(item);
       } else if (action === 'choose') {
         var form = item.querySelector('.cq-chooser');
         if (!form) return;

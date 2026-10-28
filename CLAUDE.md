@@ -135,7 +135,7 @@ the date and commit forward when you re-verify.
     `safe_fetch.py` (#724 d: **the one way the app fetches a web address it was given**, see
     "Outbound fetches" under "Data model"; never call `httpx.get` / `urllib` on a stored URL directly).
   - *Curator:* `curator.py` (completeness scoring), `curator_needs.py` (derived nudges),
-    `curation_queue.py` (the one queue). See "Decisions and the Curator".
+    `curation_queue.py` (the one queue), `lookalikes.py` + `lookalike_match.py` (look-alike photos, #759). See "Decisions and the Curator".
   - *Install, files, export:* `paths.py`, `storage.py`, `backup.py`, `install_token.py`, `version.py`,
     `site_export.py` + `project_export.py` (see "Static export"), `card_migration.py` (the V2 card
     migration run from `init_db()`).
@@ -264,6 +264,7 @@ the date and commit forward when you re-verify.
     `golden_master.py`, `seed_test_from_production.py`, `full_youtube_channel_sync.py`,
     `backfill_content_dates.py`, `regenerate_thumbnails.py`, `make_type_samples.py` + `drop_test.py` (#720),
     `caption_cleanup.py` (#743 / #542: the mid-word scan and re-queue, the short-title proposals),
+    `measure_lookalikes_759.py` (#759: read-only look-alike measurement on a DB copy, stdlib only),
     and the helpers `_http.py` and `_testenv.py`.
     **None of `scripts/` is mounted into the app containers (#634)**: where each kind runs is
     "Scripts: what runs where" below. `reset_password.py` and `mcp_token.py` moved into the app as
@@ -1093,7 +1094,7 @@ token stays the admin key for scripts and ops.
 
 **The rule: all writes go through `core/{items,membership,tags,cards,hobbies,blog,decisions,reset}.py`
 (plus `core/revisions.py` for revision chains, `core/duplicates.py` for duplicate folding (#615),
-`core/install_config.py`, `core/users.py`, and since #604
+`core/lookalikes.py` for look-alike photos (#759), `core/install_config.py`, `core/users.py`, and since #604
 `core/sharing.py` (private cards / members) and `core/mcp_tokens.py` (per-user MCP tokens)); the raw writers in `core/db.py` are private
 (`_`-prefixed); `scripts/check_layering.py` enforces it.** Run `python scripts/check_layering.py`
 (no server, no DB; `--list` prints every db.py writer and its class) before every PR that touches
@@ -1253,7 +1254,11 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   (`timeline.resolve_item_date`) from BEFORE Constructicon's first upload (`MIN(timestamp)`) first,
   the earliest Mountain day wins; ties -> on more cards -> more metadata (description, caption, tags)
   -> a clean file name over a copy marker (`AlbertusMT.otf` over `AlbertusMT (1).otf`;
-  `duplicates.has_copy_marker`: "(n)", "- Copy", "copy 2", "Copy of") -> oldest upload. A copy with no real date, or one on/after the first upload, wins only when no copy
+  `duplicates.copy_marker` / `has_copy_marker`: "(n)", "- Copy", "copy 2", "Copy of", and since #768 the
+  macOS Finder suffix `name 2.ext` (n = 2..99), counted ONLY when the same group also holds `name.ext`, so
+  `IMG 2.jpg` alone is not a copy; `duplicates.rank_copies` judges each name against its group) -> oldest
+  upload. The plan's `why` names the rule that decided each tie ("kept lildragclean1.eps: the other name
+  carries the macOS ' 2' copy suffix, lildragclean1 2.eps"). A copy with no real date, or one on/after the first upload, wins only when no copy
   has an earlier real date. Groups with a copy the actor may not see (`policy.can_view`) are left out
   and only counted; two rows sharing ONE stored file are skipped with the reason; an unreadable file is
   listed under `unreadable`, never skipped silently; empty files are ignored. `apply(dry_run=True,
@@ -1268,6 +1273,45 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   `constructicon_duplicates(action="plan" | "apply", dry_run, expect_trash)` (plan editor, apply
   admin). Check: `scripts/test_duplicates_615.py` (throwaway DB: grouping, survivor rule,
   inheritance, sensitive filter, dry run, refusals, apply, idempotence, the full undo, the upload guard).
+  The fold itself is `duplicates._fold` (inheritance rows + one `items.delete`, inside the caller's
+  transaction); `duplicates.fold_group(keep, drop, op=)` runs it for ONE group with a forced survivor
+  (its `why` says "you picked it" and what the rule would have kept): the look-alike pass's confirm.
+- **Look-alike photos (#759): `core/lookalikes.py` (+ the pure, stdlib-only `core/lookalike_match.py`).**
+  The same picture under different bytes (resized, recompressed, re-exported), which #615 can't see.
+  **Human-confirmed, never automatic.** Candidates: un-redacted IMAGES (`db.list_lookalike_images`) by the
+  perceptual hash the OCR pipeline already stores (`capture_events.perceptual_hash`, 64-bit pHash; no new
+  hash); a pair is a candidate at Hamming distance <= `lookalike_match.MAX_DISTANCE` (**2**, owner decision
+  2026-10-28 from the read-only prod measurement on #759: 0/2/4/6 bits gave 70/84/103/107 groups and no
+  threshold separates copies from look-alikes; 2 = 84 groups / 178 photos, fewest false alarms, and resized
+  copies at 4 such as HooptieJlogo3 / logo3Big are knowingly missed; similarity's "similar" uses 8), found exactly with pigeonhole
+  buckets (no O(n^2) scan). Left out: degenerate hashes (`is_degenerate_hash`, moved here from
+  `similarity.py`, which re-exports it), BYTE-IDENTICAL pairs (#615's job; sha256 only for distance-0
+  same-size pairs, cached), pairs in ONE revision chain (#477) and pairs answered "Not the same". A group is
+  a connected component of the remaining pairs; a group with a photo the actor can't see is left out and
+  counted (`hidden_groups`). The suggested keeper is `duplicates.rank_copies` (#615's rule incl. #768) with
+  its `why`. **"Not the same" is remembered per pair** in `curator_dismissals` (key
+  `need:lookalike_pair:<a>:<b>`, action dismiss; `lookalikes.dismiss(slugs)`, one imaged row op
+  `lookalike_not_same`, undoable), so a group that later gains a member comes back with only the newcomer
+  and what it matches (`answered`, `new_members`). **"Same photo, keep this one"** is
+  `lookalikes.confirm(keep, slugs=None, dry_run)` -> `duplicates.fold_group` (op `lookalike_fold` + the
+  delete, ONE batch, one undo restores rows and files); a member answered "Not the same" against the keeper
+  (or another folded copy) is left out and named in `left_out`; naming it explicitly is 409
+  `lookalike_conflict`. Editor for both; refusals: `forbidden`, `not_found`, `not_in_group` (409),
+  `nothing_to_fold`, `not_lookalikes`, `bad_request`. Web: `GET /api/curator/lookalikes` (viewer), `POST
+  /api/curator/lookalikes/confirm` (`keep`, `slugs`, `dry_run`) and `/dismiss` (`slugs`) (editor). Curator:
+  one need per group (kind `lookalike`, group "Look-alike photos", key `need:lookalike:<group id>` so
+  Defer works; `item_slugs` lets `for_actor` hide it), the copies side by side (`_curation_items.html`,
+  `curator-queue.js`) with the two buttons. MCP `constructicon_lookalikes(action="list" | "confirm" |
+  "dismiss")`. **Measure first:** `scripts/measure_lookalikes_759.py <db copy> [--storage DIR]
+  [--max-distance N] [--histogram N] [--show N]` opens the DB `mode=ro` (falls back to `immutable=1` for a
+  WAL copy in a read-only folder, and says so), stdlib + `core/lookalike_match.py` only, and prints the
+  images considered / hashed, a pair-distance histogram, the groups and their size histogram, the groups
+  excluded as byte-identical / revision chain / answered, and one line per group (slugs, names, distances).
+  `scripts/` is not in the app containers (#634), so on the box: copy the DB (`sqlite3 <db> ".backup
+  /tmp/la/c.db"` or `cp` while idle), then `sudo docker run --rm --network none -v /tmp/la:/data:ro -v
+  "$PWD/scripts":/app/scripts:ro -v <storage dir>:/storage:ro <the web image> python3
+  scripts/measure_lookalikes_759.py /data/c.db --storage /storage`.
+  Check: `scripts/test_lookalikes_759.py` (throwaway DB, synthetic hashes).
 - Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),
   `test_hobbies_blog.py` (phase D: hobbies, both conversions, card create/Save, blog, the sweep;
   every write undone and the whole DB compared), `check_layering.py`. All run on a throwaway DB.
@@ -1692,6 +1736,9 @@ Two ideas share the nav rail's "Curator" tab and one queue:
   dismissed).
 - **`needs_date` (#725):** a file with no real date and no card range to borrow, one need per item, with its
   best date guess as a one-click "Use <date>" (see "Dates" above).
+- **`lookalike` (#759):** "These look like the same photo: keep which?", one need per look-alike group in
+  the "Look-alike photos" group (whole queue only), the copies side by side with "Same photo, keep this one"
+  / "Not the same" (see "Look-alike photos" under "Service layer").
 - **One report card (#545, owner decisions 2026-10-17).** The Curator score and the card pips
   (`core/card_level.py`) used to grade the same card differently. Now the checks they share are
   defined once, in `card_level`: `check_cover`, `check_writeup` (the write-up has **>= 200
@@ -2265,7 +2312,8 @@ Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
 `mcp_server/server.py`, exposing 60 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
-`constructicon_sharing` (#604), `constructicon_duplicates` (#615) and `constructicon_caption_review` (#556)) like `constructicon_search`, `constructicon_get`,
+`constructicon_sharing` (#604), `constructicon_duplicates` (#615), `constructicon_caption_review` (#556) and
+`constructicon_lookalikes` (#759), 61 in all) like `constructicon_search`, `constructicon_get`,
 `constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
 `constructicon_card_files`, `constructicon_needs`, etc.
 (`mcp__constructicon-mcp__*` in a session with it configured). #68 tracked
@@ -2424,6 +2472,14 @@ configuration gap for that session, not evidence the server itself is gone.
   `accept` with no text / title takes the suggestion as it stands (before, a blank Accept was refused
   `bad_caption`); `retry` on a captions-off install is now 409 `captions_disabled` (was a 400 saying
   "isn't available"), with the breaker open 409 `captions_paused`.
+- **Look-alike photos over MCP (#759).** `constructicon_lookalikes(action="list" | "confirm" | "dismiss",
+  keep=, slugs=, dry_run=False, limit=, cursor=)`: `list` is paged like #722's lists (`{items, next_cursor,
+  more, limit}` + `summary`, `unreadable`; default limit 20), each group with its members (slug, filename,
+  width, height, file size, dates, cards, copy marker), pairs and distances, the suggested `keep` and `why`,
+  `answered` / `new_members`; `confirm` folds keeping `keep` (returns `batch_id`, `left_out`); `dismiss` is
+  "Not the same". Roles as the web routes: list viewer, confirm / dismiss editor. **confirm and dismiss
+  are DRY-RUN BY DEFAULT** (owner, 2026-10-28), like `constructicon_duplicates(apply)`: pass
+  `dry_run=false` to fold / record. The web routes are not (a click is the confirmation). See "Look-alike photos" under "Service layer".
 - `mcp_server/server.py` still carries some stale-vocabulary rough edges
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.

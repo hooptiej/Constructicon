@@ -22,6 +22,7 @@ import numpy as np
 from PIL import Image, ImageStat
 
 from . import db
+from .lookalike_match import MIN_HASH_BITS, is_degenerate_hash  # noqa: F401 (#759: re-exported)
 
 # sentence_transformers (and torch under it) is imported in _get_model, not here: #644 runs the
 # perceptual hash in a parser child process (core/parse_limits.py), which imports this module and
@@ -84,21 +85,9 @@ def _get_model():
 # #587 item 2: a nearly uniform image hashes to a degenerate value (all zeros, or one lone bit such
 # as 8000000000000000, the DC term), and every blank-ish image then "matches" every other. Such a
 # hash carries no information, so it is treated as "no hash": never stored for a new image, and
-# ignored when comparing rows that already hold one.
-MIN_HASH_BITS = 3                # a 64-bit hash with fewer (or, mirrored, more) set bits is degenerate
+# ignored when comparing rows that already hold one. The check lives in core/lookalike_match.py (#759,
+# stdlib only, so the look-alike measurement script can use it) and is re-exported here.
 MIN_IMAGE_STDDEV = 3.0           # grey-level standard deviation (0-255) below which an image is "blank"
-
-
-def is_degenerate_hash(hex_hash):
-    """True for a missing/unparseable hash or one with near-zero entropy: at most
-    MIN_HASH_BITS - 1 bits set, or at most as many clear (all ones, one lone zero bit)."""
-    if not hex_hash:
-        return True
-    try:
-        bits = bin(int(hex_hash, 16)).count("1")
-    except ValueError:  # silent-ok: an unparseable hash is "no hash", the documented meaning here
-        return True
-    return bits < MIN_HASH_BITS or (64 - bits) < MIN_HASH_BITS
 
 
 def _is_low_variance(img):

@@ -13,6 +13,11 @@ Three kinds of item used to live in three places. They are one queue now:
             inherit (core/item_dates.py needs_date_rows), with its best date guess as the
             one-click "Use <date>" (POST /api/image/{slug}/date-guess). Grouped under the card
             it is on (a card with no real dates of its own), else under "Undated files".
+            #759: also `lookalike`, one per group of photos that look like the same picture
+            (core/lookalikes.py), with the copies side by side and "Same photo, keep this one" /
+            "Not the same" (POST /api/curator/lookalikes/confirm | dismiss). Grouped under
+            "Look-alike photos"; carries `item_slugs`, so for_actor hides a group with a photo the
+            asker can't see. "Not the same" is remembered per pair (lookalikes.dismiss).
 
 Nothing here stores items: questions are stored by their own table, nudges and needs are
 derived every time. The only thing this module's callers persist is the owner's Defer /
@@ -35,7 +40,7 @@ import threading
 import time
 from urllib.parse import quote
 
-from . import actor as actor_ctx, cards, curator_needs, datefmt, date_guess, db, decisions, install_config, item_dates, item_title, policy, roles
+from . import actor as actor_ctx, cards, curator_needs, datefmt, date_guess, db, decisions, install_config, item_dates, item_title, lookalikes, policy, roles
 from .errors import InvalidInput
 
 TYPE_QUESTION = "question"
@@ -289,6 +294,8 @@ def _group_order(g):
         return (2, 0, 0, "")
     if g["type"] == "undated":
         return (2, 1, 0, "")
+    if g["type"] == "lookalikes":
+        return (2, 2, 0, "")
     return (3, 0, 0, "")
 
 
@@ -433,6 +440,11 @@ def build_queue(card=None, hobby=None):
             else:
                 put("undated", _plain_group("undated", "undated", "Undated files", "/unfiled"), item)
 
+    # #759: look-alike photos, the whole queue only (never a card's or hobby's slice)
+    if not hobby_row and not card_row:
+        for item in lookalikes.queue_items():
+            put("lookalikes", _plain_group("lookalikes", "lookalikes", "Look-alike photos", "/curator"), item)
+
     open_by, deferred_by = {}, {}
     for gid, item in items:
         (deferred_by if item["deferred"] else open_by).setdefault(gid, []).append(item)
@@ -550,6 +562,9 @@ def _for_actor(q, who, acc, revisions):
                 if i.get("item_slug") and not item_visible(i["item_slug"]):
                     changed = True
                     continue
+                if i.get("item_slugs") and not all(item_visible(s) for s in i["item_slugs"]):
+                    changed = True  # #759: a look-alike group with a photo the asker can't see
+                    continue
                 opts = i.get("options")
                 if opts:
                     shown = [o for o in opts if option_visible(i, o)]
@@ -577,7 +592,7 @@ def cached_queue():
 
 def group_items(gid, section="open"):
     """One group's items (for expanding a collapsed group). `gid` is a group id from the queue
-    (card:<slug>, hobby:<slug>, uploads, collection); `section` is "open" or "deferred".
+    (card:<slug>, hobby:<slug>, uploads, collection, undated, lookalikes); `section` is "open" or "deferred".
     Returns (group dict or None, items). A card or hobby builds only its own slice, so
     expanding a group never rebuilds the whole queue."""
     key = "deferred" if section == "deferred" else "groups"

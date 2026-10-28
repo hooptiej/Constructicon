@@ -34,7 +34,9 @@ one at a time), which stores the result and rebuilds the row's text without re-r
 - `transcript_status`: `found` | `none` (settled: no captions, captions off, only noise, the video
   unavailable) | `retry` (a network error, a timeout, YouTube blocking us: tried again later with
   backoff, never `failed`) | `queued` (the backfill: not tried yet);
-- `transcript` (the cleaned text, only when found), `transcript_language` ("English
+- `transcript` (the cleaned text, only when found), `transcript_cues` (#789: where each kept caption
+  starts, as compact `[start_seconds, char_offset]` pairs into `transcript`, so a position in the
+  text maps to a moment in the video: `cite`), `transcript_language` ("English
   (auto-generated)"), `transcript_language_code`, `transcript_kind` (`manual` | `auto`),
   `transcript_words`, `transcript_note` (the plain reason for none / retry), `transcript_attempts`,
   `transcript_retry_at`, `transcript_checked_at`.
@@ -46,6 +48,13 @@ never empties the row's text: it only records the reason and when to try again.
 sound words in parentheses, music-note symbols and snippets that are only filler ("foreign", "um",
 "uh", ...) are dropped. Fewer than `MIN_REAL_WORDS` (30) real words left = no transcript (`none`,
 "its captions are only music or sound tags (N real words)").
+
+**Timestamps (#789).** Each kept caption's start time is kept beside the text (`transcript_cues`),
+from the library's snippets (`start`) or from a WebVTT / SRT file (`parse_vtt`, for subtitles fetched
+some other way, e.g. yt-dlp, handed in through MCP `constructicon_update(fields={"transcript_vtt":
+...})`, `fields_from_vtt`). `cite(row, offset)` maps a character position in the row's
+`extracted_text` (or in `transcript` itself) to `{timestamp_seconds, timestamp_url}` (a `&t=<s>s`
+link); a row stored before #789, or a position outside the transcript, gives nulls.
 """
 
 import logging
@@ -66,7 +75,7 @@ RETRY_MAX_SECONDS = 24 * 3600  # ...up to a day
 MAX_AUTO_ATTEMPTS = 8         # then it stops retrying by itself (Retry OCR still tries again)
 
 QUEUED, FOUND, NONE, RETRY = "queued", "found", "none", "retry"
-FIELDS = ("transcript", "transcript_status", "transcript_language", "transcript_language_code",
+FIELDS = ("transcript", "transcript_cues", "transcript_status", "transcript_language", "transcript_language_code",
           "transcript_kind", "transcript_words", "transcript_note", "transcript_attempts",
           "transcript_retry_at", "transcript_checked_at")
 
@@ -99,18 +108,171 @@ FILLER = frozenset({"foreign", "um", "umm", "uh", "uhh", "uhm", "hmm", "hm", "mm
 
 def clean(snippets):
     """(text, real_word_count) from caption snippets with the noise taken out."""
-    kept = []
-    for raw in snippets or ():
+    text, real, _cues = clean_with_cues(snippets)
+    return text, real
+
+
+def _start_of(value):
+    """A cue start in seconds (a finite number >= 0), else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return round(float(value), 1) if 0 <= float(value) < 10 ** 7 else None
+
+
+def clean_with_cues(snippets, starts=None):
+    """(text, real_word_count, cues) from caption snippets with the noise taken out. `starts` (#789):
+    each snippet's start time in seconds (same order; None or missing = unknown). `cues` is
+    [[start_seconds, char_offset_in_text], ...] for the kept snippets with a known start, in order
+    (a start earlier than the previous kept one is dropped, so the list stays sorted)."""
+    kept, cues, at = [], [], 0
+    starts = list(starts or ())
+    for i, raw in enumerate(snippets or ()):
         t = raw if isinstance(raw, str) else ""
         t = _SYMBOLS.sub(" ", _SOUND_PARENS.sub(" ", _BRACKETED.sub(" ", t)))
         t = " ".join(t.split())
         words = _WORD.findall(t)
         if not words or all(w.lower() in FILLER for w in words):
             continue
+        if kept:
+            at += 1  # the joining space
+        start = _start_of(starts[i]) if i < len(starts) else None
+        if start is not None and (not cues or start >= cues[-1][0]):
+            cues.append([start, at])
         kept.append(t)
+        at += len(t)
     text = " ".join(kept)
     real = sum(1 for w in _WORD.findall(text) if w.lower() not in FILLER)
-    return text, real
+    return text, real, cues
+
+
+# --- WebVTT / SRT subtitles (#789) -------------------------------------------------------------------
+
+_CUE_TIME = re.compile(r"^\s*((?:\d+:)?\d{1,2}:\d{2}[.,]\d{1,3})\s*-->\s*((?:\d+:)?\d{1,2}:\d{2}[.,]\d{1,3})")
+_INLINE_TAG = re.compile(r"<[^>]{0,80}>")
+VTT_MAX_BYTES = 5 * 1024 * 1024  # a subtitle file is text; 5 MB is hours of captions
+
+
+def _seconds(stamp):
+    parts = stamp.replace(",", ".").split(":")
+    secs = float(parts[-1])
+    mins = int(parts[-2]) if len(parts) >= 2 else 0
+    hours = int(parts[-3]) if len(parts) >= 3 else 0
+    return hours * 3600 + mins * 60 + secs
+
+
+def parse_vtt(text):
+    """[(start_seconds, caption text), ...] from a WebVTT (or SRT) file's text, in file order. Inline
+    tags (<c>, <00:00:01.234>, <v Name>) are removed, and a line one of the last few cues already
+    showed is dropped: YouTube's auto-generated VTT (yt-dlp) repeats the previous line at the top of
+    every cue, so without this every sentence would appear twice. Blocks with no timing line (the
+    WEBVTT header, NOTE / STYLE / REGION) are skipped, and so are SRT's counter lines. Pure."""
+    if not isinstance(text, str):
+        return []
+    out, recent = [], []
+    for block in re.split(r"\r?\n[ \t]*\r?\n", text.replace("﻿", "")):
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        timing = next((i for i, ln in enumerate(lines) if _CUE_TIME.match(ln)), None)
+        if timing is None:
+            continue
+        start = _seconds(_CUE_TIME.match(lines[timing]).group(1))
+        said = []
+        for ln in lines[timing + 1:]:
+            line = " ".join(_INLINE_TAG.sub("", ln).split())
+            if not line or line in recent:
+                continue
+            said.append(line)
+            recent = (recent + [line])[-3:]
+        if said:
+            out.append((start, " ".join(said)))
+    return out
+
+
+def fields_from_vtt(text, now=None):
+    """The type_metadata a transcript from a subtitle file gives: what a found fetch writes (status
+    found, transcript, transcript_cues; kind auto when the file carries YouTube's word-timing tags,
+    else manual; no language). InvalidInput (400 `bad_transcript`) when it is empty, too big, holds no
+    timed captions, or too few real words to count as speech (the noise filter's rule): nothing is
+    guessed or stored then."""
+    from .errors import InvalidInput
+    if not isinstance(text, str) or not text.strip():
+        raise InvalidInput("transcript_vtt must be the subtitle file's text (WebVTT or SRT). Nothing was changed.",
+                           code="bad_transcript")
+    if len(text.encode("utf-8", "replace")) > VTT_MAX_BYTES:
+        raise InvalidInput(f"transcript_vtt is over {VTT_MAX_BYTES // 1048576} MB; a subtitle file is never that "
+                           "big. Nothing was changed.", code="bad_transcript")
+    cues = parse_vtt(text)
+    if not cues:
+        raise InvalidInput("transcript_vtt has no timed captions (no '00:00:01.000 --> 00:00:04.000' lines). "
+                           "Send the .vtt or .srt file's text. Nothing was changed.", code="bad_transcript")
+    outcome = {"outcome": FOUND, "snippets": [c[1] for c in cues], "starts": [c[0] for c in cues],
+               "language": None, "language_code": None, "generated": bool(re.search(r"<\d{2}:\d{2}", text))}
+    fields = fields_for(outcome, {}, now)
+    if fields.get("transcript_status") != FOUND:
+        raise InvalidInput(f"transcript_vtt holds no real speech: {fields.get('transcript_note')}. Nothing was changed.",
+                           code="bad_transcript")
+    return fields
+
+
+# --- citing a moment (#789) -------------------------------------------------------------------------
+
+def _cues_of(meta):
+    cues = meta.get("transcript_cues") if isinstance(meta, dict) else None
+    if not isinstance(cues, list):
+        return []
+    return [c for c in cues if isinstance(c, (list, tuple)) and len(c) == 2
+            and _start_of(c[0]) is not None and isinstance(c[1], int) and not isinstance(c[1], bool)]
+
+
+def has_cues(row):
+    """True when the row carries transcript cue times (a transcript stored since #789)."""
+    return bool(_cues_of((row or {}).get("type_metadata") or {}))
+
+
+def transcript_start(row):
+    """Where the transcript sits inside the row's extracted_text (its first character), or None when
+    the text doesn't hold it (not folded in yet, an old row)."""
+    meta = (row or {}).get("type_metadata") or {}
+    transcript = meta.get("transcript") if isinstance(meta, dict) else None
+    if not isinstance(transcript, str) or not transcript.strip():
+        return None
+    at = (row.get("extracted_text") or "").find(transcript.strip())
+    return at if at >= 0 else None
+
+
+def timestamp_url(row, seconds):
+    """The video's watch URL starting at `seconds` (`&t=<s>s`), or None when it isn't a YouTube video."""
+    from .object_types.youtube import extract_youtube_id
+    vid = extract_youtube_id((row or {}).get("external_url"))
+    if not vid or seconds is None:
+        return None
+    return f"https://www.youtube.com/watch?v={vid}&t={int(seconds)}s"
+
+
+def cite(row, offset, *, within="extracted_text"):
+    """{timestamp_seconds, timestamp_url} for character `offset` of the row's extracted_text (or of
+    its `transcript`, within="transcript"): the start of the caption that position falls in. Both
+    None when the row has no cue times (stored before #789, a type without transcripts) or the
+    position is outside the transcript (in the description or the thumbnail text)."""
+    nothing = {"timestamp_seconds": None, "timestamp_url": None}
+    meta = (row or {}).get("type_metadata") or {}
+    cues = _cues_of(meta)
+    if not cues or offset is None:
+        return nothing
+    if within == "transcript":
+        rel = offset
+    else:
+        base = transcript_start(row)
+        if base is None:
+            return nothing
+        rel = offset - base
+    if rel < 0 or rel >= len((meta.get("transcript") or "").strip()):
+        return nothing
+    best = cues[0][0]
+    for start, at in cues:
+        if at > rel:
+            break
+        best = start
+    return {"timestamp_seconds": best, "timestamp_url": timestamp_url(row, best)}
 
 
 # --- the fetch, in a child process ---------------------------------------------------------------
@@ -163,6 +325,7 @@ def _fetch_in_child(video_id, http_timeout):
             return {"outcome": NONE, "reason": "YouTube has no captions for this video"}
         fetched = chosen.fetch()
         return {"outcome": FOUND, "snippets": [getattr(s, "text", "") for s in fetched],
+                "starts": [getattr(s, "start", None) for s in fetched],  # #789: kept as transcript_cues
                 "language": str(getattr(chosen, "language", "") or ""),
                 "language_code": str(getattr(chosen, "language_code", "") or ""),
                 "generated": bool(getattr(chosen, "is_generated", False))}
@@ -269,13 +432,14 @@ def fields_for(outcome, meta, now=None):
     out = {"transcript_checked_at": round(now)}
     kind = outcome.get("outcome")
     if kind == FOUND:
-        text, words = clean(outcome.get("snippets"))
+        text, words, cues = clean_with_cues(outcome.get("snippets"), outcome.get("starts"))
         if words >= MIN_REAL_WORDS:
             note = None
             if len(text) > MAX_CHARS:
                 text = text[:MAX_CHARS].rsplit(" ", 1)[0]
                 note = f"the transcript is long: only its first {MAX_CHARS:,} characters are kept"
-            out.update({"transcript_status": FOUND, "transcript": text,
+                cues = [c for c in cues if c[1] < len(text)]
+            out.update({"transcript_status": FOUND, "transcript": text, "transcript_cues": cues or None,
                         "transcript_language": outcome.get("language") or None,
                         "transcript_language_code": outcome.get("language_code") or None,
                         "transcript_kind": "auto" if outcome.get("generated") else "manual",
@@ -286,7 +450,7 @@ def fields_for(outcome, meta, now=None):
         outcome = {"reason": f"its captions are only music or sound tags ({words} real word"
                              f"{'' if words == 1 else 's'}, fewer than {MIN_REAL_WORDS})"}
     if kind == NONE:
-        out.update({"transcript_status": NONE, "transcript": None, "transcript_language": None,
+        out.update({"transcript_status": NONE, "transcript": None, "transcript_cues": None, "transcript_language": None,
                     "transcript_language_code": None, "transcript_kind": None, "transcript_words": None,
                     "transcript_note": outcome.get("reason") or "no captions",
                     "transcript_attempts": None, "transcript_retry_at": None})

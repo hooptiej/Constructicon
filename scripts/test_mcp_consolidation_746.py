@@ -317,7 +317,7 @@ def scenarios(ctx):
         ("set_blog_entry_items", "set_blog_entry_items", {"slug": "post", "items": [{"slug": "img2", "note": "w"}]},
          "update_blog_entry", {"slug": "post", "items": [{"slug": "img2", "note": "w"}]}, None),
         ("get_posts_for_tag", "get_posts_for_tag", {"tag_name": "Hardware"},
-         "list_items", {"which": "tag", "tag": "Hardware"}, ident),
+         "list_items", {"which": "tag", "tag": "Hardware"}, key_of("items")),  # #722: paged {items, next_cursor}
         ("attach_tags", "attach_tags", {"slug": "img2", "tag_names": ["Motors", "Brand New"]},
          "item_tags", {"slug": "img2", "tag_names": ["Motors", "Brand New"]}, None),
         ("detach_tag", "detach_tag", {"slug": "img1", "tag_name": "Motors"},
@@ -534,7 +534,9 @@ ADDED_SINCE_746 = {"private",        # #604 step 3: projects.private, hobby_sett
                    "short_title",    # #542: capture_events.short_title, in item answers and row images
                    # #554 (batch 5): a hobby can borrow a member card's cover (hobby_settings.cover_project_id,
                    # the answers' picked_cover_card_id), and a renamed hobby's old slugs are kept.
-                   "cover_project_id", "picked_cover_card_id", "picked_cover_card", "hobby_slug_history"}
+                   "cover_project_id", "picked_cover_card_id", "picked_cover_card", "hobby_slug_history",
+                   # #722: list results trim big type_metadata values and say so
+                   "type_metadata_truncated", "type_metadata_cut_keys"}
 
 
 def _strip_added(value):
@@ -583,8 +585,8 @@ restore()
 listed = asyncio.run(S.mcp.list_tools())
 names = {t.name for t in listed}
 # #746 folded 108 into 55; #725 added constructicon_undated, #604 constructicon_sharing, #615
-# constructicon_duplicates, #555 constructicon_tags (59).
-check("tools/list: 59 tools", len(names) == 59, len(names))
+# constructicon_duplicates, #555 constructicon_tags, #556 constructicon_caption_review (60).
+check("tools/list: 60 tools", len(names) == 60, len(names))
 check("tools/list: no alias listed", not (names & set(S._HIDDEN_ALIASES)), sorted(names & set(S._HIDDEN_ALIASES)))
 SNAPNAMES = json.load(open(os.path.join(HERE, "data", "mcp_tool_names_700.json"), encoding="utf-8"))["names"]
 check("tools/list equals scripts/data/mcp_tool_names_700.json", sorted(names) == sorted(SNAPNAMES),
@@ -752,8 +754,9 @@ finally:
 # ---- 8. the (tool, action) -> role table -----------------------------------------------------------------
 print("--- 8. who may run which (tool, action) ---")
 visible = {n for n in S._TOOL_FUNCS if n not in S._ALIAS_OF}
-check("59 visible tool functions (#746's 55 + constructicon_undated #725, constructicon_sharing #604, "
-      "constructicon_duplicates #615, constructicon_tags #555)", len(visible) == 59, len(visible))
+check("60 visible tool functions (#746's 55 + constructicon_undated #725, constructicon_sharing #604, "
+      "constructicon_duplicates #615, constructicon_tags #555, constructicon_caption_review #556)",
+      len(visible) == 60, len(visible))
 check("every visible tool has its role rows (startup refuses otherwise)",
       all(any(k[0] == n for k in S.ACTION_ROLES) for n in visible))
 check("permanent actions need admin",

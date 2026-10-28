@@ -3694,19 +3694,20 @@ def _descendant_tag_ids(tag_id):
         conn.close()
 
 
-def list_posts_for_tag(tag_id, include_descendants=True, limit=50):
+def list_posts_for_tag(tag_id, include_descendants=True, limit=50, offset=0):
     """Posts tagged with `tag_id`, or anywhere under it in the tree when
     include_descendants — e.g. the "Projects" root category page shows
     every post filed under any of its child tags too, not just posts
-    tagged with "Projects" directly (which would almost never happen)."""
+    tagged with "Projects" directly (which would almost never happen).
+    Newest first, ties by slug, so `offset` pages through it stably (#722: MCP list_items paging)."""
     tag_ids = _descendant_tag_ids(tag_id) if include_descendants else [tag_id]
     placeholders = ",".join("?" for _ in tag_ids)
     conn = get_conn()
     try:
         rows = conn.execute(
             f"SELECT DISTINCT ce.* FROM capture_events ce JOIN post_tags pt ON pt.post_slug = ce.slug "
-            f"WHERE pt.tag_id IN ({placeholders}) AND ce.redacted = 0{policy.sql_browse_clause('ce.')} ORDER BY ce.timestamp DESC LIMIT ?",
-            tag_ids + [limit],
+            f"WHERE pt.tag_id IN ({placeholders}) AND ce.redacted = 0{policy.sql_browse_clause('ce.')} ORDER BY ce.timestamp DESC, ce.slug LIMIT ? OFFSET ?",
+            tag_ids + [limit, max(0, int(offset))],
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:
@@ -4273,7 +4274,7 @@ def list_projects_for_post(post_slug):
         conn.close()
 
 
-def list_unfiled_items(limit=10000, include_brand=False, include_superseded=False):
+def list_unfiled_items(limit=10000, include_brand=False, include_superseded=False, offset=0):
     """capture_events rows with no project_items row — "unfiled" uploads
     (#41). #17 moved the raw upload gallery into the home page's
     hover/drag pop-out and left the main page showing only Project tiles;
@@ -4309,8 +4310,8 @@ def list_unfiled_items(limit=10000, include_brand=False, include_superseded=Fals
         rows = conn.execute(
             "SELECT ce.* FROM capture_events ce LEFT JOIN project_items pi ON pi.post_slug = ce.slug "
             "WHERE pi.post_slug IS NULL AND ce.redacted = 0" + policy.sql_browse_clause("ce.") + " " + brand_clause +
-            "ORDER BY ce.timestamp DESC LIMIT ?",
-            (limit,),
+            "ORDER BY ce.timestamp DESC, ce.slug LIMIT ? OFFSET ?",  # #722: slug breaks ties, so offset pages are stable
+            (limit, max(0, int(offset))),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:

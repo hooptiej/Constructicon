@@ -288,6 +288,21 @@ def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **field
     return _result(OP_UPDATE, muts, batch_id, dry_run, item, slug=slug)
 
 
+def append_agent_notes(slug, text, *, dry_run=False, actor=None, batch_id=None):
+    """(#763) Adds `text` under the item's agent notes as a dated block ("--- 2026-10-27 ---", the
+    Mountain Time day; `cards.appended_notes`), instead of replacing them. The read of the current
+    notes and the write happen inside ONE transaction (BEGIN IMMEDIATE takes the write lock first), so
+    two appends at once both land. It is `update(agent_notes=...)` underneath: one change-log row,
+    undoable. Blank `text` is refused (400 bad_request), nothing written."""
+    cards.appended_notes("", text)  # validates first: non-blank text
+    with db.transaction(dry_run=dry_run):
+        row = get_item(slug, actor)
+        res = update(slug, agent_notes=cards.appended_notes(row.get("agent_notes"), text), actor=actor,
+                     batch_id=batch_id)
+    res.dry_run = dry_run
+    return res
+
+
 DISPLAY_DATE_MIN = 0.0          # 1970-01-01
 DISPLAY_DATE_MAX = 4102444800.0  # 2100-01-01
 

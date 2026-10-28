@@ -161,7 +161,7 @@ check("item_tags(detach) unknown tag errors", isinstance(r, dict) and r.get("ok"
 check("neither created a tag", tag_count() == n, f"{n} -> {tag_count()}")
 server.constructicon_item_tags("tg1", ["real-tag"])
 check("attach still creates", tag_count() == n + 1)
-check("lookup finds the existing tag", isinstance(server.constructicon_list_items(which="tag", tag="real-tag"), list))
+check("lookup finds the existing tag", isinstance(server.constructicon_list_items(which="tag", tag="real-tag").get("items"), list))
 r = server.constructicon_item_tags("tg1", ["real-tag"], action="detach")
 check("detach works on an existing tag", isinstance(r, dict) and r.get("ok") is not False and r.get("batch_id"), r)
 

@@ -2046,7 +2046,21 @@ def _cover_data(row):
 OP_CARD_AGENT_NOTES = "card_agent_notes"
 
 
-def set_agent_notes(card, notes, *, dry_run=False, actor=None, batch_id=None):
+def appended_notes(existing, text, epoch=None):
+    """(#763) Agent notes with a dated block added under `existing`: "--- 2026-10-27 ---" (the
+    Mountain Time day of `epoch`, default now), then `text`; a blank line separates it from what was
+    there. `text` must be non-blank text (InvalidInput otherwise: an empty append is a mistake, not a
+    no-op). Pure apart from the clock. The one place both append paths (an item's notes, a card's)
+    build the new text."""
+    if not isinstance(text, str) or not text.strip():
+        raise InvalidInput("append=true needs notes: the text to add under a dated header. Nothing was changed.")
+    header = f"--- {datefmt.iso_day(time.time() if epoch is None else epoch)} ---"
+    block = f"{header}\n{text.strip()}"
+    before = (existing or "").rstrip()
+    return f"{before}\n\n{block}" if before else block
+
+
+def set_agent_notes(card, notes, *, append=False, dry_run=False, actor=None, batch_id=None):
     """(#745) Sets (or, with None, clears) the card's private agent notes: the card twin of an item's
     agent_notes (#206, `items.update(agent_notes=...)`), stored exactly as given, the same way. ONE
     imaged change-log row (op card_agent_notes), undoable with the generic undo; a no-op logs nothing.
@@ -2054,12 +2068,19 @@ def set_agent_notes(card, notes, *, dry_run=False, actor=None, batch_id=None):
     the card lists or shows as an edit anywhere public. Only the MCP (`constructicon_set_agent_notes`)
     calls it. Change summaries leave the text out (`_changes_from_log` strips private card
     columns); this op's own summary says only that the field changed. data: {card: the row after
-    (no notes, see db._card_row), agent_notes: the notes after}."""
-    if notes is not None and not isinstance(notes, str):
+    (no notes, see db._card_row), agent_notes: the notes after}.
+    append=True (#763): `notes` is added under the existing notes as a dated block
+    (`appended_notes`), read and written inside the one transaction (its write lock is taken
+    first), so two appends never lose each other's text."""
+    if append:
+        appended_notes("", notes)  # validates: non-blank text
+    elif notes is not None and not isinstance(notes, str):
         raise InvalidInput("notes must be text, or null to clear them.")
     row = get_card(card)
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
+        if append:
+            notes = appended_notes(db.get_card_agent_notes(row["id"]), notes)
         with db.ImageLog(OP_CARD_AGENT_NOTES, actor, batch_id, [row["slug"]]) as log:
             log.update("projects", {"id": row["id"]}, {"agent_notes": notes})
             muts = list(log.muts)

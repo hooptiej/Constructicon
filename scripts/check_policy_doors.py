@@ -325,6 +325,7 @@ MCP_TOOLS = {
     "constructicon_delete_blog_entry": (NONE, "alias"),
     "constructicon_list_tags": (NONE, "the tag tree"),
     "constructicon_create_tag": (NONE, "a tag"),
+    "constructicon_tags": (NONE, "#555: the tag tree, tag management and the cleanup list (tags and counts, no item rows)"),
     "constructicon_list_provenance_options": (NONE, "option lists"),
     "constructicon_set_project_status": (NONE, "alias"),
     "constructicon_set_status": (NONE, "alias"),

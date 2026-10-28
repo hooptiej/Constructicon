@@ -1101,7 +1101,7 @@ token stays the admin key for scripts and ops.
 - a module outside the service modules calls (or imports) a private `db._*` function. The raw-write
   allowlist, each with its reason in the script: `core/captions.py` (caption status/results),
   `core/embedded_metadata.py` and `core/object_types/youtube.py` (upload-time file metadata, a
-  YouTube publish date), `core/automatch.py` (upload-time automatch tagging), `core/card_migration.py` (migrations), the one-off scripts
+  YouTube publish date), `core/card_migration.py` (migrations), the one-off scripts
   `scripts/archive/{apply_project_groupings,seed_example_projects,backfill_from_hooptiej_site,link_lil_dragon_brand}.py`
   (retired, kept readable),
   and `scripts/test_*.py` (throwaway-DB fixtures);
@@ -1179,9 +1179,10 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   link: relate also shares tags and card memberships both ways (#16), all imaged, so one undo
   removes the link AND what it shared; unrelate leaves the shared tags/cards (as before).
 - **Membership (phase C): `core/membership.py` is the one way files go on and off a card.**
-  `add_files(card, slugs, *, link_tag, merge_free_tags, auto_cover)` (flags keyword-only, no
-  defaults) and `remove_files(card, slugs)`. `link_tag` = the card's linked tag into `post_tags`;
-  `merge_free_tags` = that tag's name into the free-text `tags` column (#274); `auto_cover` = a card
+  `add_files(card, slugs, *, link_tag, auto_cover)` (flags keyword-only, no
+  defaults) and `remove_files(card, slugs)`. `link_tag` = the card's linked tag into `post_tags`
+  (plumbing, never a chip; #555 retired #274's `merge_free_tags`, which stamped the card's name into the
+  free-text column as a chip); `auto_cover` = a card
   with no `cover_slug` takes the first file (also clears `cover_project_id`, bumps `updated_at`).
   `membership.UI_EFFECTS` (all three) is what upload / `ingest.attach_to_project`, the item page,
   bulk add-to-project, from-selection / from-related, a resolved project-match question, AND (since
@@ -1192,21 +1193,25 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   `db.add_item_to_project` / `remove_item_from_project` from a route or tool.
   **Tags follow a transfer (#590).** `membership.plan_transfer_tags` / `apply_transfer_tags` (read-only
   plan, then one imaged row under the op's own batch): `cards.move_files` and `cards.copy_files` give
-  the files the destination's linked tag in BOTH stores (`post_tags` + the free-text chip); a move
+  the files the destination's linked tag (`post_tags`, #555: the one store); a move
   also drops the source's own linked tag (`projects.tag_id` exactly; hand-added tags stay), unless the
-  file is still on another card whose linked tag is the same tag (chip: same name). `merge_cards` is
+  file is still on another card whose linked tag is the same tag. `merge_cards` is
   a move into the kept card (the absorbed card is ignored in the "still elsewhere" check). Split is
   left alone (the new card has no linked tag). No cover change. Check: `scripts/test_move_tags_590.py`.
-- **Tags (phase C): `core/tags.py`.** `create(name, parent_name)` (MCP create_tag), `attach(slug,
-  names)` / `detach(slug, tag_id)` (MCP; `post_tags` only, as before), `set_item_tags` and
-  `merge_item_tags(slugs, names)` (bulk attach-tags: free-text column + its `post_tags` sync, one
-  batch). The item Save passes `tags=` to `items.update`, so tags + fields are still ONE change-log
-  row. Creating a tag is imaged (`blog_tags` insert via `ImageLog.insert_auto`), so undo removes a
+- **Tags (phase C, #555): `core/tags.py`, the ONE writer of the tag tree, the one tag store** (see
+  "Tags (#555)" below). Item ops: `create(name, parent_name)` (MCP create_tag), `attach(slug, names)` /
+  `detach(slug, tag_id)` (MCP item_tags, the item chip's x), `set_item_tags` (full replace of the
+  chips) and `merge_item_tags(slugs, names)` (bulk attach-tags, one batch), `attach_on_upload`
+  (`db.insert_upload(tags=)`, op `upload_tags`) and `attach_matched` (upload-time automatch, op
+  `automatch_tags`; automatch is no longer a raw writer). The item Save passes `tags=` to
+  `items.update` (`tags.write_chips` on its log), so tags + fields are still ONE change-log row.
+  Management: `rename`, `merge`, `move`, `delete`, `get_tag` / `get_by_name` / `tree` (reads), the
+  cleanup `sweep` / `sweep_apply`, and `follow_card_title` (a card rename renames its linked tag in the
+  same row). Creating a tag is imaged (`blog_tags` insert via `ImageLog.insert_auto`), so undo removes a
   tag the op created; `db.invert_image` refuses that (undo_conflict) while anything made later uses
-  the tag. Lookups (`tags.find`, `find_root`, `find_any`) never create. The two tag stores (free-text column vs
-  `post_tags`) stay as they were; unifying them is #555. Card creation and hobby creation mint their
-  tags through `tags.ensure` too (phase D); the only raw tag writer left is the upload-time
-  automatch tagging (pipeline, allowlisted; the OCR client tagging went with #704).
+  the tag. Lookups (`tags.find`, `find_named`, `find_root`, `find_any`, `get_by_name`) never create.
+  A typed name reuses an existing tag in any case (`find_named`), so "kerbal" doesn't mint a
+  near-duplicate of "Kerbal". Card creation and hobby creation mint their tags through `tags.ensure`.
 - **Delete-all (phase C): `core/reset.py` `delete_everything(confirm)`**, called by `POST
   /api/delete-all` and MCP `constructicon_delete(everything=true, confirm=...)` (#746: BOTH keys, either alone
   is refused); both need the phrase `DELETE EVERYTHING`. Permanent by design (no trash, no undo); one change-log row (op `delete_all`, actor
@@ -1266,6 +1271,49 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
 - Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),
   `test_hobbies_blog.py` (phase D: hobbies, both conversions, card create/Save, blog, the sweep;
   every write undone and the whole DB compared), `check_layering.py`. All run on a throwaway DB.
+
+## Tags (#555): one store, the tag tree
+
+Owner decisions 2026-10-18 (on the issue). Before this, tags lived in two stores that disagreed (553 of
+1,758 items on prod), card renames left stale chips, and nothing could rename or delete a tag.
+- **One store: the tree** (`blog_tags` + `post_tags`). Every writer goes through `core/tags.py` (see
+  "Service layer"); `db.search(tags=)` and MCP `constructicon_search(tags=)` filter on the tree (see
+  "Search"); reads never mint tags (`find*`, `get_by_name`; MCP list_items(tag) / detach use them).
+- **Chips are derived:** an item's chips = its tree tags in attach order, minus the linked tag of any card
+  it is on. `capture_events.tags` is a trigger-kept cache of exactly that (see "Data model"). So
+  `row["tags"]` everywhere is the derived list. The item page reads `tags.chips(slug)` (ids too, and
+  `policy.hidden_tag_ids` left out); `_to_object_detail` / MCP `_to_public` drop hidden-tag names too.
+  A file taken off a card keeps the card's tag (removing never untags), which then shows as a chip.
+- **Card tags are plumbing:** membership shows as the card (WHERE IT LIVES links), never a chip; the
+  chip x refuses a card's tag on a file that is on it (409 `tag_is_card_tag`: take it off the card). A card
+  rename renames its linked tag (`follow_card_title`, same row, one undo).
+- **Management, three places, every write one undoable batch:** core `rename` (a hobby's tag goes
+  through `hobbies.rename`; a card's linked tag is refused unless renamed to the card's title; a clash in
+  any case is 409 `tag_name_conflict`: merge instead), `merge(source, into)` (items once each, sub-tags
+  move, source deleted; refused: same tag, `into` inside `source` = `tag_cycle`, a card's / hobby's tag
+  as source), `move(tag, parent)` (no cycles; hobbies stay top level), `delete` (refused: card / hobby
+  tag, `tag_has_children`). **Admin > Tags** (`static/js/admin-tags.js`; `GET /api/tags/tree`, `POST
+  /api/tags/{id}/rename|merge|move|delete`, editor). **MCP** `constructicon_tags(action=tree | get | rename
+  | merge | move | delete | sweep | sweep_apply)` (reads viewer, the rest editor). **Inline on the item
+  chip** (`static/js/tag-chips.js`): rename (everywhere) and remove (`POST /api/image/{slug}/tags/{id}/remove`;
+  `GET /api/image/{slug}/tags`); viewers see both buttons greyed, saying they need the editor role.
+- **Cleanup sweep:** `tags.sweep()` (read-only; `GET /api/tags/sweep`) lists `orphan` (no item, card,
+  hobby or sub-tag), `empty` (sub-tags only, nothing under them) and `near_duplicate` (same name ignoring
+  case, punctuation, `-` / `_`: "Ancient projects." vs "Ancient Projects") tags, each with `deletable` /
+  `why_not` (a card's or hobby's tag, or items under it: merge instead) and a suggestion. **Nothing is
+  deleted until the owner picks:** `sweep_apply(tag_ids)` (`POST /api/tags/sweep/apply`) re-runs the sweep
+  and deletes exactly the picks as ONE batch, refusing the whole call (409 `sweep_refused`, per id) if a
+  pick is no longer listed / deletable or its sub-tags weren't picked too.
+- **Migration `tags_one_store_555`** (web, once, idempotent): every free-text chip none of the item's tree
+  tags carries (any case) is attached (an existing tag reused in any case, else a new root tag), EXCEPT a
+  chip that is the title, or the linked tag's name, of a card the item is on (it came from #274's card
+  stamping; the card shows as a link now): those are listed per item in the row's `details.card_name_chips`.
+  ONE imaged change-log row (op `migration_tags_one_store_555`, actor `migration`, counts in `details`:
+  items, disagreeing, items_changed, links_added, tags_created, skipped_card_names, unreadable), then the
+  chip triggers go on and every row's cache is rewritten. The generic undo refuses migration rows (as for
+  every migration): the pre-deploy snapshot is the way back. Then `search_tags_tree_555` rebuilds search.
+- Check: `scripts/test_tags_555.py` (throwaway DB: the migration + idempotence, every writer, search,
+  chips, card rename, the ops + refusals + undo, the sweep, the MCP tool, a viewer).
 
 ## Card faces (#596)
 
@@ -1358,7 +1406,7 @@ matching the V2 mockup's Card template:
   so an undo keeps both addresses working; cleared by delete-all), and `/hobby/<old slug>` 308s to
   `hobby_label.url(<current>)`, query kept (`pages.hobby_detail_page`; a hidden hobby stays 404).
   Web: the hobby page's IDENTITY Name field (`POST /api/hobby/{id}/rename`); MCP
-  `constructicon_update_hobby(name=)`. Not changed: the free-text tag chips items carry (#555).
+  `constructicon_update_hobby(name=)`. Items' chips follow the new name (#555: they are derived from the tree).
 - **Undo after deleting a card:** the card page's Delete answers with `batch_id` and shows the Undo bar;
   closing it (or 30 s) goes home, Undo reloads the restored card. No persistent "Recent changes" strip
   (owner: no).
@@ -2007,7 +2055,14 @@ One generated file of every registered type and extension, to drop-test a new in
   parent (`tags.find` / `tags.ensure`; the same tag name can exist under
   different parents).
 - **`post_tags`** — many-to-many join, `(post_slug, tag_id)`, between
-  `capture_events.slug` and `blog_tags.id`.
+  `capture_events.slug` and `blog_tags.id`. **Since #555 the tree (`blog_tags` + `post_tags`) is the
+  ONLY tag store**; an item's chips are derived from it (see "Tags (#555)").
+- **`capture_events.tags`** — since #555 a CACHE, not truth: the JSON list of the item's chips (its
+  `post_tags` names in attach order, minus the linked tag of any card it is on), kept exactly by the
+  `item_chips_*` triggers (`db._chip_triggers`; they exist once the `tags_one_store_555` migration has
+  run) and never imaged (`db.invert_image` ignores the column in old row images). Nothing writes it as
+  truth; `db.check_chip_cache()` lists rows that drift (none, by construction). Kept for one release;
+  dropping it is #799.
 - **`projects`** — hand-curated portfolio collections, deliberately
   *distinct* from the tag tree (auto-grouping by tag was the original plan
   and was rejected in favor of manual curation — "projects are how the
@@ -2015,8 +2070,11 @@ One generated file of every registered type and extension, to drop-test a new in
   project to a `blog_tags` row. `cards.create` sets it at creation time: it reuses the root tag of
   the same name or makes one (`link_tag=False` makes none; a hobby -> card conversion reuses the
   hobby's tag), so tagging into a project also surfaces it via ordinary tag browsing. The link is the
-  id, **not** the name: nothing renames the tag when the card is retitled (or the reverse), so the two
-  names drift (7 of 75 prod cards had, per #552) and older cards have `tag_id` NULL.
+  id. **#555: the linked tag is internal plumbing**: never a chip on a file that is on the card (the card
+  shows as a link), and `cards.update(title=)` renames it in the same change-log row (`tags.follow_card_title`;
+  kept, with a warning, when another tag has the name, it is a hobby's tag or another card shares it).
+  Cards that drifted before #555 (7 of 75 on prod, per #552) keep their old tag name until renamed;
+  renaming the tag to the card's own title is allowed. Older cards have `tag_id` NULL.
   `private` (#604 step 3, 0/1) ticks the card private; its members are `share_members` (see "Private
   cards and hobbies"). `agent_notes` (#745) is the card's private agent scratch field: never in a row `core/db.py` hands
   out, read only by `db.get_card_agent_notes` (see the MCP section, "Agent notes on cards").
@@ -2141,7 +2199,8 @@ builder, `/api/gallery` and the MCP `constructicon_search`) reads one SQLite FTS
 `item_search` (rowid = `capture_events.id`). The text it holds per item is defined once, by the
 view `item_search_src` in `core/db.py`: `display_name` (with `short_title` folded in, #542),
 `content_description` and `filename` (every name the item has had, so a rename never makes the old filename unfindable; `core/item_title.py`
-picks only one of them to SHOW), the free-text `tags` column plus tag-tree tag names (`post_tags`),
+picks only one of them to SHOW), the tag-tree tag names (`post_tags`; #555: not the free-text column,
+which is only a chip cache now, so a card's linked tag is still found by its name),
 the titles of the cards it is on (`project_items`), the uploader's note (`description`) and
 `extracted_text`. Not indexed: `agent_notes` (an item's or its card's, #745), `type_metadata`, `provenance`, the slug.
 (A YouTube description, which lives in `type_metadata`, is searchable because #724 (c) copies it into
@@ -2158,7 +2217,9 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
   items via `policy.sql_browse_clause("ce.")`, brand assets, `include_superseded`), then
   `policy.filter_visible` in the callers. The index holds flagged items' text; they are filtered
   by the query, so a viewer never finds one by a word, a tag or a card title.
-- **Tag filter and limit are SQL** (`json_each` over the free-text list, any-of; `LIMIT ?`).
+- **Tag filter and limit are SQL.** #555: `tags=` filters on the TREE: any-of, any case, an item carrying
+  a tag of that name or any tag under one (a recursive CTE over `blog_tags.parent_id`), a card's linked
+  tag included; `LIMIT ?` after it. The view change came with the rebuild migration `search_tags_tree_555`.
 - **Kept current by triggers**, not by each write path: item insert/update/delete, `post_tags`,
   `project_items`, a tag renamed or deleted (`blog_tags`), a card retitled or deleted (`projects`)
   all re-index exactly the items they touch. The table is contentless with `contentless_delete=1`
@@ -2180,7 +2241,7 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
 Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
-`mcp_server/server.py`, exposing 58 tools (55 after #746, plus `constructicon_undated` (#725),
+`mcp_server/server.py`, exposing 59 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
 `constructicon_sharing` (#604) and `constructicon_duplicates` (#615)) like `constructicon_search`, `constructicon_get`,
 `constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
 `constructicon_card_files`, `constructicon_needs`, etc.
@@ -2537,7 +2598,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_drop_columns_704` (the dead-column drop and its safeguard),
-    `test_move_tags_590`, `test_revisions`, `test_duplicates_615` (duplicate folding), `test_bulk_decisions`, `test_provenance_options`,
+    `test_move_tags_590`, `test_tags_555` (one tag store, tag management, the sweep), `test_revisions`, `test_duplicates_615` (duplicate folding), `test_bulk_decisions`, `test_provenance_options`,
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,

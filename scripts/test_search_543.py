@@ -70,7 +70,7 @@ from mcp_server import server as mcp  # noqa: E402  (after the DB env is set)
 
 
 # membership with NO side effects: the item gets no linked tag, so the card's title is the only way in
-NO_TAG = {"link_tag": False, "merge_free_tags": False, "auto_cover": False}
+NO_TAG = {"link_tag": False, "auto_cover": False}
 
 
 def slugs_of(rows):
@@ -234,10 +234,8 @@ check("the viewer finds only the ordinary item (/api/search)", api_slugs("mulber
       api_slugs("mulberryjam", client=viewer))
 check("... also by a word only the flagged item's note has ('one')... still hidden",
       api_slugs("secret one", client=viewer) == [], api_slugs("secret one", client=viewer))
-tagged = db.get_conn()
-tagged.execute("UPDATE capture_events SET tags = ? WHERE slug = 'hid-flag'", (json.dumps(["Quillbadger"]),))
-tagged.commit()
-tagged.close()
+with actor.acting_as(actor.ACTOR_SCRIPT):  # #555: tags live in the tag tree (the column is a cache)
+    tags.attach("hid-flag", ["Quillbadger"])
 check("the viewer cannot find a flagged item by its tag", api_slugs("quillbadger", client=viewer) == [],
       api_slugs("quillbadger", client=viewer))
 check("... nor with the tag filter", api_slugs("", "Quillbadger", client=viewer) == [], api_slugs("", "Quillbadger", client=viewer))

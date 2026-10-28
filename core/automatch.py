@@ -91,11 +91,10 @@ def apply_to_upload(slug, texts, exclude_project_ids=()):
     result = {"text": text, "tags": [], "project": None, "pending_id": None, "candidates": []}
     if tags:
         names = [t["name"] for t in tags]
-        # Both halves of the tag system (see core/db.py's sync_real_tags_for_post
-        # docstring): the free-text JSON column the edit form shows, and the
-        # real post_tags link the tree browsing/pills read.
-        db._add_tags(slug, names)
-        db._attach_tags(slug, [t["id"] for t in tags])
+        # #555: the tag tree is the one store (the item's chips are derived from it); through the
+        # tag service, imaged (op automatch_tags), so a bad match can be undone.
+        from . import tags as tags_svc  # lazy: tags -> cards -> ... imports this module's callers
+        tags_svc.attach_matched(slug, [t["id"] for t in tags])
         result["tags"] = names
     excluded = set(exclude_project_ids)
     candidates = [p for p in projects if p["id"] not in excluded]

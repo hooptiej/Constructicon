@@ -199,7 +199,10 @@
         {# #542: the short name, after a rename in the title chain (core/item_title.py); the long caption is never the title #}
         <div class="dp-row"><dt>Short title</dt><dd>{% if item.short_title %}{{ item.short_title }}{% else %}<span class="dp-muted">None yet (the name falls back to the file name)</span>{% endif %}</dd></div>
         <div class="dp-row"><dt>Description</dt><dd>{% if item.description %}<span class="dp-pre">{{ item.description }}</span>{% else %}<span class="dp-muted">None yet</span>{% endif %}</dd></div>
-        <div class="dp-row"><dt>Tags</dt><dd>{% if item.tags %}<span class="dp-chips">{% for t in item.tags %}<span class="chip">{{ t }}</span>{% endfor %}</span>{% else %}<span class="dp-muted">None yet</span>{% endif %}</dd></div>
+        {# #555: chips come from the tag tree; a card the item is on shows in WHERE IT LIVES, never as a chip.
+           Each chip renames the tag everywhere or takes it off this item (static/js/tag-chips.js); viewers see
+           the two buttons greyed, saying they need the editor role. #}
+        <div class="dp-row"><dt>Tags</dt><dd id="item-tag-chips" data-slug="{{ item.slug }}" data-can-edit="{{ '1' if can_edit_tags else '0' }}">{% if tag_chips %}<span class="dp-chips">{% for t in tag_chips %}<span class="chip tag-chip" data-tag-id="{{ t.id }}" data-tag-name="{{ t.name }}"><span class="tag-chip-name">{{ t.name }}</span><button type="button" class="tag-chip-btn{% if not can_edit_tags %} is-locked{% endif %}" data-act="rename" {% if not can_edit_tags %}aria-disabled="true" title="Renaming a tag needs the editor role"{% else %}title="Rename this tag everywhere it is used"{% endif %} aria-label="Rename tag {{ t.name }}">&#9998;</button><button type="button" class="tag-chip-btn{% if not can_edit_tags %} is-locked{% endif %}" data-act="remove" {% if not can_edit_tags %}aria-disabled="true" title="Removing a tag needs the editor role"{% else %}title="Take this tag off this item"{% endif %} aria-label="Remove tag {{ t.name }} from this item">&times;</button></span>{% endfor %}</span>{% else %}<span class="dp-muted">None yet</span>{% endif %}<span class="tag-chip-status" id="item-tag-chips-status" role="status" aria-live="polite"></span></dd></div>
         {% for f in item.edit_fields %}
         <div class="dp-row"><dt>{{ f.label }}</dt><dd>{% if f.value %}<span class="dp-pre">{{ f.value | string | truncate(280) }}</span>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>
         {% endfor %}
@@ -498,6 +501,7 @@
   <img class="lightbox-img" id="lightbox-img" src="" alt="">
 </div>
 <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
+<script src="/static/js/tag-chips.js?v={{ static_version('js/tag-chips.js') }}"></script>
 <script nonce="{{ csp_nonce() }}">
 const IS_OCR_CAPABLE = {{ item.ocr_capable | tojson }};
 const IS_FILE = {{ item.is_file | tojson }};

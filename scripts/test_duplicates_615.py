@@ -152,13 +152,13 @@ check("three cards created", all([A, B, C]), (A, B, C))
 
 from core import membership, tags as tags_svc  # noqa: E402
 with actor.acting_as(actor.ACTOR_MCP):
-    membership.add_files(A, ["r_new"], link_tag=True, merge_free_tags=True, auto_cover=False)
-    membership.add_files(B, ["r_nodate", "r_old"], link_tag=False, merge_free_tags=False, auto_cover=False)
-    membership.add_files(A, ["b_two"], link_tag=False, merge_free_tags=False, auto_cover=False)
-    membership.add_files(B, ["b_two"], link_tag=False, merge_free_tags=False, auto_cover=False)
-    membership.add_files(C, ["b_one"], link_tag=False, merge_free_tags=False, auto_cover=False)
-    tags_svc.attach("r_nodate", ["wix-import"])
-    items.update("r_nodate", tags=["imgur"])
+    membership.add_files(A, ["r_new"], link_tag=True, auto_cover=False)
+    membership.add_files(B, ["r_nodate", "r_old"], link_tag=False, auto_cover=False)
+    membership.add_files(A, ["b_two"], link_tag=False, auto_cover=False)
+    membership.add_files(B, ["b_two"], link_tag=False, auto_cover=False)
+    membership.add_files(C, ["b_one"], link_tag=False, auto_cover=False)
+    items.update("r_nodate", tags=["imgur"])  # #555: the chips are a full replace in the one tree,
+    tags_svc.attach("r_nodate", ["wix-import"])  # so the attach comes after (it would be replaced)
     items.relate("r_new", "g_one")
     cards.update(C, cover_slug="b_one")
     EID = blog.create("Entry", cover_slug="r_new").data["entry"]["id"]
@@ -180,7 +180,7 @@ check("red: the 2010 copy survives over the post-first-upload and undated copies
 check("red: the reason names the date", "before Constructicon" in red.get("why", ""), red.get("why"))
 check("red: inherits Card Alpha, the wix-import tag, the imgur chip and the description",
       [c["title"] for c in red["inherit"]["cards"]] == ["Card Alpha"]
-      and "wix-import" in red["inherit"]["tags"] and "imgur" in red["inherit"]["free_text_tags"]
+      and "wix-import" in red["inherit"]["tags"] and "imgur" in red["inherit"]["tags"]  # #555: one store
       and "description" in red["inherit"]["fields"], red.get("inherit"))
 check("red: post-Constructicon copy flagged, dates differ", red["has_post_constructicon_copy"] and red["dates_differ"])
 check("card counts: red has 3 copies on cards spanning 2 cards; summary agrees",

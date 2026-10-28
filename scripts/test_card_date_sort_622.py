@@ -201,7 +201,7 @@ def main():
     print("--- 3. the server-built file face shows the same date ---")
     with actor.acting_as(actor.ACTOR_SCRIPT):
         card = cards.create("Pile622").data["card"]
-        membership.add_files(card["id"], list(want), link_tag=False, merge_free_tags=False, auto_cover=False)
+        membership.add_files(card["id"], list(want), link_tag=False, auto_cover=False)
     pile = cards.project_pile(card["id"])
     # only the fixture files (#725: the card's own blank write-up is undated too, so it can sit in the fan)
     faces = {c["slug"]: c["dates"] for c in pile["cards"] if c["slug"] in want} if pile else {}

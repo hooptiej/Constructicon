@@ -154,7 +154,7 @@ jeep_pic, tank_pic, cab_pic, rig_pic, fam_pic = mk("jeep-pic"), mk("tank-pic"), 
 song = mk("a-song", media_type="audio", ext="mp3")
 from core import membership  # noqa: E402
 for card, slug in ((m1, jeep_pic), (m2, tank_pic), (child, cab_pic), (proj, rig_pic), (fam, fam_pic), (fam, song)):
-    membership.add_files(card["id"], [slug], link_tag=False, merge_free_tags=False, auto_cover=False)
+    membership.add_files(card["id"], [slug], link_tag=False, auto_cover=False)
 cards.set_cover(m1["id"], slug=jeep_pic)
 cards.set_cover(child["id"], slug=cab_pic)
 
@@ -165,7 +165,7 @@ r = cards.set_cover(fam["id"], from_card=m1["id"])
 check("a family borrows a MEMBER's cover (#554 widened from nested children)",
       r.batch_id and r.data["cover"] == jeep_pic and r.data["cover_project_id"] == m1["id"], r.data)
 m1_new = mk("jeep-pic-2")
-membership.add_files(m1["id"], [m1_new], link_tag=False, merge_free_tags=False, auto_cover=False)
+membership.add_files(m1["id"], [m1_new], link_tag=False, auto_cover=False)
 cards.set_cover(m1["id"], slug=m1_new)
 check("it follows the member's cover when that changes", db.resolve_project_cover_slug(db.get_project(fam["id"])) == m1_new)
 ref = refusal(cards.set_cover, fam["id"], from_card=m2["id"])
@@ -232,7 +232,7 @@ cov = cards.resolve_hobby_cover(db.get_hobby(H["id"]))
 check("a hobby borrows a member card's cover (picked_card)", cov["slug"] == m1_new and cov["source"] == card_rules.HOBBY_COVER_CARD
       and cov["picked"] and cov["project"] == m1["slug"], cov)
 newest = mk("jeep-pic-3")
-membership.add_files(m1["id"], [newest], link_tag=False, merge_free_tags=False, auto_cover=False)
+membership.add_files(m1["id"], [newest], link_tag=False, auto_cover=False)
 cards.set_cover(m1["id"], slug=newest)
 check("and follows it", cards.resolve_hobby_cover(db.get_hobby(H["id"]))["slug"] == newest)
 res2 = hobbies.set_cover(H["id"], cover_card=m2["id"])
@@ -308,7 +308,7 @@ cards.undo(out["batch_id"])
 # ---- 6. delete a card, undo it ------------------------------------------------------------------
 print("--- 6. delete + undo ---")
 gone = cards.create("Doomed Card", kind="project").data["card"]
-membership.add_files(gone["id"], [mk("doomed-pic")], link_tag=False, merge_free_tags=False, auto_cover=False)
+membership.add_files(gone["id"], [mk("doomed-pic")], link_tag=False, auto_cover=False)
 db_before = snapshot()
 resp = client.post(f"/api/projects/{gone['id']}/delete", headers=SAME)
 bid = resp.json().get("batch_id")

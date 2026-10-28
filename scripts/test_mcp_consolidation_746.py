@@ -437,7 +437,17 @@ def golden_view(label, value):
     created_at, no longer an upload time), so list_needs compares as a set (sorted by key); and the queue
     gained `needs_date` items (an undated file with no card range to borrow), so curation_queue compares
     without them (empty groups dropped, counts recomputed)."""
-    value = mask_765(mask_725(value))
+    value = mask_555(mask_765(mask_725(value)))
+    if label in ("move_files", "copy_files") and isinstance(value, dict):
+        # #555: a transfer used to count a file that had the card's tag but not its CHIP as gaining the
+        # tag (the #590 chip stamp). Chips are derived now, so only real post_tags changes count; the
+        # tag rows and counts are left out here and covered by scripts/test_move_tags_590.py.
+        value = {k: v for k, v in value.items() if k not in ("tags_added", "tags_removed")}
+        value["changes"] = [c for c in value.get("changes", []) if c.get("field") != "tag"]
+    return golden_view_rest(label, value)
+
+
+def golden_view_rest(label, value):
     if label == "list_needs" and isinstance(value, list):
         return sorted(value, key=lambda n: n.get("nudge_key", ""))
     if label == "curation_queue" and isinstance(value, dict) and "groups" in value:
@@ -469,6 +479,24 @@ MASKED_765_KINDS = ("missing_writeup", "missing_dates")
 
 def _group_card_ids():
     return {p["id"] for p in db.list_projects() if (p.get("kind") or "project") in ("family", "collection")}
+
+
+def mask_555(value):
+    """#555 changed an item's chips on purpose: they are derived from the tag tree (one store), never
+    the linked tag of a card the item is on, and nothing writes the free-text column any more. So an
+    item's `tags` list and change rows of capture_events.tags (the old #274 / #590 chip stamping) are
+    left out of the golden comparison; the tree itself (post_tags rows) is still compared."""
+    drop = object()
+
+    def walk(v):
+        if isinstance(v, dict):
+            if v.get("table") == "capture_events" and v.get("field") == "tags":
+                return drop
+            return {k: ("<chips #555>" if k == "tags" and isinstance(x, list) else walk(x)) for k, x in v.items()}
+        if isinstance(v, list):
+            return [w for w in (walk(x) for x in v) if w is not drop]
+        return v
+    return walk(value)
 
 
 def mask_765(value):
@@ -555,8 +583,8 @@ restore()
 listed = asyncio.run(S.mcp.list_tools())
 names = {t.name for t in listed}
 # #746 folded 108 into 55; #725 added constructicon_undated, #604 constructicon_sharing, #615
-# constructicon_duplicates (58).
-check("tools/list: 58 tools", len(names) == 58, len(names))
+# constructicon_duplicates, #555 constructicon_tags (59).
+check("tools/list: 59 tools", len(names) == 59, len(names))
 check("tools/list: no alias listed", not (names & set(S._HIDDEN_ALIASES)), sorted(names & set(S._HIDDEN_ALIASES)))
 SNAPNAMES = json.load(open(os.path.join(HERE, "data", "mcp_tool_names_700.json"), encoding="utf-8"))["names"]
 check("tools/list equals scripts/data/mcp_tool_names_700.json", sorted(names) == sorted(SNAPNAMES),
@@ -724,8 +752,8 @@ finally:
 # ---- 8. the (tool, action) -> role table -----------------------------------------------------------------
 print("--- 8. who may run which (tool, action) ---")
 visible = {n for n in S._TOOL_FUNCS if n not in S._ALIAS_OF}
-check("58 visible tool functions (#746's 55 + constructicon_undated #725, constructicon_sharing #604, "
-      "constructicon_duplicates #615)", len(visible) == 58, len(visible))
+check("59 visible tool functions (#746's 55 + constructicon_undated #725, constructicon_sharing #604, "
+      "constructicon_duplicates #615, constructicon_tags #555)", len(visible) == 59, len(visible))
 check("every visible tool has its role rows (startup refuses otherwise)",
       all(any(k[0] == n for k in S.ACTION_ROLES) for n in visible))
 check("permanent actions need admin",

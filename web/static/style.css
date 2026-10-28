@@ -297,6 +297,13 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   border-radius: 6px; display: inline-flex; align-items: center; gap: 5px;
 }
 .chip button { background: none; border: none; color: var(--text-3); cursor: pointer; padding: 0; }
+/* #555: the item page's tag chips: rename everywhere / take off this item (static/js/tag-chips.js). */
+.tag-chip .tag-chip-btn { margin-left: 4px; font-size: 0.85em; line-height: 1; }
+.tag-chip .tag-chip-btn:hover, .tag-chip .tag-chip-btn:focus-visible { color: var(--text); }
+.tag-chip .tag-chip-btn.is-locked { opacity: 0.45; cursor: not-allowed; }
+.tag-chip-status { display: block; font-size: 0.85em; color: var(--text-3); margin-top: 4px; }
+.tag-chip-status:empty { display: none; }
+.tag-chip-status.is-error { color: #e06c5a; }
 .tag-add-input { border: none; background: transparent; outline: none; font-size: 12px; color: var(--text); flex: 1; min-width: 60px; }
 
 /* Manual YouTube add (#25) — the upload drawer's alternate "or paste a
@@ -2276,3 +2283,17 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .admin-users-actions .btn-ms { width: auto; padding: 5px 10px; font-size: 12px; }
 .admin-users-add { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; }
 .admin-users-add .btn-ms { width: auto; }
+
+/* #555: Admin > Tags (static/js/admin-tags.js): the tag tree and the cleanup list. */
+.admin-tags-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.admin-tags-tree, .admin-tags-tree ul { list-style: none; margin: 0; padding-left: 0; }
+.admin-tags-tree ul { padding-left: 18px; border-left: 1px solid var(--border, #444); margin-left: 6px; }
+.admin-tag-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 0; }
+.admin-tag-name { font-weight: 500; }
+.admin-tag-count { font-size: 0.85em; color: var(--text-3); }
+.admin-tag-badge { font-size: 0.8em; padding: 1px 6px; border-radius: 6px; background: var(--chip); color: var(--text-2); }
+.admin-tag-actions { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.admin-tag-actions .btn-ms { width: auto; padding: 3px 8px; font-size: 12px; }
+.admin-tags-sweep-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 0.9em; }
+.admin-tags-sweep-table th, .admin-tags-sweep-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border, #444); vertical-align: top; }
+#admin-tags-section .btn-ms { width: auto; }

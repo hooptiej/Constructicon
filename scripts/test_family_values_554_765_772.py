@@ -60,7 +60,7 @@ def add_files(card_id, dates):
         (paths.storage_dir() / f"{slug}.txt").write_text(f"file {slug}\n")
         db.insert_upload(slug, f"{slug}.txt", f"{slug}.txt", "tester", media_type="image", content_date=d)
         slugs.append(slug)
-    membership.add_files(card_id, slugs, link_tag=True, merge_free_tags=False, auto_cover=False)
+    membership.add_files(card_id, slugs, link_tag=True, auto_cover=False)
     return slugs
 
 

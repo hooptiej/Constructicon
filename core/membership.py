@@ -4,7 +4,7 @@ Same contract as core/cards.py: validate first, one `db.transaction()`, rows thr
 `db.ImageLog` (row images), a `Result`, `dry_run`, `actor` (None = the request's actor context).
 Undo is the generic `cards.undo` (POST /api/changes/{batch}/undo, MCP constructicon_undo).
 
-  add_files(card, slugs, *, link_tag, merge_free_tags, auto_cover)
+  add_files(card, slugs, *, link_tag, auto_cover)
   remove_files(card, slugs)
   write(card_id, add, remove, op, actor, batch_id, affected)   the plain row writer the card
                                    reshaping ops (copy/move/split/merge/delete) use: membership
@@ -13,9 +13,10 @@ Undo is the generic `cards.undo` (POST /api/changes/{batch}/undo, MCP constructi
 The side effects are explicit flags with no defaults, so every caller says what it wants. They
 are what core/ingest.py's attach_to_project always did (#1, #274, #103):
   link_tag         the card's linked tag (projects.tag_id, minted with the card) is attached to
-                   the file in post_tags, so the file shows up in tag browsing.
-  merge_free_tags  that tag's NAME is appended to the file's free-text `tags` column (if it isn't
-                   there), so it shows as a chip in the item page's TAGS box (#274).
+                   the file in post_tags, so the file shows up in tag browsing and in a search's tag
+                   filter. #555: it is plumbing, never a chip: the item page shows the card itself (a
+                   link), so the old `merge_free_tags` effect (#274: the card's name stamped into the
+                   free-text column as a chip) is gone with that column.
   auto_cover       a card with no cover_slug takes the first file added as its cover (#103). As
                    before this also clears a borrowed cover_project_id and bumps updated_at.
 Each side effect applies to every named file even when it was already on the card (the old
@@ -38,8 +39,8 @@ from .errors import NotFound
 OP_ADD = "add_files"
 OP_REMOVE = "remove_files"
 
-UI_EFFECTS = {"link_tag": True, "merge_free_tags": True, "auto_cover": True}
-NO_EFFECTS = {"link_tag": False, "merge_free_tags": False, "auto_cover": False}
+UI_EFFECTS = {"link_tag": True, "auto_cover": True}
+NO_EFFECTS = {"link_tag": False, "auto_cover": False}
 
 
 def get_card(card):
@@ -84,7 +85,7 @@ def write(card_id, add, remove, op, actor, batch_id=None, affected_slugs=None):
 
 # --- ops ---------------------------------------------------------------------------------
 
-def add_files(card, slugs, *, link_tag, merge_free_tags, auto_cover, missing_ok=False, dry_run=False,
+def add_files(card, slugs, *, link_tag, auto_cover, missing_ok=False, dry_run=False,
               actor=None, batch_id=None):
     """Puts files on a card with the named side effects (see the module docstring). Unknown file
     slugs raise not_found before anything is written, unless `missing_ok` (the bulk paths skip
@@ -104,8 +105,6 @@ def add_files(card, slugs, *, link_tag, merge_free_tags, auto_cover, missing_ok=
             for s in present:
                 if link_tag and tag is not None and tags.link(log, s, tag["id"]):
                     tagged.append(s)
-                if merge_free_tags and tag is not None:
-                    tags.merge_free_text_name(log, s, tag["name"])
             if auto_cover and present and not project.get("cover_slug"):
                 cover = present[0]
                 log.update("projects", {"id": project["id"]},
@@ -136,14 +135,14 @@ def remove_files(card, slugs, *, dry_run=False, actor=None, batch_id=None):
 
 def plan_transfer_tags(slugs, src, dst, *, drop_source, ignore_card_ids=()):
     """What a move / copy / merge does to the files' tags, as a read-only plan (so a dry run can
-    show it). The files gain `dst`'s linked tag in both stores (post_tags and the free-text chip).
-    With `drop_source` they lose `src`'s linked tag in both stores, but only that exact tag (a tag
-    the user added by hand under another name stays), and not while the file is still on another
-    card whose linked tag is the same tag (or has the same name, for the chip).
+    show it). The files gain `dst`'s linked tag (post_tags; #555: the one tag store, and never a
+    chip while the file is on that card). With `drop_source` they lose `src`'s linked tag, but only
+    that exact tag (a tag the user added by hand stays), and not while the file is still on another
+    card whose linked tag is the same tag.
     `ignore_card_ids`: cards that are going away in the same batch (a merge's absorbed cards), so
     they don't count as "still on another card". Returns a list of per-file dicts
-    {slug, link_add, chip_add, link_drop, chip_drop} with only the files that change, plus the two
-    tag dicts: (changes, dst_tag, src_tag)."""
+    {slug, link_add, link_drop} with only the files that change, plus the two tag dicts:
+    (changes, dst_tag, src_tag)."""
     dst_tag = db.get_tag(dst["tag_id"]) if dst.get("tag_id") else None
     src_tag = db.get_tag(src["tag_id"]) if drop_source and src.get("tag_id") else None
     if src_tag is not None and dst_tag is not None and src_tag["id"] == dst_tag["id"]:
@@ -160,22 +159,17 @@ def plan_transfer_tags(slugs, src, dst, *, drop_source, ignore_card_ids=()):
             if row is None:
                 continue
             have = {r["tag_id"] for r in conn.execute("SELECT tag_id FROM post_tags WHERE post_slug = ?", (slug,))}
-            chips = list(row.get("tags") or [])
-            d = {"slug": slug, "link_add": False, "chip_add": False, "link_drop": False, "chip_drop": False}
+            d = {"slug": slug, "link_add": False, "link_drop": False}
             if dst_tag is not None:
                 d["link_add"] = dst_tag["id"] not in have
-                d["chip_add"] = dst_tag["name"] not in chips
             if src_tag is not None:
                 elsewhere = conn.execute(
-                    "SELECT t.id, t.name FROM project_items pi JOIN projects p ON p.id = pi.project_id "
+                    "SELECT t.id FROM project_items pi JOIN projects p ON p.id = pi.project_id "
                     f"JOIN blog_tags t ON t.id = p.tag_id WHERE pi.post_slug = ? AND p.id NOT IN ({marks})",
                     (slug, *skip_ids)).fetchall()
                 same_tag = any(r["id"] == src_tag["id"] for r in elsewhere)
-                same_name = any(r["name"] == src_tag["name"] for r in elsewhere)
                 d["link_drop"] = src_tag["id"] in have and not same_tag
-                d["chip_drop"] = (src_tag["name"] in chips and not same_name
-                                  and not (dst_tag is not None and dst_tag["name"] == src_tag["name"]))
-            if any(d[k] for k in ("link_add", "chip_add", "link_drop", "chip_drop")):
+            if d["link_add"] or d["link_drop"]:
                 out.append(d)
     finally:
         conn.close()
@@ -191,12 +185,8 @@ def apply_transfer_tags(plan, dst_tag, src_tag, op, actor, batch_id, affected_sl
         for d in plan:
             if d["link_drop"]:
                 tags.unlink(log, d["slug"], src_tag["id"])
-            if d["chip_drop"]:
-                tags.remove_free_text_name(log, d["slug"], src_tag["name"])
             if d["link_add"]:
                 tags.link(log, d["slug"], dst_tag["id"])
-            if d["chip_add"]:
-                tags.merge_free_text_name(log, d["slug"], dst_tag["name"])
 
 
 def _flat(op, muts):

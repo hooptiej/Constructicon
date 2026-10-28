@@ -77,7 +77,7 @@ def add_files(card_id, dated, undated):
         db.insert_upload(slug, f"{slug}.txt", f"{slug}.txt", "tester", media_type="document",
                          content_date=(BASE + i * DAY) if i < dated else None)
         slugs.append(slug)
-    membership.add_files(card_id, slugs, link_tag=True, merge_free_tags=False, auto_cover=False)
+    membership.add_files(card_id, slugs, link_tag=True, auto_cover=False)
     return slugs
 
 

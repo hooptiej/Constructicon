@@ -649,7 +649,9 @@ def _trash_expires_nullable(conn):
 #   display_name (+ short_title, #542), content_description, filename   every name an item has ever worn (a rename must
 #                                                  not make the old filename unfindable; title_of()
 #                                                  in core/item_title.py picks only ONE of them)
-#   tags          the free-text `tags` JSON column + the names of its tag-tree tags (post_tags)
+#   tags          the names of its tag-tree tags (post_tags). #555: the tree is the one tag store; the
+#                 `capture_events.tags` column is only a derived cache of the chips, so it is not read
+#                 here (a card's linked tag the cache leaves out is still found, by its name).
 #   cards         the titles of the cards (projects) the item belongs to (project_items)
 #   description   the uploader's note
 #   extracted_text  OCR / extracted text
@@ -672,7 +674,7 @@ SELECT ce.id AS id,
        TRIM(COALESCE(ce.display_name, '') || ' ' || COALESCE(ce.short_title, '')) AS display_name,
        COALESCE(ce.content_description, '') AS content_description,
        COALESCE(ce.filename, '') AS filename,
-       COALESCE(ce.tags, '') || ' ' || COALESCE((SELECT group_concat(name, ' ') FROM (
+       COALESCE((SELECT group_concat(name, ' ') FROM (
            SELECT bt.name AS name FROM post_tags pt JOIN blog_tags bt ON bt.id = pt.tag_id
            WHERE pt.post_slug = ce.slug)), '') AS tags,
        COALESCE((SELECT group_concat(title, ' ') FROM (
@@ -702,7 +704,7 @@ def _search_sync_triggers():
         return (f"id IN (SELECT ce.id FROM capture_events ce JOIN project_items pi ON pi.post_slug = ce.slug "
                 f"WHERE pi.project_id = {ref})")
 
-    cols = "display_name, short_title, content_description, filename, tags, description, extracted_text"
+    cols = "display_name, short_title, content_description, filename, description, extracted_text"
     trig = {}
 
     def add(name, when, table, body):
@@ -756,6 +758,99 @@ def _ensure_search_schema(conn):
         if name in stored and _norm(stored[name]) != _norm(ddl):
             conn.execute(f"DROP TRIGGER IF EXISTS {name}")
         conn.execute(ddl)
+
+
+# --- Tag chips: a cache derived from the tag tree (#555) ---------------------------------------
+# Owner decision 2026-10-18: ONE tag store, the tree (blog_tags + post_tags). An item's chips (the
+# names its TAGS box shows, `row["tags"]` everywhere) are DERIVED: the names of its post_tags tags,
+# in the order they were attached, minus the linked tag (projects.tag_id) of any card the item is
+# on (card membership shows as the card, a link, never as a chip). `capture_events.tags` stays for
+# one release as a cache of exactly that list, and nothing writes it as truth: these triggers
+# recompute it whenever anything it depends on changes (a tag attached or detached, a file put on
+# or taken off a card, a tag renamed, a card's linked tag changed or the card deleted, a row
+# inserted, a direct write to the column), on every path: the tag service, undo, the pipeline,
+# scripts. The cache is never imaged (core/tags.py writes post_tags; undo restores post_tags and
+# the triggers follow). The triggers exist only once the `tags_one_store_555` migration has run:
+# before it, the column still holds free text that migration has to merge into the tree first.
+MIGRATION_555 = "tags_one_store_555"
+CHIP_TRIGGER_PREFIX = "item_chips_"
+
+
+def chips_sql(slug_ref):
+    """SQL for one item's derived chip list (a JSON array of names) given an SQL slug reference."""
+    return ("COALESCE((SELECT json_group_array(name) FROM (SELECT bt.name AS name FROM post_tags pt "
+            f"JOIN blog_tags bt ON bt.id = pt.tag_id WHERE pt.post_slug = {slug_ref} AND NOT EXISTS ("
+            "SELECT 1 FROM project_items pi JOIN projects p ON p.id = pi.project_id "
+            f"WHERE pi.post_slug = {slug_ref} AND p.tag_id = pt.tag_id) ORDER BY pt.rowid)), '[]')")
+
+
+def _chip_triggers():
+    """name -> DDL for every trigger that keeps capture_events.tags equal to the derived chips."""
+    def refresh(where):
+        return f"UPDATE capture_events SET tags = {chips_sql('capture_events.slug')} WHERE {where};"
+
+    p = CHIP_TRIGGER_PREFIX
+    trig = {}
+
+    def add(name, when, table, body, cond=""):
+        trig[p + name] = f"CREATE TRIGGER IF NOT EXISTS {p}{name} {when} ON {table}{cond} BEGIN {body} END"
+
+    for table, short in (("post_tags", "pt"), ("project_items", "pi")):
+        add(f"{short}_ai", "AFTER INSERT", table, refresh("slug = NEW.post_slug"))
+        add(f"{short}_ad", "AFTER DELETE", table, refresh("slug = OLD.post_slug"))
+    add("bt_au", "AFTER UPDATE OF name", "blog_tags",
+        refresh("slug IN (SELECT post_slug FROM post_tags WHERE tag_id = NEW.id)"))
+    add("pr_au", "AFTER UPDATE OF tag_id", "projects",
+        refresh("slug IN (SELECT post_slug FROM project_items WHERE project_id = NEW.id)"))
+    add("pr_ad", "AFTER DELETE", "projects",
+        refresh("slug IN (SELECT post_slug FROM project_items WHERE project_id = OLD.id)"))
+    add("ce_ai", "AFTER INSERT", "capture_events", refresh("id = NEW.id"))
+    # A direct write of the column (an old row image, a stray raw UPDATE) is put back to the derived
+    # value. With recursive triggers off (SQLite's default) this trigger's own UPDATE doesn't re-fire it.
+    add("ce_au", "AFTER UPDATE OF tags", "capture_events", refresh("id = NEW.id"),
+        cond=f" WHEN NEW.tags IS NOT {chips_sql('NEW.slug')}")
+    return trig
+
+
+def _ensure_chip_triggers(conn, force=False):
+    """Creates (or re-creates, when their definition changed) the #555 chip-cache triggers, once
+    the tags_one_store_555 migration is recorded (`force`: the migration itself, before it is).
+    Idempotent; both processes run it at boot."""
+    if not force and not conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (MIGRATION_555,)).fetchone():
+        return False
+    stored = {r["name"]: r["sql"] for r in conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE ?", (CHIP_TRIGGER_PREFIX + "%",))}
+
+    def _norm(sql):
+        return " ".join((sql or "").replace("IF NOT EXISTS ", "").split())
+
+    for name, ddl in _chip_triggers().items():
+        if name in stored and _norm(stored[name]) != _norm(ddl):
+            conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+        conn.execute(ddl)
+    return True
+
+
+def _refresh_chip_cache(conn, slugs=None):
+    """Rewrites capture_events.tags from the tree for `slugs` (None = every row). The cache is
+    derived; this is the migration's one full pass and a repair. Returns the rows rewritten."""
+    sql = f"UPDATE capture_events SET tags = {chips_sql('capture_events.slug')} WHERE tags IS NOT {chips_sql('capture_events.slug')}"
+    if slugs is None:
+        return conn.execute(sql).rowcount
+    slugs = list(slugs)
+    if not slugs:
+        return 0
+    return conn.execute(sql + f" AND slug IN ({','.join('?' for _ in slugs)})", slugs).rowcount
+
+
+def check_chip_cache():
+    """[slug] whose cached chips differ from the tree (empty = in step). A read."""
+    conn = get_conn()
+    try:
+        return [r["slug"] for r in conn.execute(
+            f"SELECT slug FROM capture_events WHERE tags IS NOT {chips_sql('capture_events.slug')}")]
+    finally:
+        conn.close()
 
 
 def rebuild_search_index():
@@ -1068,6 +1163,7 @@ def init_db(migrate=True):
         conn.execute(provenance_options.DDL)
         _rebuild_project_relations_typed(conn)
         _ensure_search_schema(conn)  # #543: after every column it reads exists
+        _ensure_chip_triggers(conn)  # #555: the derived chip cache (once its migration has run)
     # leaving the block commits the whole schema step (an exception rolls all of it back)
     if migrate:
         run_pending_migrations()
@@ -1620,6 +1716,31 @@ def _mig_short_title_seed_542():
           f"(batch {res.batch_id})", flush=True)
 
 
+def _mig_tags_one_store_555():
+    # #555 (owner decisions 2026-10-18): one tag store, the tree. Every free-text chip an item carries
+    # that its tree tags don't is merged into the tree (core/tags.py merge_free_text_into_tree: the
+    # rule is there), as ONE imaged change-log row, actor `migration`, counts in `details`. Then the
+    # chip-cache triggers go on and every row's `tags` is rewritten from the tree. Idempotent: a
+    # second run finds the column equal to the tree and merges nothing.
+    from . import actor as actor_ctx, tags
+    with actor_ctx.acting_as(actor_ctx.ACTOR_MIGRATION):
+        res = tags.merge_free_text_into_tree()
+    conn = get_conn()
+    _ensure_chip_triggers(conn, force=True)
+    rewritten = _refresh_chip_cache(conn)
+    d = res.data
+    print(f"schema_migrations: tags_one_store_555 examined {d['items']} item(s), {d['disagreeing']} disagreed; "
+          f"{d['links_added']} tag link(s) added to {d['items_changed']} item(s), {d['tags_created']} tag(s) created, "
+          f"{d['skipped_card_names']} card-name chip(s) left to the card; {rewritten} chip cache row(s) rewritten "
+          f"(batch {res.batch_id})", flush=True)
+
+
+def _mig_search_tags_tree_555():
+    # #555: the search view's tags column reads the tree only (the free-text column is a cache now).
+    rows, secs = rebuild_search_index()
+    print(f"schema_migrations: search_tags_tree_555 re-indexed {rows} item(s) in {secs:.2f}s", flush=True)
+
+
 def _mig_search_short_title_542():
     # #542: the search view's name column now carries short_title too; re-read every item once.
     rows, secs = rebuild_search_index()
@@ -1651,6 +1772,8 @@ MIGRATIONS = [
     ("date_guess_backfill_725", _mig_date_guess_backfill_725),
     ("short_title_seed_542", _mig_short_title_seed_542),
     ("search_short_title_542", _mig_search_short_title_542),
+    (MIGRATION_555, _mig_tags_one_store_555),
+    ("search_tags_tree_555", _mig_search_tags_tree_555),
 ]
 
 
@@ -1777,12 +1900,13 @@ def _drop_capture_columns(conn, columns):
         idx_cols = {r["name"] for r in conn.execute(f"PRAGMA index_info({idx})")}
         if idx_cols & set(columns):
             conn.execute(f"DROP INDEX IF EXISTS {idx}")
-    for name in _search_sync_triggers():
+    for name in list(_search_sync_triggers()) + list(_chip_triggers()):
         conn.execute(f"DROP TRIGGER IF EXISTS {name}")
     conn.execute("DROP VIEW IF EXISTS item_search_src")
     for col in columns:
         conn.execute(f"ALTER TABLE capture_events DROP COLUMN {col}")
     _ensure_search_schema(conn)
+    _ensure_chip_triggers(conn)
 
 
 def _drop_dead_columns_704():
@@ -1932,19 +2056,19 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
             "sensitive, sensitive_by, sensitive_at, short_title) "
             "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (slug, now, uploaded_by, description,
-             json.dumps(tags or []), filename, stored_filename, file_size, source_modified_at, ocr_status,
+             "[]", filename, stored_filename, file_size, source_modified_at, ocr_status,
              now if ocr_status == "pending" else None,
              media_type, external_url, content_description, content_date, json.dumps(type_metadata or {}), owner_id,
              1 if sensitive else 0, who if sensitive else None, now if sensitive else None, short_title or None),
         )
         conn.commit()
-
-        # #228: sync free-text tags to the real tag tree on insert, not just on update.
-        # For a new row, previous_tags is empty since it just got created with no prior state.
-        if tags:
-            _sync_real_tags_for_post(slug, tags, previous_tags=[])
     finally:
         conn.close()
+    # #555: the tags an upload names go into the tag tree (the one store) through the tag service,
+    # imaged (op upload_tags); the row's `tags` column is the derived chip cache.
+    if tags:
+        from . import tags as tags_svc  # lazy: core.tags imports this module
+        tags_svc.attach_on_upload(slug, tags)
 
 
 def insert_content(slug, uploaded_by, media_type, external_url=None, content_description=None, content_date=None,
@@ -2237,63 +2361,6 @@ def find_duplicate(filename, file_size, source_modified_at):
         conn.close()
 
 
-def _sync_real_tags_for_post(post_slug, tag_names, previous_tags=None):
-    """#165: the free-text `tags` column above is invisible to /api/tags
-    (autocomplete) and the home page's tag-tree browsing/pills, which only
-    ever read blog_tags/post_tags -- a typed tag that only lands in the
-    free-text column can never be suggested again or browsed to. Keeps the
-    real tag tree in sync with whatever's typed into an item's TAGS box
-    (single-item save or bulk), full-replace semantics matching the
-    free-text column's own contract. Root-level tags only (parent_id None);
-    reuses an existing tag of the same name if one already exists (e.g. a
-    project's own auto-linked tag) rather than creating a duplicate.
-
-    #213 fix: only detaches tags that were in the row's PREVIOUS free-text
-    list (passed as previous_tags), not the entire tag tree. This preserves
-    tags that arrived through other paths (project linkage, MCP attach,
-    child-tag creation) and only removes tags the user explicitly removed
-    from the free-text box."""
-    # Build the set of desired tag IDs from the new tag list
-    desired_ids = set()
-    for name in tag_names:
-        name = name.strip()
-        if not name:
-            continue
-        tag = _get_or_create_tag(name, parent_id=None)
-        desired_ids.add(tag["id"])
-
-    # Build the set of previously attached free-text tag IDs
-    # (only root-level tags from the previous free-text column)
-    previous_ids = set()
-    if previous_tags:
-        for name in previous_tags:
-            name = name.strip()
-            if not name:
-                continue
-            # Look up the previous tag — it should already exist (we're only
-            # diffing against what was there before), but use None default
-            # to be safe in case of data inconsistency. #280: must be the
-            # root-scoped lookup, not _find_tag_by_name -- a same-named
-            # CHILD tag elsewhere in the tree would otherwise come back
-            # instead of the real root tag, silently failing to detach it.
-            tag = _find_root_tag_by_name(name)
-            if tag:
-                previous_ids.add(tag["id"])
-
-    # Attach new tags
-    current_ids = {t["id"] for t in list_tags_for_post(post_slug)}
-    to_add = desired_ids - current_ids
-    if to_add:
-        _attach_tags(post_slug, list(to_add))
-
-    # Detach only tags that were in previous_ids but not in desired_ids
-    # This means: tags the user explicitly removed from the free-text box,
-    # while preserving tags that arrived through other paths (projects, MCP, etc.)
-    to_remove = previous_ids - desired_ids
-    for tag_id in to_remove:
-        _detach_tag(post_slug, tag_id)
-
-
 def _rename_object(slug, display_name):
     """Sets an object's display_name override (#11). Passing an empty string clears it back to
     the default title (core/item_title.py) rather than leaving the previous override in place,
@@ -2467,31 +2534,6 @@ def set_setting(key, value):
         conn.close()
 
 
-def _add_tags(slug, new_tags):
-    """Merge new_tags into the row's existing tags (deduped) instead of
-    replacing them — for auto-tagging, so it never clobbers tags a person
-    already set by hand.
-
-    #227: wrap read-modify-write in a transaction to prevent lost updates when
-    concurrent writers (OCR thread, user saves) race on the same row."""
-    conn = get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT tags FROM capture_events WHERE slug = ?", (slug,)).fetchone()
-        if row is None:
-            conn.commit()
-            return
-        existing_tags = json.loads(row["tags"] or "[]")
-        merged = existing_tags + [t for t in new_tags if t not in existing_tags]
-        if merged == existing_tags:
-            conn.commit()
-            return
-        conn.execute("UPDATE capture_events SET tags = ? WHERE slug = ?", (json.dumps(merged), slug))
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def list_uploaders(query=None):
     """Distinct Source *groups* (see source_group()) matching the given
     filters, each with their total count and most recent capture time — used
@@ -2619,11 +2661,11 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
     first.
 
     #543: `query` is looked up in the item_search index (see "Search index" above): every name the
-    item has (display_name, content_description, filename), its tags (free-text and tag-tree), its
+    item has (display_name, content_description, filename), its tag-tree tags (#555), its
     card titles, the uploader's note and the extracted text. Words are prefix-matched and ANDed; the
     match is on whole words/word starts, not on any substring. A query with no letters or digits in
-    it ("***") finds nothing. `tags` (any-of, matched against the free-text tag list) and `limit` are
-    applied in SQL.
+    it ("***") finds nothing. `tags` (any-of tag names, any case, matched on the tag tree including
+    every tag under a named one, #555) and `limit` are applied in SQL.
 
     #282: redacted rows are excluded by default, same as every other
     list/browse query here (list_unfiled_items, list_recent_items_by_type, ...) --
@@ -2675,11 +2717,17 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
             clauses.append("(ce.tech = ? OR ce.tech LIKE ? OR ce.tech LIKE ?)")
             params += [uploaded_by, f"{uploaded_by} —%", f"{uploaded_by} -%"]
         if tags:
-            # #543: was a Python filter after an unbounded fetch (#166). json_each reads the free-text
-            # tag list in SQL, so the LIMIT below applies after the filter, in the database.
-            wanted = list(dict.fromkeys(tags))
-            clauses.append("CASE WHEN json_valid(ce.tags) THEN EXISTS (SELECT 1 FROM json_each(ce.tags) "
-                           f"WHERE json_each.value IN ({', '.join('?' * len(wanted))})) ELSE 0 END")
+            # #543: in SQL, so the LIMIT below applies after the filter. #555: on the TAG TREE (the one
+            # tag store): an item carrying a tag with one of these names (any case), or any tag under
+            # one, anywhere in the tree. A card's linked tag counts (it is a tree tag, though no chip).
+            wanted = list(dict.fromkeys(str(t).strip().lower() for t in tags if str(t).strip()))
+            if not wanted:
+                return []
+            clauses.append(
+                "EXISTS (SELECT 1 FROM post_tags pt WHERE pt.post_slug = ce.slug AND pt.tag_id IN ("
+                "WITH RECURSIVE sub(id) AS (SELECT id FROM blog_tags WHERE lower(name) IN "
+                f"({', '.join('?' * len(wanted))}) UNION SELECT bt.id FROM blog_tags bt JOIN sub ON bt.parent_id = sub.id) "
+                "SELECT id FROM sub))")
             params += wanted
         if match:
             clauses.insert(0, "item_search MATCH ?")
@@ -4475,6 +4523,7 @@ class ImageLog:
         self.op, self.actor, self.batch_id = op, actor, batch_id
         self.slugs = list(affected_slugs or [])
         self.muts = []
+        self.details = None  # #555: an optional JSON-able summary for the log row's form_body
 
     def get(self, table, key):
         return image_get(self.conn, table, key)
@@ -4518,7 +4567,7 @@ class ImageLog:
         if not self.muts:
             return None
         row_id = insert_change_log(self.conn, self.op, self.actor, self.muts, batch_id=self.batch_id,
-                                   affected_slugs=sorted(set(self.slugs)))
+                                   affected_slugs=sorted(set(self.slugs)), details=self.details)
         self.muts = []
         return row_id
 
@@ -4552,6 +4601,11 @@ def invert_image(conn, mutation, force=False):
     # client, ...). Compare and restore only the columns the table has now; the dropped ones held
     # nothing anything reads, and writing them back would fail.
     live = set(_image_columns(conn, table)) | {"rowid"}
+    if table == "capture_events":
+        # #555: `tags` is a cache derived from the tag tree (the chip triggers keep it), so an image
+        # logged before #555 that names it is neither compared nor written back: the post_tags rows
+        # that op imaged are what undo restores, and the cache follows them.
+        live.discard("tags")
     if expected is not None:
         expected = {k: v for k, v in expected.items() if k in live}
     if target is not None:

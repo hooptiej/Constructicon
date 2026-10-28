@@ -23,7 +23,7 @@ constructicon_undo(batch_id); it calls back into this module for the file side o
                            at them) deleted with row images, one `trash` row per item.
   relate(a, b) / unrelate(a, b)   (phase C) the "related" link; relate also shares tags and
                            card memberships both ways (#16), all imaged.
-  update(..., tags=[...])  (phase C) the free-text tags ride in the same batch (core/tags.py).
+  update(..., tags=[...])  (phase C) the item's chips (#555: in the tag tree) ride in the same batch.
   set_sensitive(slugs, on) (#603) the "This is sensitive" flag: mark = editor+, clear = admin only.
   set_provenance(slugs, key) (#553) the file grids' bulk provenance, one batch.
   apply_dates(entries)      (#725) guessed dates -> content_date (+ type_metadata.content_date_source),
@@ -268,8 +268,8 @@ def _plan_text_sources(row, merged_meta, cols):
 def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **fields):
     """Edits any of UPDATE_FIELDS on one item as ONE change-log entry (so one Save is one undo).
     Every field is validated before anything is written. A no-op edit logs nothing.
-    `tags` (#541 phase C): the free-text tag list, full replace, with its post_tags sync
-    (core/tags.py `write_free_text`; tags it creates are imaged too). None = leave tags alone."""
+    `tags` (#541 phase C, #555): the item's chips, full replace, written to the tag tree
+    (core/tags.py `write_chips`; tags it creates are imaged too). None = leave tags alone."""
     if tags is not None and (isinstance(tags, str) or not isinstance(tags, (list, tuple))):
         raise InvalidInput("tags must be a list of names", code="bad_tags")
     batch_id = batch_id or changes.new_batch_id()
@@ -282,7 +282,7 @@ def update(slug, *, tags=None, dry_run=False, actor=None, batch_id=None, **field
             if "type_metadata" in cols:
                 cards.refresh_writeup_lead(log, slug)  # #596: a write-up's body feeds its card's face
             if tags is not None:
-                tags_svc.write_free_text(log, slug, [str(t) for t in tags])
+                tags_svc.write_chips(log, slug, [str(t) for t in tags], actor)
             muts = list(log.muts)
         item = db.get_by_slug(slug)
     return _result(OP_UPDATE, muts, batch_id, dry_run, item, slug=slug)

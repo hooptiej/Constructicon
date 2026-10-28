@@ -279,8 +279,9 @@ with actor.acting_as(actor.ACTOR_MCP):
     m = mcp.constructicon_search(query="tuning")
 # #697: plus the text-preview fields (extracted_text_chars, extracted_text_truncated)
 mcp_keys = set(mcp._to_public(db.get_by_slug("yt-tune")).keys()) | {"rev", "superseded_by", "matched",  # #762
-                                                                    "extracted_text_chars", "extracted_text_truncated"}
-check("the MCP search is a list of MCP public items (its own shape + the #697 preview fields)",
+                                                                    "extracted_text_chars", "extracted_text_truncated",
+                                                                    "type_metadata_truncated"}  # #722
+check("the MCP search is a list of MCP public items (its own shape + the #697 / #722 preview fields)",
       isinstance(m, list) and len(m) == 1 and set(m[0].keys()) == mcp_keys, sorted(set(m[0].keys()) ^ mcp_keys) if m else m)
 check("a row from db.search has the same columns as a capture_events row",
       set(db.search(query="tuning")[0].keys()) == set(db.get_by_slug("yt-tune").keys()))

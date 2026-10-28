@@ -185,9 +185,9 @@ def find(rows, slug="big"):
 
 with actor.acting_as(actor.ACTOR_MCP):
     mcp.constructicon_item_tags("big", ["catalogs697"])
-    capped("list_items(which=tag)", find(mcp.constructicon_list_items(which="tag", tag="catalogs697")))
+    capped("list_items(which=tag)", find(mcp.constructicon_list_items(which="tag", tag="catalogs697")["items"]))
     capped("list_items(which=tag, text_chars=2000)",
-           find(mcp.constructicon_list_items(which="tag", tag="catalogs697", text_chars=2000)), 2000)
+           find(mcp.constructicon_list_items(which="tag", tag="catalogs697", text_chars=2000)["items"]), 2000)
 
     card = mcp.constructicon_create_project("Catalog card 697", cover_slug="big")
     added = mcp.constructicon_card_files(card["id"], ["big", "short"])

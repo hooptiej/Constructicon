@@ -1,8 +1,9 @@
 {
- "_about": "#700: the MCP tool names with the default hobby label (Hobby / Hobbies). #746 folded the 108 tools into 55 (#725 added constructicon_undated, #604 constructicon_sharing, #615 constructicon_duplicates, #555 constructicon_tags: 59 now; the 65 retired names still answer as hidden aliases, scripts/test_mcp_consolidation_746.py). scripts/test_hobby_label_700.py compares the live list to this, so a label change cannot drift anything else. A PR that adds, removes or renames a tool updates this list.",
+ "_about": "#700: the MCP tool names with the default hobby label (Hobby / Hobbies). #746 folded the 108 tools into 55 (#725 added constructicon_undated, #604 constructicon_sharing, #615 constructicon_duplicates, #555 constructicon_tags, #556 constructicon_caption_review: 60 now; the 65 retired names still answer as hidden aliases, scripts/test_mcp_consolidation_746.py). scripts/test_hobby_label_700.py compares the live list to this, so a label change cannot drift anything else. A PR that adds, removes or renames a tool updates this list.",
  "names": [
   "constructicon_add_content",
   "constructicon_backup",
+  "constructicon_caption_review",
   "constructicon_bulk_edit",
   "constructicon_card_files",
   "constructicon_card_hobby",

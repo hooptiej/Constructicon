@@ -2031,6 +2031,16 @@ One generated file of every registered type and extension, to drop-test a new in
     stops the pass early. The `transcripts_724e` migration queued existing YouTube rows (no network).
     Seen live 2026-10-17: YouTube answered HTTP 429 to the caption download from the NAS address for some
     videos (`IpBlocked`), which lands as `retry`. Check with `scripts/test_youtube_transcripts_724e.py`.
+    **#789, cue times:** a found transcript also stores `transcript_cues`, compact `[start_seconds,
+    char_offset]` pairs into `transcript` (from the library's snippet `start`s, `clean_with_cues`), so
+    `transcripts.cite(row, offset)` maps a position in `extracted_text` to `{timestamp_seconds,
+    timestamp_url}` (`https://www.youtube.com/watch?v=<id>&t=<s>s`); a row from before #789 (no cues) or
+    a position outside the transcript gives nulls. Subtitles fetched another way (yt-dlp `.vtt`, an
+    `.srt`) go in through MCP `constructicon_update(slug, fields={"transcript_vtt": "<file text>"})`
+    (YouTube items only, else 400 `bad_transcript`): `transcripts.parse_vtt` (inline tags removed,
+    YouTube's rolling repeated lines dropped) + `fields_from_vtt` (refuses no timed captions or no real
+    speech), written through `items.update` (one undoable batch; the text is resettled so search sees it).
+    No network, so it works with `CONSTRUCTICON_TRANSCRIPTS=off` (prod). Channel-RSS import: not built.
   - `redacted` — "file removed, metadata kept" (the detail page's "Remove
     file, keep info" button / `constructicon_redact`; since #541 `items.redact`
     holds the file in the trash with no expiry until the owner recovers it or
@@ -2254,8 +2264,8 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
 Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
-`mcp_server/server.py`, exposing 59 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
-`constructicon_sharing` (#604) and `constructicon_duplicates` (#615)) like `constructicon_search`, `constructicon_get`,
+`mcp_server/server.py`, exposing 60 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
+`constructicon_sharing` (#604), `constructicon_duplicates` (#615) and `constructicon_caption_review` (#556)) like `constructicon_search`, `constructicon_get`,
 `constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
 `constructicon_card_files`, `constructicon_needs`, etc.
 (`mcp__constructicon-mcp__*` in a session with it configured). #68 tracked
@@ -2273,8 +2283,8 @@ configuration gap for that session, not evidence the server itself is gone.
   `scripts/test_mcp_consolidation_746.py`'s scenarios). The pattern:
   - **Selector tools.** Related operations share one tool with a selector: `action=` (`redact`,
     `trash`, `item_tags`, `related`, `revision`, `card_files`, `card_hobby`, `family`, `nest`, `link`,
-    `queue_item`), `view=` (`needs`: queue | nudges | caption | card_decisions | pending), `which=`
-    (`list_items`: tag | brand_assets | redacted | restricted), `direction=` (`convert`); `delete` picks
+    `queue_item`, `caption_review`), `view=` (`needs`: queue | nudges | caption | card_decisions | pending), `which=`
+    (`list_items`: tag | unfiled | similar | brand_assets | redacted | restricted), `direction=` (`convert`); `delete` picks
     its target by which of `slug` / `slugs` / `card` / `blog_entry` / `everything` is given. The selector
     is a `Literal[...]`; a parameter that doesn't apply to the chosen action is refused (`_only_for`),
     never ignored. Each action's answer is documented in the tool's description.
@@ -2305,6 +2315,13 @@ configuration gap for that session, not evidence the server itself is gone.
     columns too; the raw row images stay in the change log (MCP `list_changes`, admin `/api/audit-log`),
     as for item notes, so undo still restores them. Never indexed for search, never exported.
     Check: `scripts/test_card_agent_notes_745.py`.
+    **Append mode (#763):** `constructicon_set_agent_notes(..., append=True)` adds `notes` under the existing
+    text as a dated block (`--- 2026-10-27 ---`, the Mountain Time day, then the text; a blank line
+    between blocks; `cards.appended_notes` builds it) instead of replacing, for both `slug=` and `card=`.
+    The read and the write happen in the service op inside ONE transaction (`items.append_agent_notes`,
+    `cards.set_agent_notes(append=True)`; BEGIN IMMEDIATE takes the write lock first), so two appends at
+    once both land. Blank or null notes with append = `bad_request`, nothing written. One change-log row
+    each, undoable; an append's answer carries `batch_id` (a plain item set's answer is unchanged).
   - **Undated items (#725):** `constructicon_undated(action="list" | "accept" | "apply_auto")` lists the
     items with no real date and their date guesses, accepts one guess, or applies every in-file guess as one
     batch (see "Dates" above). Added after #746's count, like `constructicon_sharing` and `constructicon_duplicates`.
@@ -2375,9 +2392,38 @@ configuration gap for that session, not evidence the server itself is gone.
   case and accents folded, like the search; else the start), with "…" at each cut end, plus
   `extracted_text_chars` (full length) and `extracted_text_truncated`. `search`, `list_items` and
   `get_project` take `text_chars` (0 = no text, capped at `TEXT_PREVIEW_MAX_CHARS` = 5,000). Single-item
-  tools (`constructicon_get`, the setters) still send the WHOLE text, uncapped (one item by design; a
-  window-by-offset read for very long single items is not built). `get_project`'s write-up object is
-  sent whole. Check with `scripts/test_mcp_search_cap_697.py` (throwaway DB).
+  tools (`constructicon_get`, the setters) still send the WHOLE text, uncapped (one item by design). Check
+  with `scripts/test_mcp_search_cap_697.py` (throwaway DB).
+- **The rest of the book (#722).** (1) **By the page:** `constructicon_get(slug, text_offset=0,
+  text_chars=None)`: with `text_chars` (1..`GET_WINDOW_MAX_CHARS` = 50,000), or a `text_offset` alone
+  (= to the end, at most 50,000), it returns only that window of `extracted_text` plus
+  `extracted_text_chars` (whole length), `text_offset`, `extracted_text_truncated`, `next_offset` (null at
+  the end) and `timestamp_seconds` / `timestamp_url` (#789, null unless the window starts in a cued
+  transcript); a windowed read also trims `type_metadata` (below). An offset outside the text, or a size
+  out of range, is `bad_request` naming the length. The default (neither given) is the whole item, as
+  before. (2) **Big type_metadata in lists:** `_to_public_listed` also trims `type_metadata`: a text value
+  over the preview (`max(text_chars, 300)`) is cut with "…", any other value over `META_VALUE_MAX_CHARS`
+  (1,000) as JSON (a cue list) is left out; `type_metadata_truncated` (always) and
+  `type_metadata_cut_keys` (when true) say so. `get_project`'s write-up is now a listed-shape preview with
+  `body_chars` / `body_truncated`; `full_writeup=true` sends it whole (or `constructicon_get(writeup_slug)`).
+  (3) **Paged lists:** `list_items(which="tag" | "unfiled")` answer `{items, next_cursor, more, limit}`
+  (limit 1..500, default 100, `bad_limit`), read in SQL a page at a time (`db.list_posts_for_tag` /
+  `list_unfiled_items` took `offset`, ties broken by slug); the cursor is opaque base64 JSON (view + offset;
+  `bad_cursor`, `cursor_view_mismatch` for another list's). The per-item policy runs after the SQL page, so
+  a page can be short while `more` is true. The retired `constructicon_get_posts_for_tag` still answers a
+  bare list: the first 500. A transcript search hit carries `timestamp_seconds` / `timestamp_url` (#789).
+  Check with `scripts/test_mcp_reading_glasses_722.py`.
+- **Unfiled, look-alikes and caption review over MCP (#556, MCP part).** `list_items(which="unfiled")` is
+  the /unfiled page's set (`db.list_unfiled_items` defaults: no brand assets, current revisions; browse
+  clause + `filter_visible`), paged as above. `list_items(which="similar", slug=)` is `GET
+  /api/image/{slug}/similar` (`core/similarity.find_similar`, read-only), with `similarity_reason` /
+  `similarity_score`. `constructicon_caption_review(action="list" | "accept" | "skip" | "retry")` runs the
+  same core ops as the review page, now in `core/captions.py` (`review_queue`, `accept`, `skip`, `retry`;
+  the web routes `/api/captions/unreviewed`, `/api/captions/{slug}/accept`, `/skip` and
+  `/api/image/{slug}/caption` call them too). Roles as the routes: list viewer, the rest editor.
+  `accept` with no text / title takes the suggestion as it stands (before, a blank Accept was refused
+  `bad_caption`); `retry` on a captions-off install is now 409 `captions_disabled` (was a 400 saying
+  "isn't available"), with the breaker open 409 `captions_paused`.
 - `mcp_server/server.py` still carries some stale-vocabulary rough edges
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.
@@ -2625,7 +2671,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
     `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live),
     `check_type_samples` and `test_type_samples_720` (the type sampler covers every type and sniffs right, #720);
-  - pages, search, dates, UI: `test_search_543`, `test_search_camel_762` (run-together filenames), `test_mcp_search_cap_697` (MCP text previews), `test_item_title_542`,
+  - pages, search, dates, UI: `test_search_543`, `test_search_camel_762` (run-together filenames), `test_mcp_search_cap_697` (MCP text previews), `test_mcp_reading_glasses_722` (MCP reading by the page, list trimming and paging, notes append, transcript timestamps, unfiled / similar / caption review), `test_item_title_542`,
     `test_captions_titles_787_743` (short titles, the set_caption guard, mid-word captions, the backfill), `test_mountain_time_544` (`.py` and
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and

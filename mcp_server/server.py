@@ -64,6 +64,7 @@ from core import besteffort, install_config
 from core import hobby_label as hobby_label_rules
 from core import tags as tags_svc
 from core import paths
+from core import similarity, transcripts
 
 # #652: files this process writes (uploads, imports, thumbnails, backups) are not readable by other
 # users on the host. Set at import, before main() runs init_db.
@@ -142,7 +143,7 @@ Conventions for every tool:
 - dry_run=true answers as the write would and writes nothing. constructicon_bulk_edit, constructicon_resolve_decisions and constructicon_retype_links are dry-run by DEFAULT.
 - Visibility: sensitive and restricted items are admin-only (or their uploader's). Private cards and hobbies (and everything under them) are seen only by admins, their owner and their members; constructicon_sharing manages that. A hidden item or card reads as not_found; a write that names a hidden item is refused as forbidden, saying why.
 - Identity: the install token acts as the admin; a personal MCP token (made in the web app under Account > MCP tokens) acts as that user, with their role and what they can see.
-- Text: a tool returning many items sends a ~300-character preview of each one's extracted_text, plus extracted_text_chars and extracted_text_truncated (text_chars=0..5000 where offered). constructicon_get(slug) returns one item's whole text.
+- Text: a tool returning many items sends a ~300-character preview of each one's extracted_text, plus extracted_text_chars and extracted_text_truncated (text_chars=0..5000 where offered), and trims big type_metadata values (type_metadata_truncated, type_metadata_cut_keys). constructicon_get(slug) returns one item whole; constructicon_get(slug, text_offset=, text_chars=) reads a long text by the page (next_offset). Long lists page: limit + cursor -> next_cursor (null at the end).
 - Dates: an ISO date or datetime with no offset is Mountain Time (America/Denver); unix seconds also work.
 - Selector tools take action= (or view=, which=, direction=); each value is listed with what it returns.
 - Names retired in 2026-10 (#746) still answer but are not listed; use the listed tools."""
@@ -262,6 +263,12 @@ ACTION_ROLES = {
     ("constructicon_list_items", "restricted"): A,
     ("constructicon_list_items", "brand_assets"): V,
     ("constructicon_list_items", "tag"): V,
+    ("constructicon_list_items", "unfiled"): V,  # #556: the /unfiled page (viewer)
+    ("constructicon_list_items", "similar"): V,  # #556: GET /api/image/{slug}/similar (viewer)
+    ("constructicon_caption_review", "list"): V,    # #556: GET /api/captions/unreviewed (viewer)
+    ("constructicon_caption_review", "accept"): E,  # POST /api/captions/{slug}/accept (editor)
+    ("constructicon_caption_review", "skip"): E,    # POST /api/captions/{slug}/skip (editor)
+    ("constructicon_caption_review", "retry"): E,   # POST /api/image/{slug}/caption (editor)
     ("constructicon_revision", "supersede"): E,
     ("constructicon_revision", "remove"): E,
     ("constructicon_run_type_action", None): E,
@@ -634,9 +641,54 @@ def _text_preview(text, query=None, chars=TEXT_PREVIEW_CHARS):
     return {"extracted_text": preview, "extracted_text_chars": full, "extracted_text_truncated": True}
 
 
+# #722: a multi-item result trims big type_metadata values too (a write-up's `body`, a video's
+# `transcript` and its cue list can each be hundreds of KB). A text value longer than the preview is
+# cut to it (with "…"); any other value (a list, an object) over META_VALUE_MAX_CHARS as JSON is
+# left out. `type_metadata_truncated` says whether anything was, `type_metadata_cut_keys` which keys.
+# constructicon_get(slug) still returns the whole type_metadata.
+META_VALUE_MAX_CHARS = 1000
+
+
+def _trim_meta(meta, chars=TEXT_PREVIEW_CHARS):
+    """(type_metadata for a list result, [keys cut or left out])."""
+    limit = max(chars or 0, TEXT_PREVIEW_CHARS)
+    out, cut = {}, []
+    for key, value in (meta or {}).items():
+        if isinstance(value, str):
+            if len(value) > limit:
+                out[key] = value[:limit] + _ELLIPSIS
+                cut.append(key)
+            else:
+                out[key] = value
+        elif isinstance(value, (list, dict)) and len(json.dumps(value, default=str)) > META_VALUE_MAX_CHARS:
+            cut.append(key)
+        else:
+            out[key] = value
+    return out, cut
+
+
+def _meta_fields(meta, chars=TEXT_PREVIEW_CHARS):
+    """{type_metadata, type_metadata_truncated[, type_metadata_cut_keys]} for a trimmed answer."""
+    trimmed, cut = _trim_meta(meta, chars)
+    out = {"type_metadata": trimmed, "type_metadata_truncated": bool(cut)}
+    if cut:
+        out["type_metadata_cut_keys"] = cut
+    return out
+
+
 def _to_public_listed(row, query=None, text_chars=TEXT_PREVIEW_CHARS):
-    """_to_public for an item in a multi-item result: extracted_text is a preview (#697)."""
-    return {**_to_public(row), **_text_preview(row.get("extracted_text"), query, text_chars)}
+    """_to_public for an item in a multi-item result: extracted_text is a preview (#697), big
+    type_metadata values are trimmed (#722), and a transcript hit carries its moment (#789:
+    timestamp_seconds / timestamp_url for the first query word found in the transcript)."""
+    pub = _to_public(row)
+    out = {**pub, **_meta_fields(pub["type_metadata"], text_chars),
+           **_text_preview(row.get("extracted_text"), query, text_chars)}
+    if query and transcripts.has_cues(row):
+        hit = _first_hit(row.get("extracted_text"), query)
+        stamp = transcripts.cite(row, hit)
+        if stamp["timestamp_seconds"] is not None:
+            out.update(stamp)
+    return out
 
 
 def _to_public_project(project):
@@ -754,11 +806,12 @@ def _fields_arg(fields, spec, tool):
     return dict(fields)
 
 
-def _only_for(what, **passed):
-    """Refuses parameters that don't apply to the chosen action: {name: (value, default)}."""
+def _only_for(label, /, **passed):
+    """Refuses parameters that don't apply to the chosen action: {name: (value, default)}.
+    `label` is positional-only, so a tool parameter may be called anything (caption_review's `what`)."""
     extra = [k for k, (value, default) in passed.items() if value != default]
     if extra:
-        raise InvalidInput(f"{', '.join(extra)} {'does' if len(extra) == 1 else 'do'} not apply to {what}. "
+        raise InvalidInput(f"{', '.join(extra)} {'does' if len(extra) == 1 else 'do'} not apply to {label}. "
                            "Nothing was changed.")
 
 
@@ -850,13 +903,53 @@ def constructicon_search(query: str | None = None, tags: list[str] | None = None
 
 
 GET_INCLUDES = ("related", "revisions", "agent_notes")
+GET_WINDOW_MAX_CHARS = 50_000  # #722: the most text one windowed constructicon_get returns
+
+
+def _whole_number(name, value):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidInput(f"{name} must be a whole number.")
+    return value
+
+
+def _text_window(row, text_offset, text_chars):
+    """#722: one window of the row's extracted_text, plus where it sits and where the next one starts.
+    text_chars None = from text_offset to the end (capped at GET_WINDOW_MAX_CHARS). Refuses an offset
+    past the end or a size out of range (bad_request, saying the text's length)."""
+    text = row.get("extracted_text") or ""
+    total = len(text)
+    _whole_number("text_offset", text_offset)
+    if text_chars is not None:
+        _whole_number("text_chars", text_chars)
+        if not 1 <= text_chars <= GET_WINDOW_MAX_CHARS:
+            raise InvalidInput(f"text_chars must be from 1 to {GET_WINDOW_MAX_CHARS:,}; this item's text is "
+                               f"{total:,} characters.")
+    if text_offset < 0 or (text_offset >= total and not (text_offset == 0 and total == 0)):
+        raise InvalidInput(f"text_offset {text_offset:,} is outside this item's text ({total:,} characters"
+                           + (f": use 0 to {total - 1:,})." if total else ", so only 0 works)."),
+                           details={"extracted_text_chars": total})
+    end = min(total, text_offset + (GET_WINDOW_MAX_CHARS if text_chars is None else text_chars))
+    return {"extracted_text": text[text_offset:end] if text else row.get("extracted_text"),
+            "extracted_text_chars": total, "text_offset": text_offset,
+            "extracted_text_truncated": text_offset > 0 or end < total,
+            "next_offset": end if end < total else None,
+            # #789: the moment this window starts at, when it falls in a video's transcript
+            **transcripts.cite(row, text_offset)}
 
 
 @mcp.tool()
 def constructicon_get(slug: str,
-                      include: list[typing.Literal["related", "revisions", "agent_notes"]] | None = None) -> dict:
-    """One item by slug: metadata, hotlink url, its WHOLE extracted_text, and `superseded_by` /
-    `rev` (its place in a revision chain).
+                      include: list[typing.Literal["related", "revisions", "agent_notes"]] | None = None,
+                      text_offset: int = 0, text_chars: int | None = None) -> dict:
+    """One item by slug: metadata, hotlink url, its WHOLE extracted_text and type_metadata, and
+    `superseded_by` / `rev` (its place in a revision chain).
+    Reading a long text by the page: text_chars=N (1..50000) returns only extracted_text[text_offset
+    : text_offset+N] (text_offset alone = from there to the end, at most 50000), plus
+    extracted_text_chars (the whole length), text_offset, extracted_text_truncated, next_offset
+    (where the next page starts; null at the end) and timestamp_seconds / timestamp_url (for a YouTube
+    video whose transcript has cue times: the moment that position is said, a &t= link; else null).
+    A windowed read also trims big type_metadata values (type_metadata_truncated) as list results do.
+    E.g. constructicon_get(slug, text_chars=20000), then text_offset=next_offset.
     include adds, on request: "related" -> `related`, the items linked to it (listed shape);
     "revisions" -> `revisions`, its chain {in_chain, chain: [{slug, title, filename, rev,
     is_current, is_this, redacted}], current, superseded, rev, of}; "agent_notes" ->
@@ -867,12 +960,17 @@ def constructicon_get(slug: str,
     bad = [w for w in wanted if w not in GET_INCLUDES]
     if bad:
         raise InvalidInput(f"include: unknown {', '.join(map(str, bad))}; use {', '.join(GET_INCLUDES)}.")
+    windowed = text_chars is not None or text_offset != 0
     row = db.get_by_slug(slug)
     if row is None:
         raise NotFound(f"No item {slug!r}.")
     policy.require_view(row, message=f"No item {slug!r}.")  # #557
+    window = _text_window(row, text_offset, text_chars) if windowed else None  # validated before the access log
     policy.note_access(row, access_log.HOW_MCP_GET)  # #604 follow-up 7: sensitive items only
     out = revisions.decorate([_to_public(row)])[0]
+    if window is not None:
+        out.update(window)
+        out.update(_meta_fields(out["type_metadata"], TEXT_PREVIEW_MAX_CHARS))
     if "related" in wanted:
         out["related"] = _related_listed(slug)
     if "revisions" in wanted:
@@ -1004,7 +1102,20 @@ ITEM_FIELDS = {
     "is_brand_asset": (bool,),
     "brand_role": (str, type(None)),
     "sensitive": (bool,),
+    "transcript_vtt": (str,),  # #789: a YouTube video's subtitles (WebVTT / SRT text) -> transcript + cue times
 }
+
+
+def _transcript_from_vtt(slug, vtt):
+    """#789: the type_metadata a subtitle file gives a video item (refused for any other type)."""
+    row = items.get_item(slug)
+    spec = object_types.get_object_type(row.get("media_type"))
+    if getattr(spec, "text_fetch_fn", None) is None:
+        raise InvalidInput(f"fields.transcript_vtt is for a YouTube video item; {slug!r} is {spec.label}. "
+                           "Nothing was changed.", code="bad_transcript")
+    meta = transcripts.fields_from_vtt(vtt)
+    meta["transcript_note"] = "from a subtitle file handed in through the MCP"
+    return meta
 
 
 @mcp.tool()
@@ -1023,7 +1134,9 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
       provenance: an active file key (constructicon_list_provenance_options(scope="file")) or null;
       content_date: the content's own date, ISO or unix seconds, null clears;
       highlight: bool; is_brand_asset: bool; brand_role: "logo"/"icon"/... or null;
-      sensitive: bool (marking: editor+; clearing: admin).
+      sensitive: bool (marking: editor+; clearing: admin);
+      transcript_vtt: a YouTube video's subtitles as WebVTT or SRT text (e.g. from yt-dlp): becomes its
+        transcript (searchable) WITH cue times, so constructicon_get / search can cite a &t= moment.
     E.g. fields={"provenance": "created", "highlight": true, "content_date": "2017-07-31"}.
     dry_run=true returns the item as it would be, writing nothing.
     Returns the item plus batch_id. Private notes: constructicon_set_agent_notes.
@@ -1042,6 +1155,8 @@ def constructicon_update(slug: str, description: str | None = None, tags: list[s
     if type_metadata is not None:
         # #563: merge (top-level keys), same as the web route; #425 keys cleaned in core.
         cols["type_metadata"] = dict(type_metadata)
+    if "transcript_vtt" in extra:  # #789: parsed (and refused) before anything is written
+        cols["type_metadata"] = {**cols.get("type_metadata", {}), **_transcript_from_vtt(slug, extra["transcript_vtt"])}
     if reset_display_date:
         cols["display_date_override"] = None
     elif display_date is not None:
@@ -1183,6 +1298,74 @@ def constructicon_set_caption(slug: str, text: str | None = None, title: str | N
             "in_review_queue": waiting_caption or waiting_title}
 
 
+CAPTION_REVIEW_PAGE_DEFAULT = 50  # #722: one review page; a caption can be a long paragraph
+
+
+def _caption_review_rows(rows):
+    """The review queue's entries for one SQL page (captions.review_entries applies the item policy),
+    with the caption and description cut to previews (+ *_chars, *_truncated)."""
+    out = []
+    for entry in captions.review_entries(rows):
+        for key in ("caption", "description"):
+            text = entry.get(key) or ""
+            entry[f"{key}_chars"] = len(text)
+            entry[f"{key}_truncated"] = len(text) > TEXT_PREVIEW_CHARS
+            if len(text) > TEXT_PREVIEW_CHARS:
+                entry[key] = text[:TEXT_PREVIEW_CHARS] + _ELLIPSIS
+        out.append(entry)
+    return out
+
+
+@mcp.tool(selector="action")
+def constructicon_caption_review(action: typing.Literal["list", "accept", "retry", "skip"] = "list",
+                                 slug: str | None = None, text: str | None = None, title: str | None = None,
+                                 replace: bool = False, what: typing.Literal["all", "caption", "title"] = "all",
+                                 advance: bool = False, limit: int | None = None,
+                                 cursor: str | None = None) -> dict:
+    """The owner's caption review queue (the web's Captions review page), and its buttons:
+    "list": items whose caption or short-title suggestion waits for review, PAGED, newest first:
+      {items: [{slug, name, kind ("caption" | "title": only a title waits), caption, caption_chars,
+      caption_truncated, caption_by, description, description_chars, description_truncated, title,
+      title_by, thumb_url, detail_url}], next_cursor, more, limit}. limit 1..500 (default 50); pass
+      next_cursor back as cursor= (null = the end). caption / description are ~300-character previews;
+      read a whole suggestion with constructicon_get(slug) (type_metadata.auto_caption).
+    "accept" (slug): the suggestion becomes the description and short title, one undoable batch;
+      text= / title= accept your edited wording instead. Text a local model didn't write is not
+      replaced silently: would_replace_suggestion unless replace=true. -> {item, batch_id,
+      replaced_suggestion, replaced}.
+    "skip" (slug): reviewed, not used; it leaves the queue. what= all (default) | caption | title.
+      -> {item, batch_id}.
+    "retry" (slug): run the local caption model on it again (queued; type_metadata.auto_caption_status
+      goes "pending"); advance=true tries the next prompt for variety. captions_disabled (409) on an
+      install with no caption model: look at it (constructicon_view) and constructicon_set_caption.
+      -> {item}.
+    E.g. constructicon_caption_review(action="accept", slug="abc123").
+    """
+    if action == "list":
+        _only_for('action="list"', slug=(slug, None), text=(text, None), title=(title, None),
+                  replace=(replace, False), what=(what, "all"), advance=(advance, False))
+        return _paged("captions", lambda n, o: db.list_unaccepted_captions(limit=n, offset=o), limit, cursor,
+                      TEXT_PREVIEW_CHARS, shape=_caption_review_rows, default=CAPTION_REVIEW_PAGE_DEFAULT)
+    _only_for(f'action="{action}"', limit=(limit, None), cursor=(cursor, None))
+    if not (slug or "").strip():
+        raise InvalidInput(f'action="{action}" needs slug (the item).')
+    if action == "accept":
+        _only_for('action="accept"', what=(what, "all"), advance=(advance, False))
+        res = captions.accept(slug, text, title, replace)
+        return {"ok": True, "item": _to_public(res.item), "batch_id": res.batch_id,
+                "replaced_suggestion": res.data["replaced_suggestion"], "replaced": res.data["replaced"]}
+    if action == "skip":
+        _only_for('action="skip"', text=(text, None), title=(title, None), replace=(replace, False),
+                  advance=(advance, False))
+        res = captions.skip(slug, what)
+        return {"ok": True, "item": _to_public(db.get_by_slug(slug)), "batch_id": _written(res.batch_id)}
+    if action == "retry":
+        _only_for('action="retry"', text=(text, None), title=(title, None), replace=(replace, False),
+                  what=(what, "all"))
+        return {"ok": True, "item": _to_public(captions.retry(slug, advance=advance))}
+    raise InvalidInput(f"Unknown action {action!r}: use list, accept, skip or retry.")
+
+
 _DESTRUCTIVE = ToolAnnotations(destructiveHint=True)
 
 
@@ -1321,38 +1504,134 @@ def _list_brand_assets(text_chars=TEXT_PREVIEW_CHARS):
     ]
 
 
-def _posts_for_tag(tag_name, text_chars):
+# #722: paged item lists (which="tag" | "unfiled"): `limit` rows per page, read in SQL (never the
+# whole list at once), and an opaque `cursor` naming the view and where the next page starts.
+LIST_PAGE_DEFAULT = 100
+LIST_PAGE_MAX = 500
+
+
+def _page_limit(limit, default=None):
+    if limit is None:
+        return default or LIST_PAGE_DEFAULT
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= LIST_PAGE_MAX:
+        raise InvalidInput(f"limit must be a whole number from 1 to {LIST_PAGE_MAX}.", code="bad_limit")
+    return limit
+
+
+def _make_cursor(view, offset):
+    raw = json.dumps({"v": view, "o": offset}, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _read_cursor(cursor, view):
+    """The offset a cursor continues from (0 for none). bad_cursor when it isn't one of ours;
+    cursor_view_mismatch when it belongs to another list (another tag, unfiled vs a tag)."""
+    if cursor is None or cursor == "":
+        return 0
+    try:
+        data = json.loads(base64.urlsafe_b64decode(str(cursor) + "=" * (-len(str(cursor)) % 4)))
+        offset = data["o"]
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("bad offset")
+    except (ValueError, TypeError, KeyError, binascii.Error) as e:
+        raise InvalidInput("cursor is not a next_cursor this tool gave out. Start again without it.",
+                           code="bad_cursor") from e
+    if data.get("v") != view:
+        raise InvalidInput("cursor belongs to another list (another which= or tag). Use the next_cursor of "
+                           "this same list, or start again without it.", code="cursor_view_mismatch")
+    return offset
+
+
+def _paged(view, fetch, limit, cursor, text_chars, shape=None, default=None):
+    """One page: {items (listed shape), next_cursor (null at the end), more, limit}. `fetch(limit,
+    offset)` reads rows in SQL (the policy's browse clause applies there); the per-item policy then
+    drops any it hides, so a page can hold fewer than `limit` items while `more` is still true.
+    `shape(rows)` (optional) replaces the listed shape and must apply the item policy itself."""
+    limit = _page_limit(limit, default)
+    offset = _read_cursor(cursor, view)
+    rows = fetch(limit + 1, offset)
+    more = len(rows) > limit
+    page = rows[:limit]
+    items_out = shape(page) if shape is not None else         [_to_public_listed(r, text_chars=text_chars) for r in policy.filter_visible(page)]
+    return {"items": items_out,
+            "next_cursor": _make_cursor(view, offset + limit) if more else None, "more": more, "limit": limit}
+
+
+def _tag_or_404(tag_name):
     tag = tags_svc.find_any(tag_name)  # #563: a lookup must not create the tag
     if tag is None:
         raise NotFound(f"No such tag: {tag_name!r}")
-    rows = db.list_posts_for_tag(tag["id"], limit=10000)  # the policy's browse clause applies in db
-    return [_to_public_listed(r, text_chars=text_chars) for r in policy.filter_visible(rows)]  # #557
+    return tag
+
+
+def _posts_for_tag(tag_name, text_chars, limit=None, cursor=None):
+    """One page of the items tagged `tag_name` or any tag under it (#722: paged in SQL)."""
+    tag = _tag_or_404(tag_name)
+    return _paged(f"tag:{tag['id']}", lambda n, o: db.list_posts_for_tag(tag["id"], limit=n, offset=o),
+                  limit, cursor, text_chars)  # the policy's browse clause applies in db; filter_visible in _paged
+
+
+def _unfiled(text_chars, limit=None, cursor=None):
+    """#556: one page of the items on no card: the /unfiled page's list (db.list_unfiled_items, its
+    default view: no brand assets, current revisions only), newest first."""
+    return _paged("unfiled", lambda n, o: db.list_unfiled_items(limit=n, offset=o), limit, cursor, text_chars)
+
+
+def _similar(slug, text_chars):
+    """#556: look-alikes of one item, as GET /api/image/{slug}/similar finds them (core/similarity.py,
+    read-only), each with similarity_reason (visual | text | both) and similarity_score."""
+    _viewable_item(slug)
+    out = []
+    for m in similarity.find_similar(slug):
+        row = db.get_by_slug(m["slug"])
+        if row is None or not policy.can_view(row):  # #557
+            continue
+        out.append({**_to_public_listed(row, text_chars=text_chars), "similarity_reason": m["reason"],
+                    "similarity_score": round(m["score"], 3)})
+    return out
 
 
 @mcp.tool(selector="which")
-def constructicon_list_items(which: typing.Literal["redacted", "restricted", "brand_assets", "tag"],
-                             tag: str | None = None, text_chars: int = TEXT_PREVIEW_CHARS) -> list[dict]:
-    """List items of one kind (listed shape, text previews):
-    "tag": everything tagged `tag` or any tag under it (walks the tag tree; tag required).
+def constructicon_list_items(which: typing.Literal["redacted", "restricted", "brand_assets", "tag", "unfiled", "similar"],
+                             tag: str | None = None, text_chars: int = TEXT_PREVIEW_CHARS, slug: str | None = None,
+                             limit: int | None = None, cursor: str | None = None) -> list[dict] | dict:
+    """List items of one kind (listed shape: text previews, big type_metadata values trimmed):
+    "tag": everything tagged `tag` or any tag under it (walks the tag tree; tag required). PAGED.
+    "unfiled": the items on no card, as the web's Unfiled page lists them (no brand assets, current
+      revisions), newest first. PAGED.
+    "similar": look-alikes of the item `slug` (required): same picture re-saved, or similar text;
+      each with similarity_reason (visual | text | both) and similarity_score; best first. A list.
     "brand_assets": logos, icons and other brand assets, with is_brand_asset and brand_role.
     "redacted": every redacted item (the only listing that has them; admin).
     "restricted": every sensitive item (keys, certificates, items marked sensitive), each with
       `projects` [{title, slug}] and `sensitive_reason` (admin).
-    E.g. constructicon_list_items(which="tag", tag="3D Printing").
+    PAGED lists answer {items, next_cursor, more, limit}: limit 1..500 (default 100); pass
+    next_cursor back as cursor= for the next page (null = the end). A page can hold fewer than limit
+    items while more is true (items you can't see are left out).
+    E.g. constructicon_list_items(which="tag", tag="3D Printing", limit=200).
     """
     chars = text_chars_arg(text_chars)
     if which == "tag":
+        _only_for('which="tag"', slug=(slug, None))
         if not (tag or "").strip():
             raise InvalidInput('which="tag" needs tag (a tag name).')
-        return _posts_for_tag(tag, chars)
-    _only_for(f'which="{which}"', tag=(tag, None))
+        return _posts_for_tag(tag, chars, limit, cursor)
+    if which == "unfiled":
+        _only_for('which="unfiled"', tag=(tag, None), slug=(slug, None))
+        return _unfiled(chars, limit, cursor)
+    if which == "similar":
+        _only_for('which="similar"', tag=(tag, None), limit=(limit, None), cursor=(cursor, None))
+        if not (slug or "").strip():
+            raise InvalidInput('which="similar" needs slug (the item to find look-alikes of).')
+        return _similar(slug, chars)
+    _only_for(f'which="{which}"', tag=(tag, None), slug=(slug, None), limit=(limit, None), cursor=(cursor, None))
     if which == "redacted":
         return _list_redacted(chars)
     if which == "restricted":
         return _list_restricted(chars)
     if which == "brand_assets":
         return _list_brand_assets(chars)
-    raise InvalidInput(f"Unknown which {which!r}: use tag, brand_assets, redacted or restricted.")
+    raise InvalidInput(f"Unknown which {which!r}: use tag, unfiled, similar, brand_assets, redacted or restricted.")
 
 
 @mcp.tool(alias_of=("constructicon_list_items", "redacted"))
@@ -1842,10 +2121,13 @@ def constructicon_set_project_writeup(project_id: str | int, slug: str, owner_wo
 
 
 @mcp.tool()
-def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREVIEW_CHARS) -> dict | None:
+def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREVIEW_CHARS,
+                              full_writeup: bool = False) -> dict | None:
     """One card in full: its fields and live status (kind, activity, stage, stop_reason + labels,
-    needs_input), items (with tags; text previews), cover, write-up
-    (whole), open_decisions, families / members / children, links (both directions), its face
+    needs_input), items (with tags; text previews), cover, write-up (a preview like the items: its
+    text and type_metadata.body cut to text_chars (at least 300), with body_chars and body_truncated; full_writeup=true
+    sends it whole, or read it with constructicon_get(writeup_slug)), open_decisions, families /
+    members / children, links (both directions), its face
     text (synopsis, flavor, writeup_lead, face_text, face_text_source) and agent_notes (your private
     notes, from constructicon_set_agent_notes(card=...); null when none). For a read-before-change
     view with level, needs and recent changes: constructicon_explain_card.
@@ -1877,7 +2159,14 @@ def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREV
     if project.get("writeup_slug"):
         writeup_row = db.get_by_slug(project["writeup_slug"])
         if writeup_row and policy.can_view(writeup_row):  # #557
-            writeup = _to_public(writeup_row)
+            body = (writeup_row.get("type_metadata") or {}).get("body")
+            body_chars = len(body) if isinstance(body, str) else 0
+            if full_writeup:
+                writeup = {**_to_public(writeup_row), "body_chars": body_chars, "body_truncated": False}
+            else:  # #722: a preview, like every other item here
+                writeup = _to_public_listed(writeup_row, text_chars=chars)
+                writeup["body_chars"] = body_chars
+                writeup["body_truncated"] = "body" in writeup.get("type_metadata_cut_keys", [])
 
     return {
         **_to_public_project(project),
@@ -2330,7 +2619,9 @@ def constructicon_tags(action: typing.Literal["tree", "get", "rename", "merge", 
 
 @mcp.tool(alias_of=("constructicon_list_items", "tag"))
 def constructicon_get_posts_for_tag(tag_name: str, text_chars: int = TEXT_PREVIEW_CHARS) -> list[dict]:
-    return _posts_for_tag(tag_name, text_chars_arg(text_chars))
+    # #722: still a bare list (its old shape), but only the first LIST_PAGE_MAX items, read in SQL;
+    # list_items(which="tag") pages through the rest.
+    return _posts_for_tag(tag_name, text_chars_arg(text_chars), limit=LIST_PAGE_MAX)["items"]
 
 
 def _detach_tag(slug, tag_name):
@@ -2414,26 +2705,38 @@ def _agent_notes_target(args):
 
 @mcp.tool(selector=(_agent_notes_target, ("slug", "card")))
 def constructicon_set_agent_notes(slug: str | None = None, notes: str | None = None,
-                                  card: str | int | None = None) -> dict | None:
+                                  card: str | int | None = None, append: bool = False) -> dict | None:
     """Set (or, with null, clear) your private working notes on an item (slug=) or a card (card=, its
     id or slug); exactly one of them. E.g. "Fusion 360 screenshot, not user-facing", or story details
     the owner mentioned for a later write-up. Never shown in the app, the web API, search or exports.
+    append=true ADDS notes under what is there as a dated block ("--- 2026-10-27 ---", Mountain Time,
+    then the text) instead of replacing it: the safe way to add to notes you haven't read (empty
+    notes with append is refused).
     Read them back: constructicon_get(slug, include=["agent_notes"]) for an item,
     constructicon_get_project(card) for a card. Undoable.
-    -> the item (or card) plus agent_notes; a card also gets batch_id.
+    -> the item (or card) plus agent_notes (the whole notes after); a card, and any append, also
+    gets batch_id.
     """
     if (slug is None) == (card is None):
         raise InvalidInput("Pass exactly one of slug= (an item) or card= (a card).")
+    if not isinstance(append, bool):
+        raise InvalidInput("append must be true or false.")
     if card is not None:  # #745: the card twin, through the card service (not_found if missing)
-        res = cards.set_agent_notes(card, notes)
+        res = cards.set_agent_notes(card, notes, append=append)  # #763: the append is atomic in core
         return {**_to_public_project(res.data["card"]), "agent_notes": res.data["agent_notes"],
                 "batch_id": res.batch_id}
-    items.update(slug, agent_notes=notes)  # #541 phase D: through the item service (not_found if missing)
+    if append:  # #763: read-and-add inside one transaction, in the item service
+        res = items.append_agent_notes(slug, notes)
+    else:
+        res = items.update(slug, agent_notes=notes)  # #541 phase D: through the item service (not_found if missing)
     row = db.get_by_slug(slug)
     # Never return the raw DB row: it carries the `embedding` BLOB, which
     # isn't JSON-serializable, so the tool call itself failed for every row
     # that had been through OCR (#211).
-    return {**_to_public(row), "agent_notes": row.get("agent_notes")}
+    out = {**_to_public(row), "agent_notes": row.get("agent_notes")}
+    if append:  # #763: the append's batch, so it can be undone; the plain set's answer is unchanged (#745)
+        out["batch_id"] = _written(res.batch_id)
+    return out
 
 
 @mcp.tool()

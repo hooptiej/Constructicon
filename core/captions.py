@@ -828,6 +828,111 @@ def needs_caption(limit=50, include_failed=True):
     return policy.filter_exportable(policy.filter_visible(rows))[:limit]
 
 
+# --- The caption review queue, shared by the web review page and MCP caption_review (#556) ---
+
+SKIP_WHAT = ("all", "caption", "title")
+
+
+def review_queue(limit=500, offset=0):
+    """(#409, #542) Items with a caption or short-title suggestion waiting for review, as the
+    caption review page lists them (GET /api/captions/unreviewed; MCP
+    constructicon_caption_review(action="list")). Each: slug, name, kind ("caption": a caption, maybe
+    with a title, waiting to become the description; "title": only a short title, the description is
+    already accepted), caption, caption_by, description, title, title_by, thumb_url, detail_url.
+    The item policy decides what the actor sees (#603: a flagged image can be in it).
+    limit / offset page it in SQL (the web page reads the first 500, as before; MCP caption_review pages
+    with review_entries over its own SQL page)."""
+    return review_entries(db.list_unaccepted_captions(limit=limit, offset=offset))
+
+
+def review_entries(rows):
+    """review_queue's entries for these db.list_unaccepted_captions rows, the item policy applied."""
+    from . import item_title
+    out = []
+    for r in policy.filter_visible(rows):
+        tm = r.get("type_metadata") or {}
+        has_desc = bool((r.get("content_description") or "").strip())
+        out.append({
+            "slug": r["slug"],
+            "name": item_title.title_of(r),
+            "kind": "title" if has_desc else "caption",
+            "caption": "" if has_desc else (tm.get(METADATA_KEY) or "").strip(),
+            "caption_by": tm.get("auto_caption_model"),
+            "description": (r.get("content_description") or "").strip() if has_desc else "",
+            "title": (tm.get(TITLE_KEY) or "").strip() if not (r.get("short_title") or r.get("display_name")) else "",
+            "title_by": tm.get(TITLE_MODEL_KEY) or tm.get("auto_caption_model"),
+            "thumb_url": f"/f/{r['slug']}/thumb",
+            "detail_url": f"/object/{r['slug']}",
+        })
+    return out
+
+
+def retry(slug, advance=False):
+    """(#239, #250) (Re-)run the caption suggestion for one item: queued for web's worker (#549), the
+    item shows "pending" until it lands. advance=True runs the NEXT step of STEPS once (a "Regenerate"
+    for variety), else step 0 with the cascade. Refusals: 404 (missing or hidden), 409
+    `captions_disabled` (this install has no caption model: write one with set_caption instead), 400
+    for a redacted item or a type that isn't captioned. Returns the item row after."""
+    row = policy.viewable_item(slug, message=f"No item {slug!r}.")  # 404 if missing or not viewable
+    if row["redacted"]:
+        raise InvalidInput("File was redacted — there's no image left to caption")
+    spec = object_types.get_object_type(row.get("media_type"))
+    if spec.caption_capable and DISABLED:
+        raise Conflict("Captions are off on this install (CAPTION_DISABLED), so no caption model can run again. "
+                       "Nothing was queued. Look at it (MCP constructicon_view) and write one with "
+                       "constructicon_set_caption, or turn captioning on.", code="captions_disabled")
+    if not should_caption(spec):
+        if spec.caption_capable:  # the breaker is open
+            raise Conflict(f"Captioning is paused: {_breaker_reason}. Nothing was queued; reset the breaker in "
+                           "Admin > Caption tuning, then try again.", code="captions_paused")
+        raise InvalidInput(f"Captioning isn't available for {spec.label} content")
+    mark_pending(slug)  # pipeline bookkeeping, owned by this module (#541 phase D)
+    if advance:
+        next_step = ((row.get("type_metadata") or {}).get(STEP_KEY, 0) + 1) % len(STEPS)
+        run_caption(slug, next_step, False)  # #592: persists into caption_queue
+    else:
+        run_caption(slug)
+    return db.get_by_slug(slug)
+
+
+def accept(slug, text=None, title=None, replace=False):
+    """(#787, #542) The review page's Accept: `text` becomes the description (content_description) and
+    `title` the short title, as ONE undoable batch (items.set_caption, accept=True). Blank text or title
+    = the suggestion as it stands. Unedited suggestion text keeps the model that wrote it; anything
+    else is the owner's. 409 `would_replace_suggestion` (details.existing) when it would replace text a
+    local model didn't write, unless replace=True. Returns items.set_caption's Result."""
+    from . import items  # lazy: core.items imports this module
+    row = policy.viewable_item(slug, message=f"No item {slug!r}.")  # 404 if missing or not viewable
+    tm = row.get("type_metadata") or {}
+    text = (text or "").strip() or None
+    title = (title or "").strip() or None
+    # Blank = the suggestion as the review queue shows it (a "title"-kind entry offers no caption).
+    if text is None and not (row.get("content_description") or "").strip():
+        text = (tm.get(METADATA_KEY) or "").strip() or None
+    if title is None and not (row.get("short_title") or row.get("display_name")):
+        title = (tm.get(TITLE_KEY) or "").strip() or None
+    unedited = (text is None or text == (tm.get(METADATA_KEY) or "").strip()) and \
+               (title is None or title == (tm.get(TITLE_KEY) or "").strip())
+    return items.set_caption(slug, text, title=title, accept=True, replace=replace,
+                             model=None if unedited else OWNER_MODEL)
+
+
+def skip(slug, what="all"):
+    """(#409, #542) Mark a suggestion reviewed-but-not-used, so it leaves the review queue without
+    becoming the description: what = "all" (the caption and its title), "caption" or "title". One
+    undoable item_update batch. Returns items.update's Result (batch_id None when already skipped)."""
+    from . import items  # lazy: core.items imports this module
+    if what not in SKIP_WHAT:
+        raise InvalidInput("what must be all, caption or title")
+    policy.viewable_item(slug, message=f"No item {slug!r}.")  # 404 if missing or not viewable
+    meta = {}
+    if what in ("all", "caption"):
+        meta["auto_caption_dismissed"] = True
+    if what in ("all", "title"):
+        meta[TITLE_DISMISSED_KEY] = True
+    return items.update(slug, type_metadata=meta)
+
+
 def count_needs_caption(include_failed=True):
     """How many items needs_caption would list with no limit (Admin shows this)."""
     return db.list_needs_caption(caption_capable_types(), include_failed=include_failed, count_only=True)

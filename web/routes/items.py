@@ -411,20 +411,9 @@ def api_retry_caption(request: Request, slug: str, background_tasks: BackgroundT
     last one, so repeated clicks give real variety instead of repeating
     the same greedy default. advance=False (the "Generate" case, no prior
     caption) behaves as before: start at step 0 and auto-cascade on empty."""
-    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
-    if row["redacted"]:
-        raise HTTPException(status_code=400, detail="File was redacted — there's no image left to caption")
-    spec = object_types.get_object_type(row.get("media_type"))
-    if not captions.should_caption(spec):
-        raise HTTPException(status_code=400, detail=f"Captioning isn't available for {spec.label} content")
-    captions.mark_pending(slug)  # pipeline bookkeeping, owned by core/captions.py (#541 phase D)
-    if advance:
-        current_step = row["type_metadata"].get(captions.STEP_KEY, 0)
-        next_step = (current_step + 1) % len(captions.STEPS)
-        captions.run_caption(slug, next_step, False)  # #592: persists into caption_queue, no background task
-    else:
-        captions.run_caption(slug)
-    return JSONResponse(_to_public(db.get_by_slug(slug)))
+    # #556: the same op as MCP constructicon_caption_review(action="retry"); refusals keep their 400s,
+    # plus 409 captions_disabled / captions_paused (it used to say "isn't available" for those too).
+    return JSONResponse(_to_public(captions.retry(slug, advance=advance)))
 
 
 @router.post("/api/image/{slug}/caption/mark-used")
@@ -459,23 +448,7 @@ def api_captions_unreviewed(request: Request):
     a short title: the item's description is already accepted, typically a backfill proposal for
     an item whose long caption used to be its name). Accept is POST /api/captions/{slug}/accept;
     skip is POST /api/captions/{slug}/skip."""
-    out = []
-    for r in policy.filter_visible(db.list_unaccepted_captions()):  # #603: a flagged image can be captioned
-        tm = r.get("type_metadata") or {}
-        has_desc = bool((r.get("content_description") or "").strip())
-        out.append({
-            "slug": r["slug"],
-            "name": item_title.title_of(r),
-            "kind": "title" if has_desc else "caption",
-            "caption": "" if has_desc else (tm.get("auto_caption") or "").strip(),
-            "caption_by": tm.get("auto_caption_model"),
-            "description": (r.get("content_description") or "").strip() if has_desc else "",
-            "title": (tm.get(captions.TITLE_KEY) or "").strip() if not (r.get("short_title") or r.get("display_name")) else "",
-            "title_by": tm.get(captions.TITLE_MODEL_KEY) or tm.get("auto_caption_model"),
-            "thumb_url": f"/f/{r['slug']}/thumb",
-            "detail_url": f"/object/{r['slug']}",
-        })
-    return JSONResponse(out)
+    return JSONResponse(captions.review_queue())  # #556: shared with MCP caption_review(action="list")
 
 
 @router.post("/api/captions/{slug}/accept")
@@ -486,15 +459,7 @@ def api_caption_accept(slug: str, text: str = Form(""), title: str = Form(""), r
     `would_replace_suggestion` (details.existing = each text that would go) when it would replace
     something a local model didn't write, unless replace=true: the page shows that and offers
     Replace. Answers {ok, batch_id, replaced_suggestion, replaced, item}."""
-    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
-    tm = row.get("type_metadata") or {}
-    text = (text or "").strip() or None
-    title = (title or "").strip() or None
-    # Unedited suggestion text keeps the model that wrote it; anything else is the owner's.
-    unedited = (text is None or text == (tm.get(captions.METADATA_KEY) or "").strip()) and \
-               (title is None or title == (tm.get(captions.TITLE_KEY) or "").strip())
-    res = items.set_caption(slug, text, title=title, accept=True, replace=replace,
-                            model=None if unedited else captions.OWNER_MODEL)
+    res = captions.accept(slug, text, title, replace)  # #556: shared with MCP caption_review(action="accept")
     return JSONResponse({"ok": True, "batch_id": res.batch_id, "replaced_suggestion": res.data["replaced_suggestion"],
                          "replaced": res.data["replaced"], "item": _to_public(res.item)})
 
@@ -504,15 +469,7 @@ def api_caption_skip(slug: str, what: str = Form("all")):
     """#409: mark an auto-caption suggestion reviewed-but-not-used, so it drops
     out of the confirm_caption queue without being copied into the description.
     #542: `what` = "all" (default: the caption and its title), "caption" or "title"."""
-    if what not in ("all", "caption", "title"):
-        raise HTTPException(status_code=400, detail="what must be all, caption or title")
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
-    meta = {}
-    if what in ("all", "caption"):
-        meta["auto_caption_dismissed"] = True
-    if what in ("all", "title"):
-        meta[captions.TITLE_DISMISSED_KEY] = True
-    res = items.update(slug, type_metadata=meta)
+    res = captions.skip(slug, what)  # #556: shared with MCP caption_review(action="skip")
     return JSONResponse({"ok": True, "batch_id": res.batch_id})
 
 

@@ -1280,8 +1280,10 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   The same picture under different bytes (resized, recompressed, re-exported), which #615 can't see.
   **Human-confirmed, never automatic.** Candidates: un-redacted IMAGES (`db.list_lookalike_images`) by the
   perceptual hash the OCR pipeline already stores (`capture_events.perceptual_hash`, 64-bit pHash; no new
-  hash); a pair is a candidate at Hamming distance <= `lookalike_match.MAX_DISTANCE` (6; similarity's
-  "similar" uses 8; measure on prod with the script below before tuning), found exactly with pigeonhole
+  hash); a pair is a candidate at Hamming distance <= `lookalike_match.MAX_DISTANCE` (**2**, owner decision
+  2026-10-28 from the read-only prod measurement on #759: 0/2/4/6 bits gave 70/84/103/107 groups and no
+  threshold separates copies from look-alikes; 2 = 84 groups / 178 photos, fewest false alarms, and resized
+  copies at 4 such as HooptieJlogo3 / logo3Big are knowingly missed; similarity's "similar" uses 8), found exactly with pigeonhole
   buckets (no O(n^2) scan). Left out: degenerate hashes (`is_degenerate_hash`, moved here from
   `similarity.py`, which re-exports it), BYTE-IDENTICAL pairs (#615's job; sha256 only for distance-0
   same-size pairs, cached), pairs in ONE revision chain (#477) and pairs answered "Not the same". A group is
@@ -2475,9 +2477,9 @@ configuration gap for that session, not evidence the server itself is gone.
   more, limit}` + `summary`, `unreadable`; default limit 20), each group with its members (slug, filename,
   width, height, file size, dates, cards, copy marker), pairs and distances, the suggested `keep` and `why`,
   `answered` / `new_members`; `confirm` folds keeping `keep` (returns `batch_id`, `left_out`); `dismiss` is
-  "Not the same". Roles as the web routes: list viewer, confirm / dismiss editor. Unlike
-  `constructicon_duplicates(apply)` it is not dry-run by default (it folds one group a person looked at;
-  one undo reverses it). See "Look-alike photos" under "Service layer".
+  "Not the same". Roles as the web routes: list viewer, confirm / dismiss editor. **confirm and dismiss
+  are DRY-RUN BY DEFAULT** (owner, 2026-10-28), like `constructicon_duplicates(apply)`: pass
+  `dry_run=false` to fold / record. The web routes are not (a click is the confirmation). See "Look-alike photos" under "Service layer".
 - `mcp_server/server.py` still carries some stale-vocabulary rough edges
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.

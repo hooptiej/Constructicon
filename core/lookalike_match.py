@@ -16,13 +16,13 @@ its pairs, a group that later gains a new look-alike comes back holding just the
 items it matches (the question is only about the newcomer).
 """
 
-MAX_DISTANCE = 6
-"""Hamming distance (bits of 64) at or under which two images are a look-alike CANDIDATE. Conservative on
-purpose: core/similarity.py's "similar" suggestions use 8, which also catches different shots of one
-scene; a resized or recompressed copy of the same photo usually lands at 0-4, a light crop or re-export
-a little higher. 6 keeps those and leaves out most merely similar pictures. Every candidate is still
-shown to a person before anything is folded; scripts/measure_lookalikes_759.py prints the distance
-histogram on a prod copy so the number can be set from measurement, not guesswork."""
+MAX_DISTANCE = 2
+"""Hamming distance (bits of 64) at or under which two images are a look-alike CANDIDATE. Owner decision
+2026-10-28, from the read-only prod measurement posted on #759 (scripts/measure_lookalikes_759.py): at
+distance 0 / 2 / 4 / 6 there are 70 / 84 / 103 / 107 groups, and no threshold separates true copies from
+mere look-alikes. 2 gives 84 groups / 178 photos. Resized copies that land at 4 (HooptieJlogo3 /
+logo3Big) are knowingly missed: the owner chose the fewest false alarms. (core/similarity.py's
+"similar" suggestions use 8.) Every candidate is still shown to a person before anything is folded."""
 
 MIN_HASH_BITS = 3
 """#587 item 2: a 64-bit hash with fewer (or, mirrored, more) set bits than this is degenerate."""

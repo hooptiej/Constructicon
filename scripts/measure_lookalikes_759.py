@@ -17,7 +17,7 @@ environment variable, else <db dir>/../storage). If no storage folder is found i
 counts no pair as byte-identical (never silently).
 
     python3 scripts/measure_lookalikes_759.py /path/to/copy-of-constructicon.db [--storage DIR]
-        [--max-distance 6] [--histogram 12] [--show 60]
+        [--max-distance 2] [--histogram 12] [--show 60]
 
 Exit status: 0 on success, 2 when the database can't be opened or has no capture_events table.
 """

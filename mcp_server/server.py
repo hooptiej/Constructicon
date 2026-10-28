@@ -1791,7 +1791,7 @@ def constructicon_duplicates(action: typing.Literal["plan", "apply"] = "plan", d
 
 @mcp.tool(selector="action", annotations=_DESTRUCTIVE)
 def constructicon_lookalikes(action: typing.Literal["list", "confirm", "dismiss"] = "list", keep: str | None = None,
-                             slugs: list[str] | None = None, dry_run: bool = False, limit: int | None = None,
+                             slugs: list[str] | None = None, dry_run: bool = True, limit: int | None = None,
                              cursor: str | None = None) -> dict:
     """Look-alike photos: the same picture under different bytes (resized, recompressed, re-exported),
     found by perceptual hash and never folded without a yes. Byte-identical copies are
@@ -1801,6 +1801,8 @@ def constructicon_lookalikes(action: typing.Literal["list", "confirm", "dismiss"
       cards, copy_marker}], pairs: [{a, b, distance}], answered, new_members}], next_cursor, more,
       limit, summary}. `keep` is the suggested keeper (same rule as duplicates), `why` says what
       decided; `answered` = pairs already said "Not the same", `new_members` = what is being asked now.
+    "confirm" and "dismiss" are DRY-RUN BY DEFAULT: they answer as the write would and write nothing;
+      pass dry_run=false to fold / record.
     "confirm" (keep=<slug>, slugs=optional subset of the group): "same photo, keep this one". The kept
       photo inherits the others' cards, tags, blank text fields, flags, related links and covers; the
       others go to the trash (7-day undo), ONE batch. A member answered "Not the same" against the
@@ -1808,10 +1810,11 @@ def constructicon_lookalikes(action: typing.Literal["list", "confirm", "dismiss"
       Refusals: not_found, forbidden, not_in_group, lookalike_conflict, nothing_to_fold.
     "dismiss" (slugs=[2+ photos of one group]): "not the same", remembered per pair so it is never
       asked again. -> {ok, batch_id, pairs}. Refusal: not_lookalikes.
-    Example: constructicon_lookalikes(action="confirm", keep="abc123", dry_run=True)
+    Example: constructicon_lookalikes(action="confirm", keep="abc123") (a dry run), then again with
+    dry_run=False to fold.
     """
     if action == "list":
-        _only_for('action="list"', keep=(keep, None), slugs=(slugs, None), dry_run=(dry_run, False))
+        _only_for('action="list"', keep=(keep, None), slugs=(slugs, None), dry_run=(dry_run, True))
         built = lookalikes.plan()
         groups = built["groups"]
         page = _paged("lookalikes", lambda n, o: groups[o:o + n], limit, cursor, 0, shape=lambda rows: rows,

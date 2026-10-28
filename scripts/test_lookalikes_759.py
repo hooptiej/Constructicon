@@ -165,7 +165,10 @@ check("a degenerate hash (all zeros, one lone bit) is no hash",
       and lm.hash_int(h()) is not None and lm.hash_int("abc") is None)
 check("similarity re-exports the same degenerate check (one definition)",
       __import__("core.similarity", fromlist=["x"]).is_degenerate_hash is lm.is_degenerate_hash)
-check("MAX_DISTANCE is a conservative named constant (<= similarity's 8)", 0 < lm.MAX_DISTANCE <= 8)
+check("MAX_DISTANCE is the owner's measured choice, 2 (#759, 2026-10-28)", lm.MAX_DISTANCE == 2, lm.MAX_DISTANCE)
+_w = lm.build({"p": h(), "q": h([1, 2]), "r": h([10, 11, 12])})
+check("at the default threshold a 2-bit pair groups and a 3-bit one does not",
+      [g["members"] for g in _w["groups"]] == [["p", "q"]], _w["groups"])
 built = lm.build({"a": h(), "b": h([1]), "c": h([1, 2]), "z": "0000000000000000"}, dismissed={("a", "b")})
 check("build: a dismissed pair leaves its group, the rest still groups",
       [g["members"] for g in built["groups"]] == [["a", "b", "c"]] and built["groups"][0]["answered"] == [("a", "b")]
@@ -410,8 +413,14 @@ check("an item gives members and the keeper's why",
       all(k in p1["items"][0]["members"][0] for k in ("slug", "filename", "width", "height", "file_size", "date", "cards")))
 check("a foreign cursor is refused", err(S.constructicon_lookalikes(cursor="eyJ2IjoidW5maWxlZCIsIm8iOjB9")) == "cursor_view_mismatch")
 check("list refuses keep= (does not apply)", err(S.constructicon_lookalikes(keep="a_one")) == "bad_request")
-out = S.constructicon_lookalikes(action="confirm", keep="a_one", dry_run=True)
-check("confirm dry run over MCP", out.get("ok") and out["dry_run"] and out["trashed"] == ["a_two"] and out["batch_id"], out)
+check("list refuses dry_run=false (does not apply)", err(S.constructicon_lookalikes(dry_run=False)) == "bad_request")
+_before = snapshot()
+out = S.constructicon_lookalikes(action="confirm", keep="a_one")
+check("MCP confirm is a dry run by default (nothing written)",
+      out.get("ok") and out["dry_run"] and out["trashed"] == ["a_two"] and out["batch_id"] and snapshot() == _before, out)
+out = S.constructicon_lookalikes(action="dismiss", slugs=["s_open", "s_secret"])
+check("MCP dismiss is a dry run by default (nothing written)",
+      out.get("ok") and out["dry_run"] and snapshot() == _before, out)
 check("confirm with an unknown keeper: not_found", err(S.constructicon_lookalikes(action="confirm", keep="nope")) == "not_found")
 check("confirm with a keeper in no group: not_in_group",
       err(S.constructicon_lookalikes(action="confirm", keep="d_far")) == "not_in_group")
@@ -420,8 +429,8 @@ check("confirm naming a slug outside the group: not_in_group",
 check("a viewer's confirm is refused (forbidden)",
       err(as_user("la_view", S.constructicon_lookalikes, action="confirm", keep="a_one")) == "forbidden")
 check("a viewer may list", "items" in as_user("la_view", S.constructicon_lookalikes))
-out = S.constructicon_lookalikes(action="dismiss", slugs=["s_open", "s_secret"])
-check("dismiss over MCP", out.get("ok") and out["pairs"] == [["s_open", "s_secret"]] and out["batch_id"], out)
+out = S.constructicon_lookalikes(action="dismiss", slugs=["s_open", "s_secret"], dry_run=False)
+check("dismiss over MCP with dry_run=false records it", not out.get("dry_run") and out.get("ok") and out["pairs"] == [["s_open", "s_secret"]] and out["batch_id"], out)
 cards.undo(out["batch_id"], actor=actor.ACTOR_MCP)
 
 # ---- 9. web routes --------------------------------------------------------------------------

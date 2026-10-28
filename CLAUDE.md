@@ -2211,6 +2211,19 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
   and AND/OR/NOT/NEAR are plain punctuation/words, never FTS5 syntax (`db._search_match`). It is
   NOT a substring match: "ning" does not find "Tuning". A query with no letters or digits finds
   nothing. Up to 16 words.
+- **Run-together filenames (#762):** the view's `filename` column also holds the name split at CamelCase
+  and letter/digit boundaries (`ElCamino.jpeg` -> `El Camino jpeg`, `OldTalonFR` -> `Old Talon FR`,
+  `Elcamino4` -> `Elcamino 4`; `_ - . ( )` become spaces), after the original, and only when a boundary
+  was inserted (a plain name indexes as before). Pure SQL (`_FILENAME_PARTS_SQL`, a recursive CTE in
+  the view), so no connection needs a registered function: a bare `sqlite3.connect` can write. ASCII
+  capitals only. **Filename fallback:** `db.search(filename_fallback=True)` (`/api/search`, MCP search;
+  not `/api/gallery`, whose totals are word-start) runs ONLY when word start found nothing: the query's
+  words run together, letters/digits only, accents and case folded (`el camino 4` -> `elcamino4`), as a
+  substring of the visible filenames (Python, not LIKE, so `%`/`_` are never wildcards), under the same
+  clauses, tag filter and limit, newest first; 3+ characters. Those rows carry `search_matched`; the API
+  and MCP put `matched` on every result (`word_start` | `inside_filename` | null with no query), and the
+  pickers (related, revision, blog builder) say "Matched inside a filename". So `el camino` finds
+  `Elcamino4.jpeg` only while no name has an `el`+`camino` word start (`ElCamino.jpeg` does).
 - **Ranking:** with a query, best match first by bm25 with column weights (name > filename > tags
   and card titles > note > OCR text), ties newest first. With no query it is newest first, as before.
 - **Visibility is unchanged:** the same SQL clauses as ever (redacted, restricted types, flagged
@@ -2226,7 +2239,7 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
   (SQLite >= 3.43; the image has 3.46) so there is no second copy of the OCR text and the triggers
   never need old values. A NEW table or column that should be searchable goes into
   `item_search_src` + `_search_sync_triggers()`, and needs a rebuild migration (#542's is
-  `search_short_title_542`). `_ensure_search_schema` re-creates the view and any trigger whose
+  `search_short_title_542`; #762's is `search_filename_parts_762`). `_ensure_search_schema` re-creates the view and any trigger whose
   stored definition differs from the code's, so an existing DB never keeps an old one.
 - **Schema vs data:** `_ensure_search_schema()` (table, view, triggers; idempotent) runs at every
   boot in both processes; the one-time backfill is the `search_index_543` migration (web process),
@@ -2234,7 +2247,7 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
   (`db.check_search_index()` reports missing/stale rows). `db.list_tables()` hides the `item_search*`
   tables (derived data, not part of `reset.CLEARED_TABLES`/`KEPT_TABLES`); "database exactly as
   before" snapshot tests skip them too (their bytes differ after an undo, their content does not).
-- Check with `scripts/test_search_543.py` (throwaway DB).
+- Check with `scripts/test_search_543.py` and `scripts/test_search_camel_762.py` (throwaway DBs).
 
 ## MCP server: `constructicon-mcp` (issue #68, resolved)
 
@@ -2612,7 +2625,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
   - object types and previews: `check_object_types`, `test_types_602`, `test_previews_606_607`,
     `test_email_type`, `test_traditional_media`, `test_raw_view_703` (the code raw view), `test_office` (live),
     `check_type_samples` and `test_type_samples_720` (the type sampler covers every type and sniffs right, #720);
-  - pages, search, dates, UI: `test_search_543`, `test_mcp_search_cap_697` (MCP text previews), `test_item_title_542`,
+  - pages, search, dates, UI: `test_search_543`, `test_search_camel_762` (run-together filenames), `test_mcp_search_cap_697` (MCP text previews), `test_item_title_542`,
     `test_captions_titles_787_743` (short titles, the set_caption guard, mid-word captions, the backfill), `test_mountain_time_544` (`.py` and
     `.js`), `test_home_paging_624` (`.py` and `.js`), `test_item_grid_553` (`.py` and `.js`), `test_home_payload`, `test_autocomplete`,
     `test_timeline_dates`, `test_timeline_drag_593` (`.py`) with `test_timeline_drag` and

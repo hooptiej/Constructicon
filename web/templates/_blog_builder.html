@@ -359,6 +359,13 @@
         objectPickerList.appendChild(el);
       });
       if (!items || items.length === 0) objectPickerList.innerHTML = '<div class="blog-empty">No matches.</div>';
+      else if (items.some((item) => item.matched === 'inside_filename')) {
+        // #762: the results came from the filename fallback, not a word-start match; say so.
+        const note = document.createElement('div');
+        note.className = 'blog-empty search-matched-note';
+        note.textContent = 'Matched inside a filename: no word starts with what you typed, so these names contain it run together.';
+        objectPickerList.insertBefore(note, objectPickerList.firstChild);
+      }
     } catch (err) { console.error('load objects failed', err); }
   }
   let objSearchT;

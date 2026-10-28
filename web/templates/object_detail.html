@@ -1477,8 +1477,11 @@ document.addEventListener('constructicon:upload-complete', (e) => {
       relatedPickerGrid.innerHTML = '<p class="empty-state">No matching items to add.</p>';
       return;
     }
-    relatedPickerGrid.innerHTML = candidates.map(i =>
-      `<button type="button" class="existing-avatar-thumb${i.redacted ? ' redacted-thumb' : ''}" data-slug="${i.slug}" title="${escapeHtml(i.display_name)}${i.redacted ? ' (redacted)' : ''}">${i.thumb_url ? `<img src="${i.thumb_url}" loading="lazy">` : ''}</button>`
+    // #762: say so when the results came from the filename fallback, not a word-start match.
+    const relatedNote = candidates.some(i => i.matched === 'inside_filename')
+      ? '<p class="empty-state search-matched-note" style="grid-column: 1 / -1">Matched inside a filename: no word starts with what you typed, so these names contain it run together.</p>' : '';
+    relatedPickerGrid.innerHTML = relatedNote + candidates.map(i =>
+      `<button type="button" class="existing-avatar-thumb${i.redacted ? ' redacted-thumb' : ''}" data-slug="${i.slug}" title="${escapeHtml(i.display_name)}${i.redacted ? ' (redacted)' : ''}${i.matched === 'inside_filename' ? ' (matched inside a filename)' : ''}">${i.thumb_url ? `<img src="${i.thumb_url}" loading="lazy">` : ''}</button>`
     ).join('');
   }
 
@@ -1593,7 +1596,9 @@ document.addEventListener('constructicon:upload-complete', (e) => {
     const res = await fetch('/api/search?' + params);
     const found = (await res.json()).filter(i => i.slug !== '{{ item.slug }}' && !i.redacted);
     if (!found.length) { revGrid.innerHTML = '<p class="empty-state">No matching files.</p>'; return; }
-    revGrid.innerHTML = found.slice(0, 40).map(i =>
+    const revNote = found.some(i => i.matched === 'inside_filename')  // #762
+      ? '<p class="empty-state search-matched-note" style="grid-column: 1 / -1">Matched inside a filename: no word starts with what you typed, so these names contain it run together.</p>' : '';
+    revGrid.innerHTML = revNote + found.slice(0, 40).map(i =>
       '<button type="button" class="rev-pick" data-slug="' + escapeHtml(i.slug) + '">' +
       (i.thumb_url ? '<img src="' + escapeHtml(i.thumb_url) + '" loading="lazy" alt="">' : '<span class="rev-pick-noimg"></span>') +
       '<span>' + escapeHtml(i.display_name) +

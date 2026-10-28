@@ -829,8 +829,11 @@ def constructicon_replace_file(slug: str, content_base64: str, filename: str | N
 def constructicon_search(query: str | None = None, tags: list[str] | None = None,
                          text_chars: int = TEXT_PREVIEW_CHARS) -> list[dict]:
     """Search items by name (title, any filename it has had), tags, card titles, note or extracted
-    text. Each word matches the START of a word ("tun" finds "Tuning"); all words are required;
-    best match first. Not a substring search. query and tags together: both must match.
+    text. Each word matches the START of a word ("tun" finds "Tuning"; a run-together filename is
+    split too, so "camino" finds "ElCamino.jpeg"); all words are required; best match first. When
+    nothing matches that way, the words run together are looked for INSIDE filenames ("el camino"
+    finds "Elcamino4.jpeg"); each result's `matched` says which: "word_start" or "inside_filename"
+    (null with no query). query and tags together: both must match.
     tags (any of them, any case) filters on the tag tree: an item carrying one of these tags, or any
     tag under one (a card's own tag counts). Redacted items are left out
     (constructicon_list_items(which="redacted")). The text preview is centred on the first query
@@ -839,8 +842,11 @@ def constructicon_search(query: str | None = None, tags: list[str] | None = None
     chars = text_chars_arg(text_chars)
     # #477: old revisions are still found, marked with `superseded_by` (the current revision's slug) and `rev`.
     # #557: db.search applies the policy's browse clause; the per-item policy is checked here too.
-    return revisions.decorate([_to_public_listed(r, query, chars)
-                               for r in policy.filter_visible(db.search(query=query, tags=tags))])
+    # #762: the filename fallback, and `matched` on every result (never a silent change of meaning).
+    return revisions.decorate([
+        {**_to_public_listed(r, query, chars),
+         "matched": r.get("search_matched", db.SEARCH_MATCHED_WORD_START) if query else None}
+        for r in policy.filter_visible(db.search(query=query, tags=tags, filename_fallback=True))])
 
 
 GET_INCLUDES = ("related", "revisions", "agent_notes")

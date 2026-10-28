@@ -268,17 +268,17 @@ check("include_superseded=False lists only the current revision",
 # ---- 5. shape -----------------------------------------------------------------------------------
 print("--- 5. response shape ---")
 from web.routes.items import _to_public  # noqa: E402
-want_keys = set(_to_public(db.get_by_slug("yt-tune")).keys()) | {"rev", "superseded_by"}
+want_keys = set(_to_public(db.get_by_slug("yt-tune")).keys()) | {"rev", "superseded_by", "matched"}  # #762: matched
 r = api("tuning")
 body = r.json()
 check("/api/search is 200 and a flat list", r.status_code == 200 and isinstance(body, list) and len(body) == 1, r.text[:200])
-check("each /api/search item has the public-item keys (nothing added, nothing dropped)",
+check("each /api/search item has the public-item keys (+ #762 matched; nothing else added or dropped)",
       set(body[0].keys()) <= want_keys and set(_to_public(db.get_by_slug("yt-tune")).keys()) <= set(body[0].keys()),
       sorted(set(body[0].keys()) ^ want_keys))
 with actor.acting_as(actor.ACTOR_MCP):
     m = mcp.constructicon_search(query="tuning")
 # #697: plus the text-preview fields (extracted_text_chars, extracted_text_truncated)
-mcp_keys = set(mcp._to_public(db.get_by_slug("yt-tune")).keys()) | {"rev", "superseded_by",
+mcp_keys = set(mcp._to_public(db.get_by_slug("yt-tune")).keys()) | {"rev", "superseded_by", "matched",  # #762
                                                                     "extracted_text_chars", "extracted_text_truncated"}
 check("the MCP search is a list of MCP public items (its own shape + the #697 preview fields)",
       isinstance(m, list) and len(m) == 1 and set(m[0].keys()) == mcp_keys, sorted(set(m[0].keys()) ^ mcp_keys) if m else m)

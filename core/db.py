@@ -7,6 +7,7 @@ import re
 import sqlite3
 import threading
 import time
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -648,7 +649,8 @@ def _trash_expires_nullable(conn):
 # title match outranks a match inside OCR text):
 #   display_name (+ short_title, #542), content_description, filename   every name an item has ever worn (a rename must
 #                                                  not make the old filename unfindable; title_of()
-#                                                  in core/item_title.py picks only ONE of them)
+#                                                  in core/item_title.py picks only ONE of them).
+#                                                  #762: filename also holds its CamelCase/digit split.
 #   tags          the names of its tag-tree tags (post_tags). #555: the tree is the one tag store; the
 #                 `capture_events.tags` column is only a derived cache of the chips, so it is not read
 #                 here (a card's linked tag the cache leaves out is still found, by its name).
@@ -668,12 +670,39 @@ SEARCH_COLUMNS = ("display_name", "content_description", "filename", "tags", "ca
 SEARCH_WEIGHTS = (12.0, 12.0, 10.0, 8.0, 8.0, 4.0, 1.0)  # bm25 column weights, SEARCH_COLUMNS order
 _SEARCH_COLS_SQL = ", ".join(SEARCH_COLUMNS)
 
-_SEARCH_VIEW = """
+# #762: a run-together filename ("ElCamino.jpeg", "OldTalonFR.jpeg", "Elcamino4.jpeg") is one word to
+# the tokenizer, so "camino" or "talon" never matched its start. The filename column also carries the
+# name split at its CamelCase and letter/digit boundaries ("El Camino jpeg", "Old Talon FR jpeg",
+# "Elcamino 4 jpeg"; `_ - . ( )` become spaces), appended after the original so every old prefix
+# match still holds. Only when the split inserted a boundary: a plain name adds nothing, so its
+# ranking is unchanged. Pure SQL (a recursive CTE walking the name one character at a time), so no
+# connection needs a Python function registered: every writer (web, MCP, undo, scripts, the sqlite3
+# shell) fires the triggers safely. ASCII case only (GLOB [A-Z]); an accented capital doesn't split.
+_FILENAME_BOUNDARY_SQL = (  # 1 when a word starts at character i of f (not counting `_ - . ( )`)
+    "(i > 1 AND ("
+    "(substr(f, i - 1, 1) GLOB '[a-z]' AND substr(f, i, 1) GLOB '[A-Z]') "
+    "OR (substr(f, i - 1, 1) GLOB '[A-Za-z]' AND substr(f, i, 1) GLOB '[0-9]') "
+    "OR (substr(f, i - 1, 1) GLOB '[0-9]' AND substr(f, i, 1) GLOB '[A-Za-z]') "
+    "OR (substr(f, i - 1, 1) GLOB '[A-Z]' AND substr(f, i, 1) GLOB '[A-Z]' AND substr(f, i + 1, 1) GLOB '[a-z]')))")
+_FILENAME_PARTS_SQL = f"""(SELECT CASE WHEN n > 0 THEN out ELSE '' END FROM (
+    WITH RECURSIVE s(i, out, n, f) AS (
+        SELECT 1, '', 0, COALESCE(ce.filename, '')
+        UNION ALL
+        SELECT i + 1,
+               out || CASE WHEN substr(f, i, 1) IN ('_', '-', '.', '(', ')') THEN ' '
+                           WHEN {_FILENAME_BOUNDARY_SQL} THEN ' ' || substr(f, i, 1)
+                           ELSE substr(f, i, 1) END,
+               n + {_FILENAME_BOUNDARY_SQL},
+               f
+        FROM s WHERE i <= length(f))
+    SELECT out, n FROM s ORDER BY i DESC LIMIT 1))"""
+
+_SEARCH_VIEW = f"""
 CREATE VIEW IF NOT EXISTS item_search_src AS
 SELECT ce.id AS id,
        TRIM(COALESCE(ce.display_name, '') || ' ' || COALESCE(ce.short_title, '')) AS display_name,
        COALESCE(ce.content_description, '') AS content_description,
-       COALESCE(ce.filename, '') AS filename,
+       TRIM(COALESCE(ce.filename, '') || ' ' || {_FILENAME_PARTS_SQL}) AS filename,
        COALESCE((SELECT group_concat(name, ' ') FROM (
            SELECT bt.name AS name FROM post_tags pt JOIN blog_tags bt ON bt.id = pt.tag_id
            WHERE pt.post_slug = ce.slug)), '') AS tags,
@@ -1741,6 +1770,13 @@ def _mig_search_tags_tree_555():
     print(f"schema_migrations: search_tags_tree_555 re-indexed {rows} item(s) in {secs:.2f}s", flush=True)
 
 
+def _mig_search_filename_parts_762():
+    # #762: the search view's filename column now also holds the name split at its CamelCase and
+    # letter/digit boundaries ("ElCamino.jpeg" -> "El Camino jpeg"); re-read every item once.
+    rows, secs = rebuild_search_index()
+    print(f"schema_migrations: search_filename_parts_762 re-indexed {rows} item(s) in {secs:.2f}s", flush=True)
+
+
 def _mig_search_short_title_542():
     # #542: the search view's name column now carries short_title too; re-read every item once.
     rows, secs = rebuild_search_index()
@@ -1774,6 +1810,7 @@ MIGRATIONS = [
     ("search_short_title_542", _mig_search_short_title_542),
     (MIGRATION_555, _mig_tags_one_store_555),
     ("search_tags_tree_555", _mig_search_tags_tree_555),
+    ("search_filename_parts_762", _mig_search_filename_parts_762),
 ]
 
 
@@ -2654,8 +2691,45 @@ def _search_match(query):
     return " ".join(f'"{w}"*' for w in words) or None
 
 
+# #762: what a result found by the filename fallback carries in `search_matched` (the API and the MCP
+# pass it on as `matched`; a word-start hit has no key here and reads "word_start" there).
+SEARCH_MATCHED_WORD_START = "word_start"
+SEARCH_MATCHED_FILENAME = "inside_filename"
+SEARCH_FALLBACK_MIN_CHARS = 3  # a shorter run-together needle ("el", "x1") would match nearly every name
+
+
+def _search_fold(text):
+    """Lower case, accents folded (as the FTS side's remove_diacritics), only letters and digits kept:
+    "Élcamino_4.JPEG" -> "elcamino4jpeg". Used on both sides of the filename fallback."""
+    decomposed = unicodedata.normalize("NFKD", text or "")
+    return "".join(_SEARCH_WORD_RE.findall("".join(c for c in decomposed if not unicodedata.combining(c)))).casefold()
+
+
+def _search_fallback_needle(query):
+    """The query's words run together and folded ("el camino" -> "elcamino"), or None when too short.
+    Only letters and digits survive, so `%`, `_` and every other character are never a wildcard."""
+    needle = _search_fold(" ".join(_SEARCH_WORD_RE.findall(query or "")[:_SEARCH_MAX_WORDS]))
+    return needle if len(needle) >= SEARCH_FALLBACK_MIN_CHARS else None
+
+
+def _search_filename_fallback(conn, needle, clauses, params, limit):
+    """#762: ids of the items whose filename CONTAINS `needle` (folded both sides), newest first,
+    under exactly the caller's visibility/filter `clauses`, at most `limit`. Done in Python rather than
+    with LIKE so the accent folding matches the FTS side; it only runs when word-start search found
+    nothing, and reads two columns of the visible rows."""
+    where = " AND ".join(clauses + ["ce.filename IS NOT NULL", "ce.filename != ''"])
+    hits = []
+    for r in conn.execute(f"SELECT ce.id AS id, ce.filename AS filename FROM capture_events ce WHERE {where} "
+                          "ORDER BY ce.timestamp DESC, ce.id DESC", params):
+        if needle in _search_fold(r["filename"]):
+            hits.append(r["id"])
+            if len(hits) >= limit:
+                break
+    return hits
+
+
 def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False,
-           include_superseded=True):
+           include_superseded=True, filename_fallback=False):
     """Keyword/filter search over capture_events. With a `query`, best match first (#543: relevance,
     a hit in a name or tag outranks one inside OCR text; ties newest first). Without one, most recent
     first.
@@ -2689,6 +2763,13 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
     and every `db.search(limit=<huge>)` maintenance/discovery pass, since a
     brand asset is a real stored image that still needs thumbnail/date
     backfills, unlike a fileless redacted row).
+
+    #762 `filename_fallback=True` (GET /api/search, MCP constructicon_search): when the word-start
+    search finds NOTHING, look for the query's words run together inside the filenames ("el camino"
+    finds "Elcamino4.jpeg"), case- and accent-insensitive, under exactly the same clauses (visibility,
+    brand, superseded, uploader, tags, limit), newest first. Each such row carries
+    `search_matched = SEARCH_MATCHED_FILENAME` so the caller can say so. Off by default: /api/gallery
+    pairs search() with list_uploaders' word-start totals, which must agree.
     """
     match = None
     if query:
@@ -2729,6 +2810,7 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
                 f"({', '.join('?' * len(wanted))}) UNION SELECT bt.id FROM blog_tags bt JOIN sub ON bt.parent_id = sub.id) "
                 "SELECT id FROM sub))")
             params += wanted
+        base_clauses, base_params = list(clauses), list(params)  # #762: the fallback's exact filter
         if match:
             clauses.insert(0, "item_search MATCH ?")
             params.insert(0, match)
@@ -2741,6 +2823,16 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
         params.append(int(limit))
         try:
             rows = conn.execute(sql, params).fetchall()
+            needle = _search_fallback_needle(query) if (match and not rows and filename_fallback) else None
+            if needle:
+                ids = _search_filename_fallback(conn, needle, base_clauses or ["1"], base_params, int(limit))
+                if ids:
+                    by_id = {r["id"]: r for r in conn.execute(
+                        f"SELECT ce.* FROM capture_events ce WHERE ce.id IN ({','.join('?' * len(ids))})", ids)}
+                    found = [_row_to_dict(by_id[i]) for i in ids if i in by_id]
+                    for row in found:
+                        row["search_matched"] = SEARCH_MATCHED_FILENAME
+                    return found
         except sqlite3.OperationalError as e:
             raise errors.AppError("search_failed", f"search for {query!r} failed in SQLite: {e}", status=500,
                                   details={"query": query, "match": match}) from e

@@ -1037,6 +1037,14 @@ def api_tags(request: Request):
 def api_search(request: Request, query: str = "", tags: str = ""):
     tag_list = [t for t in tags.split(",") if t] or None
     # #557: db.search applies the policy's browse clause; the per-item policy is checked here too.
-    results = policy.filter_visible(db.search(query=query or None, tags=tag_list))
+    results = policy.filter_visible(db.search(query=query or None, tags=tag_list, filename_fallback=True))
     # #477: search still finds old revisions, but marks them (superseded_by = the current one).
-    return JSONResponse(revisions.decorate([_to_public(r) for r in results]))
+    # #762: `matched` says how each result was found: "word_start" (a word starts with what was typed),
+    # "inside_filename" (nothing did, so the words run together were found inside its filename), or
+    # null with no query (the most recent items).
+    out = []
+    for r in results:
+        item = _to_public(r)
+        item["matched"] = r.get("search_matched", db.SEARCH_MATCHED_WORD_START) if query else None
+        out.append(item)
+    return JSONResponse(revisions.decorate(out))

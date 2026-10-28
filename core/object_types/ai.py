@@ -114,6 +114,9 @@ register(ObjectTypeSpec(
     label="Illustrator file",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,
+    # #556 (owner decision 2026-10-28): an Illustrator file is a visual document, captioned from its
+    # rendered first page (the thumbnail), like a PDF; captions toggle and breaker apply.
+    caption_capable=True,
     extensions=frozenset({".ai"}),
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,

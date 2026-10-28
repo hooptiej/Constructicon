@@ -1,4 +1,4 @@
-"""Video support (issue #92): .mov and .mp4 file uploads with frame capture
+"""Video support (issue #92): .mov and .mp4 (and .m4v, #737) file uploads with frame capture
 for thumbnails via ffmpeg.
 
 ffmpeg is installed as a system package (see Dockerfile) and shelled out to
@@ -242,7 +242,9 @@ register(ObjectTypeSpec(
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=False,
     caption_capable=True,  # #239: captions the existing generated thumbnail frame — one frame proved enough in testing, no extra sampling
-    extensions=frozenset({".mov", ".mp4"}),
+    # #737: .m4v is MP4 video (Apple's name; served as video/mp4, #729): the same ffmpeg frame,
+    # ffprobe properties and mvhd creation_time as .mp4.
+    extensions=frozenset({".mov", ".mp4", ".m4v"}),
     capture_fn=capture_thumbnail,
     properties_fn=get_properties,
     # #265: container creation_time -> content_date at upload time (and via

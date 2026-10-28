@@ -216,7 +216,9 @@ register(ObjectTypeSpec(
     label="Audio file",
     thumbnail_source=ThumbnailSource.NONE,
     ocr_capable=False,
-    extensions=frozenset({".mp3", ".m4a", ".ogg", ".wav"}),
+    # #737: .opus is Ogg Opus (served as audio/ogg, #729); ffprobe reads its duration, codec and
+    # Vorbis-comment tags (stream-level, which read_tags already merges) like .ogg.
+    extensions=frozenset({".mp3", ".m4a", ".ogg", ".opus", ".wav"}),
     properties_fn=get_properties,
     embedded_metadata_fn=get_embedded_metadata,
     # #255: written at upload time by core/embedded_metadata.py from the

@@ -134,8 +134,8 @@ OCR-eligibility, metadata) registered into a shared dispatch table.
 |---|---|
 | Image | `.png` `.jpg` `.jpeg` `.ico` `.bmp` `.tiff` `.tif` `.webp` |
 | Animated GIF | `.gif` |
-| Video | `.mov` `.mp4` |
-| Audio | `.mp3` `.m4a` `.ogg` `.wav` |
+| Video | `.mov` `.mp4` `.m4v` |
+| Audio | `.mp3` `.m4a` `.ogg` `.opus` `.wav` |
 | PDF document | `.pdf` |
 | 3D printing file | `.stl` |
 | Photoshop document | `.psd` |

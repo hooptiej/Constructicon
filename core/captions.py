@@ -146,6 +146,9 @@ _breaker_reason = None  # str describing why the circuit breaker is open, or Non
 
 METADATA_KEY = "auto_caption"
 STATUS_KEY = "auto_caption_status"  # "done" | "failed" (absent = never attempted)
+# #556: the reason (type_metadata.auto_caption_failed_reason) when there is no picture to caption.
+NO_PICTURE_REASON = ("no picture to caption: this {label}'s preview image couldn't be made (the file may be "
+                     "corrupt, encrypted or empty); replace the file, then Generate again")
 STEP_KEY = "auto_caption_step"  # #250: index into STEPS last attempted/used (absent = step 0)
 
 # #251: separate from STEP_KEY, which gets overwritten by every subsequent
@@ -1054,7 +1057,11 @@ def _run_caption_now(slug, start_step=0, cascade=True):
         image_path = _caption_source_path(row, spec)
         if image_path is None:
             print(f"caption: no source image for {slug} ({spec.key}) — skipping", flush=True)
-            db._update_content_metadata(slug, type_metadata={STATUS_KEY: "failed"})
+            # #556: say why (a PDF / Illustrator file whose first page couldn't be rendered: corrupt,
+            # encrypted or empty), so the red lamp isn't a bare "failed".
+            db._update_content_metadata(slug, type_metadata={
+                STATUS_KEY: "failed",
+                "auto_caption_failed_reason": NO_PICTURE_REASON.format(label=spec.label.lower())})
             return
         step_index = start_step % len(STEPS)
         step_prompt, step_temperature = STEPS[step_index]

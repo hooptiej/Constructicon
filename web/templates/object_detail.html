@@ -591,6 +591,8 @@ if (refreshThumbBtn) {
 const IS_CAPTION_CAPABLE = {{ item.caption_capable | tojson }};
 let captionStatus = {{ (item.type_metadata.get('auto_caption_status') or '') | tojson }};
 let captionText = {{ (item.type_metadata.get('auto_caption') or '') | tojson }};
+// #556: why the last run failed (e.g. a PDF whose first page couldn't be rendered), shown with the lamp.
+let captionFailedReason = {{ (item.type_metadata.get('auto_caption_failed_reason') or '') | tojson }};
 // #251: which ladder step's text last got copied into description, if any —
 // separate from auto_caption_step so it survives further Regenerate clicks.
 let descriptionCaptionStepLabel = {{ (item.type_metadata.get('description_caption_step_label') or '') | tojson }};
@@ -606,7 +608,8 @@ function renderCaptionPanel() {
   captionPanel.style.display = 'flex';
   const meta = CAPTION_LAMP_META[captionStatus || 'none'];
   document.getElementById('caption-lamp').style.background = meta.color;
-  document.getElementById('caption-label').textContent = meta.label;
+  document.getElementById('caption-label').textContent =
+    (captionStatus === 'failed' && captionFailedReason) ? meta.label + ': ' + captionFailedReason : meta.label;
   const btn = document.getElementById('caption-retry-btn');
   btn.disabled = captionStatus === 'pending';
   btn.textContent = captionStatus === 'pending' ? 'Running…' : (captionText ? 'Regenerate' : 'Generate');
@@ -637,6 +640,7 @@ async function pollCaption() {
         if (tm.auto_caption_status !== 'pending') {
           captionStatus = tm.auto_caption_status || '';
           captionText = tm.auto_caption || '';
+          captionFailedReason = tm.auto_caption_failed_reason || '';
           renderCaptionPanel();
           return;
         }

@@ -3124,7 +3124,9 @@ def constructicon_explain_card(card: str | int) -> dict:
     """Everything about a card, to read BEFORE proposing a change (read-only): identity, status (+
     labels, `provisional`), whereabouts, provenance, highlight, hobbies, families, members, parent,
     children, links, `home` (+ source, dangling_override) and `home_chain`, `files` (counts, date
-    range), `level` (the 0-5 pips, each with a reason), open_decisions, needs, warnings,
+    range), `level` (the 0-5 pips, each with a reason), `caption_check` (the Curator's caption
+    check: passed, excused, reason, excused_files = [{type, label, count, reason}] for files of a
+    type that isn't captioned, e.g. Word/PowerPoint/spreadsheets), open_decisions, needs, warnings,
     suggestions (provenance, typed links) and recent_changes (last 5, with batch ids)."""
     return cards.explain_card(card)
 

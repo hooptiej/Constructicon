@@ -104,7 +104,7 @@
         <span style="width:9px;height:9px;border-radius:50%;background:#B9B4A0"></span>not scored
       </span>
       {% else %}
-      <span class="project-health-badge" title="Curator health: {{ _passed|length }} of {{ _applicable|length }} checks passed{% if project_score.unmet %} — missing: {% for u in project_score.unmet %}{{ u.dimension }}/{{ u.item }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600">
+      <span class="project-health-badge" title="Curator health: {{ _passed|length }} of {{ _applicable|length }} checks passed{% if project_score.unmet %} — missing: {% for u in project_score.unmet %}{{ u.dimension }}/{{ u.item }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}{% for c in project_score.checklist %}{% if c.item == 'captions' and c.excused_files %} · Captions: {{ c.reason }}{% endif %}{% endfor %}" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600">
         <span style="width:9px;height:9px;border-radius:50%;background:{% if project_score.band=='green' %}#3FA34D{% elif project_score.band=='yellow' %}#D9A400{% else %}#C0392B{% endif %}"></span>
         {{ project_score.score }}% · {{ _passed|length }}/{{ _applicable|length }}
       </span>

@@ -437,7 +437,7 @@ def golden_view(label, value):
     created_at, no longer an upload time), so list_needs compares as a set (sorted by key); and the queue
     gained `needs_date` items (an undated file with no card range to borrow), so curation_queue compares
     without them (empty groups dropped, counts recomputed)."""
-    value = mask_555(mask_765(mask_725(value)))
+    value = mask_556(mask_555(mask_765(mask_725(value))))
     if label in ("move_files", "copy_files") and isinstance(value, dict):
         # #555: a transfer used to count a file that had the card's tag but not its CHIP as gaining the
         # tag (the #590 chip stamp). Chips are derived now, so only real post_tags changes count; the
@@ -511,6 +511,19 @@ def mask_765(value):
             return [walk(x) for x in v]
         return v
     return walk(value)
+
+
+def mask_556(value):
+    """#556 gave the caption check a plain reason ("1 of 3 captionable files have a caption ... Not
+    counted: 2 Word documents (...)"), which is now the thin_captions nudge's summary (and the queue
+    item's detail) instead of the bare "thin_captions: <card>". For the golden comparison only, both
+    sides mask that text; scripts/test_type_casting_737_790_556.py checks the reason itself."""
+    if isinstance(value, dict):
+        hit = value.get("kind") == "thin_captions"
+        return {k: ("<reason>" if hit and k in ("summary", "detail") else mask_556(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [mask_556(v) for v in value]
+    return value
 
 
 def mask_725(value):

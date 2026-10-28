@@ -65,6 +65,7 @@
     var status = tm.auto_caption_status || 'none';
     var meta = CAPTION_LAMP_META[status] || CAPTION_LAMP_META.none;
     var title = status === 'done' ? (tm.auto_caption || 'Caption came back empty') : meta.title;
+    if (status === 'failed' && tm.auto_caption_failed_reason) title = meta.title + ': ' + tm.auto_caption_failed_reason;  // #556: say why
     return lamp(meta.color, title);
   }
 

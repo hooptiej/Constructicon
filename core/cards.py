@@ -2162,6 +2162,7 @@ def explain_card(card):
     change. Returns a dict: identity, status (kind/activity/stage/stop_reason, `provisional`),
     whereabouts, provenance, highlight, face text (synopsis / flavor / writeup_lead), hobbies, families, members, parent, children, links,
     home (+ `home_chain`), files (counts per type, date span), level (pips + reasons),
+    caption_check (#556: the Curator's caption check, with the files it excuses and why),
     open_decisions, needs (computed + stored for this card), warnings, suggestions,
     recent_changes. Read-only."""
     from . import card_level  # lazy: card_level imports db/timeline only, but keeps cards.py's import graph flat
@@ -2203,6 +2204,12 @@ def explain_card(card):
         "suggestions": suggestions,
         "recent_changes": recent,
     }
+    from . import curator  # lazy, like card_level above
+    # #556: the Curator's caption check, so an agent sees which files it counts and which it excuses
+    # (and why: "Word documents aren't captioned; their text is extracted instead").
+    out["caption_check"] = next(({k: c.get(k) for k in ("passed", "excused", "reason", "excused_files")}
+                                 for c in (curator.score_project(row) or {}).get("checklist", [])
+                                 if c["item"] == "captions"), None)
     from . import sharing  # lazy: sharing imports this module
     out["sharing"] = sharing.state("card", row["id"])  # #604 step 3
     if out["home_override"] and row["home_kind"] in ("card", "hobby"):

@@ -15,7 +15,7 @@ their hobby_settings, #562), blog
 entries, card/item questions and their snoozes, the caption queue and the trash. On disk: each
 item's file and thumbnail, and the whole <storage>/.trash directory (held redacted files too).
 
-What it keeps (KEPT_TABLES): settings, the install config (#562), user accounts and sessions (#467), the editable provenance lists, the
+What it keeps (KEPT_TABLES): settings, the install config (#562), user accounts and sessions (#467), the editable provenance lists and word lists (#556), the
 migration record and the audit/change log (the reset's own record lives there). (#704: the
 imagerepo client tables are gone; on an install where #704 kept them for their data, delete-all
 leaves them alone.) A table in
@@ -41,6 +41,7 @@ CLEARED_TABLES = (
     "capture_events", "projects", "blog_tags",
 )
 KEPT_TABLES = ("app_settings", "audit_log", "install_config", "provenance_options",
+               "vocab_terms",  # #556: the editable brand roles + wallpaper tags, like provenance options
                "schema_migrations", "users", "sessions",
                "item_access_log",  # #604 follow-up 7: a log, like audit_log (who opened sensitive items)
                "mcp_tokens")  # #604 step 5: users' MCP tokens stay with the users

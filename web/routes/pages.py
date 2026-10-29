@@ -10,7 +10,7 @@ from core import card_rules, cards, curation_queue, curator, db, install_config,
 from core import hobbies, physical_piece, provenance_options
 from core import tags as tags_svc
 from core import hobby_label as hobby_label_rules
-from core.db import BRAND_ROLES
+from core import vocab
 from web import files_feed, item_grid
 from web.common import _build_breadcrumbs, _rev_note, templates
 from web.shapes import _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _hobby_cover, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_hobby_face, _to_object_detail, _to_public, _to_timeline_project
@@ -570,8 +570,9 @@ def brand_kit_page(request: Request):
 @router.get("/wallpaper", response_class=HTMLResponse)
 def wallpaper_page(request: Request):
     """Wallpaper home (#422) — a large-preview, download-oriented gallery of
-    every wallpaper-tagged object (see db.WALLPAPER_TAG_NAMES)."""
-    return templates.TemplateResponse(request, "wallpaper.html", {})
+    every wallpaper-tagged object (the tags are vocab 'wallpaper_tag', editable in Admin, #556).
+    #780: Download all (.zip) (GET /api/wallpapers/download.zip), with the left-out counts beside it."""
+    return templates.TemplateResponse(request, "wallpaper.html", {"wallpaper_tags": vocab.terms(vocab.WALLPAPER_TAG)})
 
 
 @router.get("/gallery/user/{uploader}", response_class=HTMLResponse)
@@ -654,7 +655,7 @@ def object_detail_page(request: Request, slug: str):
     return templates.TemplateResponse(
         request, "object_detail.html",
         {"item": item, "tag_chips": tag_chips, "can_edit_tags": roles.at_least(my_role, roles.EDITOR),
-         "redact_hold": redact_hold, "sensitive_ctl": sensitive_ctl, "can_replace_file": roles.at_least(my_role, roles.EDITOR), "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": BRAND_ROLES, "physical": physical},
+         "redact_hold": redact_hold, "sensitive_ctl": sensitive_ctl, "can_replace_file": roles.at_least(my_role, roles.EDITOR), "revisions": revisions.revision_view(slug), "full_url": full_url, "full_object_url": full_object_url, "related": related, "breadcrumbs": breadcrumbs, "file_provenance_options": provenance_options.picker_options("file", item.get("provenance")), "file_provenance_label": provenance_options.label("file", item.get("provenance")), "BRAND_ROLES": vocab.terms(vocab.BRAND_ROLE), "physical": physical},
     )
 
 

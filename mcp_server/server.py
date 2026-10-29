@@ -63,6 +63,7 @@ from core import blog, changes, hobbies, membership, parse_limits, reset, sharin
 from core import besteffort, install_config
 from core import hobby_label as hobby_label_rules
 from core import tags as tags_svc
+from core import vocab as vocab_svc
 from core import paths
 from core import similarity, transcripts
 
@@ -327,6 +328,7 @@ ACTION_ROLES = {
     ("constructicon_tags", "delete"): E,
     ("constructicon_tags", "sweep_apply"): E,
     ("constructicon_list_provenance_options", None): V,
+    ("constructicon_list_vocab", None): V,
     ("constructicon_needs", "queue"): V,
     ("constructicon_needs", "nudges"): V,
     ("constructicon_needs", "caption"): V,
@@ -2792,6 +2794,17 @@ def constructicon_list_provenance_options(scope: str = "card", include_retired: 
     opts = provenance_options.list_options(scope, include_retired=include_retired)
     return {"ok": True, "scope": scope,
             "options": [{k: o[k] for k in ("key", "label", "sort_order", "retired")} for o in opts]}
+
+
+@mcp.tool()
+def constructicon_list_vocab(vocab: str = "brand_role") -> dict:
+    """The word lists the owner edits in /admin. vocab: "brand_role" (the suggested roles
+    for constructicon_update fields.brand_role; a custom role is still allowed) or "wallpaper_tag"
+    (the tag names that put an item on the Wallpaper page, any case).
+    -> {ok, vocab, terms: [{term, sort_order}]}.
+    """
+    return {"ok": True, "vocab": vocab,
+            "terms": [{"term": t["term"], "sort_order": t["sort_order"]} for t in vocab_svc.list_terms(vocab)]}
 
 
 @mcp.tool(alias_of=("constructicon_update", None))

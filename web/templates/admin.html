@@ -174,6 +174,40 @@
       <div id="prov-status" class="backup-status" role="status" aria-live="polite"></div>
     </section>
 
+    <!-- Word lists (#556): the brand roles the item page's picker offers, and the tag names the
+         Wallpaper page gathers. Add / rename / remove / merge (brand roles) / reorder, each one
+         undoable batch. Rendered by static/js/admin-vocab.js from GET/POST /api/vocab/<list>
+         (core/vocab.py, change-logged). -->
+    <section class="admin-panel admin-panel-wide" id="admin-vocab-section" aria-labelledby="admin-vocab-heading">
+      <div class="admin-panel-header">
+        <div>
+          <h2 id="admin-vocab-heading">Word lists</h2>
+          <div class="admin-row-hint">Brand roles: renaming one renames it on every item that has it; one still in use can't be removed, merge it into another role instead. Wallpaper tags: which tag names put a picture on the Wallpaper page; removing one says how many pictures leave the page.</div>
+        </div>
+      </div>
+      <div class="prov-lists">
+        <div class="prov-list" data-vocab="brand_role">
+          <h3 id="vocab-heading-brand_role">Brand roles</h3>
+          <ul class="prov-items" id="vocab-items-brand_role" aria-labelledby="vocab-heading-brand_role"></ul>
+          <form class="vocab-add prov-add" data-vocab="brand_role" autocomplete="off">
+            <label for="vocab-add-brand_role">New brand role <span class="optional">(one lowercase word: letters, digits, - and _)</span></label>
+            <input type="text" class="input mono" id="vocab-add-brand_role" maxlength="40" required>
+            <button type="submit" class="btn-ms">Add brand role</button>
+          </form>
+        </div>
+        <div class="prov-list" data-vocab="wallpaper_tag">
+          <h3 id="vocab-heading-wallpaper_tag">Wallpaper tags</h3>
+          <ul class="prov-items" id="vocab-items-wallpaper_tag" aria-labelledby="vocab-heading-wallpaper_tag"></ul>
+          <form class="vocab-add prov-add" data-vocab="wallpaper_tag" autocomplete="off">
+            <label for="vocab-add-wallpaper_tag">New wallpaper tag <span class="optional">(a tag name, any case)</span></label>
+            <input type="text" class="input" id="vocab-add-wallpaper_tag" maxlength="100" required>
+            <button type="submit" class="btn-ms">Add wallpaper tag</button>
+          </form>
+        </div>
+      </div>
+      <div id="vocab-status" class="backup-status" role="status" aria-live="polite"></div>
+    </section>
+
     <!-- Tags (#555): the tag tree, the one tag store, with rename / merge / move / delete (each one
          undoable batch), and the cleanup sweep, which only LISTS orphan, empty and near-duplicate tags:
          nothing is deleted until the owner ticks them and confirms. Rendered by static/js/admin-tags.js
@@ -527,6 +561,7 @@
 <script src="/static/js/mountain-time.js?v={{ static_version('js/mountain-time.js') }}"></script>
 <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
 <script src="/static/js/admin-tags.js?v={{ static_version('js/admin-tags.js') }}"></script>
+<script src="/static/js/admin-vocab.js?v={{ static_version('js/admin-vocab.js') }}"></script>
 <script nonce="{{ csp_nonce() }}">
 (function () {
   function escapeHtml(s) {

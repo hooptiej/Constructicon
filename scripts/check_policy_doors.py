@@ -90,6 +90,7 @@ DOORS = {
     ("mcp_server/server.py", "_retry_ocr"): "MCP run_type_action(retry_ocr), retry_ocr (#746: was ungated)",
     ("core/site_export.py", "build_site"): "static site export",
     ("core/project_export.py", "export_project"): "project zip export",
+    ("core/wallpapers.py", "plan"): "#780 the wallpaper zip + its summary (GET /api/wallpapers/download.zip, download-summary)",
     # #603: a flagged item can be in flight or captioned, so these name items now.
     ("web/routes/items.py", "api_processing"): "GET /api/processing (in-flight items' names)",
     ("core/captions.py", "review_entries"): "GET /api/captions/unreviewed (caption review page), MCP caption_review(list) (#556)",
@@ -339,6 +340,7 @@ MCP_TOOLS = {
     "constructicon_create_tag": (NONE, "a tag"),
     "constructicon_tags": (NONE, "#555: the tag tree, tag management and the cleanup list (tags and counts, no item rows)"),
     "constructicon_list_provenance_options": (NONE, "option lists"),
+    "constructicon_list_vocab": (NONE, "word lists (#556)"),
     "constructicon_set_project_status": (NONE, "alias"),
     "constructicon_set_status": (NONE, "alias"),
     "constructicon_set_kind": (NONE, "alias"),

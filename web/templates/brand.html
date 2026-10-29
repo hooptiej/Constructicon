@@ -22,6 +22,19 @@
     <div id="brand-assets-container"></div>
   </div>
   <p id="brand-empty" class="empty-state" style="display:none">No brand assets yet — mark objects as brand assets from their detail page.</p>
+
+  {#- #556: the brand-role list is an admin setting. Owner rule #779: everyone else sees it greyed,
+      labelled with the role it needs, and a click says why. -#}
+  <div class="brand-roles-admin" style="margin-top:1.5rem;display:flex;flex-wrap:wrap;align-items:center;gap:0.6rem;font-size:13px">
+    {% if has_role("admin") %}
+    <a class="btn-ms" href="/admin#admin-vocab-section">Change the brand roles</a>
+    {% else %}
+    <button type="button" class="btn-ms" id="brand-roles-locked" aria-disabled="true" aria-describedby="brand-roles-why"
+            style="filter: grayscale(1); cursor: not-allowed;" title="Change the brand roles (admins only)">Change the brand roles (admins only)</button>
+    <span class="dp-muted" id="brand-roles-why" hidden>Changing the list of brand roles needs the admin role, because
+      renaming one renames it on every item. Your account is a {{ current_role() }}. Ask an admin.</span>
+    {% endif %}
+  </div>
 </div>
 
 <style>
@@ -245,6 +258,13 @@ function copyToClipboard(text, btn) {
 }
 
 loadBrandAssets();
+
+const brandRolesLocked = document.getElementById('brand-roles-locked');
+if (brandRolesLocked) {
+  brandRolesLocked.addEventListener('click', () => {
+    document.getElementById('brand-roles-why').hidden = false;
+  });
+}
 </script>
 
 {% endblock %}

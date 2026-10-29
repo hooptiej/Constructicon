@@ -29,7 +29,7 @@ import mimetypes
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from core import object_types
 
@@ -176,6 +176,22 @@ def serve_raw_text(path, filename, codec):
     with open(path, "rb") as fh:
         body = fh.read().decode(codec, errors="replace").encode("utf-8")
     return Response(body, media_type=RAW_TEXT_TYPE, headers=headers)
+
+
+def zip_stream_headers(filename):
+    """#780: a zip of user files built on the fly (the Wallpaper page's Download all). Always a
+    download under its name, nosniff, and the sandbox CSP (belt and braces: it is never a page)."""
+    headers = dict(NOSNIFF)
+    headers["Content-Security-Policy"] = RENDERED_HTML_CSP
+    headers["Content-Disposition"] = _attachment(filename)
+    return headers
+
+
+def serve_zip_stream(chunks, filename, extra_headers=None):
+    """#780: stream `chunks` (an iterator of bytes; a sync generator runs in Starlette's threadpool)
+    as `application/zip` with zip_stream_headers. Nothing is buffered here."""
+    return StreamingResponse(chunks, media_type="application/zip",
+                             headers={**zip_stream_headers(filename), **(extra_headers or {})})
 
 
 def serve_file(path, filename=None, type_name=None, download=False):

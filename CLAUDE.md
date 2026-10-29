@@ -432,7 +432,11 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
 - `require_role(role)` (the dependency) records the label (`request.state.required_role`, written
   by the audit middleware into the request log's `audit_log.required_role` column) and, with
   `roles.ENFORCE` (True since #467 step 2), refuses a request below it: 401 `unauthorized` when the
-  actor holds no role (anonymous), else 403 `forbidden`, shared error shape. `roles.role_of(actor)`:
+  actor holds no role (anonymous), else 403 `forbidden`, shared error shape; since #779 the message
+  (`roles.refusal_message`) names the role needed, the caller's own and who to ask ("This needs the
+  editor role (editors and admins), and your account is a viewer. Ask an admin ..."), with `details:
+  {need, have}` (the access gate's mount refusal and the MCP's ACTION_ROLES refusal carry the same
+  details). `roles.role_of(actor)`:
   `user:<name>` -> that user's role; `token`, `mcp`, `script`, `system`, `migration` (and the legacy
   `owner-ui`) -> admin; `anonymous` and anything unknown -> public (fail closed). Before any route
   runs, `web/auth.py`'s `AccessMiddleware` resolves the request to its route or mount label
@@ -456,8 +460,9 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   hidden"): `can_view` is False for a restricted item unless the actor is an admin (a signed-in
   admin, the install token, the MCP, in-process scripts), so every direct door answers 404 and every
   list drops it; browsing hides restricted items from everyone; exports exclude them.
-  `policy.viewable_item(slug)` (row or 404, then the policy) guards every single-item web route,
-  reads AND writes (an editor can't edit, redact, delete or relate a restricted item either);
+  `policy.viewable_item(slug)` (row or 404, then the policy) guards every single-item web READ;
+  `policy.writable_item(slug)` / `writable_items([(slug, msg), ...])` (#730) every single-item web
+  WRITE (an editor can't edit, redact, delete or relate a restricted item either: 403 saying why, below);
   `policy.require_file(row)` guards `/f/<slug>` and its thumbnail (also 404 for a REDACTED item
   unless admin); `decisions.list_open()` leaves out questions about items the actor can't see.
   Don't decide restriction anywhere else (`object_types.is_restricted` / `restricted_types` outside
@@ -480,16 +485,56 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   restricted_type | hidden | mixed, reasons: {slug: reason}}`; nothing written. Same code, message and
   details over MCP. The grid's bulk bar shows that message as is. An unknown slug keeps its old
   meaning (`missing_ok` skips it, else 404). **Not this rule (owner, PR #727):** `set_sensitive` /
-  `set_provenance` (bulk and single) keep their own 404 for a hidden item, and the single-item WEB
-  routes still answer 404 first (`viewable_item`, the read-door rule above; saying why there is #730).
-  Check: `scripts/test_bulk_visibility_709.py`.
+  `set_provenance` (bulk and single, incl. `POST /api/image/{slug}/sensitive`) keep their own 404 for
+  a hidden item. Check: `scripts/test_bulk_visibility_709.py`.
+- **Single-item web writes say why too (#730).** Every POST under `/api/image/{slug}...` and
+  `/api/captions/{slug}...` (update, delete, redact / unredact / recover, OCR, caption retry / accept /
+  skip / mark-used, dates, thumbnail, type actions, related, revisions, card add / remove, the tag
+  chip's x) and `POST /api/projects/from-related` calls `policy.writable_item` (or `captions.retry` /
+  `accept` / `skip`, which do; MCP `undated(accept)` too): missing = 404, hidden = #709's 403 with the
+  same words and details ("Nothing was changed: this item is marked sensitive, ..."; a two-item route
+  says "1 of the 2 selected items"). The caller named the slug, so this reveals nothing (#709's
+  reasoning). **Reads of a hidden item stay 404** (page, API, revisions, tags), so a page never
+  confirms that a hidden item exists. The PR #727 exceptions above still hold.
+- **The other write doors (#749).** Revision chains (`revisions.mark_superseded` / `remove_from_chain`,
+  web, MCP `revision`, the decision queue's answer) check every named item (`_require_items_visible`:
+  404, then 403 saying why) before the chain rules, and refuse removing an item whose NEIGHBOUR the
+  actor can't see (403, `details.reason` `hidden_neighbour`, the neighbour never named); a returned
+  `chain` lists only slugs the actor may see. `cards.move_files` / `copy_files` / `split_card` check the
+  files named (`viewable_rows`); `merge_cards` refuses when an absorbed card holds files the actor can't
+  see (403 `hidden_files`, `details.hidden` = {card slug: count}: counted, never named). The change log:
+  `cards.list_changes` answers `{changes, withheld, withheld_note}` (MCP `list_changes` too): rows that
+  touch anything hidden from a non-admin are left out AND counted ("2 of the 50 newest changes were
+  left out: ..."), never silently; `undo` of such a row is 403 (`sharing.check_undo_allowed`).
 - **Adding a door** (anything that hands out an item or a list of items, web or MCP): call the
   policy in it, and add it to `DOORS` in `scripts/check_policy_doors.py`. That script (AST, no
   server) fails when a known door stops calling `policy.`, when a GET route or MCP read tool reads
   items (`get_by_slug`, `search`, `list_project_items`, ...) without calling it (unless `EXEMPT`
   with a reason), or when other code decides restriction itself. It can't tell whether the call is
   on the right rows: `scripts/test_role_policy.py` (throwaway DB) proves the behaviour by flipping
-  the switch, then by denying everything, and checks every door refuses.
+  the switch, then by denying everything, and checks every door refuses. Rule 6 (#730): a
+  single-item write route must call `writable_item(s)` (or a `WRITABLE_CORE` op), and no write route
+  may call `viewable_item`, unless listed in `WRITE_404_KEPT` with the owner's reason (only
+  `api_set_sensitive`). Rule 7 (#749): `list_changes` / `undo` go through `_sharing.visible_change_rows`
+  (and report `withheld`) / `_sharing.check_undo_allowed`, which ask `policy.change_row_visible`.
+  `scripts/test_bouncers_730_749_766_779.py` proves #730 / #749 / #766 / #779 and that rules 6-7 fail on
+  a regression.
+- **Permissions never hide features (#779, owner 2026-10-18).** A control the user's role can't use is
+  still drawn, greyed (`.role-locked`: greyscale, never translucent), labelled with the role it needs
+  (title "Delete (editors and admins)"), and a click explains instead of acting. ONE pattern:
+  `web/role_lock.py` (Jinja globals `role_locked(need)`, `role_lock_attrs(need, label, note=None)`,
+  `role_lock_class(need)`, `role_lock_if(need, label)`, `role_lock_message`, `role_need_phrase`) and
+  `static/js/role-lock.js` (base.html, every page: one capture-phase click listener on
+  `.role-locked[data-locked-message]` that stops the click and shows the message; `RoleLock.decorate` /
+  `show` for JS-built controls). The nav tabs' locked message comes from the same helper. Locked today:
+  every details-panel Edit (viewers), the item page's More menu (type actions, Replace file, Remove
+  file, Delete) and "This is sensitive" / "Clear sensitive", the card page's rename pencil, Delete
+  (editor) and Convert (admin), a family chip's x, the hobby page's Convert to card (admin), + New
+  project (home, Unfiled) and + New hobby (/hobbies, the drawer), every file grid's Select (`<grid>-
+  select-locked`, viewers), the Curator queue's and the needs strip's answer / defer / dismiss buttons,
+  the caption review page's Accept / Skip, and the Account page's backup download (admin). Hiding stays
+  ONLY for private content, and for a restricted drawer's markup (its tab is greyed). The older
+  cover-pick and tag-chip locks (`is-locked`, own JS) predate it and work the same way.
 
 ## Users and sessions (#467 step 1: users, sign-in, first-run setup)
 
@@ -955,8 +1000,8 @@ string) + `sensitive_at`. Written only by `items.set_sensitive(slugs, on)`: ONE 
   type stays out of browsing for everyone (unchanged); a flagged item is in browsing for admins and its
   uploader only (`AND (COALESCE(sensitive,0) = 0 OR uploaded_by_user_id = <id>)`, nothing for an admin).
   `list_uploaders`' totals use the same clause, so a `?query=` can't probe a hidden description.
-- **Every door:** item page, item API (and its revisions / similar / every write route through
-  `viewable_item`), `/f/<slug>` and thumbnail (404 for anyone else, signed in or not), browse, search,
+- **Every door:** item page, item API (and its revisions / similar through `viewable_item`; every
+  write route through `writable_item`, 403 saying why since #730), `/f/<slug>` and thumbnail (404 for anyone else, signed in or not), browse, search,
   the gallery, Unfiled, card / hobby / blog lists, exports (`filter_exportable`: never, for anyone), MCP
   get / search / download / view / get_project / get_related, `list_needs_caption` (never offers a
   sensitive item even to the admin MCP: `filter_exportable`, the picture would leave the install), the
@@ -1026,7 +1071,8 @@ and their items) **unless ticked Private.**
   `get_hobby` / `membership.get_card`, which refuse a hidden card as `not_found`).
   `scripts/check_policy_doors.py` rule 5 lists them (`CARD_DOORS`).
 - **The change log:** a non-admin reads only change rows that touch nothing hidden from them
-  (`sharing.visible_change_rows`, used by `cards.list_changes`: MCP `list_changes`), and can't undo one
+  (`sharing.visible_change_rows`, used by `cards.list_changes`: MCP `list_changes`; since #749 the answer
+  counts the rows it left out, `withheld` + `withheld_note`), and can't undo one
   (`sharing.check_undo_allowed`, from `cards.undo`). Undoing a sharing change needs the owner or an admin.
 - **The write guard (step 4, inside private cards only): `policy.check_write`, called by
   `db.insert_change_log` for EVERY logged write** (so every service op, the undo and any future door).
@@ -1083,7 +1129,14 @@ token stays the admin key for scripts and ops.
   refuses it. `last_used_at` is written at most every 10 minutes. Kept by delete-all (`reset.KEPT_TABLES`);
   a deleted user's tokens go with them (`db._delete_user`); a disabled user's are refused until re-enabled.
 - **Who:** every signed-in user (viewer and up) manages ONLY their own tokens; the install token / MCP
-  (no user) get 403 `not_signed_in`. An admin can't see or revoke someone else's (owner question).
+  (no user) get 403 `not_signed_in`. **The one exception (#766, owner decision 2026-10-18): an admin**
+  sees every user's key count, names and last use, and can **revoke ALL** of one user's keys (never see,
+  rotate or make one). `mcp_tokens.by_user()` / `revoke_all(user)` (admin only, else 403 `forbidden`,
+  `details.need` admin): ONE change-log row `mcp_token_revoke_all` (`details`: user, count, each key's id
+  and name; never a secret), not imaged, so undo refuses it; a user with no keys answers `revoked: 0`,
+  "nothing was changed", `batch_id` null. Web: `GET /api/users` carries `mcp_tokens` + `mcp_token_count`
+  per user; `POST /api/users/{id}/mcp-tokens/revoke-all` (admin); Admin > Users' "MCP keys" column with
+  "Revoke all keys" (confirm first, then the answer's message). No MCP tool for it (the web is enough).
 - **Web:** Account page (`/account/password`, the header's name link), section "My MCP tokens"
   (`static/js/account-tokens.js`): make (shows the secret once plus the client config line), rotate
   (confirm), revoke (confirm). API (viewer, JSON bodies): `GET /api/account/mcp-tokens`, `POST
@@ -1099,7 +1152,8 @@ token stays the admin key for scripts and ops.
   token only; a `ctu_` value there is 401 `invalid_token`). Owner question.
 - Check with `scripts/test_mcp_user_tokens_604.py` (throwaway DB: the account API, the secret never at
   rest, authenticate's refusals, the middleware, and real tool calls through the streamable-HTTP app as a
-  user: a card they create is theirs, a viewer can't write, a private card is not_found).
+  user: a card they create is theirs, a viewer can't write, a private card is not_found); the admin
+  side (#766) with `scripts/test_bouncers_730_749_766_779.py`.
 
 ## Service layer (#541): one core module per domain
 

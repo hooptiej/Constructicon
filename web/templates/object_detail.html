@@ -29,18 +29,20 @@
         <button type="button" class="dp-btn dp-more-btn" id="object-more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="object-more-menu">More <span aria-hidden="true">&#9662;</span></button>
         <div class="dp-menu" id="object-more-menu" role="menu" aria-labelledby="object-more-btn" hidden>
           {# #448: generic type-action buttons for per-type handlers #}
+          {#- #779: every action here is an editor write. Below that each one stays in the menu, greyed,
+              and a click says the editor role is needed (web/role_lock.py; role-lock.js stops the click
+              before the page's own handler), never hidden or dead. #}
           {% for a in item.actions %}
-          <button type="button" role="menuitem" class="type-action-btn" data-action="{{ a.key }}" data-confirm="{{ a.confirm }}">{{ a.label }}</button>
+          <button type="button" role="menuitem" class="type-action-btn{{ role_lock_class('editor') }}" data-action="{{ a.key }}" data-confirm="{{ a.confirm }}"{{ role_lock_if('editor', a.label) }}>{{ a.label }}</button>
           {% endfor %}
-          {% if item.is_file and not item.redacted and can_replace_file %}
-          {# #617: new bytes, same item: slug, cards, tags, title and captions stay; the old file goes to the trash (undo). #}
-          <button type="button" role="menuitem" id="replace-file-btn" title="Swap in a new version of this file; the link, cards, tags and title stay">Replace file&hellip;</button>
-          <input type="file" id="replace-file-input" hidden>
-          {% endif %}
           {% if item.is_file and not item.redacted %}
-          <button type="button" role="menuitem" class="dp-menu-warn" id="redact-btn">Remove file, keep info (sensitive content)</button>
+          {# #617: new bytes, same item: slug, cards, tags, title and captions stay; the old file goes to the trash (undo). #}
+          {% if can_replace_file %}<button type="button" role="menuitem" id="replace-file-btn" title="Swap in a new version of this file; the link, cards, tags and title stay">Replace file&hellip;</button>
+          <input type="file" id="replace-file-input" hidden>
+          {% else %}<button type="button" role="menuitem" class="role-locked"{{ role_lock_attrs("editor", "Replacing the file") }}>Replace file&hellip;</button>{% endif %}
+          <button type="button" role="menuitem" class="dp-menu-warn{{ role_lock_class('editor') }}" id="redact-btn"{{ role_lock_if('editor', 'Removing the file') }}>Remove file, keep info (sensitive content)</button>
           {% endif %}
-          <button type="button" role="menuitem" class="dp-menu-danger" id="delete-btn">Delete entirely</button>
+          <button type="button" role="menuitem" class="dp-menu-danger{{ role_lock_class('editor') }}" id="delete-btn"{{ role_lock_if('editor', 'Deleting an item') }}>Delete entirely</button>
         </div>
       </div>
     </div>
@@ -361,8 +363,13 @@
           {% endif %}
           {% if reason and reason.kind == 'flag' and sensitive_ctl.can_unmark %}
             <button type="button" class="dp-btn" id="sensitive-unmark-btn" title="Let everyone who can see ordinary items see this one again">Clear sensitive</button>
+          {% elif reason and reason.kind == 'flag' %}
+            {#- #779: clearing is the uploader or an admin (#603); everyone else sees it greyed, saying so #}
+            <button type="button" class="dp-btn role-locked"{{ role_lock_attrs("admin", "Clearing the sensitive flag", "Its uploader can clear it too.") }}>Clear sensitive</button>
           {% elif not reason and sensitive_ctl.can_mark %}
             <button type="button" class="dp-btn" id="sensitive-mark-btn" title="Lock it: only you, its uploader and admins can see it">This is sensitive</button>
+          {% elif not reason %}
+            <button type="button" class="dp-btn role-locked"{{ role_lock_attrs("editor", "Marking an item sensitive") }}>This is sensitive</button>
           {% endif %}
           <p class="dp-error" id="sensitive-error" role="alert"></p>
         </dd></div>

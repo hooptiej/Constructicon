@@ -16,20 +16,20 @@
   </div>
   <div class="cq-actions">
     {% if i.deferred %}
-    <button type="button" class="dp-btn" data-cq-action="bring-back">Bring back</button>
+    <button type="button" class="dp-btn{{ role_lock_class('editor') }}"{{ role_lock_if('editor', 'Answering or sorting Curator items') }} data-cq-action="bring-back">Bring back</button>
     {% else %}
       {% if i.type == 'question' %}
-        {% if i.suggested and i.suggested.picks %}<button type="button" class="dp-btn dp-btn-primary" data-cq-action="accept">Accept</button>{% endif %}
-        <button type="button" class="dp-btn" data-cq-action="choose" aria-expanded="false">Choose&hellip;</button>
+        {% if i.suggested and i.suggested.picks %}<button type="button" class="dp-btn dp-btn-primary{{ role_lock_class('editor') }}"{{ role_lock_if('editor', 'Answering or sorting Curator items') }} data-cq-action="accept">Accept</button>{% endif %}
+        <button type="button" class="dp-btn{{ role_lock_class('editor') }}"{{ role_lock_if('editor', 'Answering or sorting Curator items') }} data-cq-action="choose" aria-expanded="false">Choose&hellip;</button>
       {% endif %}
-      {% if i.accept_source %}<button type="button" class="dp-btn dp-btn-primary" data-cq-action="accept-date" title="Write this date as the file's date (one undoable change)">Use {{ i.suggested.labels[0].split(',')[0] }}</button>{% endif %}
+      {% if i.accept_source %}<button type="button" class="dp-btn dp-btn-primary{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Write this date as the file's date (one undoable change)"{% endif %} data-cq-action="accept-date">Use {{ i.suggested.labels[0].split(',')[0] }}</button>{% endif %}
       {% if i.kind == 'lookalike' %}
-        <button type="button" class="dp-btn" data-cq-action="lookalike-not-same" title="These are different photos. Remembered: you won't be asked about them again.">Not the same</button>
+        <button type="button" class="dp-btn{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="These are different photos. Remembered: you won't be asked about them again."{% endif %} data-cq-action="lookalike-not-same">Not the same</button>
       {% elif i.type != 'question' or i.kind in ('project_match', 'retype', 'item_supersedes') %}
         <a class="dp-btn" href="{{ i.href }}">{{ i.fix_label }}</a>
       {% endif %}
-      <button type="button" class="dp-btn" data-cq-action="defer" title="Move to the Deferred list. No timer: it stays there until you bring it back.">Defer</button>
-      {% if i.dismissible %}<button type="button" class="dp-btn" data-cq-action="dismiss" title="Remove for good">Dismiss</button>{% endif %}
+      <button type="button" class="dp-btn{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Move to the Deferred list. No timer: it stays there until you bring it back."{% endif %} data-cq-action="defer">Defer</button>
+      {% if i.dismissible %}<button type="button" class="dp-btn{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Remove for good"{% endif %} data-cq-action="dismiss">Dismiss</button>{% endif %}
     {% endif %}
   </div>
   {% if i.kind == 'lookalike' and i.lookalike %}
@@ -48,7 +48,7 @@
         {% if m.slug == i.lookalike.keep %}<div class="cq-suggest">Suggested keeper</div>{% endif %}
         {% if m.slug in i.lookalike.new_members %}<div class="cq-suggest">New since your last answer</div>{% endif %}
       </div>
-      {% if not i.deferred %}<button type="button" class="dp-btn{% if m.slug == i.lookalike.keep %} dp-btn-primary{% endif %}" data-cq-action="lookalike-keep" data-cq-keep="{{ m.slug }}" title="Keep this copy; the others go to the trash (7-day undo) and it takes over their cards, tags and notes.">Same photo, keep this one</button>{% endif %}
+      {% if not i.deferred %}<button type="button" class="dp-btn{% if m.slug == i.lookalike.keep %} dp-btn-primary{% endif %}{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Keep this copy; the others go to the trash (7-day undo) and it takes over their cards, tags and notes."{% endif %} data-cq-action="lookalike-keep" data-cq-keep="{{ m.slug }}">Same photo, keep this one</button>{% endif %}
     </li>
     {% endfor %}
   </ul>
@@ -61,7 +61,7 @@
       <label class="cq-option"><input type="{{ 'checkbox' if i.multi else 'radio' }}" name="pick" value="{{ o.key }}"{% if o.suggested or (i.kind == 'retype' and i.current == o.key and not i.suggested.picks) %} checked{% endif %}> {{ o.label }}{% if o.reason %} <span class="cq-detail">({{ o.reason }})</span>{% endif %}</label>
       {% endfor %}
     </fieldset>
-    <button type="submit" class="dp-btn dp-btn-primary">{% if i.kind == 'project_match' %}Add to the ticked projects{% else %}Use this answer{% endif %}</button>
+    <button type="submit" class="dp-btn dp-btn-primary{{ role_lock_class('editor') }}"{{ role_lock_if('editor', 'Answering or sorting Curator items') }}>{% if i.kind == 'project_match' %}Add to the ticked projects{% else %}Use this answer{% endif %}</button>
     {% if i.kind == 'project_match' %}<span class="cq-detail">Tick none to add it to no project.</span>{% endif %}
   </form>
   {% endif %}

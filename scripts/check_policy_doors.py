@@ -11,6 +11,13 @@ A static check (AST, no server, no DB). It fails when:
      item's access with `policy.note_access(...)`.
   5. (#604 step 3) a known CARD door (CARD_DOORS) stops asking the card policy (private cards and
      hobbies), or db.insert_change_log stops running the private-card write guard (policy.check_write).
+  6. (#730) a single-item WRITE route (POST/PUT/DELETE on /api/image/{slug}..., /api/captions/{slug}...)
+     answers a hidden item with 403 saying why: it calls policy.writable_item(s) (or a core op in
+     WRITABLE_CORE that does), and no write route calls policy.viewable_item (the read door's 404),
+     unless it is in WRITE_404_KEPT with the owner's reason (PR #727: set_sensitive keeps its 404).
+  7. (#749) the change log: cards.list_changes filters through sharing.visible_change_rows and
+     reports what it withheld; cards.undo runs sharing.check_undo_allowed; both of those ask
+     policy.change_row_visible.
   4. (#746) EVERY MCP tool function (visible tools and hidden aliases; no name-prefix heuristic) is
      in MCP_TOOLS with a kind, and the kind holds. The tool's body is followed into the server
      helpers it calls (not into core/, except CORE_GUARDED):
@@ -127,6 +134,12 @@ DOORS = {
     ("mcp_server/server.py", "_remove_from_project"): "MCP remove_from_project",
     ("mcp_server/server.py", "_detach_tag"): "MCP detach_tag",
     ("mcp_server/server.py", "_set_writeup"): "MCP update_project(fields.writeup_slug), set_project_writeup",
+    # #749: the item-policy gaps the #746 consolidation found (each refuses a hidden item, 403 saying why).
+    ("core/revisions.py", "_require_items_visible"): "revision chains: supersede / remove (web, MCP revision, the queue's answer)",
+    ("core/revisions.py", "remove_from_chain"): "revisions.remove_from_chain (a hidden neighbour refuses too)",
+    ("core/cards.py", "_transfer_files"): "cards.move_files / copy_files (web + MCP card_files move / copy)",
+    ("core/cards.py", "split_card"): "cards.split_card (the files each part names)",
+    ("core/cards.py", "_require_card_files_visible"): "cards.merge_cards (every file on the absorbed cards)",
 }
 
 # #604 step 3: doors that hand out CARDS or HOBBIES (or name them: titles in a tag tree, a breadcrumb,
@@ -234,6 +247,13 @@ CORE_GUARDED = {
     ("core/lookalikes.py", "plan"): "_groups",     # #759: lists through the visibility filter
     ("core/lookalikes.py", "confirm"): "viewable_rows",  # #759: then re-groups through _groups
     ("core/lookalikes.py", "dismiss"): "viewable_rows",
+    # #749
+    ("core/revisions.py", "mark_superseded"): "_require_items_visible",
+    ("core/revisions.py", "remove_from_chain"): "_require_items_visible",
+    ("core/cards.py", "move_files"): "_transfer_files",
+    ("core/cards.py", "copy_files"): "_transfer_files",
+    ("core/cards.py", "split_card"): "viewable_rows",
+    ("core/cards.py", "merge_cards"): "_require_card_files_visible",
 }
 # How server.py names the core modules (for `items.delete(...)` -> core/items.py:delete).
 MODULE_FILES = {"items": "core/items.py", "tags_svc": "core/tags.py", "membership": "core/membership.py",
@@ -243,7 +263,26 @@ MODULE_FILES = {"items": "core/items.py", "tags_svc": "core/tags.py", "membershi
                 "duplicates": "core/duplicates.py", "lookalikes": "core/lookalikes.py"}
 # The policy calls that decide visibility (`policy.restriction_reason` in a shaper is not a gate).
 POLICY_GATES = {"require_view", "filter_visible", "viewable_rows", "can_view", "viewable_item", "require_file",
-                "filter_exportable"}
+                "filter_exportable", "writable_item", "writable_items"}
+
+# #730 rule 6: single-item write routes (the URL names the item).
+SINGLE_WRITE_PATHS = ("/api/image/{slug}", "/api/captions/{slug}")
+WRITE_FILES = ["web/routes/items.py", "web/routes/cards.py", "web/routes/tags.py", "web/routes/hobbies.py",
+               "web/routes/curator.py"]
+# Core ops that are the single-item write door themselves (they call policy.writable_item).
+WRITABLE_CORE = {("captions", "retry"), ("captions", "accept"), ("captions", "skip")}
+# Write routes that keep their own 404 for a hidden item, each with the owner's reason.
+WRITE_404_KEPT = {
+    ("web/routes/items.py", "api_set_sensitive"):
+        "owner, PR #727: set_sensitive keeps its own 404 for a hidden item (items.set_sensitive decides)",
+}
+# #749 rule 7: (file, function) -> (the call its body must make, a string constant it must carry).
+CHANGE_LOG_GUARDS = {
+    ("core/cards.py", "list_changes"): ("_sharing.visible_change_rows", "withheld"),
+    ("core/cards.py", "undo"): ("_sharing.check_undo_allowed", None),
+    ("core/sharing.py", "visible_change_rows"): ("policy.change_row_visible", None),
+    ("core/sharing.py", "check_undo_allowed"): ("policy.change_row_visible", None),
+}
 # Server helpers the walk does not descend into: why each hands out no item it wasn't given.
 MCP_SHAPERS = {
     "_to_public": "shapes one row the caller already holds",
@@ -361,13 +400,13 @@ MCP_TOOLS = {
     "constructicon_retype_links": (NONE, "card links"),
     "constructicon_list_links": (NONE, "alias"),
     "constructicon_list_needs_decision": (NONE, "alias (card needs)"),
-    # Card reshaping moves files by slug in core/cards.py, which has no item-policy check of its own
-    # (it predates #709's write rule; a follow-up). They hand out slugs, not item rows.
-    "constructicon_split_card": (NONE, "cards and file slugs"),
-    "constructicon_merge_cards": (NONE, "cards and file slugs"),
+    # Card reshaping moves files by slug; since #749 core/cards.py checks the item policy on them
+    # (split / move / copy: every named file; merge: every file on the absorbed cards).
+    "constructicon_split_card": (I, "cards and file slugs (cards.split_card checks every named file)"),
+    "constructicon_merge_cards": (I, "cards and file slugs (cards.merge_cards checks the absorbed cards' files)"),
     "constructicon_delete_project": (NONE, "alias"),
-    "constructicon_move_files": (NONE, "alias"),
-    "constructicon_copy_files": (NONE, "alias"),
+    "constructicon_move_files": (I, "alias (cards.move_files)"),
+    "constructicon_copy_files": (I, "alias (cards.copy_files)"),
     "constructicon_add_to_hobby": (NONE, "alias"),
     "constructicon_remove_from_hobby": (NONE, "alias"),
     "constructicon_bulk_edit": (NONE, "card changes"),
@@ -376,7 +415,8 @@ MCP_TOOLS = {
     "constructicon_sweep_stale_decisions": (NONE, "resolved question ids"),
     # The change log's row images carry whatever was written (item fields too). Since #604 steps 3 / 5
     # (per-user tokens) a non-admin reads only rows that touch nothing hidden from them, and can't undo
-    # one that does (core/sharing.py visible_change_rows / check_undo_allowed, policy.change_row_visible).
+    # one that does (core/sharing.py visible_change_rows / check_undo_allowed, policy.change_row_visible);
+    # since #749 list_changes says how many rows it withheld (rule 7 checks the chain).
     "constructicon_undo": (NONE, "change rows"),
     "constructicon_list_changes": (NONE, "change rows"),
     "constructicon_list_needs": (NONE, "alias (nudges)"),
@@ -384,10 +424,10 @@ MCP_TOOLS = {
     "constructicon_dismiss_need": (NONE, "alias"),
     "constructicon_defer": (NONE, "alias"),
     "constructicon_bring_back": (NONE, "alias"),
-    # Revision chains by slug: core/revisions.py has no item-policy check (predates #709; a follow-up).
-    "constructicon_revision": (NONE, "slugs of a chain"),
-    "constructicon_mark_superseded": (NONE, "alias"),
-    "constructicon_remove_from_revisions": (NONE, "alias"),
+    # Revision chains by slug: since #749 core/revisions.py checks the item policy (403 saying why).
+    "constructicon_revision": (I, "slugs of a chain (revisions.mark_superseded / remove_from_chain)"),
+    "constructicon_mark_superseded": (I, "alias"),
+    "constructicon_remove_from_revisions": (I, "alias"),
 }
 
 SELF_DECIDING = ("is_restricted(", "restricted_types(", "_not_restricted")
@@ -499,6 +539,12 @@ def main():
     # 4. #746: every MCP tool, classified, and the class holds
     mcp_counts = _check_mcp_tools(tree, failures)
 
+    # 6. #730: single-item write routes say why
+    single_writes = _check_single_writes(tree, failures)
+
+    # 7. #749: the change log
+    _check_change_log(tree, failures)
+
     # 3. nobody else decides restriction
     for path in list((ROOT / "core").rglob("*.py")) + list((ROOT / "web").rglob("*.py")) + \
             list((ROOT / "mcp_server").rglob("*.py")) + list((ROOT / "scripts").glob("*.py")):
@@ -512,7 +558,8 @@ def main():
                 failures.append(f"{rel}:{i}: decides restriction itself ({line.strip()[:90]}); ask core/policy.py")
 
     print(f"known doors: {len(DOORS)}; card doors: {len(CARD_DOORS)}; access-logged doors: {len(ACCESS_LOGGED)}; "
-          f"GET routes reading items (net): {netted}; exempt: {len(EXEMPT)}; MCP tools classified: "
+          f"GET routes reading items (net): {netted}; exempt: {len(EXEMPT)}; single-item write routes: "
+          f"{single_writes} (404 kept: {len(WRITE_404_KEPT)}); MCP tools classified: "
           + ", ".join(f"{k} {v}" for k, v in sorted(mcp_counts.items())))
     if failures:
         print(f"FAIL: {len(failures)} problem(s):")
@@ -604,6 +651,66 @@ def _check_mcp_tools(tree, failures):
         if kind not in ("opens", "items", "admin", "new", "none"):
             failures.append(f"{where}: unknown kind")
     return counts
+
+
+def _check_change_log(tree, failures):
+    """Rule 7 (#749): the change log's reads and undo ask the item policy, and list_changes reports
+    what it withheld."""
+    for (rel, name), (call, word) in CHANGE_LOG_GUARDS.items():
+        fn = _functions(tree(rel)).get(name)
+        if fn is None:
+            failures.append(f"{rel}:{name}: change-log guard not found (renamed? update CHANGE_LOG_GUARDS)")
+            continue
+        mod, attr = call.split(".")
+        if not any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == attr
+                   and isinstance(c.func.value, ast.Name) and c.func.value.id == mod for c in ast.walk(fn)):
+            failures.append(f"{rel}:{fn.lineno} {name}: doesn't call {call}() (the change log's item policy, #749)")
+        if word and not any(isinstance(c, ast.Constant) and c.value == word for c in ast.walk(fn)):
+            failures.append(f"{rel}:{fn.lineno} {name}: doesn't report {word!r} (never drop rows silently, #749)")
+
+
+def _route_paths(fn, methods=("post", "put", "delete", "patch")):
+    """The paths of a function's write-route decorators (@router.post("..."))."""
+    out = []
+    for d in fn.decorator_list:
+        if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr in methods \
+                and d.args and isinstance(d.args[0], ast.Constant) and isinstance(d.args[0].value, str):
+            out.append(d.args[0].value)
+    return out
+
+
+def _check_single_writes(tree, failures):
+    """Rule 6 (#730): every single-item write route reaches policy.writable_item(s) (or a WRITABLE_CORE
+    op), and no write route calls policy.viewable_item. Returns how many single-item write routes."""
+    count, kept_seen = 0, set()
+    for rel in WRITE_FILES:
+        for name, fn in _functions(tree(rel)).items():
+            paths = _route_paths(fn)
+            if not paths:
+                continue
+            attrs = {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                     and n.value.id == "policy"}
+            core = {(n.func.value.id, n.func.attr) for n in ast.walk(fn) if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)}
+            if "viewable_item" in attrs:
+                failures.append(f"{rel}:{fn.lineno} {name} ({paths[0]}): a write route calls policy.viewable_item "
+                                "(404 for a hidden item); use policy.writable_item, which says why (#730)")
+            if not any(p.startswith(SINGLE_WRITE_PATHS) for p in paths):
+                continue
+            count += 1
+            if (rel, name) in WRITE_404_KEPT:
+                kept_seen.add((rel, name))
+                continue
+            if not ({"writable_item", "writable_items"} & attrs or core & WRITABLE_CORE):
+                failures.append(f"{rel}:{fn.lineno} {name} ({paths[0]}): a single-item write route that doesn't call "
+                                "policy.writable_item(s) (#730: 404 when missing, 403 saying why when hidden)")
+    for key in sorted(set(WRITE_404_KEPT) - kept_seen):
+        failures.append(f"{key[0]}:{key[1]}: stale WRITE_404_KEPT entry (no such single-item write route)")
+    for (mod, op) in sorted(WRITABLE_CORE):
+        fn = _functions(tree(MODULE_FILES[mod])).get(op)
+        if fn is None or not any(isinstance(n, ast.Attribute) and n.attr == "writable_item" for n in ast.walk(fn)):
+            failures.append(f"{MODULE_FILES[mod]}:{op}: WRITABLE_CORE says it calls policy.writable_item, and it doesn't")
+    return count
 
 
 def _in_function(tree, lineno, name):

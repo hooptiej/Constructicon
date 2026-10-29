@@ -157,7 +157,7 @@ for who, c in CLIENTS.items():
                 m = re.search(r'data-locked-message="([^"]*)"', li)
                 msg = m.group(1) if m else ""
                 check(f"{who} {path}: {t} message names it, the role, the user's role and who to ask",
-                      msg.startswith(f"{LABEL[t]} needs the {MIN_ROLE[t]} role") and f"a {role_word}." in msg
+                      msg.startswith(f"{LABEL[t]} needs the {MIN_ROLE[t]} role") and f"{'an' if role_word[0] in 'aeiou' else 'a'} {role_word}." in msg
                       and "Ask an admin" in msg, msg)
                 # 4. its drawer's markup is not on the page
                 for marker in DRAWER_MARKUP[t]:

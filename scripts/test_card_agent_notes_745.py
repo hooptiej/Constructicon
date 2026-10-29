@@ -202,7 +202,7 @@ with actor.acting_as(actor.ACTOR_MCP):
           and S.constructicon_search(query=MARK2) == [])
     check("MCP search results carry no notes", not leaks(S.constructicon_search(query="rover")))
     check("MCP list_changes keeps the row images (admin change log, as for item notes)",
-          any(r["op"] == "card_agent_notes" for r in S.constructicon_list_changes()))
+          any(r["op"] == "card_agent_notes" for r in S.constructicon_list_changes()["changes"]))
     made = S.constructicon_create_project(title="Fresh Card")
     check("MCP create_project answer: no agent_notes key", "agent_notes" not in made, made)
     gp = S.constructicon_get_project(ROVER["slug"])

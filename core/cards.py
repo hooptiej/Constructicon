@@ -1349,6 +1349,8 @@ def _transfer_files(slugs, from_card, to_card, move, dry_run, actor, batch_id):
     missing = [s for s in slugs if s not in held]
     if missing:
         raise CardError("bad_files", f"Not in '{src['title']}': {', '.join(missing[:8])}.", {"missing": missing})
+    # #749: every file moved / copied must be visible to the actor (#709's 403 saying why; nothing written).
+    policy.viewable_rows(slugs, actor=actor)
     for s in slugs:
         if s == src.get("writeup_slug") or s == dst.get("writeup_slug"):
             raise CardError("bad_files", "A card's write-up can't be moved or copied; it belongs to its card.",
@@ -1464,6 +1466,9 @@ def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None
         if src.get("writeup_slug") in files:
             raise CardError("bad_files", "A card's write-up can't be split out; it belongs to its card.")
         moved_all += [s for s in files if s not in moved_all]
+    # #749: every file a part names must be visible to the actor (#709's 403 saying why; nothing written).
+    if moved_all:
+        policy.viewable_rows(moved_all, actor=actor)
     batch_id = batch_id or changes.new_batch_id()
     rows, warnings, created = [], [], []
     with db.transaction(dry_run=dry_run):
@@ -1655,6 +1660,26 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
     rows.append({"card": keep["slug"], "field": "merged", "before": a["slug"], "after": None})
 
 
+def _require_card_files_visible(card_rows, verb, actor=None):
+    """(#749) A card-level reshape (merge) moves EVERY file on the cards it names, including files
+    the actor can't see (marked sensitive, a restricted type, also on a private card). Refuse the whole request (403
+    `forbidden`, nothing written) when any is hidden from them, saying how many but never which:
+    they named the card, not those files (a count only, as card counts already are)."""
+    hidden = {}
+    with policy.access_scope(actor):
+        for c in card_rows:
+            n = sum(1 for r in db.list_project_items(c["id"]) if not policy.can_view(r, actor))
+            if n:
+                hidden[c["slug"]] = n
+    if hidden:
+        total = sum(hidden.values())
+        names = ", ".join(f"'{c['title']}'" for c in card_rows if c["slug"] in hidden)
+        raise AppError("forbidden", f"Nothing was changed: {names} {'holds' if len(hidden) == 1 else 'hold'} "
+                       f"{total} file{'s' if total != 1 else ''} you can't see (marked sensitive, a restricted "
+                       f"file type, or also on a private card), and a {verb} would move {'it' if total == 1 else 'them'} too. Ask an admin "
+                       f"to do it.", status=403, details={"reason": "hidden_files", "hidden": hidden})
+
+
 def merge_cards(keep, absorb, *, dry_run=False, actor=None, batch_id=None):
     """Folds one or more cards into `keep` (spec 6): files unioned (deduped), hobbies and
     family memberships unioned, children re-parented, links re-pointed (self-links and
@@ -1677,6 +1702,7 @@ def merge_cards(keep, absorb, *, dry_run=False, actor=None, batch_id=None):
         absorbed.append(a)
     if not absorbed:
         raise CardError("bad_merge", "Name at least one card to absorb.")
+    _require_card_files_visible(absorbed, "merge", actor)  # #749
     # #604 step 3: merging moves the files, so a private card can't be folded into one that isn't.
     if not policy.share_state(policy.CARD, keep_row)["effective"]:
         for a in absorbed:
@@ -2985,8 +3011,11 @@ def _rows_undone_by(undo_id):
 
 
 def list_changes(card=None, batch_id=None, limit=50):
-    """Newest-first change-log rows (spec 7.3): {id, op, actor, batch_id, timestamp,
-    affected_slugs, undone_by, mutations}. `card` is a slug or id."""
+    """Newest-first change-log rows (spec 7.3), as {changes: [{id, op, actor, batch_id, timestamp,
+    affected_slugs, undone_by, mutations}], withheld, withheld_note}. `card` is a slug or id.
+    #749: a non-admin gets only the rows that touch nothing hidden from them; `withheld` says how
+    many of the newest `limit` rows were left out (never silently), `withheld_note` says why in words
+    (None when nothing was withheld). Withheld rows are counted, never described."""
     slug = None
     if card not in (None, ""):
         c = db.get_project(card)
@@ -2996,7 +3025,16 @@ def list_changes(card=None, batch_id=None, limit=50):
     from . import sharing as _sharing  # lazy: sharing imports this module
     # #604 steps 3 and 5: a row image carries the whole row, so a non-admin reads only the rows
     # that touch nothing hidden from them (a private card they aren't on, a sensitive item).
-    rows = _sharing.visible_change_rows(db.list_change_log(card_slug=slug, batch_id=batch_id, limit=limit))
-    return [{"id": r["id"], "op": r["op"], "actor": r["actor"], "batch_id": r["batch_id"],
-             "timestamp": r["timestamp"], "affected_slugs": r["affected_slugs"], "undone_by": r.get("undone_by"),
-             "mutations": r["mutations"]} for r in rows]
+    every = db.list_change_log(card_slug=slug, batch_id=batch_id, limit=limit)
+    rows = _sharing.visible_change_rows(every)
+    withheld = len(every) - len(rows)
+    note = None
+    if withheld:
+        note = (f"{withheld} of the {len(every)} newest change{'s' if len(every) != 1 else ''} "
+                f"{'was' if withheld == 1 else 'were'} left out: {'it touches' if withheld == 1 else 'they touch'} "
+                f"an item, card or {_sharing._noun(policy.HOBBY)} you can't see (marked sensitive, or private). "
+                f"An admin sees the whole log.")
+    return {"changes": [{"id": r["id"], "op": r["op"], "actor": r["actor"], "batch_id": r["batch_id"],
+                         "timestamp": r["timestamp"], "affected_slugs": r["affected_slugs"],
+                         "undone_by": r.get("undone_by"), "mutations": r["mutations"]} for r in rows],
+            "withheld": withheld, "withheld_note": note}

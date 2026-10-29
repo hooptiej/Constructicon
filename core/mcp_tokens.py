@@ -15,11 +15,14 @@ shown ONCE, in the answer to create / rotate, and is never logged, imaged or sto
   revoke(token_id)      delete one of your tokens
   list_mine()           your tokens, without secrets
   authenticate(token)   the MCP's sign-in: (user, token row) or raises TokenRefused with a clear reason
+  by_user()             (#766, admin only) every user's keys, for Admin > Users (names, dates; no secrets)
+  revoke_all(user)      (#766, admin only) delete every key of one user, one change-log row
 
 Every write is ONE change-log row with a `details` summary (user, token id, name; never the secret),
 like core/users.py: not imaged, so the generic undo refuses it (revoke / create again instead).
 Only the signed-in user manages their own tokens; the install token and the MCP itself (no user) get
-403 not_signed_in. A disabled or deleted user's tokens are refused at sign-in (and a deleted user's
+403 not_signed_in. The one exception (#766, owner decision 2026-10-18): an admin sees every user's key
+names and dates, and can revoke ALL of one user's keys at once (never see or rotate one). A disabled or deleted user's tokens are refused at sign-in (and a deleted user's
 are removed with them, db._delete_user); re-enabling the user brings them back.
 """
 
@@ -38,6 +41,7 @@ TOUCH_EVERY_SECONDS = 600  # last_used_at is written at most this often (like se
 OP_CREATE = "mcp_token_create"
 OP_ROTATE = "mcp_token_rotate"
 OP_REVOKE = "mcp_token_revoke"
+OP_REVOKE_ALL = "mcp_token_revoke_all"  # #766: an admin revoking every key of one user
 
 
 class TokenRefused(Exception):
@@ -147,6 +151,53 @@ def revoke(token_id, *, actor=None):
         _record(OP_REVOKE, {"user_id": user["id"], "username": user["username"], "token_id": row["id"],
                             "name": row["name"]}, batch_id, actor)
     return {"ok": True, "revoked": _public(row), "batch_id": batch_id}
+
+
+def _require_admin(what, actor=None):
+    who = actor_ctx.resolve(actor)
+    have = roles.role_of(who)
+    if not roles.at_least(have, roles.ADMIN):
+        raise AppError("forbidden", f"Nothing was changed: {what} needs the admin role, and your account is "
+                       f"{'not signed in' if have == roles.PUBLIC else 'a ' + have}. You can manage your own "
+                       f"keys under Account > MCP tokens.", status=403, details={"need": roles.ADMIN, "have": have})
+    return who
+
+
+def by_user(actor=None):
+    """(#766, owner decision 2026-10-18) Admin > Users: every user's MCP keys, {user_id: [{id, name,
+    created_at, rotated_at, last_used_at}]} (never a secret or hash). Admin only: the one deliberate
+    exception to "a user manages only their own tokens" (403 otherwise)."""
+    _require_admin("Seeing other people's MCP keys", actor)
+    out = {}
+    for r in db.list_all_mcp_tokens():
+        out.setdefault(r["user_id"], []).append(_public(r))
+    return out
+
+
+def revoke_all(user, *, actor=None):
+    """(#766) Admin > Users "Revoke all keys": deletes EVERY MCP token of `user` (id or username) at
+    once; each MCP client using one gets 401 from its next call. Admin only (403 otherwise). ONE
+    change-log row (op `mcp_token_revoke_all`, details: the user, how many and each key's id and name;
+    never a secret), not imaged, so undo refuses it: the user makes new keys instead. A user with no
+    keys changes nothing and says so (batch_id None). Returns {ok, user, revoked, tokens, batch_id,
+    message}."""
+    _require_admin("Revoking someone's MCP keys", actor)
+    target = users.get(user)
+    batch_id = changes.new_batch_id()
+    with db.transaction():
+        mine = db.list_mcp_tokens(target["id"])
+        if not mine:
+            return {"ok": True, "user": target["username"], "revoked": 0, "tokens": [], "batch_id": None,
+                    "message": f"{target['username']} has no MCP keys, so nothing was changed."}
+        n = db._delete_user_mcp_tokens(target["id"])
+        gone = [{"id": t["id"], "name": t["name"]} for t in mine]
+        _record(OP_REVOKE_ALL, {"user_id": target["id"], "username": target["username"], "count": n,
+                                "tokens": gone}, batch_id, actor)
+    names = ", ".join(repr(t["name"]) for t in gone)
+    return {"ok": True, "user": target["username"], "revoked": n, "tokens": gone, "batch_id": batch_id,
+            "message": f"Revoked {n} MCP key{'s' if n != 1 else ''} of {target['username']} ({names}). Any MCP client "
+                       f"using {'them' if n != 1 else 'it'} is refused from its next call; they can make new keys "
+                       f"under Account > MCP tokens. This can't be undone."}
 
 
 def authenticate(presented, *, now=None):

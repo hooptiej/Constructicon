@@ -6075,6 +6075,28 @@ def list_mcp_tokens(user_id):
         conn.close()
 
 
+def list_all_mcp_tokens():
+    """(#766) Every user's MCP tokens, for Admin > Users: {id, user_id, name, created_at, rotated_at,
+    last_used_at}, newest first per user (never the hash)."""
+    conn = get_conn()
+    try:
+        return [dict(r) for r in conn.execute(
+            f"SELECT {MCP_TOKEN_PUBLIC_COLUMNS} FROM mcp_tokens ORDER BY user_id, created_at DESC, id DESC")]
+    finally:
+        conn.close()
+
+
+def _delete_user_mcp_tokens(user_id):
+    """(#766) Deletes every MCP token of one user (core/mcp_tokens.revoke_all); returns how many."""
+    conn = get_conn()
+    try:
+        n = conn.execute("DELETE FROM mcp_tokens WHERE user_id = ?", (user_id,)).rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
 def get_mcp_token(token_id):
     conn = get_conn()
     try:

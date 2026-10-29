@@ -873,10 +873,10 @@ def review_entries(rows):
 def retry(slug, advance=False):
     """(#239, #250) (Re-)run the caption suggestion for one item: queued for web's worker (#549), the
     item shows "pending" until it lands. advance=True runs the NEXT step of STEPS once (a "Regenerate"
-    for variety), else step 0 with the cascade. Refusals: 404 (missing or hidden), 409
+    for variety), else step 0 with the cascade. Refusals: 404 (missing), 403 forbidden saying why (hidden, #730), 409
     `captions_disabled` (this install has no caption model: write one with set_caption instead), 400
     for a redacted item or a type that isn't captioned. Returns the item row after."""
-    row = policy.viewable_item(slug, message=f"No item {slug!r}.")  # 404 if missing or not viewable
+    row = policy.writable_item(slug, message=f"No item {slug!r}.")  # #730: 404 if missing, 403 saying why if hidden
     if row["redacted"]:
         raise InvalidInput("File was redacted — there's no image left to caption")
     spec = object_types.get_object_type(row.get("media_type"))
@@ -905,7 +905,7 @@ def accept(slug, text=None, title=None, replace=False):
     else is the owner's. 409 `would_replace_suggestion` (details.existing) when it would replace text a
     local model didn't write, unless replace=True. Returns items.set_caption's Result."""
     from . import items  # lazy: core.items imports this module
-    row = policy.viewable_item(slug, message=f"No item {slug!r}.")  # 404 if missing or not viewable
+    row = policy.writable_item(slug, message=f"No item {slug!r}.")  # #730: 404 if missing, 403 saying why if hidden
     tm = row.get("type_metadata") or {}
     text = (text or "").strip() or None
     title = (title or "").strip() or None
@@ -927,7 +927,7 @@ def skip(slug, what="all"):
     from . import items  # lazy: core.items imports this module
     if what not in SKIP_WHAT:
         raise InvalidInput("what must be all, caption or title")
-    policy.viewable_item(slug, message=f"No item {slug!r}.")  # 404 if missing or not viewable
+    policy.writable_item(slug, message=f"No item {slug!r}.")  # #730: 404 if missing, 403 saying why if hidden
     meta = {}
     if what in ("all", "caption"):
         meta["auto_caption_dismissed"] = True

@@ -276,8 +276,8 @@
       </div>
       <div style="overflow-x:auto">
         <table class="admin-users-table">
-          <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last sign-in</th><th>Actions</th></tr></thead>
-          <tbody id="admin-users-rows"><tr><td colspan="6" class="admin-row-hint">Loading…</td></tr></tbody>
+          <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last sign-in</th><th>MCP keys</th><th>Actions</th></tr></thead>
+          <tbody id="admin-users-rows"><tr><td colspan="7" class="admin-row-hint">Loading…</td></tr></tbody>
         </table>
       </div>
       <div class="admin-divider"></div>
@@ -923,7 +923,7 @@
       countEl.textContent = data.users.length ? `${data.users.length}` : 'none yet';
       if (!data.users.length) {
         const tr = el('tr');
-        tr.appendChild(el('td', { colSpan: 6, className: 'admin-row-hint' },
+        tr.appendChild(el('td', { colSpan: 7, className: 'admin-row-hint' },
           'No accounts yet. Add one below, or create the admin account from the banner at the top.'));
         rowsEl.appendChild(tr);
         return;
@@ -945,6 +945,23 @@
         tr.appendChild(roleTd);
         tr.appendChild(el('td', {}, u.disabled ? 'disabled' : 'active'));
         tr.appendChild(el('td', {}, when(u.last_login_at)));
+        // #766: the user's personal MCP keys: how many, each one's name and last use (never a secret),
+        // and "Revoke all keys" (confirm, then one change-log row; not undoable).
+        const keys = u.mcp_tokens || [];
+        const keysTd = el('td', { className: 'admin-users-keys' });
+        keysTd.appendChild(el('div', {}, keys.length ? `${keys.length} key${keys.length === 1 ? '' : 's'}` : 'none'));
+        if (keys.length) {
+          const ul = el('ul', { className: 'admin-users-keylist' });
+          keys.forEach(k => ul.appendChild(el('li', {}, `${k.name} · last used ${when(k.last_used_at)}`)));
+          keysTd.appendChild(ul);
+          keysTd.appendChild(button('Revoke all keys', async () => {
+            if (!confirm(`Revoke all ${keys.length} MCP key(s) of ${u.username}? Every MCP client using them is refused from its next call. This can't be undone; they can make new keys under Account > MCP tokens.`)) return;
+            const r = await call(`/api/users/${u.id}/mcp-tokens/revoke-all`);
+            setMsg(r.message || `Revoked ${r.revoked} key(s) of ${u.username}.`, true);
+            load();
+          }, true));
+        }
+        tr.appendChild(keysTd);
         const actions = el('td');
         const box = el('div', { className: 'admin-users-actions' });
         const pwRow = el('div', { className: 'admin-users-actions' });
@@ -984,7 +1001,7 @@
       } catch (e) {
         rowsEl.textContent = '';
         const tr = el('tr');
-        tr.appendChild(el('td', { colSpan: 6, className: 'error-text' }, e.message));
+        tr.appendChild(el('td', { colSpan: 7, className: 'error-text' }, e.message));
         rowsEl.appendChild(tr);
       }
     }

@@ -60,7 +60,7 @@
             </select>
           </div>
           {% endif %}
-          <button type="button" class="btn-secondary" id="new-project-btn" title="Create a new project">+ New project</button>
+          <button type="button" class="btn-secondary{{ role_lock_class('editor') }}" id="new-project-btn"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Creating a card') }}{% else %} title="Create a new project"{% endif %}>+ New project</button>
         </div>
       </div>
       <script nonce="{{ csp_nonce() }}">

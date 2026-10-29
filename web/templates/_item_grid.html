@@ -1,7 +1,8 @@
 {#- #553: one file grid, the same controls on every page that lists files (home Files, /unfiled, the
     user gallery, a hobby's loose objects). Needs `grid` (web/item_grid.py build()) and `rev_note`.
     Behaviour: static/js/item-grid.js (reads the JSON config below; no inline code). Viewers get no
-    Select button and no selection bar (grid.bulk is empty for them; the endpoints refuse anyway). -#}
+    selection bar (grid.bulk is empty for them; the endpoints refuse anyway) and, since #779, a greyed
+    Select that explains on click. -#}
 {%- set g = grid.id -%}
 <div class="item-grid{% if grid.select_default %} is-selecting{% endif %}" id="{{ g }}" data-item-grid="{{ g }}">
   <div class="item-grid-controls">
@@ -34,6 +35,11 @@
     {% if grid.bulk and not grid.select_default %}
     <button type="button" class="btn-secondary item-grid-select-btn" id="{{ g }}-select" aria-pressed="false"
             title="Show selection checkboxes for bulk actions">{{ grid.labels.select }}</button>
+    {% elif not grid.can_edit %}
+    {#- #779: a viewer still sees Select (the door to every bulk action), greyed; a click says the
+        editor role is needed (web/role_lock.py). It is not item-grid.js's button (a different id). -#}
+    <button type="button" class="btn-secondary item-grid-select-btn role-locked" id="{{ g }}-select-locked"
+            {{- role_lock_attrs("editor", "Selecting files for bulk actions (add to card, tag, provenance, mark sensitive, delete)") }}>{{ grid.labels.select }}</button>
     {% endif %}
   </div>
   {% include "_revisions_note.html" %}

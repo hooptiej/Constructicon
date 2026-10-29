@@ -70,8 +70,9 @@ def api_tag_sweep_apply(tag_ids: list[int] = Form(...), dry_run: str = Form(""))
 
 @router.post("/api/image/{slug}/tags/{tag_id}/remove")
 def api_item_tag_remove(slug: str, tag_id: int):
-    """The item chip's x: take one tag off this item (undoable). 404 for an item the caller can't see."""
-    policy.viewable_item(slug)  # #557: the single-item web door answers 404 first
+    """The item chip's x: take one tag off this item (undoable). #730: 404 when missing, 403 saying why
+    for an item the caller can't see."""
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     res = tags_svc.detach(slug, tag_id)
     return JSONResponse({**res.to_dict(), "chips": tags_svc.chips(slug)})
 

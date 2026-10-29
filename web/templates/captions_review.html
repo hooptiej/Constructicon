@@ -38,6 +38,8 @@
 
 <script nonce="{{ csp_nonce() }}">
 (function () {
+  // #779: a viewer still sees Accept / Skip, greyed; a click says the editor role is needed (role-lock.js).
+  const LOCK = {{ (role_lock_message("Accepting or skipping a caption", "editor") if role_locked("editor") else none) | tojson }};
   const list = document.getElementById('cr-list');
   const empty = document.getElementById('cr-empty');
   const countEl = document.getElementById('cr-count');
@@ -128,6 +130,12 @@
           }
           card.remove(); updateCount();
         } catch (err) { msg.textContent = 'Not saved: ' + err.message; }
+      }
+      if (LOCK && window.RoleLock) {
+        card.querySelectorAll('.cr-accept, .cr-skip').forEach(b => window.RoleLock.decorate(b, 'editor', LOCK,
+          'Accepting or skipping a caption (editors and admins)'));
+        if (ta) ta.readOnly = true;
+        ti.readOnly = true;
       }
       card.querySelector('.cr-accept').addEventListener('click', () => accept(false));
       card.querySelector('.cr-replace').addEventListener('click', () => { refusal.style.display = 'none'; accept(true); });

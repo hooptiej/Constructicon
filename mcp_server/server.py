@@ -213,7 +213,7 @@ def _require_role(need):
     if not roles.at_least(have, need):
         raise errors.AppError("forbidden", f"Nothing was done: this needs the {need} role, and {who} has {have}. "
                                            f"Ask an admin to change your role, or use a token of someone who has it.",
-                              status=403)
+                              status=403, details={"need": need, "have": have})  # #779: the role, machine-readable
 
 
 # --- #746: who may run which (tool, action) ---------------------------------------------------
@@ -1407,7 +1407,7 @@ def constructicon_undated(action: typing.Literal["list", "accept", "apply_auto"]
     if action == "accept":
         if not slug or not source:
             raise InvalidInput("accept needs slug and source.", code="bad_request")
-        policy.viewable_item(slug, message=f"No item {slug!r}.")
+        policy.writable_item(slug, message=f"No item {slug!r}.")  # #730: hidden = forbidden, saying why
         res = items.accept_date_guess(slug, source, dry_run=dry_run)
         return {"slug": slug, "batch_id": None if dry_run else _written(res.batch_id), "guess": res.data["guess"],
                 **({"dry_run": True} if dry_run else {})}
@@ -3185,9 +3185,11 @@ def constructicon_undo(audit_id: str | int, force: bool = False, dry_run: bool =
 
 
 @mcp.tool()
-def constructicon_list_changes(card: str | int | None = None, batch_id: str | None = None, limit: int = 50) -> list[dict]:
-    """The change log, newest first: [{id, op, actor, batch_id, timestamp, affected_slugs,
-    undone_by, mutations: [{table, key, before, after}]}]. Filter by card or batch_id."""
+def constructicon_list_changes(card: str | int | None = None, batch_id: str | None = None, limit: int = 50) -> dict:
+    """The change log, newest first: {changes: [{id, op, actor, batch_id, timestamp, affected_slugs,
+    undone_by, mutations: [{table, key, before, after}]}], withheld, withheld_note}. Filter by card or
+    batch_id. A non-admin token gets only rows touching nothing hidden from them; `withheld` counts
+    the rest of the newest `limit` rows (withheld_note says why)."""
     return cards.list_changes(card=card, batch_id=batch_id, limit=limit)
 
 

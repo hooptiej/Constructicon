@@ -596,14 +596,42 @@ def require_view(item, actor=None, message="not found"):
 
 def viewable_item(slug, message="not found", actor=None):
     """The item row for `slug`, or NotFound (404 `not_found`) when there is no such row OR the actor
-    may not see it. For every single-item web door, reads AND writes (#467 step 2: an editor who
-    somehow holds a restricted item's slug can't edit, redact, delete or relate it either, and the
-    answer doesn't reveal that it exists)."""
+    may not see it. For every single-item web READ door (#467 step 2: the answer doesn't reveal that a
+    hidden item exists). Since #730 the single-item WRITE doors use `writable_item` (403 saying why)."""
     from core import db  # lazy: core.db imports this module
     row = db.get_by_slug(slug)
     if row is None:
         raise NotFound(message)
     return require_view(row, actor, message)
+
+
+def writable_item(slug, message="not found", actor=None):
+    """(#730) The single-item WRITE door: the item row for `slug`, NotFound (404) when there is no such
+    row, and when the actor may not see it the same 403 `forbidden` the bulk doors give since #709
+    (`refusal`: "Nothing was changed: this item is marked sensitive, and only its uploader or an admin
+    can change it.", details {refused, reason, reasons}). Owner rule: a failure says why. Reads keep
+    `viewable_item` (404, so a page never confirms that a hidden item exists); a write names the slug
+    itself, so echoing it back reveals nothing the caller didn't send, exactly as #709 settled.
+    Not for `items.set_sensitive` / `set_provenance` (they keep their own 404, owner note on PR #727)."""
+    return writable_items([(slug, message)], actor=actor)[0]
+
+
+def writable_items(pairs, actor=None):
+    """(#730) `writable_item` for a request that names two items (relate, supersedes): [(slug,
+    missing_message)]. Every missing one is 404 with its own message first; then one `refusal` over
+    the hidden ones ("1 of the 2 selected items ..."), so nothing is written. Returns the rows."""
+    from core import db  # lazy: core.db imports this module
+    who = actor_ctx.resolve(actor)
+    rows = []
+    for slug, message in pairs:
+        row = db.get_by_slug(slug)
+        if row is None:
+            raise NotFound(message)
+        rows.append(row)
+    refused = [(r["slug"], _refusal_reason(r, who)) for r in rows if not can_view(r, who)]
+    if refused:
+        raise refusal(refused, len(rows))
+    return rows
 
 
 REFUSED_SENSITIVE = "sensitive"           # flagged "This is sensitive" (#603)

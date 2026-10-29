@@ -186,9 +186,22 @@ def api_revoke_my_mcp_token(token_id: str):
 
 @router.get("/api/users", dependencies=requires(roles.ADMIN))
 def api_list_users():
+    """Admin > Users. #766: each user carries `mcp_tokens` (their personal MCP keys: id, name,
+    created_at, rotated_at, last_used_at; never a secret) and `mcp_token_count`."""
     me = users.current_user()
-    return {"ok": True, "users": users.list_users(), "me": me["id"] if me else None,
+    keys = mcp_tokens.by_user()
+    listed = [{**u, "mcp_tokens": keys.get(u["id"], []), "mcp_token_count": len(keys.get(u["id"], []))}
+              for u in users.list_users()]
+    return {"ok": True, "users": listed, "me": me["id"] if me else None,
             "roles": list(users.ROLES), "min_password_length": users.MIN_PASSWORD_LENGTH}
+
+
+@router.post("/api/users/{user_id}/mcp-tokens/revoke-all", dependencies=requires(roles.ADMIN))
+def api_revoke_user_mcp_tokens(user_id: int):
+    """(#766) Admin > Users "Revoke all keys": deletes every personal MCP key of that user (the page
+    confirms first). One change-log row; not undoable. {ok, user, revoked, tokens: [{id, name}],
+    batch_id, message}; a user with no keys answers revoked 0 and says nothing changed."""
+    return mcp_tokens.revoke_all(user_id)
 
 
 @router.post("/api/users", dependencies=requires(roles.ADMIN))

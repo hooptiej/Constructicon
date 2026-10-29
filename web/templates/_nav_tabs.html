@@ -66,13 +66,13 @@
     explains (script below). A locked tab carries no trigger, id or badge, so
     no drawer script can wire to it. #}
 {%- set locked = t.min_role and not has_role(t.min_role) %}
-{%- set _need = "admins only" if t.min_role == "admin" else "editors and admins" %}
+{%- set _need = role_need_phrase(t.min_role) if t.min_role else "" %}
 <li class="nav-tab-item" data-nav-tab="{{ t.id }}">
   {%- if locked %}
-  {%- set _me = current_role() %}
+  {#- the same words as every other locked control (web/role_lock.py) #}
   <button type="button" class="nav-tab nav-tab-locked" aria-disabled="true" data-locked-role="{{ t.min_role }}"
           title="{{ t.label }} ({{ _need }})" aria-label="{{ t.label }} ({{ _need }})"
-          data-locked-message="{{ t.label }} needs the {{ t.min_role }} role ({{ _need }}). {% if _me == 'public' %}You're not signed in: sign in with an account that has it.{% else %}Your account is a {{ _me }}. Ask an admin to change your role if you need it.{% endif %}">
+          data-locked-message="{{ role_lock_message(t.label, t.min_role) }}">
   {%- elif t.kind == "link" %}
   <a class="nav-tab" href="{{ t.href }}" title="{{ t.label }}">
   {%- elif t.kind == "button" %}

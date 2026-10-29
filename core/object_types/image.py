@@ -13,6 +13,10 @@ gallery (screenshots, renders, web-resized copies) has no EXIF at all;
 that's the expected {} result, not a failure. Checked against production
 while scoping this: 66 of 361 undated image rows carried a real capture
 timestamp.
+
+#769: which EXIF tag dated the photo goes in content_date_source, and an
+EXIF date at the upload moment is flagged as a possible export time
+(applied all the same; see core/embedded_metadata.py).
 """
 
 import logging
@@ -120,12 +124,26 @@ def _exif_properties(img):
         return {}
 
 
+# #769: the labels recorded in type_metadata.content_date_source.source for which EXIF tag dated a
+# photo (the object page shows the evidence built from them).
+_DATE_TAG_SOURCES = {0x9003: "exif_datetimeoriginal", 0x9004: "exif_datetimedigitized"}
+
+
 def read_capture_datetime(img):
-    """The EXIF capture moment of an open PIL image as a datetime —
-    timezone-aware when the file carries an OffsetTime* tag for it, naive
-    (the camera's wall clock, zone unknown) otherwise — or None when the
-    image has no usable DateTimeOriginal/DateTimeDigitized. Raises on a
-    Pillow failure; get_embedded_metadata is the best-effort wrapper.
+    """Just the datetime of read_capture (None when the image has none)."""
+    found = read_capture(img)
+    return found[0] if found else None
+
+
+def read_capture(img):
+    """(datetime, source label, raw text) for the EXIF capture moment of an
+    open PIL image, or None when the image has no usable
+    DateTimeOriginal/DateTimeDigitized. The datetime is timezone-aware
+    when the file carries an OffsetTime* tag for it, naive (the camera's
+    wall clock, zone unknown) otherwise. The label names the tag that won
+    (_DATE_TAG_SOURCES); the raw text is the tag as written, plus its
+    offset when one was used. Raises on a Pillow failure;
+    get_embedded_metadata is the best-effort wrapper.
 
     A value that isn't in EXIF's "YYYY:MM:DD HH:MM:SS" shape — the
     "0000:00:00 00:00:00" an unset camera clock writes, or free text some
@@ -143,36 +161,46 @@ def read_capture_datetime(img):
         if not raw:
             continue
         raw = str(raw).strip()
+        label = _DATE_TAG_SOURCES[date_tag]
         offset = ifd.get(offset_tag)
         if offset:
             # "%z" accepts the "+HH:MM" form OffsetTime* uses. A malformed
             # offset falls through to the naive parse below rather than
             # costing the date entirely.
+            offset = str(offset).strip()
             try:
-                return datetime.strptime(f"{raw} {str(offset).strip()}", f"{_EXIF_DATETIME_FORMAT} %z")
+                return (datetime.strptime(f"{raw} {offset}", f"{_EXIF_DATETIME_FORMAT} %z"), label,
+                        f"{raw} {offset}")
             except ValueError:  # silent-ok: a malformed offset falls through to the naive parse below
                 pass
         try:
-            return datetime.strptime(raw, _EXIF_DATETIME_FORMAT)
+            return datetime.strptime(raw, _EXIF_DATETIME_FORMAT), label, raw
         except ValueError:  # silent-ok: not EXIF's date shape = treated as absent (see the docstring)
             continue
     return None
 
 
 def get_embedded_metadata(path):
-    """ObjectTypeSpec.embedded_metadata_fn for media_type='image' (#265) —
-    {"content_date": <UTC unix seconds>} from the file's EXIF capture
-    timestamp (see read_capture_datetime), or {} for an image with none
-    or on any failure. A naive EXIF time is interpreted as Mountain Time
-    per core/timeline.py's convention; an explicit OffsetTime* wins over
-    it. Only content_date: an image's EXIF has no title-shaped field
-    worth seeding content_description from the way an audio tag does."""
+    """ObjectTypeSpec.embedded_metadata_fn for media_type='image' (#265,
+    #769) — {"content_date": <UTC unix seconds>, "content_date_tag": ...,
+    "content_date_raw": ..., "content_date_export_prone": True} from the
+    file's EXIF capture timestamp (see read_capture), or {} for an image
+    with none or on any failure. A naive EXIF time is interpreted as
+    Mountain Time per core/timeline.py's convention; an explicit
+    OffsetTime* wins over it. Export-prone (#769, owner decision on PR
+    #807): an EXIF date at the upload moment is still applied, and
+    core/embedded_metadata.py flags it as a possible export time. The
+    tag/raw keys are what content_date_source records. Only content_date:
+    an image's EXIF has no title-shaped field worth seeding
+    content_description from the way an audio tag does."""
     try:
         with Image.open(path) as img:
-            captured = read_capture_datetime(img)
-        if captured is None:
+            found = read_capture(img)
+        if found is None:
             return {}
-        return {"content_date": timeline.source_datetime_to_epoch(captured)}
+        captured, label, raw = found
+        return {"content_date": timeline.source_datetime_to_epoch(captured), "content_date_tag": label,
+                "content_date_raw": raw, "content_date_export_prone": True}
     except Exception as e:
         print(f"Image capture-date extraction failed for {path}: {e!r}")
         return {}
@@ -221,7 +249,8 @@ register(ObjectTypeSpec(
     properties_fn=get_properties,
     # #265: EXIF DateTimeOriginal -> content_date at upload time (and via
     # scripts/backfill_content_dates.py for rows that predate this). See
-    # get_embedded_metadata; writes nothing into type_metadata, so no
+    # get_embedded_metadata; its only type_metadata write is
+    # content_date_source (#769, core/embedded_metadata.py), so no
     # metadata_fields entry goes with it.
     embedded_metadata_fn=get_embedded_metadata,
     badge_icon="\U0001F5BC️",

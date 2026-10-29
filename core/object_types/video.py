@@ -22,6 +22,13 @@ carried it, always as ISO-8601 UTC with a Z suffix
 13:12 local — i.e. genuinely UTC, not local time wearing a Z); the 6
 without were re-encoded social-media downloads with no metadata at all,
 which correctly stay on their file mtime.
+
+Export time is not shoot time (#769): a video dragged out of macOS Photos,
+or sent through the iPhone's upload path, is re-muxed and its creation_time
+becomes the EXPORT moment. The Apple capture-date tag
+(com.apple.quicktime.creationdate) keeps the real shoot time, so it wins
+when present; see get_embedded_metadata, and core/embedded_metadata.py for
+the backstop that refuses a creation_time sitting at the upload moment.
 """
 
 import json
@@ -103,56 +110,107 @@ def capture_thumbnail(row):
     return None
 
 
-def read_creation_time(path):
-    """The creation_time tag string exactly as ffprobe reports it, or None
-    when the file has none. The container-level (format) tag wins; a
-    stream-level one is the fallback for a muxer that only stamped the
-    tracks. Raises on ffprobe/JSON failure; get_embedded_metadata is the
-    best-effort wrapper."""
+APPLE_CREATIONDATE_TAG = "com.apple.quicktime.creationdate"
+# #769: the labels recorded in type_metadata.content_date_source.source (the object page shows them
+# with "_" -> " ") for which of the two tags dated a video.
+SRC_APPLE_CREATIONDATE = "quicktime_creationdate"
+SRC_CREATION_TIME = "container_creation_time"
+
+
+def read_date_tags(path):
+    """{"creationdate": str | None, "creation_time": str | None}: the
+    com.apple.quicktime.creationdate format tag and the creation_time tag,
+    exactly as ffprobe reports them. For creation_time the container-level
+    (format) tag wins; a stream-level one is the fallback for a muxer that
+    only stamped the tracks. Raises on ffprobe/JSON failure;
+    get_embedded_metadata is the best-effort wrapper."""
     cmd = [
         "ffprobe",
         "-v", "error",
-        "-show_entries", "format_tags=creation_time:stream_tags=creation_time",
+        "-show_entries", f"format_tags=creation_time,{APPLE_CREATIONDATE_TAG}:stream_tags=creation_time",
         "-of", "json",
         str(path),
     ]
     result = subprocess.run(cmd, capture_output=True, timeout=20, encoding="utf-8", errors="replace")
     if result.returncode != 0:
-        return None
+        return {"creationdate": None, "creation_time": None}
     data = json.loads(result.stdout)
-    candidates = [(data.get("format", {}).get("tags") or {}).get("creation_time")]
+    fmt_tags = data.get("format", {}).get("tags") or {}
+    candidates = [fmt_tags.get("creation_time")]
     candidates += [(stream.get("tags") or {}).get("creation_time") for stream in data.get("streams", [])]
-    for value in candidates:
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+    creation_time = next((v.strip() for v in candidates if isinstance(v, str) and v.strip()), None)
+    apple = fmt_tags.get(APPLE_CREATIONDATE_TAG)
+    return {"creationdate": apple.strip() if isinstance(apple, str) and apple.strip() else None,
+            "creation_time": creation_time}
+
+
+def read_creation_time(path):
+    """The creation_time tag string exactly as ffprobe reports it, or None
+    (see read_date_tags, which also reads the Apple capture-date tag)."""
+    return read_date_tags(path)["creation_time"]
 
 
 def parse_creation_time(text):
-    """ffprobe's creation_time -> datetime: timezone-aware for the
-    ISO-8601-with-offset/Z form every real file so far has carried, naive
-    for a bare "YYYY-MM-DD HH:MM:SS" (older QuickTime muxers), so the
+    """ffprobe's creation_time (or the Apple creationdate tag) -> datetime:
+    timezone-aware for the ISO-8601-with-offset/Z form every real file so
+    far has carried ("...Z", or the Apple tag's "2023-12-03T17:27:47-0700"),
+    naive for a bare "YYYY-MM-DD HH:MM:SS" (older QuickTime muxers), so the
     caller can apply the naive-date convention only when the file really
-    didn't say. Raises ValueError on anything fromisoformat can't read."""
-    # fromisoformat accepts a literal Z on the Python this project targets,
-    # but the replace keeps this readable on older interpreters too — same
-    # note scripts/full_youtube_channel_sync.py makes for publishedAt.
-    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    didn't say. A ";"-joined value (ffmpeg reports the mvhd time and a
+    metadata-key copy of it that way when a file carries both) is read as
+    its first part that parses. Raises ValueError when no part parses."""
+    # fromisoformat accepts a literal Z and a colon-less "-0700" offset on
+    # the Python this project targets (3.11+); the replace keeps the Z
+    # readable on older interpreters too — same note
+    # scripts/full_youtube_channel_sync.py makes for publishedAt.
+    error = None
+    for part in str(text).split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            return datetime.fromisoformat(part.replace("Z", "+00:00"))
+        except ValueError as e:  # silent-ok: kept and re-raised below when no part parses
+            error = e
+    raise error or ValueError(f"no date in {text!r}")
 
 
 def get_embedded_metadata(path):
-    """ObjectTypeSpec.embedded_metadata_fn for media_type='video' (#265) —
-    {"content_date": <UTC unix seconds>} from the container's
-    creation_time (see read_creation_time), or {} for a file with none or
-    on any failure. An explicit offset/Z is trusted; a naive value is
-    interpreted as Mountain Time per core/timeline.py's convention. Only
-    content_date: a container title tag is rare enough on real uploads
-    (none of production's carried one) that it isn't seeded here."""
+    """ObjectTypeSpec.embedded_metadata_fn for media_type='video' (#265,
+    #769) — {"content_date": <UTC unix seconds>, "content_date_tag": ...,
+    "content_date_raw": ..., "content_date_export_prone": bool}, or {} for
+    a file with no date tag or on any failure.
+
+    #769: the Apple capture-date tag (com.apple.quicktime.creationdate,
+    written by an iPhone / Photos, always with its own UTC offset) wins
+    over creation_time when it parses: macOS Photos and the iOS upload
+    path re-mux a video on export and stamp creation_time with the EXPORT
+    moment, while this tag keeps the shoot time (measured on prod's
+    IMG_7124 / IMG_6947 / IMG_6948: creation_time a minute before upload,
+    the Apple tag years earlier). Its offset is honoured as written.
+    Otherwise creation_time: an explicit offset/Z is trusted, a naive value
+    is Mountain Time per core/timeline.py's convention, and the result is
+    flagged export-prone, so core/embedded_metadata.py's export-time
+    backstop can refuse it when it sits at the upload moment. The tag/raw
+    keys are what content_date_source records. Only content_date: a
+    container title tag is rare enough on real uploads (none of
+    production's carried one) that it isn't seeded here."""
     try:
-        raw = read_creation_time(path)
+        tags = read_date_tags(path)
+        if tags["creationdate"]:
+            try:
+                return {"content_date": timeline.source_datetime_to_epoch(parse_creation_time(tags["creationdate"])),
+                        "content_date_tag": SRC_APPLE_CREATIONDATE, "content_date_raw": tags["creationdate"],
+                        "content_date_export_prone": False}
+            except ValueError as e:
+                # Not silent: say so, then fall back to creation_time below.
+                print(f"Video {APPLE_CREATIONDATE_TAG} unreadable for {path} ({e!r}); using creation_time")
+        raw = tags["creation_time"]
         if not raw:
             return {}
-        return {"content_date": timeline.source_datetime_to_epoch(parse_creation_time(raw))}
+        return {"content_date": timeline.source_datetime_to_epoch(parse_creation_time(raw)),
+                "content_date_tag": SRC_CREATION_TIME, "content_date_raw": raw,
+                "content_date_export_prone": True}
     except Exception as e:
         print(f"Video creation-time extraction failed for {path}: {e!r}")
         return {}
@@ -248,8 +306,9 @@ register(ObjectTypeSpec(
     capture_fn=capture_thumbnail,
     properties_fn=get_properties,
     # #265: container creation_time -> content_date at upload time (and via
-    # scripts/backfill_content_dates.py for rows that predate this). See
-    # get_embedded_metadata; writes nothing into type_metadata.
+    # scripts/backfill_content_dates.py for rows that predate this); #769:
+    # the Apple capture-date tag first. See get_embedded_metadata; its only
+    # type_metadata write is content_date_source (core/embedded_metadata.py).
     embedded_metadata_fn=get_embedded_metadata,
     badge_icon="\U0001F3AC",
     badge_text="VIDEO",

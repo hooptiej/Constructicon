@@ -1691,6 +1691,19 @@ time (`timestamp`) is shown only as **"Imported <date>"** (the item page's heade
   viewer, accept / apply_auto editor. **Never names a card the caller can't see (#604):** the list goes
   through `policy.filter_visible`, and `item_dates.listing_entry(row, access=...)` drops a hidden lending
   card's title from `shows`, `inherits` and the guesses' evidence (checked in `test_private_cards_604.py`).
+- **Export time is not shoot time (#769).** macOS Photos and the iPhone's upload path re-mux a video and
+  stamp its `creation_time` with the export moment. `video.get_embedded_metadata` prefers
+  `com.apple.quicktime.creationdate` (the true capture time, its own UTC offset honoured) and falls back to
+  `creation_time`, marked export-prone; an image's EXIF date (`image.get_embedded_metadata`) is export-prone
+  too. **Accept, then flag (owner decision on PR #807):** `embedded_metadata.resolve_file_date` still APPLIES
+  an export-prone date that is after the install's first upload AND within `EXPORT_TIME_WINDOW_SECONDS` (600)
+  of the row's upload time, either side, but its `content_date_source` carries `suspect_export_time: true`,
+  `confidence: medium` and `suspect_note` ("may be the export time (N min before the upload): check it"),
+  which the item page's DATES group shows after the date (`.dp-flag`). Nothing hides the date (a wrong one
+  can stretch a card's span; the owner chose that knowingly). The Apple tag is never flagged. Every tagged file
+  date records which tag won (`quicktime_creationdate`, `container_creation_time`, `exif_datetimeoriginal`,
+  `exif_datetimedigitized`; `guessed: false`, evidence = tag + raw value). No backfill of existing rows.
+  Check: `scripts/test_export_oven_769.py` (real ffmpeg-made .mov files, Pillow JPEGs with EXIF).
 - Checks: `scripts/test_undated_725.py` (throwaway DB: the owner's real-dates-only card, the lending rules,
   needs_date, accept / undo / refusals, apply_dates, the migration, uploads, pages, the MCP tool),
   `test_timeline_dates.py`, `test_card_date_sort_622.py`, `node scripts/test_item_sort_622.js`.

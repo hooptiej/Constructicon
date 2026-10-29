@@ -91,6 +91,16 @@ def is_silent(card):
     return STAGE_APPLICABILITY.get(scoring_stage(card)) is None
 
 
+def _not_scored_why(card, stage):
+    """Why a check is excused by the card itself (is_silent's reasons, or the stage), in plain words."""
+    if card.get("kind") == "collection" and card.get("provenance") in (None, "referenced"):
+        return "a reference collection isn't scored"
+    label = card_rules.stage_label(stage) or "not started"
+    if STAGE_APPLICABILITY.get(stage) is None:
+        return f"the card is {label}"
+    return f"not checked while the card is {label}"
+
+
 def _auto_caption(item):
     """#532: the item's moondream auto-caption, if any (type_metadata may be a dict or JSON text)."""
     tm = item.get("type_metadata") or {}
@@ -342,6 +352,9 @@ def score_project(project_id_or_dict):
         captions_passed = False
     excused = not dim_applicable[1] or not cap_items
     captions_reason = _captions_reason(cap_items, captions_present, caption_threshold, excused_files)
+    if not dim_applicable[1]:
+        # The card, not its files, excuses it: say why before the numbers, which aren't a failure here.
+        captions_reason = f"Not scored: {_not_scored_why(project, stage)}. " + captions_reason
     if not excused:
         applicable += weight_per_item
         if captions_passed:

@@ -216,6 +216,19 @@ page = client.get(f"/project/{office['slug']}")
 check("the card page's health badge says why captions are excused",
       page.status_code == 200 and "Captions: Excused: nothing here is captioned." in page.text.replace("&#39;", "'"),
       page.status_code)
+check("a scored card's reason never says 'Not scored'", "Not scored" not in caption_row(mixed)["reason"])
+with actor.acting_as(actor.ACTOR_UI):
+    cards.set_status(mixed["id"], "paused")
+row = caption_row(card_named("Mixed Card"))
+check("a Paused card: excused, and the reason says why BEFORE the numbers",
+      row["excused"] is True and row["reason"].startswith("Not scored: the card is Paused. 1 of 3 captionable files"),
+      row["reason"])
+row = caption_row(dict(card_named("Mixed Card"), kind="collection", provenance="referenced"))
+check("a reference collection: the reason names that, not the stage",
+      row["reason"].startswith("Not scored: a reference collection isn't scored."), row["reason"])
+with actor.acting_as(actor.ACTOR_UI):
+    cards.set_status(mixed["id"], "done")
+mixed = card_named("Mixed Card")
 
 # A PDF whose first page can't be rendered: a red caption with the reason, never a bare "failed".
 bad_pdf = mkfile(".pdf", "pdf", b"%PDF-1.4 not really")

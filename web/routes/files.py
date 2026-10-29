@@ -6,7 +6,8 @@ from fastapi.responses import JSONResponse
 
 from core import db, item_title, object_types, parse_limits, storage, thumbnails
 from web import content_security
-from core import access_log, policy, roles
+from core import access_log, policy, roles, users, wallpapers
+from core.errors import AppError
 from web.roles import RoleRouter, requires
 
 router = RoleRouter(default_role=roles.VIEWER)  # #557: routes without their own label are viewer
@@ -49,6 +50,35 @@ def api_list_wallpapers(request: Request):
         }
         for w in wallpapers
     ])
+
+
+# --- Wallpaper to go (#780): every wallpaper the viewer may take, as one streamed zip ---
+# Viewer, like the page: it is a read of what the page already shows. core/wallpapers.py decides
+# what goes in (policy.filter_visible, then filter_exportable: sensitive items never leave), and
+# says how many were left out and why, on the page (this summary) and in the zip's README.txt.
+
+@router.get("/api/wallpapers/download-summary")
+def api_wallpapers_download_summary(request: Request):
+    """#780: what "Download all (.zip)" would hold for this viewer: {included, bytes, left_out,
+    no_access, sensitive, links, missing, notes: [plain sentences]}."""
+    return JSONResponse(wallpapers.plan().summary())
+
+
+@router.get("/api/wallpapers/download.zip")
+def api_wallpapers_download_zip(request: Request):
+    """#780: the zip itself, streamed as it is built (never held in memory). 404 `no_wallpapers`
+    (with the reasons) when nothing would go in, so a click never saves an empty zip. The counts
+    ride along as X-Wallpapers-Included / X-Wallpapers-Left-Out."""
+    plan = wallpapers.plan()
+    if not plan.entries:
+        s = plan.summary()
+        raise AppError("no_wallpapers", "There are no wallpaper files you can download"
+                       + (": " + " ".join(s["notes"]) if s["notes"] else "."), status=404, details=s)
+    user = users.current_user()
+    who = (user.get("name") or user.get("username")) if user else None
+    return content_security.serve_zip_stream(
+        wallpapers.stream(plan, who), wallpapers.ZIP_NAME,
+        {"X-Wallpapers-Included": str(len(plan.entries)), "X-Wallpapers-Left-Out": str(plan.left_out)})
 
 
 # --- Public hotlink (no login: Hudu/Slack/the static site fetch these directly) ---

@@ -1,5 +1,5 @@
 """Admin routes (#547): settings, backup, delete-all, audit log, redacted/restricted lists,
-storage stats, provenance options, caption tuning + breaker."""
+storage stats, provenance options, word lists (#556), caption tuning + breaker."""
 
 from pathlib import Path
 
@@ -7,7 +7,8 @@ from fastapi import Request, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
 from core import backup, captions, db, install_config, items, object_types, paths, reset, storage
-from core import provenance_options
+from core import provenance_options, vocab
+from core import actor as actor_ctx
 from web.common import from_request_thread
 from web.shapes import _call_properties_fn, _friendly_datetime, _has_thumbnail, _to_public, actor_label
 from core import access_log, roles
@@ -453,3 +454,46 @@ def api_move_provenance_option(scope: str, key: str, direction: str = Form("")):
     """#529: move one place 'up' or 'down'."""
     provenance_options.move(scope, key, direction)
     return _provenance_list_response(scope)
+
+
+# --- Word lists (#556): brand roles + wallpaper tags (core/vocab.py) ---
+# Reading a list is viewer (the item page's brand-role picker, the Wallpaper page); every write is
+# admin (option management, the router default). The term travels in the form body, not the path,
+# because a wallpaper tag can hold spaces. Each write answers Result.to_dict() (terms, batch_id).
+
+@router.get("/api/vocab/{vocab_name}", dependencies=requires(roles.VIEWER))
+def api_list_vocab(vocab_name: str):
+    """#556: one word list in order. Admins also get each term's item count (`items`)."""
+    admin = roles.at_least(roles.role_of(actor_ctx.current_actor()), roles.ADMIN)
+    return JSONResponse({"vocab": vocab_name, "terms": vocab.list_terms(vocab_name, with_usage=admin)})
+
+
+@router.post("/api/vocab/{vocab_name}")
+def api_add_vocab(vocab_name: str, term: str = Form(""), dry_run: bool = Form(False)):
+    """#556: add a term (400 bad_vocab_term, 409 vocab_conflict)."""
+    return JSONResponse(vocab.add(vocab_name, term, dry_run=dry_run).to_dict())
+
+
+@router.post("/api/vocab/{vocab_name}/rename")
+def api_rename_vocab(vocab_name: str, term: str = Form(""), new_term: str = Form(""), dry_run: bool = Form(False)):
+    """#556: rename a term; a brand role's items move with it (409 vocab_conflict: merge instead)."""
+    return JSONResponse(vocab.rename(vocab_name, term, new_term, dry_run=dry_run).to_dict())
+
+
+@router.post("/api/vocab/{vocab_name}/remove")
+def api_remove_vocab(vocab_name: str, term: str = Form(""), dry_run: bool = Form(False)):
+    """#556: remove a term (409 vocab_in_use for a brand role items still hold, naming them; 409
+    vocab_last_term). A wallpaper tag's answer says how many items leave the page."""
+    return JSONResponse(vocab.remove(vocab_name, term, dry_run=dry_run).to_dict())
+
+
+@router.post("/api/vocab/{vocab_name}/merge")
+def api_merge_vocab(vocab_name: str, term: str = Form(""), into: str = Form(""), dry_run: bool = Form(False)):
+    """#556: brand roles only: `term`'s items take the role `into`, and `term` leaves the list."""
+    return JSONResponse(vocab.merge(vocab_name, term, into, dry_run=dry_run).to_dict())
+
+
+@router.post("/api/vocab/{vocab_name}/move")
+def api_move_vocab(vocab_name: str, term: str = Form(""), direction: str = Form("")):
+    """#556: move one place 'up' or 'down'."""
+    return JSONResponse(vocab.move(vocab_name, term, direction).to_dict())

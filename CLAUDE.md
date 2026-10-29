@@ -51,8 +51,8 @@ the date and commit forward when you re-verify.
     (`/api/curator/*`, `/api/pending-decisions*`), `blog_export.py`
     (`/api/blog-entries*`, `/api/export/*`), `admin.py` (settings, backup,
     delete-all, audit log, redacted/restricted, storage stats, provenance
-    options, caption tuning/breaker), `files.py` (`/f/*`,
-    brand-asset and wallpaper listings), `meta.py`
+    options, word lists (#556), caption tuning/breaker), `files.py` (`/f/*`,
+    brand-asset and wallpaper listings, the wallpaper zip, #780), `meta.py`
     (`/healthz`, `/api/version`) and `auth.py` (sign-in, setup, users, my password; see "Users and
     sessions"). `app.py` includes them in this order: meta, pages, admin, items, curator, files,
     cards, hobbies, blog_export, auth.
@@ -96,8 +96,8 @@ the date and commit forward when you re-verify.
   `MIGRATIONS`, `init_db`, `transaction()`, `ImageLog`, every read query, the pipeline writers). No
   ORM; raw SQL via `sqlite3`, one `get_conn()`/`conn.close()` pair per call (or one shared
   connection inside `db.read_session()` / `transaction()`). **It is not the only module with raw SQL:**
-  eleven other core modules (`backup`, `blog`, `card_migration`, `curator_needs`, `hobbies`,
-  `install_config`, `membership`, `physical_piece`, `provenance_options`, `revisions`, `tags`) and
+  twelve other core modules (`backup`, `blog`, `card_migration`, `curator_needs`, `hobbies`,
+  `install_config`, `membership`, `physical_piece`, `provenance_options`, `revisions`, `tags`, `vocab`) and
   `web/routes/admin.py` also call `.execute(...)` themselves (the service-layer cleanup that would pull
   them in is tracked in the issues, not done). Read the schema in `core/db.py` rather than trusting
   any description here or in README.md, which can drift. Writes still go through the service modules
@@ -116,7 +116,8 @@ the date and commit forward when you re-verify.
 - **Module map: the rest of `core/`** (one line each; the module docstring is the detail):
   - *Writes, the service layer (#541):* `items.py`, `membership.py`, `tags.py`, `cards.py`,
     `hobbies.py`, `blog.py`, `decisions.py`, `reset.py`, `revisions.py`, `users.py`,
-    `install_config.py`, `provenance_options.py`; `changes.py` (the change-log API), `actor.py`
+    `install_config.py`, `provenance_options.py`, `vocab.py` (the editable brand roles + wallpaper tags,
+    #556); `changes.py` (the change-log API), `actor.py`
     (who did it), `errors.py` (`AppError` family), `besteffort.py` (logged, rate-limited non-fatal
     failures). See "Service layer" and "Actor and errors".
   - *Rules and policy (pure or near-pure):* `card_rules.py` (card enums, labels, validation, no DB),
@@ -137,7 +138,8 @@ the date and commit forward when you re-verify.
   - *Curator:* `curator.py` (completeness scoring), `curator_needs.py` (derived nudges),
     `curation_queue.py` (the one queue), `lookalikes.py` + `lookalike_match.py` (look-alike photos, #759). See "Decisions and the Curator".
   - *Install, files, export:* `paths.py`, `storage.py`, `backup.py`, `install_token.py`, `version.py`,
-    `site_export.py` + `project_export.py` (see "Static export"), `card_migration.py` (the V2 card
+    `site_export.py` + `project_export.py` (see "Static export"), `wallpapers.py` (the Wallpaper page's
+    streamed "Download all (.zip)", #780; see "Static export"), `card_migration.py` (the V2 card
     migration run from `init_db()`).
 - **`core/storage.py`** — file storage on local disk under `storage/`
   (gitignored; not baked into the Docker image). Random unguessable slugs
@@ -448,7 +450,7 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
 - General browsing (search, gallery, home, unfiled, tag pages, uploader pages) filters in SQL with
   `policy.sql_browse_clause(prefix)` inside `core/db.py` (formerly `db._not_restricted`), plus
   `filter_visible` where the route holds the rows.
-- Exports (static site, project zip) call `policy.filter_exportable(rows)`: restricted items never
+- Exports (static site, project zip, the wallpaper zip #780) call `policy.filter_exportable(rows)`: restricted items never
   leave the install, whoever asks.
 - **Since #467 step 2** `RESTRICTED_VIEW_ROLE = roles.ADMIN` ("restricted means locked, not just
   hidden"): `can_view` is False for a restricted item unless the actor is an admin (a signed-in
@@ -703,7 +705,8 @@ UTF-8. When the type's function says no (binary, over `code.RAW_MAX_BYTES` = 32 
 raw view, the route answers with the download (`serve_file(..., download=True)`: `/f/<slug>`'s bytes and
 type, always `attachment`; Python maps `.c`/`.h` to `text/plain`, so `/f/` alone shows those inline). Check with
 `scripts/test_raw_view_703.py`. **Any new route that streams a stored file must go through
-`content_security.serve_file` (or add `file_headers`)**, never a bare `FileResponse` on a user file.
+`content_security.serve_file` (or add `file_headers`)**, never a bare `FileResponse` on a user file; a
+zip of user files built on the fly goes through `content_security.serve_zip_stream` (#780).
 Thumbnails are generated JPEGs (nosniff only). Check with `scripts/test_f_sandbox_610.py`. Longer term: a
 separate user-content origin.
 
@@ -1227,7 +1230,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   from context) with per-table counts in `form_body`. Clears `reset.CLEARED_TABLES` (items and
   everything pointing at them, cards, tags and hobbies, blog entries, questions and their snoozes,
   caption queue, trash) plus every item file and thumbnail and `<storage>/.trash`; keeps
-  `reset.KEPT_TABLES` (settings, users, provenance options, migrations, the audit/change log). A
+  `reset.KEPT_TABLES` (settings, users, provenance options, word lists, migrations, the audit/change log). A
   new table must be added to one of the two lists (`scripts/test_membership_tags.py` fails otherwise).
   Check phase C with `scripts/test_membership_tags.py` (throwaway DB).
 - **Trash.** `items.delete` / `items.redact` move the file and its thumbnail to
@@ -1735,7 +1738,19 @@ be previewed in the app and pushed to a GitHub Pages repo. All of it is admin-on
   (`web/templates/_export_builder.html`). Live pages only: the static site's own templates are
   `web/export_templates/`, not `web/templates/`.
 - **Separate and older:** `core/project_export.py` / `GET /api/projects/{id}/export.zip` bundles one
-  card's contents as a zip for offline or agent analysis; it is not the site export.
+  card's contents as a zip for offline or agent analysis; it is not the site export. (It builds the zip
+  in memory.)
+- **Wallpaper to go (#780):** the Wallpaper page's "Download all (.zip)" (`GET
+  /api/wallpapers/download.zip`, viewer, like the page). `core/wallpapers.py` `plan()` takes the page's
+  list, then `policy.filter_visible` (left out: "N not included (no access)") and `filter_exportable`
+  (sensitive items never leave, even for an admin: "N not included (sensitive)"); links and files missing
+  on disk are counted too. `stream()` yields the zip as it is built (ZIP_STORED, 1 MB reads, data
+  descriptors, nothing in memory or on disk) through `content_security.serve_zip_stream` (attachment,
+  nosniff, sandbox CSP). Original file names, de-duplicated in any case ("name (2).ext"); a `README.txt`
+  (reserved name, written last) says what is in and every reason something was left out, including a
+  file that vanished mid-stream. `GET /api/wallpapers/download-summary` (viewer) gives the same counts and
+  sentences, shown beside the button. Nothing to download = 404 `no_wallpapers`, never an empty zip.
+  No selection mode yet (#780 v1). Check: `scripts/test_wallpaper_vocab_780.py`.
 - There is no test file of its own for the export. Its lock and failure paths are covered by
   `scripts/test_async_blocking_550.py` and the `/preview` mount's headers by
   `scripts/test_f_sandbox_610.py`.
@@ -2235,6 +2250,24 @@ One generated file of every registered type and extension, to drop-test a new in
   `db.PROVENANCE_TYPES` is gone, #546).
   `scripts/test_provenance_options.py` runs on a throwaway DB, no server.
 
+- **Word lists (#556): brand roles + wallpaper tags** — `vocab_terms(id, vocab, term, sort_order,
+  UNIQUE(vocab, term))`, owned by `core/vocab.py` (was `db.BRAND_ROLES` / `db.WALLPAPER_TAG_NAMES`, now
+  its `SEED`, inserted once by the `vocab_seed_556` migration; the DDL is in `init_db`). Terms are stored
+  lowercase. `brand_role` feeds the item page's picker; `capture_events.brand_role` stays freeform (the
+  "custom" choice). `wallpaper_tag` is what `db.list_wallpapers` matches tag names against (any case).
+  Ops (admin, each one imaged batch with `dry_run`, undo via `cards.undo`): `add`, `rename` (a brand
+  role's items move with it in the same batch; a wallpaper tag's answer says the page's count before and
+  after), `remove` (**a brand role still held by items is refused**, 409 `vocab_in_use`, naming them in
+  the message and `details.items`; merge instead; a wallpaper tag's answer says how many leave the page),
+  `merge(term, into)` (brand roles only: items take `into`, the term goes), `move`. Other refusals:
+  `bad_vocab` / `bad_vocab_term` / `bad_vocab_merge` / `bad_vocab_move` (400), `vocab_conflict` and
+  `vocab_last_term` (409), `not_found`. Web: `GET /api/vocab/{brand_role|wallpaper_tag}` (viewer; item
+  counts for admins), `POST /api/vocab/{list}` + `/rename|remove|merge|move` (admin; the term is a form
+  field, since a tag has spaces), Admin > Word lists (`static/js/admin-vocab.js`, Undo bar). The
+  Wallpaper and Brand Kit pages show non-admins the link greyed, "(admins only)", with the why on click.
+  MCP `constructicon_list_vocab(vocab)` (viewer, read only; like provenance, writes are Admin's).
+  Kept by delete-all. Check: `scripts/test_wallpaper_vocab_780.py`.
+
 - **Revision chains (#477)** — `item_revisions(old_slug PK, new_slug UNIQUE)`: "new
   supersedes old", one successor and one predecessor per item, so a chain is
   linear (A -> B -> C) and the CURRENT revision is the item with no successor.
@@ -2346,9 +2379,9 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
 Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
-`mcp_server/server.py`, exposing 60 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
-`constructicon_sharing` (#604), `constructicon_duplicates` (#615), `constructicon_caption_review` (#556) and
-`constructicon_lookalikes` (#759), 61 in all) like `constructicon_search`, `constructicon_get`,
+`mcp_server/server.py`, exposing 62 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
+`constructicon_sharing` (#604), `constructicon_duplicates` (#615), `constructicon_caption_review` (#556),
+`constructicon_lookalikes` (#759) and `constructicon_list_vocab` (#556), 62 in all) like `constructicon_search`, `constructicon_get`,
 `constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
 `constructicon_card_files`, `constructicon_needs`, etc.
 (`mcp__constructicon-mcp__*` in a session with it configured). #68 tracked
@@ -2748,7 +2781,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_drop_columns_704` (the dead-column drop and its safeguard),
-    `test_move_tags_590`, `test_tags_555` (one tag store, tag management, the sweep), `test_revisions`, `test_duplicates_615` (duplicate folding), `test_bulk_decisions`, `test_provenance_options`,
+    `test_move_tags_590`, `test_tags_555` (one tag store, tag management, the sweep), `test_revisions`, `test_duplicates_615` (duplicate folding), `test_bulk_decisions`, `test_provenance_options`, `test_wallpaper_vocab_780` (the wallpaper zip, the word lists),
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,

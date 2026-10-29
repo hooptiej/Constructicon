@@ -16,6 +16,13 @@
       <h1 class="page-title">Wallpapers</h1>
       <p class="page-subtitle">Desktop pictures, collected in one place — big previews, made to grab.</p>
     </div>
+    {#- #780: Download all (.zip), streamed by the server; the counts of what is left out (and why)
+        come from GET /api/wallpapers/download-summary and sit right beside the button. -#}
+    <div class="wallpaper-zip" id="wallpaper-zip">
+      <button type="button" class="wallpaper-download wallpaper-zip-btn" id="wallpaper-zip-btn" disabled
+              aria-describedby="wallpaper-zip-note">Download all (.zip)</button>
+      <p class="wallpaper-zip-note" id="wallpaper-zip-note" role="status" aria-live="polite">Counting wallpapers…</p>
+    </div>
     <div class="sort-control">
       <label class="sort-label" for="wallpaper-sort">Sort</label>
       <select class="filter-select" id="wallpaper-sort">
@@ -29,7 +36,25 @@
   <div id="wallpaper-container" style="display:none">
     <div id="wallpaper-grid" class="wallpaper-grid"></div>
   </div>
-  <p id="wallpaper-empty" class="empty-state" style="display:none">No wallpapers yet — tag an object <code>wallpaper</code> (or <code>Desktop Picture</code>) and it shows up here.</p>
+  <p id="wallpaper-empty" class="empty-state" style="display:none">No wallpapers yet — tag an object {% for t in wallpaper_tags %}<code>{{ t }}</code>{% if not loop.last %}{{ ' or ' if loop.revindex == 2 else ', ' }}{% endif %}{% endfor %} and it shows up here.</p>
+  <p id="wallpaper-error" class="error-text" role="alert" hidden></p>
+
+  {#- #556: which tags count as wallpaper is an admin setting. Owner rule #779: a permission never
+      hides a feature, so everyone else sees it greyed, labelled with the role it needs, and a click
+      says why. -#}
+  <div class="wallpaper-tags-admin">
+    <span class="dp-muted">Wallpaper tags: {% for t in wallpaper_tags %}<code>{{ t }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.</span>
+    {% if has_role("admin") %}
+    <a class="btn-ms" href="/admin#admin-vocab-section">Change which tags count</a>
+    {% else %}
+    <button type="button" class="btn-ms" id="wallpaper-tags-locked" aria-disabled="true"
+            aria-describedby="wallpaper-tags-why" style="filter: grayscale(1); cursor: not-allowed;"
+            title="Change which tags count (admins only)">Change which tags count (admins only)</button>
+    <span class="dp-muted" id="wallpaper-tags-why" hidden>Choosing which tags count as wallpaper needs the admin
+      role, because it changes this page for everyone. Your account is a {{ current_role() }}. Ask an admin to
+      add or remove a tag, or tag the picture with one of the tags above.</span>
+    {% endif %}
+  </div>
 </div>
 
 <style>
@@ -112,6 +137,14 @@
   background: var(--accent-color, #7FA37C);
   color: #fff;
 }
+
+/* #780 */
+.wallpaper-zip { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 26rem; }
+.wallpaper-zip-btn { cursor: pointer; }
+.wallpaper-zip-btn:disabled { opacity: 0.55; cursor: progress; }
+.wallpaper-zip-note { margin: 0; font-size: 12.5px; color: var(--text-secondary, #666); text-align: right; }
+.wallpaper-zip-note.is-error { color: #b00020; }
+.wallpaper-tags-admin { margin-top: 1.5rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; font-size: 13px; }
 </style>
 
 <script nonce="{{ csp_nonce() }}">
@@ -161,19 +194,113 @@ function render() {
   `).join('');
 }
 
+const errorEl = document.getElementById('wallpaper-error');
+function showError(text) {
+  errorEl.textContent = text;
+  errorEl.hidden = !text;
+}
+
+async function errorText(res, fallback) {
+  const body = await res.json().catch(() => ({}));
+  const msg = (body.error && body.error.message) || body.detail;
+  return typeof msg === 'string' ? msg : `${fallback} (HTTP ${res.status}).`;
+}
+
 async function loadWallpapers() {
   try {
     const res = await fetch('/api/wallpapers');
-    if (!res.ok) return;
+    if (!res.ok) {
+      showError('Could not load the wallpapers: ' + await errorText(res, 'the server refused'));
+      return;
+    }
     items = await res.json();
     render();
   } catch (err) {
-    console.error('Failed to load wallpapers:', err);
+    showError('Could not load the wallpapers: the server could not be reached. Reload to try again.');
   }
+}
+
+// #780: Download all (.zip). The server streams it; the note beside the button says how many go in
+// and, when some are left out, how many and why (never silently).
+const zipBtn = document.getElementById('wallpaper-zip-btn');
+const zipNote = document.getElementById('wallpaper-zip-note');
+
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
+}
+
+function zipMessage(s, lead) {
+  const head = lead || (s.included
+    ? `${s.included} wallpaper${s.included === 1 ? '' : 's'}, ${fmtBytes(s.bytes)}.`
+    : 'No wallpaper files you can download.');
+  return [head].concat(s.notes || []).join(' ');
+}
+
+function setNote(text, isError) {
+  zipNote.textContent = text;
+  zipNote.classList.toggle('is-error', !!isError);
+}
+
+async function fetchSummary() {
+  const res = await fetch('/api/wallpapers/download-summary');
+  if (!res.ok) throw new Error(await errorText(res, 'the server refused'));
+  return res.json();
+}
+
+async function loadZipSummary() {
+  try {
+    const s = await fetchSummary();
+    zipBtn.disabled = !s.included;
+    setNote(zipMessage(s));
+  } catch (err) {
+    zipBtn.disabled = true;
+    setNote('Could not count the wallpapers for the zip: ' + err.message, true);
+  }
+}
+
+zipBtn.addEventListener('click', async () => {
+  zipBtn.disabled = true;
+  setNote('Preparing the zip…');
+  let s;
+  try {
+    s = await fetchSummary();  // fresh counts: the list may have changed since the page loaded
+  } catch (err) {
+    setNote('The zip was not started: ' + err.message, true);
+    zipBtn.disabled = false;
+    return;
+  }
+  if (!s.included) {
+    setNote(zipMessage(s), true);
+    return;
+  }
+  setNote(zipMessage(s, `Preparing ${s.included} wallpaper${s.included === 1 ? '' : 's'} (${fmtBytes(s.bytes)}): ` +
+    'your browser shows the download as it arrives.'));
+  const a = document.createElement('a');
+  a.href = '/api/wallpapers/download.zip';
+  a.download = 'wallpapers.zip';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => {
+    zipBtn.disabled = false;
+    setNote(zipMessage(s, `Started wallpapers.zip (${s.included} file${s.included === 1 ? '' : 's'}, ` +
+      `${fmtBytes(s.bytes)}). If your browser says the download failed, try again.`));
+  }, 4000);
+});
+
+const lockedTags = document.getElementById('wallpaper-tags-locked');
+if (lockedTags) {
+  lockedTags.addEventListener('click', () => {
+    document.getElementById('wallpaper-tags-why').hidden = false;
+  });
 }
 
 sortSel.addEventListener('change', render);
 loadWallpapers();
+loadZipSummary();
 </script>
 
 {% endblock %}

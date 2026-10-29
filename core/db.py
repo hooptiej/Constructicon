@@ -289,9 +289,8 @@ CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id);
 # table since #529 (core/provenance_options.py seeds and owns them).
 
 # --- Brand asset roles (capture_events.brand_role) — #350 ---
-# Suggested vocab for reusable branding objects (logo, logotype, icon, etc.).
-# Loose (no DB CHECK), extensible — brand_role is freeform text, allows custom values.
-BRAND_ROLES = ["logo", "logotype", "icon", "color", "typography", "swag", "template-asset", "other"]
+# brand_role is freeform text (custom values allowed). The suggested list the picker offers is
+# editable in Admin since #556: the vocab_terms table, owned by core/vocab.py (vocab 'brand_role').
 
 # --- Hobby statuses (blog_tags.hobby_status) — #360 ---
 # Controlled vocab for hobby activity. Only meaningful when is_hobby=1.
@@ -1190,6 +1189,9 @@ def init_db(migrate=True):
         # are the one-time `provenance_options_seed_529` migration below.
         from . import provenance_options
         conn.execute(provenance_options.DDL)
+        # Editable brand roles + wallpaper tags (#556): schema here, seed = `vocab_seed_556` below.
+        from . import vocab
+        conn.execute(vocab.DDL)
         _rebuild_project_relations_typed(conn)
         _ensure_search_schema(conn)  # #543: after every column it reads exists
         _ensure_chip_triggers(conn)  # #555: the derived chip cache (once its migration has run)
@@ -1324,6 +1326,12 @@ def _mig_provenance_options_seed_529():
     # INSERT OR IGNORE only: never renames, un-retires or duplicates anything the owner changed.
     from . import provenance_options
     provenance_options.ensure_table_and_seed(get_conn())
+
+
+def _mig_vocab_seed_556():
+    # INSERT OR IGNORE only: the old db.BRAND_ROLES / WALLPAPER_TAG_NAMES constants become the lists.
+    from . import vocab
+    vocab.ensure_seed(get_conn())
 
 
 def _mig_v2c(n):
@@ -1881,6 +1889,7 @@ MIGRATIONS = [
     ("search_filename_parts_762", _mig_search_filename_parts_762),
     ("reread_xls_790", _mig_reread_xls_790),
     ("caption_pdf_ai_556", _mig_caption_pdf_ai_556),
+    ("vocab_seed_556", _mig_vocab_seed_556),
 ]
 
 
@@ -2564,29 +2573,24 @@ def list_brand_assets():
         conn.close()
 
 
-# Tag names the Wallpaper surface (#422) gathers. Deliberately a small set of
-# synonyms rather than one canonical tag: the owner's pre-existing "Desktop
-# Picture" pile and the "wallpaper" tag the archive import stamps both mean the
-# same thing, so the surface shows every wallpaper regardless of which was used.
-# Matched case-insensitively. Extend here if another synonym shows up.
-WALLPAPER_TAG_NAMES = ("wallpaper", "desktop picture")
+# Tag names the Wallpaper surface (#422) gathers: a small set of synonyms rather than one
+# canonical tag (the owner's "Desktop Picture" pile and the archive import's "wallpaper" tag mean
+# the same thing). Matched case-insensitively. Editable in Admin since #556: the vocab_terms table
+# (vocab 'wallpaper_tag', core/vocab.py; seeded with wallpaper + desktop picture).
 
 
 def list_wallpapers():
-    """Objects carrying any WALLPAPER_TAG_NAMES tag, non-redacted, newest
-    first (#422). The Wallpaper page's data source — a tag-based sibling of
-    list_brand_assets, no schema change (wallpaper is just a tag, not a flag)."""
+    """Objects carrying any wallpaper tag (vocab_terms, vocab 'wallpaper_tag'), non-redacted,
+    newest first (#422). The Wallpaper page's data source (and its zip, #780): a tag-based
+    sibling of list_brand_assets (wallpaper is just a tag, not a flag)."""
     conn = get_conn()
     try:
-        names = [n.lower() for n in WALLPAPER_TAG_NAMES]
-        placeholders = ",".join("?" for _ in names)
         rows = conn.execute(
-            f"SELECT DISTINCT ce.* FROM capture_events ce "
-            f"JOIN post_tags pt ON pt.post_slug = ce.slug "
-            f"JOIN blog_tags t ON t.id = pt.tag_id "
-            f"WHERE lower(t.name) IN ({placeholders}) AND ce.redacted = 0 "
-            f"ORDER BY ce.timestamp DESC",
-            names,
+            "SELECT DISTINCT ce.* FROM capture_events ce "
+            "JOIN post_tags pt ON pt.post_slug = ce.slug "
+            "JOIN blog_tags t ON t.id = pt.tag_id "
+            "WHERE lower(t.name) IN (SELECT term FROM vocab_terms WHERE vocab = 'wallpaper_tag') "
+            "AND ce.redacted = 0 ORDER BY ce.timestamp DESC"
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:
@@ -4631,6 +4635,7 @@ IMAGE_TABLE_KEYS = {
     "capture_events": ("slug",),
     "post_tags": ("post_slug", "tag_id"),
     "provenance_options": ("scope", "key"),
+    "vocab_terms": ("id",),  # #556: editable brand roles + wallpaper tags (core/vocab.py)
     "item_revisions": ("old_slug",),  # #477: one successor per item
     # #541 phase B (core/items.py): what an item delete touches, plus its trash entry.
     "capture_event_relations": ("slug_a", "slug_b"),

@@ -237,6 +237,10 @@ register(ObjectTypeSpec(
     label="PDF document",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,
+    # #556 (owner decision 2026-10-28): a PDF is a visual document, captioned from its rendered first
+    # page (the thumbnail capture_thumbnail makes, the same picture OCR falls back to), exactly as an
+    # image is; the captions toggle (CAPTION_DISABLED) and the breaker apply as everywhere.
+    caption_capable=True,
     extensions=frozenset({".pdf"}),
     capture_fn=capture_thumbnail,
     text_extract_fn=extract_text_for_row,

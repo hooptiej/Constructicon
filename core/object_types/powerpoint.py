@@ -338,7 +338,8 @@ register(ObjectTypeSpec(
     label="PowerPoint presentation",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,
-    caption_capable=False,
+    caption_capable=False,  # #556 owner decision: text-only; the Curator's caption check excuses it
+    caption_excuse="PowerPoint presentations aren't captioned; their slide text is extracted instead",
     extensions=frozenset(MODERN | {".ppt"}),
     sniff_fn=sniff,
     capture_fn=capture_thumbnail,

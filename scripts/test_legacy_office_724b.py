@@ -444,9 +444,16 @@ if xlrd:
     check(f"encrypted .xls: 'unsupported' with \"{ENC}\"", state(S_ENC_XLS)[:2] == ("unsupported", ENC), state(S_ENC_XLS))
     S_BAD_XLS = mkfile("corrupt_xls", make_type_samples.legacy_office("Workbook", "Excel 97-2003")("x"), ".xls", "spreadsheet")
     ocr.run_ocr(S_BAD_XLS)
-    check("the #720 sampler's .xls stub: 'failed', saying it's corrupt",
-          state(S_BAD_XLS)[0] == "failed" and (state(S_BAD_XLS)[1] or "").startswith("corrupt or unreadable .xls: "),
-          state(S_BAD_XLS))
+    # #790: the stub holds no BIFF workbook at all: grey "not compatible", like the .doc/.ppt stubs.
+    check("the #720 sampler's .xls stub: 'unsupported' (grey), not a workbook we recognise",
+          state(S_BAD_XLS)[:2] == ("unsupported", spreadsheet.UNRECOGNISED_NOTE), state(S_BAD_XLS))
+    # ...while a stream that starts like a real workbook (its BOF) and then breaks is still red.
+    S_TRUNC_XLS = mkfile("truncated_xls", make_type_samples.ole_file({"Workbook": wb[:bof_end + 6]}), ".xls",
+                         "spreadsheet")
+    ocr.run_ocr(S_TRUNC_XLS)
+    check("a truncated real .xls: 'failed', saying it's corrupt",
+          state(S_TRUNC_XLS)[0] == "failed" and (state(S_TRUNC_XLS)[1] or "").startswith("corrupt or unreadable .xls: "),
+          state(S_TRUNC_XLS))
 check("xls: _search_text keeps real decimals and text", (spreadsheet._search_text(12.0), spreadsheet._search_text(2.5),
       spreadsheet._search_text("12.0"), spreadsheet._search_text(-3.0)) == ("12", "2.5", "12.0", "-3"))
 

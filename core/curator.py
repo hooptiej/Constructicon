@@ -15,7 +15,7 @@ import json
 import logging
 
 from core import besteffort, card_level, card_rules, db, timeline
-from core.object_types import get_object_type
+from core.object_types import caption_excuse, get_object_type
 
 log = logging.getLogger("constructicon.curator")
 
@@ -32,7 +32,7 @@ SCORING_RULES = {
         "weight": 25,
         "items": [
             {"name": "cover_image", "description": "cover image set (cover_slug non-null)"},
-            {"name": "captions", "description": "≥60% of caption-capable objects (images, video) have a description or auto-caption"},
+            {"name": "captions", "description": "≥60% of caption-capable objects (images, video, PDF, Illustrator) have a description or auto-caption; other types are excused, with the reason"},
         ],
     },
     "timeline": {
@@ -91,6 +91,16 @@ def is_silent(card):
     return STAGE_APPLICABILITY.get(scoring_stage(card)) is None
 
 
+def _not_scored_why(card, stage):
+    """Why a check is excused by the card itself (is_silent's reasons, or the stage), in plain words."""
+    if card.get("kind") == "collection" and card.get("provenance") in (None, "referenced"):
+        return "a reference collection isn't scored"
+    label = card_rules.stage_label(stage) or "not started"
+    if STAGE_APPLICABILITY.get(stage) is None:
+        return f"the card is {label}"
+    return f"not checked while the card is {label}"
+
+
 def _auto_caption(item):
     """#532: the item's moondream auto-caption, if any (type_metadata may be a dict or JSON text)."""
     tm = item.get("type_metadata") or {}
@@ -102,6 +112,26 @@ def _auto_caption(item):
                             slug=item.get("slug"))
             return False
     return bool(((tm or {}).get("auto_caption") or "").strip())
+
+def _plural(n, word):
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _captions_reason(cap_items, present, threshold, excused_files):
+    """#556: the captions check in plain words, naming the files it doesn't count and why.
+    "3 of 5 captionable files have a caption or description (60%; needs 60%). Not counted: 2 Word
+    documents (Word documents aren't captioned; their text is extracted instead)." With nothing
+    captionable on the card: "Excused: nothing here is captioned. ..." (or "no files")."""
+    skipped = "; ".join(f"{_plural(e['count'], e['label'])} ({e['reason']})" for e in excused_files)
+    if cap_items:
+        pct = round(100 * present / len(cap_items))
+        text = (f"{present} of {_plural(len(cap_items), 'captionable file')} have a caption or description "
+                f"({pct}%; needs {round(threshold * 100)}%).")
+        return text + (f" Not counted: {skipped}." if skipped else "")
+    if skipped:
+        return f"Excused: nothing here is captioned. {skipped[0].upper() + skipped[1:]}."
+    return "Excused: no files to caption."
+
 
 def content_items(project, items):
     """Project items EXCLUDING the write-up document (#404).
@@ -287,7 +317,7 @@ def score_project(project_id_or_dict):
         "reason": cover_check["reason"],
     })
 
-    # Check 2: captions (#532). Only caption-capable items (images, video: the
+    # Check 2: captions (#532). Only caption-capable items (images, video, PDF, AI since #556: the
     # object-type registry's caption_capable) are in the check; a project with
     # none is excused. An item counts if it has a real `description` OR a
     # `content_description` (trimmed, non-empty), OR a moondream auto_caption
@@ -295,8 +325,22 @@ def score_project(project_id_or_dict):
     # 695 captionable items are auto-captioned only and the check should flag projects
     # with genuinely uncaptioned images. display_name never counts: it's often an
     # auto-populated filename.
+    # #556: files of a type that isn't captioned (Word, PowerPoint, spreadsheets, ...) are never
+    # silently dropped: the row lists them as excused, per type, with the type's own plain reason
+    # (ObjectTypeSpec.caption_excuse, through object_types.caption_excuse), and `reason` says so.
     caption_threshold = 0.6
-    cap_items = [i for i in content if get_object_type(i.get("media_type")).caption_capable]
+    cap_items = []
+    excused_files = {}
+    for i in content:
+        spec = get_object_type(i.get("media_type"))
+        if spec.caption_capable:
+            cap_items.append(i)
+        else:
+            entry = excused_files.setdefault(spec.key, {"type": spec.key, "label": spec.label, "count": 0,
+                                                        "reason": caption_excuse(spec)})
+            entry["count"] += 1
+    excused_files = sorted(excused_files.values(), key=lambda e: (-e["count"], e["label"]))
+    captions_present = 0
     if cap_items:
         captions_present = sum(
             1 for item in cap_items
@@ -307,6 +351,10 @@ def score_project(project_id_or_dict):
     else:
         captions_passed = False
     excused = not dim_applicable[1] or not cap_items
+    captions_reason = _captions_reason(cap_items, captions_present, caption_threshold, excused_files)
+    if not dim_applicable[1]:
+        # The card, not its files, excuses it: say why before the numbers, which aren't a failure here.
+        captions_reason = f"Not scored: {_not_scored_why(project, stage)}. " + captions_reason
     if not excused:
         applicable += weight_per_item
         if captions_passed:
@@ -319,6 +367,8 @@ def score_project(project_id_or_dict):
         "passed": captions_passed,
         "excused": excused,
         "weight": weight_per_item,
+        "reason": captions_reason,
+        "excused_files": excused_files,  # #556: [{type, label, count, reason}], files not captioned and why
     })
 
     # Timeline checks

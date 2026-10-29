@@ -332,7 +332,15 @@ class ObjectTypeSpec:
     # explicit hard exclusion (plain-background wireframe renders produced
     # degenerate repeated-punctuation garbage in testing, not just a weak
     # caption). Defaults False so a new type opts in deliberately.
+    # #556 (owner decision 2026-10-28): PDF and Illustrator files are captioned from their rendered
+    # first page (visual documents); Word, PowerPoint and spreadsheets stay text-only.
     caption_capable: bool = False
+    # #556: for a type that ISN'T caption_capable, the plain reason why, in the words the owner reads
+    # in the Curator's caption check ("Word documents aren't captioned; their text is extracted
+    # instead"). The check lists such files as excused with this reason, never as uncaptioned and
+    # never silently. Unset: caption_excuse(spec) says "<label>s aren't captioned". Setting it on a
+    # caption_capable type is a contract error (the two contradict each other).
+    caption_excuse: str = ""
     # Issue #448: preview rendering function for web/export display.
     # (PreviewContext) -> Markup; enforced at registration, #448.
     preview_fn: object = None
@@ -458,6 +466,12 @@ def register(spec):
                 f"Object type '{spec.key}': {hook_name} must be a module-level function (got {fn!r}); "
                 "it runs in a parser child process (#644)"
             )
+
+    if spec.caption_capable and spec.caption_excuse:
+        raise ObjectTypeContractError(
+            f"Object type '{spec.key}': caption_excuse says why a type ISN'T captioned, but it is "
+            "caption_capable; drop one of the two (#556)"
+        )
 
     if spec.preview_layout not in ("default", "table"):
         raise ObjectTypeContractError(
@@ -750,6 +764,14 @@ def ocr_unsupported_note(row, spec=None):
     if isinstance(note, dict):
         note = note.get(file_extension(row.get("filename") or row.get("stored_filename") or "")) or note.get("")
     return note or f"{spec.label.lower()}: no readable text"
+
+
+def caption_excuse(spec):
+    """#556: why items of this type are left out of captioning, in plain words, or "" for a
+    caption_capable type. The type's own `caption_excuse`, else "<label>s aren't captioned"."""
+    if spec.caption_capable:
+        return ""
+    return spec.caption_excuse or f"{spec.label}s aren't captioned"
 
 
 def picture_expected(row, spec):

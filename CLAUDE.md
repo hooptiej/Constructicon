@@ -167,7 +167,15 @@ the date and commit forward when you re-verify.
   `type_metadata.auto_caption` (never into `description` on its own).
   Gated per type by `ObjectTypeSpec.caption_capable` (distinct from
   `ocr_capable`: video is captioned but not OCR'd; STL is explicitly
-  excluded — wireframe renders produce garbage). Strictly one image at a
+  excluded — wireframe renders produce garbage). **#556 (owner decision
+  2026-10-28): PDF and Illustrator (`pdf`, `ai`) are captioned too**, from their
+  rendered first page (the thumbnail), through the same queue, toggle and breaker;
+  **Word, PowerPoint and spreadsheets stay text-only.** A type that isn't captioned
+  says why in `ObjectTypeSpec.caption_excuse` (plain words; `object_types.caption_excuse(spec)`
+  falls back to "<label>s aren't captioned"; setting it on a caption_capable type is a
+  contract error), and the Curator's caption check lists such files as excused with that
+  reason (below). A caption run with no picture (a PDF whose page can't be rendered) fails
+  WITH a reason in `type_metadata.auto_caption_failed_reason`, shown on the lamp. Strictly one image at a
   time under `CAPTION_LOCK`. **#542: every caption comes with a short-title
   suggestion** in `type_metadata.auto_caption_title`, DERIVED from the caption
   (`captions.title_from_caption`: first sentence, the "The image shows" lead-in and a
@@ -1734,6 +1742,13 @@ Two ideas share the nav rail's "Curator" tab and one queue:
   into ONE list grouped by card (order rules in its docstring). Only the owner's **Defer** / **Dismiss**
   is persisted (`curator_dismissals`, keyed by the item's `key`; a question can be deferred, never
   dismissed).
+- **The caption check (#532, #556):** only caption-capable files count (60% must have a description or a
+  caption). Files of any other type are never silently dropped: the checklist row carries
+  `excused_files` (`[{type, label, count, reason}]`, the reason from `object_types.caption_excuse`) and a
+  plain `reason` ("1 of 3 captionable files have a caption or description (33%; needs 60%). Not counted: 2
+  Word documents (Word documents aren't captioned; their text is extracted instead)."); a card with
+  nothing captionable is EXCUSED, saying so. The reason is the thin-captions nudge's summary, shows in the
+  card page's health-badge tooltip, and MCP `constructicon_explain_card` returns it as `caption_check`.
 - **`needs_date` (#725):** a file with no real date and no card range to borrow, one need per item, with its
   best date guess as a one-click "Use <date>" (see "Dates" above).
 - **`lookalike` (#759):** "These look like the same photo: keep which?", one need per look-alike group in
@@ -1816,7 +1831,7 @@ To add a new object type (issue #448 contract v2):
 
 2. **Required fields**: Every type must declare `preview_fn` and `properties_fn` at registration (enforced, will raise `ObjectTypeContractError` otherwise).
 
-3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), `raw_text_fn` (#703: `(path) -> codec or None`, whether `/f/<slug>/raw` may show this file as plain text; `code` has one), and `sniff_priority` (for resolution when multiple sniffers claim the same extension).
+3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), `raw_text_fn` (#703: `(path) -> codec or None`, whether `/f/<slug>/raw` may show this file as plain text; `code` has one), and `sniff_priority` (for resolution when multiple sniffers claim the same extension). Captioning: `caption_capable=True` opts the type's picture into auto-captions; a type that isn't captioned may set `caption_excuse` (#556: the plain reason the Curator's caption check shows, e.g. Word's "Word documents aren't captioned; their text is extracted instead").
 
 4. **Preview guidance**: previews must escape all data (no raw HTML from untrusted sources; build with `_preview.py` helpers or `markupsafe.escape`) and handle `ctx.mode`: `"live"` (object page) and `"export"` (static site; most types render export markup via the helpers, some deliberately return the download link or `None` to keep the export as it was). A preview that needs its own file reads `ctx.file_path`; never guess at item-dict keys. **Anything expensive goes in `embedded_metadata_fn` (computed once at upload, stored in `type_metadata`), never in `preview_fn`/`properties_fn`, which run on every page view.** Measured lesson: per-view STL mesh parsing took 7.9 s on a real 22 MB file.
 
@@ -1869,7 +1884,7 @@ To add a new object type (issue #448 contract v2):
 One generated file of every registered type and extension, to drop-test a new install (owner, 2026-10-17).
 - **Generate** (in the app image, so the executables get made on Linux):
   `docker run --rm --network none -u 1000:1000 -v "$PWD":/app:ro -v "$PWD/samples-out":/out -w /app <image> python scripts/make_type_samples.py /out`.
-  It writes one sample per entry in its `SAMPLES` list (108 files: every extension any type claims, incl.
+  It writes one sample per entry in its `SAMPLES` list (110 files: every extension any type claims, incl.
   both `.zip` types and both `.exe` types), `content.json` + `urls.txt` (the no-file types: YouTube, web
   page, written post), `manifest.json` (per file: the type it must land as and what a correct install shows,
   derived from the registry at run time) and a `README.md` table. Nothing comes from the archive; credentials
@@ -1892,7 +1907,11 @@ One generated file of every registered type and extension, to drop-test a new in
   `scripts/test_legacy_office_724b.py`); an encrypted Office file reads "not compatible: encrypted: can't
   read without the password", a corrupt one fails with "corrupt or unreadable .<ext>: ..." in `ocr_note`
   (`object_types.NotCompatibleFile` / `UnreadableFile`, owner decision 2026-10-17); the hand-built `.xls` stub
-  ends "failed" (xlrd can't parse it: a real read error). (WAV downloading instead of playing, #723, is fixed: its row passes.)
+  ends "failed" (#790: it holds no BIFF workbook, so like the `.doc/.ppt` stubs it reads "not compatible", grey:
+  `spreadsheet.xls_check` refuses an OLE file with no Workbook / Book stream or no BOF record before
+  xlrd; one that starts like a workbook and then breaks is still red "corrupt or unreadable .xls").
+  **#737:** `.opus` (audio, Ogg Opus) and `.m4v` (video, written with `-f mp4`: ffmpeg's default for a
+  `.m4v` name is a RAW MPEG-4 stream) are in the sampler and play inline. (WAV downloading instead of playing, #723, is fixed: its row passes.)
 - **Windows / Defender (owner rule):** the executable-class samples (PE `.exe`, every installer package,
   the zipped `.app`, ELF firmware, the `.dmg`) are written only when `sys.platform` is Linux, and never
   committed: the default output `samples-out/` is gitignored and `.dockerignore` keeps `scripts/` and it out
@@ -2031,6 +2050,9 @@ One generated file of every registered type and extension, to drop-test a new in
     to get past a bot check. The `link_page_text_724d` migration re-queued existing `failed` /
     `unsupported` url rows to `pending` once (web's startup self-heal re-runs them; the fetches go one
     at a time). Check with `scripts/test_safe_fetch_724d.py`.
+    The `reread_xls_790` migration (#790) re-queued existing `failed` legacy `.xls` rows to `pending` once
+    (spreadsheet type, stored name `*.xls`, not redacted; nothing else), so a non-workbook settles grey
+    "not compatible" and a damaged real workbook settles red again on the startup self-heal.
     **Outbound fetches (#724 d, `core/safe_fetch.py`).** A stored URL is untrusted input (it could aim
     the server at the NAS, the router or a metadata address), so `safe_fetch.fetch(url, accept=,
     max_bytes=, timeout=, headers=, polite=)` is the only fetch path (the page reader, and
@@ -2805,6 +2827,17 @@ allowlist: secrets, data, `.git`, worktrees, `*.bak*` / `web.bak-*` backups, tes
   checkout's code over the baked copy; compose merges it in automatically. "Copy files in, restart, no
   rebuild" works exactly as before. Delete the override (and `up -d`) to run the baked image the way
   prod does, e.g. as a last check before a prod deploy.
+- **Boot migrations that queue background work** run once in web's `init_db` (recorded in
+  `schema_migrations`, never in the MCP) and only mark rows; the work itself happens after boot, through the
+  normal pipelines, so expect a burst in the processing drawer after a deploy that carries one. Batch 10
+  (#790, #556) carries two: `reread_xls_790` (failed `.xls` rows -> OCR `pending`; the startup self-heal
+  re-reads them) and `caption_pdf_ai_556` (every un-redacted PDF / Illustrator item with no
+  `content_description` and a caption status absent / failed / skipped, exactly what Admin > "Caption
+  skipped items" picks, -> `auto_caption_status='pending'` + a `caption_queue` row; the caption worker runs
+  them one at a time behind the lock, cooldown and breaker). With `CAPTION_DISABLED` set the caption
+  migration queues nothing, logs how many items it left, and is still recorded: queue them later with
+  Admin > Caption skipped items. Both log their counts (`docker logs <web> | grep schema_migrations`).
+  Check: `scripts/test_type_casting_737_790_556.py` (picks only the right rows; a second run is a no-op).
 - **`scripts/` is not in the image, and not mounted (#634).** It holds tests, release and deploy tooling.
   The operational tools live in `core/manage/` and ride along in the image (`python3 -m
   core.manage.<tool>`); a maintenance script runs with `./scripts/run_tool.sh` (`--volumes-from <web>`

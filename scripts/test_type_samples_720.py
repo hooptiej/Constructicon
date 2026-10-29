@@ -80,6 +80,51 @@ differ = sorted(f["file"] for f in manifest["files"] if by_name.get(f["file"]) !
 unexpected = [d for d in differ if d not in mts.VARYING]
 check("two runs are byte-identical (except VARYING)", not unexpected, ", ".join(unexpected))
 
+# #737: .opus and .m4v are accepted (a registered type claims them), land as audio / video, play
+# inline, and behave like their siblings: ffprobe reads them (duration, codec), the video gets a frame
+# thumbnail and its creation_time date, the audio its tags.
+from core import storage  # noqa: E402
+from core.object_types import audio as audio_type, video as video_type  # noqa: E402
+by_file = {f["file"]: f for f in manifest["files"]}
+check("#737: .opus and .m4v are accepted upload extensions",
+      {".opus", ".m4v"} <= set(ot.accepted_extensions()))
+for name, kind in (("audio-tone.opus", "audio"), ("video-clip.m4v", "video")):
+    f = by_file.get(name)
+    check(f"#737: {name} is in the sampler as {kind}, inline", bool(f) and f["media_type"] == kind
+          and f["disposition"] == "inline", repr(f and (f["media_type"], f["disposition"])))
+    check(f"#737: {name} opens in the browser", ot.opens_in_browser(name))
+_real_path_for = storage.path_for
+storage.path_for = lambda stored: out1 / stored
+try:
+    props = audio_type.get_properties({"stored_filename": "audio-tone.opus"})
+    check("#737: .opus properties (ffprobe): Duration and Codec OPUS",
+          bool(props.get("Duration")) and props.get("Codec") == "OPUS", repr(props))
+    tags = audio_type.get_embedded_metadata(out1 / "audio-tone.opus")
+    check("#737: .opus tags read (title + artist)", bool(tags.get("content_description"))
+          and (tags.get("type_metadata") or {}).get("artist") == "Constructicon Sampler", repr(tags))
+    vprops = video_type.get_properties({"stored_filename": "video-clip.m4v"})
+    check("#737: .m4v properties (ffprobe): Duration, Resolution, Codec H264",
+          bool(vprops.get("Duration")) and bool(vprops.get("Resolution")) and vprops.get("Codec") == "H264",
+          repr(vprops))
+    frame = video_type.capture_frame(out1 / "video-clip.m4v")
+    check("#737: .m4v frame thumbnail is a PNG", bool(frame) and frame[:8] == b"\x89PNG\r\n\x1a\n")
+    check("#737: .m4v recording date from creation_time",
+          "content_date" in video_type.get_embedded_metadata(out1 / "video-clip.m4v"))
+    # #790: the hand-built legacy .xls (an OLE file with no BIFF workbook in it) settles grey "not
+    # compatible", exactly like the .doc / .ppt stubs, never red "failed".
+    for legacy in ("spreadsheet-legacy.xls", "word-legacy.doc", "powerpoint-legacy.ppt"):
+        spec = ot.OBJECT_TYPES[by_file[legacy]["media_type"]]
+        try:
+            spec.text_extract_fn({"stored_filename": legacy, "slug": legacy})
+            got = "returned"
+        except ot.NotCompatibleFile as e:
+            got = f"grey: {e}"
+        except ot.UnreadableFile as e:
+            got = f"RED: {e}"
+        check(f"#790: {legacy} reads as grey 'not compatible'", got.startswith("grey: legacy ."), got)
+finally:
+    storage.path_for = _real_path_for
+
 print(f"{len(manifest['files'])} files generated, {len(skipped)} skipped")
 print("FAILED: " + ", ".join(failures) if failures else "ALL PASS")
 sys.exit(1 if failures else 0)

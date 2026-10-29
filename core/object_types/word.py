@@ -271,7 +271,8 @@ register(ObjectTypeSpec(
     label="Word document",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,  # runs the background task that calls text_extract_fn (no OCR)
-    caption_capable=False,
+    caption_capable=False,  # #556 owner decision: text-only; the Curator's caption check excuses it
+    caption_excuse="Word documents aren't captioned; their text is extracted instead",
     extensions=frozenset(MODERN | {".doc"}),
     sniff_fn=sniff,
     capture_fn=capture_thumbnail,

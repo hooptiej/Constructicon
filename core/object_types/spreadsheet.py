@@ -161,10 +161,31 @@ def get_embedded_metadata(path):
     return out
 
 
+UNRECOGNISED_NOTE = "legacy .xls: not an Excel 97-2003 workbook we recognise, no readable text"
+BIFF_BOF = 0x0809  # the BOF record every BIFF5/BIFF8 workbook stream starts with
+
+
+def xls_check(path):
+    """#790: raise NotCompatibleFile (grey "not compatible", the same outcome word.doc_text and
+    powerpoint.ppt_text give) when this OLE file holds no Excel workbook we can read: no Workbook /
+    Book stream, or a stream that doesn't start with a BIFF BOF record. Before this, xlrd's
+    "Expected BOF record" on such a file became a red "corrupt or unreadable .xls". A file that DOES
+    start like a workbook and then breaks is still red (raised by xlrd, as for a truncated .doc)."""
+    import olefile
+    with olefile.OleFileIO(str(path)) as ole:
+        name = next((n for n in ("Workbook", "Book") if ole.exists(n)), None)
+        if name is None:
+            raise NotCompatibleFile(UNRECOGNISED_NOTE)
+        head = ole.openstream(name).read(4)
+    if len(head) < 4 or int.from_bytes(head[:2], "little") != BIFF_BOF:
+        raise NotCompatibleFile(UNRECOGNISED_NOTE)
+
+
 def extract_text_for_row(row):
     """text_extract_fn: cell text from every sheet, row by row, capped. #724: a password-protected
-    workbook raises NotCompatibleFile ("encrypted: ...", grey); a workbook that can't be read at all
-    raises UnreadableFile ("corrupt or unreadable .xls: ...", failed)."""
+    workbook raises NotCompatibleFile ("encrypted: ...", grey), and so (#790) does an .xls that isn't
+    a workbook we recognise (xls_check); a workbook that starts right but can't be read raises
+    UnreadableFile ("corrupt or unreadable .xls: ...", failed)."""
     path = _path(row)
     if not path:
         return ""
@@ -173,6 +194,7 @@ def extract_text_for_row(row):
     try:
         if path.suffix.lower() == ".xls":
             import xlrd
+            xls_check(path)  # #790: not a workbook we recognise -> grey, like .doc/.ppt
             try:
                 book = xlrd.open_workbook(path, on_demand=True)
             except xlrd.XLRDError as e:
@@ -302,7 +324,8 @@ register(ObjectTypeSpec(
     label="Excel workbook",
     thumbnail_source=ThumbnailSource.CAPTURE,
     ocr_capable=True,
-    caption_capable=False,
+    caption_capable=False,  # #556 owner decision: text-only; the Curator's caption check excuses it
+    caption_excuse="Spreadsheets aren't captioned; their cell text is extracted instead",
     extensions=frozenset(MODERN | {".xls"}),
     sniff_fn=sniff,
     capture_fn=capture_thumbnail,

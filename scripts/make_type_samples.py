@@ -622,12 +622,14 @@ def sketchup_file(_name):
 
 # ============================================================================ audio, video
 
-def video_file(suffix):
+def video_file(suffix, muxer=None):
+    """`muxer` forces the container: ffmpeg's default for a .m4v name is RAW MPEG-4 video (no
+    container at all), so the #737 .m4v sample is written with -f mp4, as Apple's .m4v files are."""
     def build(_name):
         return _ffmpeg(["-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=2",
                         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast",
                         "-metadata", "creation_time=2005-06-07T08:09:10Z",
-                        "-metadata", f"title={MARK} video"], suffix)
+                        "-metadata", f"title={MARK} video", *(["-f", muxer] if muxer else [])], suffix)
     return build
 
 
@@ -1041,7 +1043,7 @@ SAMPLES = [
     S("word-legacy.doc", "word", legacy_office("WordDocument", "Word 97-2003"), thumbnail=False, text=False,
       hand_built=True, shows="legacy format recognised; no preview or text (a stub, not a real Word 97 file: the .doc reader finds nothing it can read, so OCR reads 'not compatible', grey, #724)"),
     S("spreadsheet-legacy.xls", "spreadsheet", legacy_office("Workbook", "Excel 97-2003"), thumbnail=False, text=False,
-      hand_built=True, shows="legacy format recognised; no preview or text (a hand-built stub xlrd can't parse, so OCR reads failed: a real read error, #724)"),
+      hand_built=True, shows="legacy format recognised; no preview or text (a stub with no BIFF workbook inside: the .xls reader finds nothing it can read, so OCR reads 'not compatible', grey, like .doc/.ppt, #790)"),
     S("powerpoint-legacy.ppt", "powerpoint", legacy_office("PowerPoint Document", "PowerPoint 97-2003"),
       thumbnail=False, text=False, hand_built=True,
       shows="legacy format recognised; no preview or text (a stub with no Current User stream: the .ppt reader finds nothing it can read, so OCR reads 'not compatible', grey, #724)"),
@@ -1059,10 +1061,16 @@ SAMPLES = [
     # audio / video (ffmpeg)
     S("video-clip.mp4", "video", video_file(".mp4"), date=True, shows="player + frame thumbnail; date from creation_time"),
     S("video-clip.mov", "video", video_file(".mov"), date=True, shows="player + frame thumbnail; date from creation_time"),
+    # #737: .m4v (MP4 video under Apple's name), inline as video/mp4 (#729)
+    S("video-clip.m4v", "video", video_file(".m4v", muxer="mp4"), date=True, disposition="inline",
+      shows="player + frame thumbnail; date from creation_time; /f/ inline as video/mp4 (#729, #737)"),
     S("audio-tone.mp3", "audio", audio_file(".mp3", ["-c:a", "libmp3lame", "-b:a", "64k", "-id3v2_version", "3"]),
       shows="player; title/artist/album from the tags"),
     S("audio-tone.m4a", "audio", audio_file(".m4a", ["-c:a", "aac", "-b:a", "64k"]), shows="player; tags"),
     S("audio-tone.ogg", "audio", audio_file(".ogg", ["-c:a", "libvorbis", "-q:a", "2"]), shows="player; tags"),
+    # #737: Ogg Opus, inline as audio/ogg (#729)
+    S("audio-tone.opus", "audio", audio_file(".opus", ["-c:a", "libopus", "-b:a", "32k"]), disposition="inline",
+      shows="player; Vorbis-comment tags; /f/ inline as audio/ogg (#729, #737)"),
     # #701 means WAV to play inline; pinned here because Python 3.14 guesses audio/vnd.wave, which the
     # registry only accepts through its alias map since #723
     S("audio-tone.wav", "audio", audio_file(".wav", ["-c:a", "pcm_s16le"]), disposition="inline",

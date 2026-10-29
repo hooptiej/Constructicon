@@ -93,6 +93,9 @@
 .dp-row dd a { color: var(--card-pip-on); text-decoration: none; }
 .dp-row dd a:hover { text-decoration: underline; }
 .dp-muted { color: var(--text-3); }
+/* #769: a date to check (e.g. a file date that may be the export time); shown, never hidden. */
+.dp-flag { color: var(--warn); font-weight: 600; }
+.dp-flag::before { content: "\26A0\FE0E  "; }
 .dp-pre { white-space: pre-wrap; }
 .dp-static { display: flex; flex-direction: column; gap: 8px; }
 

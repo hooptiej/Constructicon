@@ -26,10 +26,11 @@ capture timestamp is to a photo what publishedAt is to that video:
     in that chain). A naive source date is interpreted as Mountain Time
     via timeline.source_datetime_to_epoch; see there for the convention.
     #769: a video's Apple capture-date tag beats its creation_time (see
-    video.py), and a date the hook marks export-prone that sits at the
-    upload moment is refused as an export time (EXPORT_TIME_WINDOW_SECONDS,
-    resolve_file_date). Which tag dated the row, or why its file date was
-    refused, goes in type_metadata.content_date_source.
+    video.py); a date the hook marks export-prone (video creation_time,
+    photo EXIF) that sits at the upload moment is applied but flagged as a
+    possible export time (EXPORT_TIME_WINDOW_SECONDS, resolve_file_date).
+    Which tag dated the row, and that flag, go in
+    type_metadata.content_date_source.
 
   - the title -> content_description (the content's own title, as opposed
     to `description`, the uploader's note about it — see the
@@ -99,21 +100,22 @@ def plausible_content_date(value):
     return epoch
 
 
-# #769, "fresh from the export oven": a file date that sits right at the upload moment is the moment
-# the file was EXPORTED for upload (macOS Photos and the iPhone's upload path re-mux a video and stamp
-# its creation_time with "now"), not when the content happened. A date a hook marks export-prone
-# (content_date_export_prone: video creation_time, not the Apple capture-date tag or EXIF
-# DateTimeOriginal) is refused when it is from after the install's first upload (the same cutoff #725
-# uses for file mtimes, timeline.first_upload) AND within this many seconds of the row's own upload
-# time, either side. Measured on prod: the bad videos' creation_time was 1 minute before upload.
-# Refused = "no date": the row falls back to its file-name date and then its card's range, and
-# type_metadata.content_date_source records the refusal (never silent).
+# #769, "fresh from the export oven": a file date that sits right at the upload moment may be the
+# moment the file was EXPORTED for upload (macOS Photos and the iPhone's upload path re-mux a video
+# and stamp its creation_time with "now"), not when the content happened. Measured on prod: the bad
+# videos' creation_time was 1 minute before upload. A date a hook marks export-prone
+# (content_date_export_prone: a video's creation_time, a photo's EXIF date; never the Apple
+# capture-date tag) that is from after the install's first upload (the same cutoff #725 uses for
+# file mtimes, timeline.first_upload) AND within this many seconds of the row's own upload time,
+# either side, is SUSPECT. Owner decision on PR #807: accept, then flag. It is applied as
+# content_date like any other file date (knowing a wrong one can stretch a card's span), and
+# content_date_source carries suspect_export_time + a note the item page shows after the date, so
+# the owner can check it. Nothing hides the date.
 EXPORT_TIME_WINDOW_SECONDS = 600.0
-SRC_EXPORT_TIME_REJECTED = "rejected_export_time"
 
 
 def looks_like_export_time(epoch, uploaded_at, first_upload_at):
-    """True when a file date `epoch` is an export moment by #769's rule (see
+    """True when a file date `epoch` may be an export moment by #769's rule (see
     EXPORT_TIME_WINDOW_SECONDS): after the install's first upload (when there is one) and within
     the window of `uploaded_at`, the row's upload time. Pure."""
     if epoch is None or uploaded_at is None:
@@ -125,27 +127,27 @@ def looks_like_export_time(epoch, uploaded_at, first_upload_at):
 
 def resolve_file_date(found, row, first_upload=None):
     """#769: (content_date or None, content_date_source record or None) for what extract() found.
-    The plausibility gate first (nothing to record for a sentinel), then the export-time backstop for
-    an export-prone date: refused -> (None, a `rejected_export_time` record with the refused value
-    and why). An accepted date whose hook named its tag gets {source: <tag>, confidence: high,
-    evidence: "<tag> <raw>", guessed: False}; a hook that names no tag (image EXIF, PDF) records
-    nothing, as before. `first_upload` is the install's first upload (timeline.first_upload())."""
+    None for nothing plausible (a sentinel: nothing to record). A date whose hook named its tag gets
+    {source: <tag>, confidence: high, evidence: "<tag> <raw>", guessed: False}; when it is export-prone
+    and looks_like_export_time, also suspect_export_time: True, confidence medium and suspect_note
+    ("may be the export time (N min before the upload): check it"), which the item page shows. A
+    hook that names no tag (PDF) records nothing, as before. `first_upload` is the install's first
+    upload (timeline.first_upload())."""
     epoch = plausible_content_date((found or {}).get("content_date"))
     if epoch is None:
         return None, None
     tag = found.get("content_date_tag")
-    raw = str(found.get("content_date_raw") or "")[:120]
-    label = (tag or "file date").replace("_", " ")
-    if found.get("content_date_export_prone") and looks_like_export_time(epoch, row.get("timestamp"), first_upload):
-        minutes = (float(row["timestamp"]) - epoch) / 60.0
-        when = f"{abs(minutes):.0f} min {'before' if minutes >= 0 else 'after'}"
-        return None, {"source": SRC_EXPORT_TIME_REJECTED, "rejected": True, "rejected_tag": tag,
-                      "rejected_value": epoch, "guessed": False,
-                      "evidence": (f"ignored the file's {label} {raw}: it is {when} the upload, so it is "
-                                   f"when the file was exported, not when it was shot")[:200]}
     if not tag:
         return epoch, None
-    return epoch, {"source": tag, "confidence": "high", "evidence": f"{label} {raw}"[:200], "guessed": False}
+    raw = str(found.get("content_date_raw") or "")[:120]
+    record = {"source": tag, "confidence": "high", "evidence": f"{tag.replace('_', ' ')} {raw}"[:200],
+              "guessed": False}
+    if found.get("content_date_export_prone") and looks_like_export_time(epoch, row.get("timestamp"), first_upload):
+        minutes = (float(row["timestamp"]) - epoch) / 60.0
+        when = f"{abs(minutes):.0f} min {'before' if minutes >= 0 else 'after'} the upload"
+        record.update(confidence="medium", suspect_export_time=True,
+                      suspect_note=f"may be the export time ({when}): check it")
+    return epoch, record
 
 
 def extract(row):
@@ -205,16 +207,15 @@ def fill_missing(slug):
         # content_date (#265): same fill-only-missing rule. `is None`, not
         # falsiness — 0.0 would be a real (if implausible, see the gate)
         # value, and an existing one from any source is left alone. #769:
-        # resolve_file_date applies the export-time backstop and says which
-        # tag won (or why the date was refused) for content_date_source.
+        # resolve_file_date says which tag won, and flags a possible export
+        # time, for content_date_source.
         if row is not None and row.get("content_date") is None:
             from . import timeline  # lazy: keeps this module's import list as it was
             content_date, record = resolve_file_date(found, row, timeline.first_upload())
             if content_date is not None:
                 db._set_content_date(slug, content_date)
-            if record is not None:
-                db._update_content_metadata(slug, type_metadata={"content_date_source": record})
-            if content_date is not None or record is not None:
+                if record is not None:
+                    db._update_content_metadata(slug, type_metadata={"content_date_source": record})
                 row = db.get_by_slug(slug)
     except Exception as e:
         print(f"embedded metadata fill failed for {slug}: {e!r}")
@@ -236,14 +237,10 @@ def _date_from_filename(slug, row):
         guess = date_guess.from_filename(row.get("filename"))
         if guess is None:
             return row
-        record = {"source": guess.source, "confidence": guess.confidence, "evidence": guess.evidence[:200],
-                  "guessed": True, "accepted": "auto"}
-        # #769: a file date refused as an export time just before stays visible under the guess.
-        previous = (row.get("type_metadata") or {}).get("content_date_source") or {}
-        if previous.get("rejected"):
-            record["rejected_file_date"] = previous
         db._set_content_date(slug, guess.epoch)
-        db._update_content_metadata(slug, type_metadata={"content_date_source": record})
+        db._update_content_metadata(slug, type_metadata={"content_date_source": {
+            "source": guess.source, "confidence": guess.confidence, "evidence": guess.evidence[:200],
+            "guessed": True, "accepted": "auto"}})
         row = db.get_by_slug(slug)
     except Exception as e:
         print(f"embedded metadata fill failed for {slug}: {e!r}")

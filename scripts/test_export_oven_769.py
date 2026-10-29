@@ -189,7 +189,7 @@ check("object page: an undated video says why its file date was ignored", "no re
       and "exported, not when it was shot" in html_b)
 html_a = client.get("/object/vid-a").text
 check("object page: says the date is from the QuickTime tag (not 'guessed')",
-      "from quicktime creationdate: quicktime creationdate 2023-12-03T17:27:47-0700" in html_a
+      "from the quicktime creationdate 2023-12-03T17:27:47-0700" in html_a
       and "guessed from quicktime" not in html_a)
 
 print()

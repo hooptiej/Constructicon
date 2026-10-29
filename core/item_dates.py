@@ -201,7 +201,9 @@ def guesses_for(row, read_file=False, snap=None, name_card=True):
     from . import embedded_metadata  # lazy: it imports the type registry
     file_date = None
     if read_file:
-        file_date = embedded_metadata.plausible_content_date(embedded_metadata.extract(row).get("content_date"))
+        # #769: the same export-time backstop as at upload, so an export moment is never an auto guess.
+        file_date, _record = embedded_metadata.resolve_file_date(embedded_metadata.extract(row), row,
+                                                                 timeline.first_upload())
     card_title, dates = sibling_dates(row, snap)
     if not name_card:
         card_title = None

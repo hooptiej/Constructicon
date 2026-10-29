@@ -1691,6 +1691,17 @@ time (`timestamp`) is shown only as **"Imported <date>"** (the item page's heade
   viewer, accept / apply_auto editor. **Never names a card the caller can't see (#604):** the list goes
   through `policy.filter_visible`, and `item_dates.listing_entry(row, access=...)` drops a hidden lending
   card's title from `shows`, `inherits` and the guesses' evidence (checked in `test_private_cards_604.py`).
+- **Export time is not shoot time (#769).** macOS Photos and the iPhone's upload path re-mux a video and
+  stamp its `creation_time` with the export moment. `video.get_embedded_metadata` prefers
+  `com.apple.quicktime.creationdate` (the true capture time, its own UTC offset honoured) and falls back to
+  `creation_time`, flagged export-prone. `embedded_metadata.resolve_file_date` refuses an export-prone
+  date that is after the install's first upload AND within `EXPORT_TIME_WINDOW_SECONDS` (600) of the row's
+  upload time, either side: no content_date, so the file name and then the card range take over (the
+  guesser never offers it either). `content_date_source` records which tag won (`quicktime_creationdate` /
+  `container_creation_time`, `guessed: false`) or the refusal (`rejected_export_time`, `rejected: true`,
+  the value and why; carried as `rejected_file_date` under a later filename guess); the item page shows
+  either. Image EXIF is not export-prone. No backfill of existing rows. Check: `scripts/test_export_oven_769.py`
+  (real ffmpeg-made .mov files).
 - Checks: `scripts/test_undated_725.py` (throwaway DB: the owner's real-dates-only card, the lending rules,
   needs_date, accept / undo / refusals, apply_dates, the migration, uploads, pages, the MCP tool),
   `test_timeline_dates.py`, `test_card_date_sort_622.py`, `node scripts/test_item_sort_622.js`.

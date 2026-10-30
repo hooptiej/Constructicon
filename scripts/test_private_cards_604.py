@@ -218,9 +218,9 @@ check("tag tree: OUT doesn't get P's linked tag; OW does",
 
 # change log
 with actor.acting_as(ACT["OUT"]):
-    out_rows = cards.list_changes(limit=500)
+    out_rows = cards.list_changes(limit=500)["changes"]
 with actor.acting_as(ACT["OW"]):
-    ow_rows = cards.list_changes(limit=500)
+    ow_rows = cards.list_changes(limit=500)["changes"]
 touches_p = lambda rows: any(m.get("table") == "projects" and m.get("key", {}).get("id") == P["id"]
                              for r in rows for m in r["mutations"])
 check("change log: OUT reads no row touching P; OW does", not touches_p(out_rows) and touches_p(ow_rows))
@@ -316,8 +316,10 @@ r = C["OUT"].post(f"/api/projects/{P['id']}/text", data={"synopsis": "out was he
 check("OUT changing P: 404 (can't see it)", r.status_code == 404, r.text[:200])
 r = file_onto("OUT", I_O, P["id"])
 check("OUT filing onto P: 404", r.status_code in (400, 404), r.text[:200])
-check("OUT may still edit OUT's own file now on P? no: it's hidden from OUT now (404)",
-      C["OUT"].post(f"/api/image/{I_U}", data={"display_name": "x"}, headers=H["OUT"]).status_code == 404)
+_r = C["OUT"].post(f"/api/image/{I_U}", data={"display_name": "x"}, headers=H["OUT"])
+check("OUT may still edit OUT's own file now on P? no: it's hidden from OUT now (#730: 403 saying why, P not named)",
+      _r.status_code == 403 and (_r.json().get("error") or {}).get("details", {}).get("reason") == "private"
+      and P["title"] not in _r.text, _r.text[:200])
 with actor.acting_as(ACT["OW"]):
     check("merge private P into open O: refused (privacy_conflict), nothing written",
           raises(lambda: cards.merge_cards(O["id"], [P["id"]]), "privacy_conflict") and db.get_project(P["id"]) is not None)
@@ -362,8 +364,9 @@ for who in ("OUT", "VW"):
     u2 = as_user(who, mcp.constructicon_undated, include_inherited=False)
     check(f"undated(include_inherited=false) as {who}: P's title appears nowhere", TITLE not in json.dumps(u2))
     acc = as_user(who, mcp.constructicon_undated, action="accept", slug=I_P, source="siblings")
-    # OUT (editor) passes the role check and gets the privacy 404; VW (viewer) is refused by role first.
-    want = "not_found" if who == "OUT" else "forbidden"
+    # OUT (editor) passes the role check and gets the privacy refusal (#730: 403 forbidden saying why,
+    # without naming P); VW (viewer) is refused by role first.
+    want = "forbidden"
     check(f"undated(accept, P's file) as {who}: {want}, P not named",
           (acc.get("error") or {}).get("code") == want and TITLE not in json.dumps(acc), acc)
 # The second lock: even handed a row on P directly (no filter_visible), the entry never names P.

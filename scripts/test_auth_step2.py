@@ -288,11 +288,13 @@ for role in ROLES:
           (CERT in pending) == admin_like and PLAIN in pending)
     if role == "editor":
         r = c.post(f"/api/image/{CERT}", data={"display_name": "pwned"}, headers=WH[role])
-        check("editor edit of a restricted item -> 404 (no leak)", r.status_code == 404 and err_code(r) == "not_found")
+        # #730: a write on a hidden item says why (403 forbidden, #709's words); reads stay 404.
+        check("editor edit of a restricted item -> 403 forbidden saying why (#730)",
+              r.status_code == 403 and err_code(r) == "forbidden" and "restricted file type" in r.text)
         r = c.post(f"/api/image/{CERT}/delete", headers=WH[role])
-        check("editor delete of a restricted item -> 404", r.status_code == 404)
+        check("editor delete of a restricted item -> 403 (#730)", r.status_code == 403 and err_code(r) == "forbidden")
         r = c.post(f"/api/image/{PLAIN}/related", data={"related_slug": CERT}, headers=WH[role])
-        check("editor relate to a restricted item -> 404", r.status_code == 404)
+        check("editor relate to a restricted item -> 403 (#730)", r.status_code == 403 and err_code(r) == "forbidden")
 check("the restricted item is untouched", db.get_by_slug(CERT)["display_name"] != "pwned")
 
 # ---- 5. the install token -------------------------------------------------------------------------

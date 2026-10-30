@@ -16,7 +16,7 @@
       <h1 class="page-title">Unfiled</h1>
       <p class="page-subtitle" id="unfiled-count">{{ grid.count.total }} upload{{ 's' if grid.count.total != 1 else '' }} not yet added to a project.</p>
     </div>
-    <button type="button" class="btn-secondary" id="new-project-btn" title="Create a new project">+ New project</button>
+    <button type="button" class="btn-secondary{{ role_lock_class('editor') }}" id="new-project-btn"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Creating a card') }}{% else %} title="Create a new project"{% endif %}>+ New project</button>
   </div>
 
   {# #553: the shared file grid (templates/_item_grid.html, static/js/item-grid.js): sort, type filter,

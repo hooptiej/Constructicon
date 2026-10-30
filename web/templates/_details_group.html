@@ -14,7 +14,10 @@
 <section class="dp-group{% if wide %} dp-group-wide{% endif %}" data-group="{{ name }}" aria-labelledby="dp-h-{{ name }}">
   <div class="dp-group-head">
     <h2 class="dp-group-title" id="dp-h-{{ name }}">{{ title }}</h2>
-    {% if editable %}<button type="button" class="dp-edit-btn" aria-expanded="false" aria-controls="dp-edit-{{ name }}" aria-label="Edit {{ title | lower }}">Edit</button>{% endif %}
+    {#- #779: every group's edits are editor writes; below that the Edit button stays, greyed, and a
+        click says the editor role is needed (web/role_lock.py), instead of opening a form that can't save. #}
+    {% if editable and role_locked("editor") %}<button type="button" class="dp-edit-btn role-locked"{{ role_lock_attrs("editor", "Editing " ~ (title | lower)) }} aria-expanded="false">Edit</button>
+    {%- elif editable %}<button type="button" class="dp-edit-btn" aria-expanded="false" aria-controls="dp-edit-{{ name }}" aria-label="Edit {{ title | lower }}">Edit</button>{% endif %}
   </div>
   <div class="dp-view">{{ view }}</div>
   {% if editable %}

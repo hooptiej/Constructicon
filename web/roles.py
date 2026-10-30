@@ -42,7 +42,9 @@ def require_role(role):
             return
         if have == roles.PUBLIC:
             raise errors.AppError("unauthorized", "Sign in first.", status=401)
-        raise errors.AppError("forbidden", f"This needs the {role} role.", status=403)
+        # #779: say which role, the caller's own, and who to ask (never a bare 403).
+        raise errors.AppError("forbidden", roles.refusal_message(role, have), status=403,
+                              details={"need": role, "have": have})
 
     setattr(_require_role, ROLE_ATTR, role)
     _require_role.__name__ = f"require_{role}"

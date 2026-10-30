@@ -2114,6 +2114,13 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
    desaturated, NOT translucent: the owner banned transparency on the tabs).
    Clicking it shows .nav-locked-msg instead of opening anything. */
 .nav-tab-locked { filter: grayscale(1); cursor: not-allowed; }
+/* #779: the ONE look for every other role-gated control (web/role_lock.py, static/js/role-lock.js):
+   still shown, greyscale (never translucent, so it stays readable), and a click explains. */
+.role-locked { filter: grayscale(1); cursor: not-allowed; }
+.role-locked-role { font-size: 0.85em; color: var(--text-2); margin-left: 4px; }
+.role-locked-msg { position: fixed; z-index: 1000; max-width: 320px; padding: 10px 12px; border-radius: 8px;
+  background: var(--card); color: var(--text); border: 1px solid var(--border-strong);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); font-size: 13px; line-height: 1.4; }
 .nav-locked-msg {
   position: fixed; z-index: 60; max-width: 260px; padding: 10px 12px;
   background: var(--card); border: 1px solid var(--border-strong); border-radius: 8px;
@@ -2281,6 +2288,10 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .admin-users-table select.input { width: auto; padding: 5px 8px; }
 .admin-users-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .admin-users-actions .btn-ms { width: auto; padding: 5px 10px; font-size: 12px; }
+/* #766: a user's personal MCP keys (names + last use) and "Revoke all keys". */
+.admin-users-keys { font-size: 12px; }
+.admin-users-keylist { list-style: none; margin: 4px 0 6px; padding: 0; color: var(--text-2); }
+.admin-users-keys .btn-ms { width: auto; padding: 4px 8px; font-size: 12px; }
 .admin-users-add { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; }
 .admin-users-add .btn-ms { width: auto; }
 

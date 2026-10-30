@@ -32,7 +32,8 @@
         <div class="dp-menu" id="hobby-more-menu" role="menu" aria-labelledby="hobby-more-btn" hidden>
           <a role="menuitem" href="/curator">Open the Curator queue</a>
           <a role="menuitem" href="{{ hobby_label.index_url }}">All {{ hobby_label.many_lc }}</a>
-          <button type="button" role="menuitem" id="hobby-convert-btn" title="Turn this {{ hobby_label.one_lc }} into a family, collection or project card">Convert to card&hellip;</button>
+          {#- #779: converting is admin; below that it stays, greyed, and a click says so (web/role_lock.py) #}
+          <button type="button" role="menuitem" id="hobby-convert-btn" class="{{ role_lock_class('admin') | trim }}"{% if role_locked('admin') %}{{ role_lock_attrs('admin', 'Converting a ' ~ hobby_label.one_lc ~ ' to a card') }}{% else %} title="Turn this {{ hobby_label.one_lc }} into a family, collection or project card"{% endif %}>Convert to card&hellip;</button>
           {% if shows_physical_piece %}<a role="menuitem" href="/guides/capture-physical-piece">How to capture a physical piece</a>{% endif %}
         </div>
       </div>

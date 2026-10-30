@@ -34,8 +34,10 @@
       <div class="dp-more" data-dp-more>
         <button type="button" class="dp-btn dp-more-btn" id="project-more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="project-more-menu">More <span aria-hidden="true">&#9662;</span></button>
         <div class="dp-menu" id="project-more-menu" role="menu" aria-labelledby="project-more-btn" hidden>
-          <button type="button" role="menuitem" id="convert-to-hobby-btn" title="Convert this project to a {{ hobby_label.one_lc }}">Convert to {{ hobby_label.one_lc }}</button>
-          <button type="button" role="menuitem" class="dp-menu-danger" id="delete-project-btn" title="Delete this project (orphan children, detach objects)">Delete project</button>
+          {#- #779: converting is admin (whole-card conversions), deleting editor; below that each item
+              stays, greyed, and a click says the role it needs (web/role_lock.py). #}
+          <button type="button" role="menuitem" id="convert-to-hobby-btn" class="{{ role_lock_class('admin') | trim }}"{% if role_locked('admin') %}{{ role_lock_attrs('admin', 'Converting a card to a ' ~ hobby_label.one_lc) }}{% else %} title="Convert this project to a {{ hobby_label.one_lc }}"{% endif %}>Convert to {{ hobby_label.one_lc }}</button>
+          <button type="button" role="menuitem" class="dp-menu-danger{{ role_lock_class('editor') }}" id="delete-project-btn"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Deleting a card') }}{% else %} title="Delete this project (orphan children, detach objects)"{% endif %}>Delete project</button>
         </div>
       </div>
     </div>
@@ -86,8 +88,13 @@
       <div>
         {# #241: click the title (or the pencil) to rename in place — see the title-edit script at the bottom. #}
         <h1 class="dp-title title-edit" id="project-title-edit">
+          {%- if role_locked('editor') %}
+          <span class="title-edit-text" id="project-title-text">{{ project.title }}</span>
+          <button type="button" class="title-edit-btn role-locked" id="project-title-edit-btn" aria-label="Rename project (editors and admins)"{{ role_lock_attrs('editor', 'Renaming a card') }}>
+          {%- else %}
           <span class="title-edit-text" id="project-title-text" title="Click to rename">{{ project.title }}</span>
           <button type="button" class="title-edit-btn" id="project-title-edit-btn" title="Rename project" aria-label="Rename project">
+          {%- endif %}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20H8L18.5 9.5C19.3284 8.67157 19.3284 7.32843 18.5 6.5L17.5 5.5C16.6716 4.67157 15.3284 4.67157 14.5 5.5L4 16V20Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 7L17 11" stroke="currentColor" stroke-width="1.8"/></svg>
           </button>
         </h1>
@@ -148,7 +155,7 @@
           <span class="chip family-chip" data-card-id="{{ c.id }}">
             <a href="/project/{{ c.slug }}">{{ c.title }}</a>
             <span class="dp-muted">{{ c.kind_label }}</span>
-            <button type="button" class="dp-chip-x family-chip-remove" data-card-id="{{ c.id }}" title="Remove" aria-label="Remove {{ c.title }}">&times;</button>
+            <button type="button" class="dp-chip-x family-chip-remove{{ role_lock_class('editor') }}" data-card-id="{{ c.id }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Removing a card from a family') }}{% else %} title="Remove"{% endif %} aria-label="Remove {{ c.title }}">&times;</button>
           </span>
           {% else %}
           <span class="dp-muted">{% if page.members %}No members yet.{% else %}Not in any family or collection.{% endif %}</span>
@@ -1091,8 +1098,13 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
     input.select();
   }
 
-  textEl.addEventListener('click', startEdit);
-  editBtn.addEventListener('click', startEdit);
+  if (editBtn.classList.contains('role-locked')) {
+    // #779: a viewer's click on the title explains (the locked pencil's message), never edits.
+    textEl.addEventListener('click', () => { if (window.RoleLock) window.RoleLock.show(editBtn); });
+  } else {
+    textEl.addEventListener('click', startEdit);
+    editBtn.addEventListener('click', startEdit);
+  }
 }
 
 // Convert to hobby (#360): confirmation dialog and conversion handler

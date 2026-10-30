@@ -240,7 +240,9 @@ class AccessMiddleware:
             await self.app(scope, receive, send)
             return
         if have != roles.PUBLIC:
-            response = _error_response(403, "forbidden", f"This needs the {need} role.")
+            # #779: name the role needed, the caller's own and who to ask (never a bare 403)
+            response = JSONResponse(errors.http_body("forbidden", roles.refusal_message(need, have),
+                                                     {"need": need, "have": have}), status_code=403)
         elif is_page_request(scope):
             setup = await run_in_threadpool(users.setup_needed)
             response = RedirectResponse("/setup" if setup else login_redirect_target(scope), status_code=302)

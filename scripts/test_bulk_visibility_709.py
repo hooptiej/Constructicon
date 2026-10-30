@@ -21,7 +21,8 @@ can see it) and E2 an ordinary one.
      with the same 403 forbidden, message and details, and write nothing; run as the MCP itself
      (admin) they still work.
 Out of scope (owner, PR #727): bulk sensitive / provenance and set_sensitive keep their #603 / #553
-404 (test_ownership_sensitive.py); the single-item web routes keep their 404 too (#730).
+404 (test_ownership_sensitive.py). Since #730 the single-item web write routes refuse the same way
+(403 saying why; test_bouncers_730_749_766_779.py); single-item READS keep their 404.
 Prints `N failure(s)` or `all checks passed`.
 """
 

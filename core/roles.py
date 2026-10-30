@@ -52,6 +52,15 @@ def at_least(have, need):
     return rank(have) >= rank(need)
 
 
+def refusal_message(need, have):
+    """(#779) What a role refusal says: the role needed, the caller's own, and who to ask. The web's
+    route check (web/roles.require_role) uses it; the MCP's (#746) says the same in its own words."""
+    who = {ADMIN: "admins only", EDITOR: "editors and admins"}.get(need, f"{need} and above")
+    mine = f"an {have}" if have[:1] in "aeiou" else f"a {have}"
+    return (f"This needs the {need} role ({who}), and your account is {mine}. "
+            f"Ask an admin to change your role if you need it.")
+
+
 # Actors that act for the install itself: the install token (web `token`, the MCP `mcp`, owner
 # decision 2026-10-07: the agent keeps admin), and in-process work that never came through a door
 # (`script` run on the box, `system` boot/workers, `migration`). `owner-ui` is the pre-step-2

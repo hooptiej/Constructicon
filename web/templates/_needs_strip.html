@@ -12,20 +12,20 @@
         </div>
         <div class="dp-needs-actions">
           {% if d.deferred %}
-          <button type="button" class="dp-btn dp-needs-bring-back">Bring back</button>
+          <button type="button" class="dp-btn dp-needs-bring-back{{ role_lock_class('editor') }}"{{ role_lock_if('editor', 'Answering or sorting Curator items') }}>Bring back</button>
           {% else %}
             {% if d.type == 'question' %}
-              {% if d.suggested and d.suggested.picks %}<button type="button" class="dp-btn dp-btn-primary dp-needs-accept">Accept</button>{% endif %}
+              {% if d.suggested and d.suggested.picks %}<button type="button" class="dp-btn dp-btn-primary dp-needs-accept{{ role_lock_class('editor') }}"{{ role_lock_if('editor', 'Answering or sorting Curator items') }}>Accept</button>{% endif %}
               {% if d.multi %}
               <a class="dp-btn" href="/curator">Choose&hellip;</a>
               {% else %}
-              <button type="button" class="dp-btn dp-needs-choose" aria-expanded="false">Choose&hellip;</button>
+              <button type="button" class="dp-btn dp-needs-choose{{ role_lock_class('editor') }}"{{ role_lock_if('editor', 'Answering or sorting Curator items') }} aria-expanded="false">Choose&hellip;</button>
               {% endif %}
             {% elif d.group %}
               <a class="dp-btn dp-btn-primary" href="{{ d.href }}">{{ d.fix_label }}</a>
             {% endif %}
-            <button type="button" class="dp-btn dp-needs-defer" title="Move to the Deferred list. No timer: it stays until you bring it back.">Defer</button>
-            {% if d.dismissible %}<button type="button" class="dp-btn dp-needs-dismiss" title="Remove for good">Dismiss</button>{% endif %}
+            <button type="button" class="dp-btn dp-needs-defer{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Move to the Deferred list. No timer: it stays until you bring it back."{% endif %}>Defer</button>
+            {% if d.dismissible %}<button type="button" class="dp-btn dp-needs-dismiss{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Remove for good"{% endif %}>Dismiss</button>{% endif %}
           {% endif %}
         </div>
         {% if d.type == 'question' and not d.multi and not d.deferred %}
@@ -34,7 +34,7 @@
           <select class="input dp-needs-pick" id="needs-pick-{{ d.id }}">
             {% for o in d.options %}<option value="{{ o.key }}"{% if o.key in d.suggested.picks %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
           </select>
-          <button type="button" class="dp-btn dp-needs-apply">Use this answer</button>
+          <button type="button" class="dp-btn dp-needs-apply{{ role_lock_class('editor') }}"{{ role_lock_if('editor', 'Answering or sorting Curator items') }}>Use this answer</button>
         </div>
         {% endif %}
         <p class="dp-needs-error" role="alert" hidden></p>

@@ -119,7 +119,7 @@ def api_create_project_from_related(slug: str = Form(...), title: str = Form(...
     title = title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Project name can't be empty")
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     batch_id = changes.new_batch_id()
     with db.transaction():
         project = cards.create(title, batch_id=batch_id).data["card"]
@@ -393,7 +393,7 @@ def api_remove_item_from_project(project_id: str, slug: str = Form(...)):
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Verify the object exists.
-    policy.viewable_item(slug, "Object not found")  # #467: 404 if missing or not viewable
+    policy.writable_item(slug, "Object not found")  # #730: 404 if missing, 403 saying why if hidden
 
     result = membership.remove_files(project["id"], [slug])
     return JSONResponse({"success": True, "batch_id": result.batch_id})

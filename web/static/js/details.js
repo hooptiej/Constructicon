@@ -246,6 +246,9 @@
     if (!name || !/^[a-z]+$/.test(name)) return;
     var g = groupEl(name);
     if (!g || !g.querySelector('.dp-edit-btn')) return;
+    // #779: a role-locked Edit (a viewer) never opens; show why instead.
+    var locked = g.querySelector('.dp-edit-btn.role-locked');
+    if (locked) { if (window.RoleLock) window.RoleLock.show(locked); return; }
     open(name);
     if (g.scrollIntoView) g.scrollIntoView({ block: 'center' });
     say('Editing ' + name + '.');

@@ -302,8 +302,8 @@ check("anonymous refused", new_client().post(f"/api/image/{R}/replace-file",
 
 S = upload("A", "flagged-notes.md", OLD, sensitive=True)
 r = replace_http("E2", S, "flagged-notes.md", NEW)
-check("sensitive item: another editor sees 404 not_found (it is not theirs to see)",
-      r.status_code == 404 and err_code(r) == "not_found", (r.status_code, r.text[:200]))
+check("sensitive item: another editor is refused 403 forbidden saying why (#730; it is not theirs to change)",
+      r.status_code == 403 and err_code(r) == "forbidden" and "marked sensitive" in r.text, (r.status_code, r.text[:200]))
 r = replace_http("A", S, "flagged-notes.md", NEW)
 check("sensitive item: an admin may replace it, and it stays sensitive",
       r.status_code == 200 and db.get_by_slug(S)["sensitive"], (r.status_code, r.text[:200]))

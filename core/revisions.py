@@ -29,7 +29,7 @@ import time
 
 from . import besteffort, changes, datefmt, db, item_title
 from .card_rules import CardError
-from .errors import InvalidInput
+from .errors import AppError, InvalidInput
 
 log = logging.getLogger("constructicon.revisions")
 
@@ -192,15 +192,34 @@ def validate_mark(old, new, pairs=None):
     return old_row, new_row
 
 
+def _visible_chain(slugs, actor=None):
+    """(#749) A chain's slugs as the actor may name them: a revision they can't see is left out."""
+    from . import policy  # lazy, as in chain_detail
+    return [s for s in slugs if policy.can_view(db.get_by_slug(s), actor)]
+
+
+def _require_items_visible(slugs, actor=None):
+    """(#749) The item policy on a revision-chain write: each named item must exist (CardError
+    not_found, as before) and be visible to the actor, else #709's 403 `forbidden` saying why
+    (policy.viewable_rows / refusal); nothing is written. Checked before the chain rules, so a rule's
+    message never describes a hidden item's chain."""
+    from . import policy  # lazy, as in chain_detail
+    for s in slugs:
+        _exists(s)
+    policy.viewable_rows(slugs, actor=actor)
+
+
 def mark_superseded(old, new, actor=None, batch_id=None, dry_run=False):
     """`new` supersedes `old` (so `old` shows "Superseded, see <current>"). One change-log entry.
-    Returns {ok, dry_run, batch_id, old, new, chain: [slugs oldest first]}."""
+    Returns {ok, dry_run, batch_id, old, new, chain: [slugs oldest first, the ones the actor can see]}.
+    #749: both items must be visible to the actor (403 forbidden saying why, nothing written)."""
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
+        _require_items_visible([old, new], actor)
         validate_mark(old, new)
         with db.ImageLog(OP_MARK, actor, batch_id, [old, new]) as il:
             il.insert("item_revisions", {"old_slug": old}, {"new_slug": new, "created_at": time.time()})
-        chain = chain_slugs(old)
+        chain = _visible_chain(chain_slugs(old), actor)
     return {"ok": True, "dry_run": dry_run, "batch_id": batch_id, "old": old, "new": new, "chain": chain}
 
 
@@ -208,11 +227,20 @@ def remove_from_chain(slug, actor=None, batch_id=None, dry_run=False):
     """Takes `slug` out of its revision chain and closes the gap: A -> B -> C minus B is A -> C;
     minus the oldest, B -> C stands alone; minus the current one, the previous revision becomes
     current. A no-op (ok, `removed` False) for an item in no chain."""
+    from . import policy  # lazy, as in chain_detail
     batch_id = batch_id or changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
-        _exists(slug)
+        _require_items_visible([slug], actor)  # #749: 404 missing, 403 saying why when hidden
         fwd, back = _maps()
         succ, pred = fwd.get(slug), back.get(slug)
+        # #749: closing the gap rewrites the neighbours' links, so a neighbour the actor can't see
+        # refuses too (without naming it: they didn't send that slug).
+        hidden = [s for s in (succ, pred) if s and not policy.can_view(db.get_by_slug(s), actor)]
+        if hidden:
+            raise AppError("forbidden", f"Nothing was changed: taking this item out of its revision chain would "
+                           f"relink {'a revision' if len(hidden) == 1 else 'revisions'} you can't see (marked "
+                           f"sensitive, or on a private card). Ask an admin to do it.", status=403,
+                           details={"reason": "hidden_neighbour", "hidden": len(hidden)})
         removed = succ is not None or pred is not None
         if removed:
             with db.ImageLog(OP_REMOVE, actor, batch_id, [s for s in (slug, succ, pred) if s]) as il:
@@ -224,7 +252,7 @@ def remove_from_chain(slug, actor=None, batch_id=None, dry_run=False):
                     else:
                         il.delete("item_revisions", {"old_slug": pred})
         # What is left of the chain the item was in (empty when it was one of only two).
-        left = chain_slugs(pred or succ) if removed and (pred or succ) else []
+        left = _visible_chain(chain_slugs(pred or succ), actor) if removed and (pred or succ) else []
     return {"ok": True, "dry_run": dry_run, "batch_id": batch_id, "slug": slug, "removed": removed,
             "chain": left if len(left) > 1 else []}
 

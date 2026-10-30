@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from core import besteffort, db, install_config, item_title, markdown_render, object_types, policy, storage, users
 from core import version as version_info
 from web import auth as web_auth
-from web import security_headers
+from web import role_lock, security_headers
 
 log = logging.getLogger("constructicon.web")
 
@@ -104,6 +104,13 @@ def _has_role(need):
 
 templates.env.globals["current_role"] = _current_role
 templates.env.globals["has_role"] = _has_role
+# #779: role-locked controls, the one shared pattern (web/role_lock.py; static/js/role-lock.js).
+templates.env.globals["role_locked"] = role_lock.locked
+templates.env.globals["role_lock_attrs"] = role_lock.attrs
+templates.env.globals["role_lock_message"] = role_lock.message
+templates.env.globals["role_need_phrase"] = role_lock.need_phrase
+templates.env.globals["role_lock_class"] = role_lock.lock_class
+templates.env.globals["role_lock_if"] = role_lock.lock_if
 # #660: this request's CSP script nonce. Every inline <script> carries nonce="{{ csp_nonce() }}";
 # the CSP allows only those (scripts/test_security_headers_645.py fails on one without it).
 templates.env.globals["csp_nonce"] = security_headers.current_nonce

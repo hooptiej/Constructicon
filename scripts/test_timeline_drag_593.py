@@ -15,7 +15,7 @@ In-process, with real sessions (editors E1 and E2, viewer V), anonymous and the 
   5. permissions: a viewer gets 403, anonymous 401, and nothing is written; the page tells an editor
      canEdit=true and a viewer false;
   6. the policy: a sensitive item (admin-owned) is not in a viewer's or another editor's timeline data
-     at all, an editor who can't see it gets 404 on the write, and it doesn't leak into the `span`
+     at all, an editor who can't see it gets 403 saying why on the write (#730), and it doesn't leak into the `span`
      an editor's drag returns (even when it sits far in the future);
   7. the service: items.set_display_date validates and is the only writer.
 Exits 1 if any check fails.
@@ -214,7 +214,9 @@ check("nor in another editor's", tle2 is not None and S not in tle2)
 check("an admin (the token) does see it", S in tla)
 check("the sensitive slug isn't anywhere in the viewer's page", S not in C["V"].get(f"/project/{CARD['slug']}").text)
 r = put_date("E2", S, display_date=str(NEW))
-check("an editor who can't see it gets 404 on the write, nothing written", r.status_code == 404 and row(S)["display_date_override"] is None, r.status_code)
+check("an editor who can't see it gets 403 saying why on the write (#730), nothing written",
+      r.status_code == 403 and (r.json().get("error") or {}).get("code") == "forbidden"
+      and row(S)["display_date_override"] is None, r.status_code)
 r = put_date("E1", D, display_date=str(T0 + 210 * 86400), project=CARD["slug"])
 check("the span an editor gets doesn't count the hidden far-future item",
       r.json()["span"]["end"] == T0 + 210 * 86400, r.json().get("span"))

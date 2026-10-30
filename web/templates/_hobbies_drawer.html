@@ -14,7 +14,7 @@
   </div>
   <p class="page-subtitle">Collections organized by {{ hobby_label.one_lc }} interest.</p>
   <div style="margin-bottom:16px">
-    <button type="button" class="btn-secondary" id="hobbies-drawer-new" title="Create a new {{ hobby_label.one_lc }}">+ New {{ hobby_label.one_lc }}</button>
+    <button type="button" class="btn-secondary{{ role_lock_class('editor') }}" id="hobbies-drawer-new"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Creating a ' ~ hobby_label.one_lc) }}{% else %} title="Create a new {{ hobby_label.one_lc }}"{% endif %}>+ New {{ hobby_label.one_lc }}</button>
   </div>
   <p class="empty-state" id="hobbies-drawer-status" role="status" hidden></p>
   <div id="hobbies-drawer-grid"></div>

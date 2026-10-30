@@ -372,7 +372,7 @@ def api_access_log(slug: str):
 def api_retry_ocr(request: Request, slug: str, background_tasks: BackgroundTasks):
     """Force a (re-)run of OCR — for images that never got it, or a lousy
     first pass worth retrying."""
-    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    row = policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     if row["redacted"]:
         raise HTTPException(status_code=400, detail="File was redacted — there's no image left to OCR")
     spec = object_types.get_object_type(row.get("media_type"))
@@ -390,7 +390,7 @@ def api_clear_parse_limits(request: Request, slug: str):
     ...) are remembered for, so the next view or run really tries again instead of waiting out
     CONSTRUCTICON_PARSE_RETRY_SECONDS. The object page's "Try again now" button. Each retry still
     runs inside the limits."""
-    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    row = policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     key = thumbnails.limit_key(row)
     cleared = len(parse_limits.failures_for(key))
     parse_limits.forget(key)
@@ -425,7 +425,7 @@ def api_mark_caption_used(slug: str):
     frontend's side: the description edit itself isn't gated on this
     succeeding, since losing the provenance note is much cheaper than
     losing the actual caption text."""
-    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    row = policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     tm = row["type_metadata"]
     if tm.get(captions.STATUS_KEY) != "done" or not tm.get(captions.METADATA_KEY):
         raise HTTPException(status_code=400, detail="No current suggested caption to mark as used")
@@ -496,7 +496,7 @@ def api_update_image(
     batch (undo restores all of it). Validation (provenance key, physical-piece date, dates)
     happens before anything is written. #541 phase C: free-text tags ride in the same call
     (items.update(tags=...)), so tags + fields are still ONE batch."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     tag_list = None
     if tags is not None:
         tag_list = _parse_tags_form(tags)
@@ -562,7 +562,7 @@ def api_accept_date_guess(slug: str, source: str = Form(...)):
     with the source recorded. Editor (the router default). One imaged change-log row; `batch_id`
     feeds the Undo bar. Refusals say why and change nothing: 409 `already_dated` (it has a real
     date by now), 400 `no_such_guess` (no guess from that source any more), 400 `bad_source`."""
-    policy.viewable_item(slug)  # 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     res = items.accept_date_guess(slug, source)
     return JSONResponse({"ok": True, "slug": slug, "batch_id": res.batch_id, "applied": res.data["applied"],
                          "date": res.data["guess"]["date"], "source": source,
@@ -578,7 +578,7 @@ def api_set_item_date(slug: str, display_date: float | None = Form(None), reset:
     row, so the answer's `batch_id` feeds the Undo bar (null when nothing changed). `project`
     (a card slug, optional) adds that card's recomputed `span` (the same visible-items rule the
     project page uses) so the page can refresh its DATES group without a reload."""
-    policy.viewable_item(slug)  # 404 if missing or not viewable (a sensitive item is not editable by others)
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     if reset:
         epoch = None
     elif display_date is None:
@@ -613,7 +613,7 @@ async def api_replace_file(request: Request, slug: str, background_tasks: Backgr
     trash for TRASH_DAYS in the same change; `batch_id` undoes it via POST /api/changes/{batch_id}/undo.
     Errors carry specific codes (replace_redacted, replace_type_mismatch, file_too_large,
     empty_file, ...), see core/items.replace_file."""
-    await run_in_threadpool(policy.viewable_item, slug)  # #467: 404 if missing or not viewable
+    await run_in_threadpool(policy.writable_item, slug)  # #730: 404 if missing, 403 saying why if hidden
     if file.size is not None and file.size > storage.MAX_BYTES:
         raise AppError("file_too_large", f"The replacement is {file.size / 1048576:.1f} MB, over the {storage.MAX_MB} MB "
                        "upload limit. Nothing was changed.", status=413, details={"max_bytes": storage.MAX_BYTES})
@@ -632,7 +632,7 @@ def api_redact_image(request: Request, slug: str):
     trash with no expiry (owner decision 2026-10-04): never auto-deleted, and
     "Empty trash now" skips it. Recover it (POST .../recover-redacted) or
     delete it permanently (POST .../delete-redacted-file)."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     result = items.redact(slug)
     return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id, "held": True})
 
@@ -641,7 +641,7 @@ def api_redact_image(request: Request, slug: str):
 def api_recover_redacted(slug: str):
     """Brings a held redacted file back and un-redacts the item (as before the redact).
     409 no_redact_hold when no file is held (already deleted, or an old redaction)."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     result = items.recover_redacted(slug)
     return JSONResponse({**_to_public(result.item), "batch_id": result.batch_id})
 
@@ -650,7 +650,7 @@ def api_recover_redacted(slug: str):
 def api_delete_redacted_file(slug: str, confirm: str = Form("")):
     """Permanently erases the held redacted file (confirm=true). The item stays redacted,
     metadata only. Not undoable."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     result = items.delete_redacted_file(slug, confirm)
     return JSONResponse({"deleted": True, "slug": slug, "bytes": result.data["bytes"]})
 
@@ -664,7 +664,7 @@ def api_unredact_image(request: Request, slug: str):
     answers 409 redact_hold_exists: recover it or delete it permanently. 409 rather than a silent
     no-op on a row that isn't redacted, so a stale admin-page list can't
     misreport success."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     return JSONResponse(_to_public(items.unredact(slug).item))
 
 
@@ -672,7 +672,7 @@ def api_unredact_image(request: Request, slug: str):
 def api_delete_image(request: Request, slug: str):
     """Full delete — the row and everything pointing at it. #541: the file goes to the trash
     for 7 days; POST /api/changes/{batch_id}/undo restores row, links and file until then."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     result = items.delete([slug])
     return JSONResponse({"deleted": True, "batch_id": result.batch_id, "trash_days": items.TRASH_DAYS})
 
@@ -682,7 +682,7 @@ def api_refresh_thumbnail(request: Request, slug: str):
     """#385: Force (re)generation of a thumbnail. Deletes any existing cached
     thumbnail and calls ensure_thumbnail to regenerate it. Useful when a
     thumbnail failed (e.g. youtube FETCH_URL thumbnail 404'd) or was missed."""
-    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    row = policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
 
     spec = object_types.get_object_type(row.get("media_type"))
     if spec.thumbnail_source == object_types.ThumbnailSource.NONE:
@@ -718,7 +718,7 @@ def api_run_type_action(request: Request, slug: str, key: str):
     """#448: Generic per-type action route. The type file owns the handler;
     actions are declared in ObjectTypeSpec.actions. #446: actions must
     applies_to(row) to be runnable."""
-    row = policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    row = policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
 
     if row.get("redacted"):
         raise HTTPException(status_code=409, detail="object is redacted")
@@ -748,15 +748,15 @@ def api_run_type_action(request: Request, slug: str, key: str):
 
 @router.post("/api/image/{slug}/related")
 def api_add_related(request: Request, slug: str, related_slug: str = Form(...)):
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
-    policy.viewable_item(related_slug, "related image not found")  # #467: 404 if missing or not viewable
+    # #730: 404 if either is missing, else 403 saying why if either is hidden (nothing written)
+    policy.writable_items([(slug, "not found"), (related_slug, "related image not found")])
     items.relate(slug, related_slug)  # #541 phase C: the link and the tags/cards it shares, one undo
     return JSONResponse([_to_public(r) for r in db.list_related(slug)])
 
 
 @router.post("/api/image/{slug}/related/remove")
 def api_remove_related(request: Request, slug: str, related_slug: str = Form(...)):
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     items.unrelate(slug, related_slug)
     return JSONResponse([_to_public(r) for r in db.list_related(slug)])
 
@@ -774,8 +774,7 @@ def api_get_revisions(slug: str):
 @router.post("/api/image/{slug}/superseded-by")
 def api_mark_superseded_by(slug: str, new_slug: str = Form(...)):
     """`new_slug` replaces this item (this item becomes "Superseded, see <current>")."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
-    policy.viewable_item(new_slug)
+    policy.writable_items([(slug, "not found"), (new_slug, "not found")])  # #730: 404 / 403 saying why
     result = revisions.mark_superseded(slug, new_slug)
     return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
@@ -783,8 +782,7 @@ def api_mark_superseded_by(slug: str, new_slug: str = Form(...)):
 @router.post("/api/image/{slug}/supersedes")
 def api_mark_supersedes(slug: str, old_slug: str = Form(...)):
     """This item replaces `old_slug`."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
-    policy.viewable_item(old_slug)
+    policy.writable_items([(slug, "not found"), (old_slug, "not found")])  # #730: 404 / 403 saying why
     result = revisions.mark_superseded(old_slug, slug)
     return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
@@ -792,7 +790,7 @@ def api_mark_supersedes(slug: str, old_slug: str = Form(...)):
 @router.post("/api/image/{slug}/revisions/remove")
 def api_remove_from_revisions(slug: str):
     """Takes this item out of its chain; its neighbours link up (A -> B -> C minus B = A -> C)."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     result = revisions.remove_from_chain(slug)
     return JSONResponse({**result, "revisions": revisions.revision_view(slug)})
 
@@ -805,7 +803,7 @@ def api_add_object_to_project(request: Request, slug: str, project_id: str = For
     _attach_to_project's silent-ignore-on-bad-id (fine for a stale value
     riding along with an upload), a bad project_id here is a real error —
     it's the only thing this request is trying to do."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     if db.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="project not found")
     membership.add_files(project_id, [slug], **membership.UI_EFFECTS)  # #541 phase C: undoable
@@ -819,7 +817,7 @@ def api_remove_object_from_project(request: Request, slug: str, project_id: str 
     never untags anything either. The tag field is already separately
     editable right above this on the detail page if the user wants it gone
     too."""
-    policy.viewable_item(slug)  # #467: 404 if missing or not viewable
+    policy.writable_item(slug)  # #730: 404 if missing, 403 saying why if hidden
     project = db.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")

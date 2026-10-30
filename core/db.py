@@ -3521,21 +3521,6 @@ def list_linked_projects(slug):
         conn.close()
 
 
-def list_related_projects(slug):
-    """Projects peer-linked ('related', symmetric) to the given project slug. Typed
-    links are NOT included (use core.cards.list_links for those)."""
-    conn = get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT p.* FROM project_relations r JOIN projects p ON p.slug = r.slug_b "
-            "WHERE r.slug_a = ? AND r.type = 'related' ORDER BY p.updated_at DESC",
-            (slug,),
-        ).fetchall()
-        return [_card_row(r) for r in rows]
-    finally:
-        conn.close()
-
-
 def list_unaccepted_captions(limit=500, offset=0):
     """Rows with an auto_caption suggestion that hasn't been accepted into
     content_description and hasn't been skipped — the confirm_caption bulk

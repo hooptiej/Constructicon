@@ -322,6 +322,7 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 
 VOLATILE = [
     (re.compile(rb"\?v=\d+"), b"?v=N"),
+    (re.compile(rb'nonce="[A-Za-z0-9_-]+"'), b'nonce="N"'),  # #660: a fresh CSP nonce on every page
 ]
 
 

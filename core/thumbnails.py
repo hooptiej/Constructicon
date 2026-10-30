@@ -76,13 +76,33 @@ def ensure_thumbnail(row, wait=None):
     if spec.thumbnail_source == object_types.ThumbnailSource.CAPTURE and spec.capture_fn is None:
         return False
     try:
-        return bool(parse_limits.call(_generate, row, kind=parse_limits.BACKGROUND, what=THUMBNAIL_STEP,
-                                      key=limit_key(row), wait=wait))
+        result = parse_limits.call(_generate, row, kind=parse_limits.BACKGROUND, what=THUMBNAIL_STEP,
+                                   key=limit_key(row), wait=wait)
     except parse_limits.LimitExceeded:  # silent-ok: parse_limits logged the hit and remembers it for the page
         return False
     except Exception as e:
         print(f"thumbnail generation failed for {slug}: {e!r}")
-    return False
+        return False
+    if isinstance(result, dict):  # #742: a CaptureResult's facts, recorded here, in the app process
+        record_capture_metadata(slug, result)
+    return bool(result)
+
+
+def record_capture_metadata(slug, type_metadata):
+    """#742: merge what a capture_fn reported about its render (e.g. STL's `thumb_renderer`) into
+    the row's type_metadata. Pipeline bookkeeping like the caption status, so it uses the same
+    raw merge writer (no change-log row). A failure is logged, never raised: the thumbnail exists."""
+    if not type_metadata:
+        return
+    try:
+        from . import db  # local: db never imports thumbnails, but keep this module's imports light
+        row = db.get_by_slug(slug)
+        current = (row or {}).get("type_metadata") or {}
+        if row is not None and any(current.get(k) != v for k, v in type_metadata.items()):
+            db._update_content_metadata(slug, type_metadata=dict(type_metadata))
+    except Exception as e:
+        besteffort.warn(log, "thumbnails: couldn't record how the thumbnail was made", e, slug=slug,
+                        keys=sorted(type_metadata))
 
 
 def _generate(row):
@@ -137,10 +157,17 @@ def _from_capture(row, spec):
     if spec.capture_fn is None:
         return False
     image_bytes = spec.capture_fn(row)
+    metadata = None
+    if isinstance(image_bytes, object_types.CaptureResult):  # #742
+        image_bytes, metadata = image_bytes.image_bytes, dict(image_bytes.type_metadata or {})
     if not image_bytes:
         return False
     storage.save_thumbnail_from_bytes(row["slug"], image_bytes)
-    return storage.thumb_path_for(row["slug"]).exists()
+    if not storage.thumb_path_for(row["slug"]).exists():
+        return False
+    # A dict is truthy and pickles back to ensure_thumbnail, which records it (never written here,
+    # in the parser child).
+    return metadata or True
 
 
 # --- A picture for an agent to look at (#588) -------------------------------------------------

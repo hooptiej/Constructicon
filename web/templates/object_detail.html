@@ -614,7 +614,9 @@ function renderCaptionPanel() {
   if (!IS_CAPTION_CAPABLE || !captionPanel) return;
   captionPanel.style.display = 'flex';
   const meta = CAPTION_LAMP_META[captionStatus || 'none'];
-  document.getElementById('caption-lamp').style.background = meta.color;
+  const captionLamp = document.getElementById('caption-lamp');
+  captionLamp.style.background = meta.color;
+  captionLamp.dataset.state = (captionStatus || 'none');  // #751: the lamp's size/glow per state (details.css)
   document.getElementById('caption-label').textContent =
     (captionStatus === 'failed' && captionFailedReason) ? meta.label + ': ' + captionFailedReason : meta.label;
   const btn = document.getElementById('caption-retry-btn');
@@ -835,6 +837,7 @@ function renderOcrPanel() {
   ocrPanel.style.display = 'flex';
   const meta = OCR_LAMP_META[ocrStatus || 'none'] || OCR_LAMP_META.none;
   ocrLamp.style.background = meta.color;
+  ocrLamp.dataset.state = OCR_LAMP_META[ocrStatus] ? ocrStatus : 'none';  // #751: size/glow per state (details.css)
   // A short label, never the text itself (a megabyte tooltip is a freeze, #607).
   // #724: 'unsupported' says why it can't be read; 'failed' says why when the reader knew (a corrupt file)
   // #724 (b2): 'done' with a note = text read with a warning (the reader failed; OCR read the picture instead)
@@ -843,7 +846,9 @@ function renderOcrPanel() {
   ocrLamp.title = (ocrStatus === 'done' && ocrChars) ? label + ' - ' + ocrSizeLabel(ocrChars) + ' of text' : label;
   ocrLabel.textContent = label;
   ocrRetryBtn.disabled = ocrStatus === 'pending';
-  ocrRetryBtn.textContent = ocrStatus === 'pending' ? 'Running…' : (ocrChars ? 'Try again' : 'Run OCR');
+  // #751: OCR said it can't read this file (grey, 'not compatible'): the button offers a try, not a promise.
+  ocrRetryBtn.textContent = ocrStatus === 'pending' ? 'Running…'
+    : ocrStatus === 'unsupported' ? 'Try anyway' : (ocrChars ? 'Try again' : 'Run OCR');
   if (ocrChars) {
     ocrDisclosure.style.display = 'block';
     summaryLabel();

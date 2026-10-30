@@ -162,6 +162,16 @@ class TypeAction:
 
 
 @dataclass(frozen=True)
+class CaptureResult:
+    """#742: what a capture_fn may return instead of bare image bytes, to also record facts about how
+    the picture was made. `type_metadata` keys are merged into the row's type_metadata by
+    core/thumbnails.py (in the app process, after the parser child returns), e.g. STL's
+    `thumb_renderer`. Bare bytes (or None) stay valid for every other type."""
+    image_bytes: bytes
+    type_metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class PreviewContext:
     """Context passed to preview_fn (#449).
 
@@ -247,7 +257,8 @@ class ObjectTypeSpec:
     extensions: frozenset = frozenset()  # frozenset[str] — file extensions this type can handle (e.g. {".pdf"}), empty for types with no file
     # For thumbnail_source == FETCH_URL: (external_url) -> image URL str, or None if not derivable.
     thumbnail_url_fn: object = None
-    # For thumbnail_source == CAPTURE: (row: dict) -> raw image bytes, or None on failure.
+    # For thumbnail_source == CAPTURE: (row: dict) -> raw image bytes, or None on failure
+    # (or a CaptureResult, #742, to also record type_metadata about the render).
     # None here just means "not implemented yet" — core/thumbnails.py treats
     # that as "no thumbnail available" rather than an error, so registering
     # a CAPTURE-sourced type ahead of its capture routine existing is safe.

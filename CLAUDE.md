@@ -297,8 +297,9 @@ the date and commit forward when you re-verify.
   - `scripts/data/`: input files for scripts (the V2 curation suggestions JSON).
 - **`core/manage/`** (#634) — the operational command-line tools that ship with the app, because
   `core/` is mounted in every install and `scripts/` is not: `reset_password` (see "Users and
-  sessions") and `mcp_token` (see "Auth enforcement"). Run from the repo root or `/app`:
-  `python3 -m core.manage.<tool> ...`. Both run as actor `script` (`core/actor.py` treats a process
+  sessions"), `mcp_token` (see "Auth enforcement") and `render_stl` (#742: an STL to a PNG for
+  before/after, see "STL renders and the 3D viewer"). Run from the repo root or `/app`:
+  `python3 -m core.manage.<tool> ...`. They run as actor `script` (`core/actor.py` treats a process
   started from `core/manage/` like one started from `scripts/`). `mcp_token generate` must keep
   running on a bare checkout with no app dependencies (stdlib + `core/install_token.py` only;
   `core/__init__.py` and `core/manage/__init__.py` import nothing). Check with
@@ -2038,6 +2039,60 @@ One generated file of every registered type and extension, to drop-test a new in
   sample; `scripts/test_type_samples_720.py` generates the set twice into a temp dir and checks every file is
   written, sniffs as its type (`detect_media_type`) and is stable (skips the executables off Linux). A new
   type or extension needs a `Sample(...)` line in `make_type_samples.py`.
+
+### STL renders and the 3D viewer (#742, batch 15 "Lipstick on the Warehouse")
+
+Owner decision: STL thumbnails are a real render through **headless OpenGL**, not matplotlib doodles.
+- **Renderer** (`core/object_types/stl.py`): trimesh builds the mesh, pyrender draws it offscreen over
+  **EGL** with Mesa's llvmpipe (software; no GPU, no display): z-buffer, smooth shading that keeps edges
+  sharper than 30 degrees crisp, three lights, an auto-framed 3/4 camera (from the front-right, above),
+  the thumbnail background, drawn at 2x and scaled down. EGL, not OSMesa: Mesa removed OSMesa upstream in
+  25.1. The GL stack is imported lazily in the parser child (`_import_gl`), never at boot; it stubs
+  `pyrender.viewer` (pyglet/X11, never used) and restores `np.infty` (numpy 2) for pyrender 0.1.45.
+- **The triangle cap stays** (`MAX_PREVIEW_FACES` = 20,000) but the GL path reduces by **vertex
+  clustering** (`_cluster_decimate`: near-duplicate corners snapped, grid coarsened until it fits,
+  folded slivers turned back round), because dropping every n-th triangle leaves holes in a solid
+  render. The matplotlib fallback still strides. Parse limits (#644) are unchanged: it runs in the
+  background parser child like every capture_fn.
+- **Never silent:** any GL failure (a missing library, as on Windows; a broken mesh; a context that won't
+  start) falls back to the old matplotlib renderer and is logged through `besteffort.warn` ("stl: GL render
+  failed, falling back ..."). `type_metadata.thumb_renderer` records which one drew the thumbnail
+  (`pyrender-egl` / `pyrender-osmesa` / `matplotlib`). The capture_fn returns
+  `object_types.CaptureResult(image_bytes, type_metadata)` (a contract extension any CAPTURE type may use;
+  bare bytes stay valid); `thumbnails.ensure_thumbnail` merges that metadata into the row in the app
+  process (`record_capture_metadata`, raw pipeline bookkeeping like the caption status; allowlisted in
+  `check_layering.py`).
+- **Image (Dockerfile):** apt `libegl1`, `libopengl0` (1.7.0-1+b2), `libegl-mesa0`, `libgl1-mesa-dri`
+  (25.0.7-2+deb13u1), exact trixie versions (`libgl1-mesa-dri` was already there via ffmpeg); ENV
+  `PYOPENGL_PLATFORM=egl`, `LIBGL_ALWAYS_SOFTWARE=1`, `EGL_PLATFORM=surfaceless`, `LP_NUM_THREADS=2`.
+  requirements.txt pins `PyOpenGL==3.1.10`, `trimesh==4.12.2`, `freetype-py==2.5.1`; **`pyrender==0.1.45` is
+  installed `--no-deps` in its own Dockerfile line** (it declares `PyOpenGL==3.1.0` and pyglet), and
+  `check_requirements_freeze.py` reads that pin (`DOCKERFILE_NO_DEPS`). Bump the apt versions together
+  (`apt-cache policy` in the new base) when the base digest moves.
+- **Before / after:** `python3 -m core.manage.render_stl <in.stl> <out.png> [--renderer auto|gl|matplotlib]
+  [--compare] [--size N]` (in the image; reads only the file, writes only the PNG; `--compare` puts
+  matplotlib left and GL right). **Backfill:** `./scripts/run_tool.sh <web> scripts/regenerate_thumbnails.py
+  --type stl [--dry-run] [--slug ...]` re-renders through `ensure_thumbnail`, keeps the old thumbnail if the
+  new render fails (exit 1, says which), and prints the renderer per row. **Owner rule: before/after on real
+  prod STLs for sign-off before the backfill runs.**
+- **The 3D viewer** on the object page (live mode only; the export keeps the picture + link): three.js
+  r170 **vendored** in `web/static/vendor/three/` (module build, STLLoader, OrbitControls, LICENSE; sha256 in
+  its README.txt; `scripts/vendor_three.sh [--verify]` re-fetches / checks; `.gitattributes` keeps them
+  byte-exact). `templates/assets/stl_viewer.html` (the spec's `preview_assets=("stl_viewer",)`) maps the
+  bare `three` with a **nonce'd import map** and loads `static/js/stl-viewer.js` (a module, `'self'`). The
+  preview wraps the rendered thumbnail in `#stl-viewer` with `data-src` (the `/f/` URL), `data-size`,
+  `data-max` (`CONSTRUCTICON_STL_VIEWER_MAX_MB`, default 64) and `data-autoload` (8 MB: bigger files wait
+  for a "View in 3D" click). Over the cap the browser never fetches the file. Every reason the 3D view
+  doesn't show (over the cap, no WebGL, the vendored files missing, the download or parse failing) is said
+  in `#stl-viewer-note`, and the thumbnail stays.
+- Check: `scripts/test_lipstick_742_751.py` (throwaway DB; the real-GL checks SKIP off the app image).
+
+**Status lamps (#751, owner decision):** on the item page (READ FROM THE FILE) the OCR and caption lamps
+are 14px with a thin ring, and red "failed" is 16px with a red halo and three slow pulses (none under
+`prefers-reduced-motion`); `details.css` `.ocr-panel-header .ocr-lamp[data-state]`, the page JS sets
+`data-state`. The 8px grid/card lamps are unchanged. A grey "not compatible" (`ocr_status='unsupported'`)
+item's OCR button reads **"Try anyway"** (it still re-runs OCR); "Run OCR" stays for not-yet-run.
+Shadows, outlines and the page frame (#751's other bucket items) are not done.
 
 ## Data model (verify against `core/db.py`'s `SCHEMA` before trusting this — it evolves)
 

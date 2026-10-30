@@ -50,6 +50,8 @@ RAW_ALLOWED = {
                         "it would make every later undo of a real edit conflict with the pipeline)",
     "core/embedded_metadata.py": "pipeline: upload-time file metadata (title, ID3 tags, EXIF date), fill-only",
     "core/object_types/youtube.py": "pipeline: a YouTube row's fetched publish date (embedded metadata)",
+    "core/thumbnails.py": "pipeline: how a thumbnail was made (#742, e.g. STL's thumb_renderer), machine "
+                          "bookkeeping in type_metadata like the caption status",
     # Retired one-offs that wrote directly against the DB (kept for reference; they refuse to run, #633).
     "scripts/archive/apply_project_groupings.py": "one-off 2026-09 grouping import, already applied",
     "scripts/archive/seed_example_projects.py": "one-off seed of example cards on an empty dev DB",

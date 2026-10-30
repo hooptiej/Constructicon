@@ -20,6 +20,29 @@ FROM python:3.14-slim@sha256:656d12e70054d5fda18a045e2494c96701e9792dd1445f95b3d
 RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libcairo2 ghostscript ffmpeg build-essential git \
     && rm -rf /var/lib/apt/lists/*
 
+# #742: STL thumbnails render with headless OpenGL (core/object_types/stl.py: trimesh + pyrender over
+# EGL, drawn by Mesa's llvmpipe software rasterizer; no GPU, no display). EGL, not OSMesa: Mesa
+# removed OSMesa upstream in 25.1, so the next Debian won't ship libosmesa6, while EGL's surfaceless /
+# device platform is the maintained headless path. Exact versions for this base image's Debian 13
+# (trixie), checked with `apt-cache policy` in the 2026.10.29.1 image (2026-10-30). libgl1-mesa-dri
+# (llvmpipe, ~LLVM 19) is already in the image as an ffmpeg dependency; it is named and pinned here so
+# the renderer doesn't depend on that by accident. Measured in a throwaway copy of the image: these
+# add < 1 MB of packages. To bump: `apt-cache policy <pkg>` in the new base, change every version
+# together, rebuild, then `python3 -m core.manage.render_stl <some.stl> /tmp/x.png --renderer gl`.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libegl1=1.7.0-1+b2 \
+      libopengl0=1.7.0-1+b2 \
+      libegl-mesa0=25.0.7-2+deb13u1 \
+      libgl1-mesa-dri=25.0.7-2+deb13u1 \
+    && rm -rf /var/lib/apt/lists/*
+# PyOpenGL reads PYOPENGL_PLATFORM at its first import (stl.py also defaults it). Software rendering
+# only (LIBGL_ALWAYS_SOFTWARE), EGL without a window system (EGL_PLATFORM=surfaceless), and llvmpipe
+# capped at 2 render threads so one thumbnail can't take every core of the box.
+ENV PYOPENGL_PLATFORM=egl \
+    LIBGL_ALWAYS_SOFTWARE=1 \
+    EGL_PLATFORM=surfaceless \
+    LP_NUM_THREADS=2
+
 WORKDIR /app
 
 # This container has no need for CUDA (sentence-transformers' embeddings
@@ -35,6 +58,12 @@ RUN pip install --no-cache-dir torch==2.13.0 --index-url https://download.pytorc
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# #742: pyrender 0.1.45 (its last release) declares PyOpenGL==3.1.0 and pyglet, which would fight the
+# pins above: PyOpenGL 3.1.0 predates the OSMesa/EGL fixes, and pyglet is only for its interactive
+# window, which stl.py never imports (it stubs pyrender.viewer). Its real needs (PyOpenGL, trimesh,
+# freetype-py, numpy, scipy, networkx, six, Pillow) are pinned in requirements.txt, so it goes in
+# without its declared dependencies. scripts/check_requirements_freeze.py reads this pin too.
+RUN pip install --no-cache-dir --no-deps pyrender==0.1.45
 
 # #643: the app runs as a non-root user (it parses every uploaded file with
 # native parsers). UID/GID 1000 matches the owner of the data dirs on the

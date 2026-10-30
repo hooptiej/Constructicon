@@ -1,0 +1,22 @@
+{# #742: the STL object page's in-page 3D viewer. three.js is vendored (web/static/vendor/three/, see its
+   README.txt); the vendored loader and controls import the bare name 'three', so a nonce'd import map
+   (CSP: script-src 'self' + nonce) maps it. The viewer itself is a module from /static. #}
+<script type="importmap" nonce="{{ csp_nonce() }}">
+{"imports": {
+  "three": "/static/vendor/three/three.module.min.js?v={{ static_version('vendor/three/three.module.min.js') }}",
+  "three/stl-loader": "/static/vendor/three/STLLoader.js?v={{ static_version('vendor/three/STLLoader.js') }}",
+  "three/orbit-controls": "/static/vendor/three/OrbitControls.js?v={{ static_version('vendor/three/OrbitControls.js') }}"
+}}
+</script>
+<style>
+  .stl-viewer { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+  .stl-viewer-stage { width: 100%; aspect-ratio: 1 / 1; max-height: 70vh; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--border-color, #2A2A2A); background: #14170f; touch-action: none; }
+  .stl-viewer-stage[hidden] { display: none; }
+  .stl-viewer-stage canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  .stl-viewer-stage canvas:active { cursor: grabbing; }
+  .stl-viewer-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .stl-viewer-load[hidden] { display: none; }
+  .stl-viewer-note { font-size: 12px; }
+</style>
+<script type="module" src="/static/js/stl-viewer.js?v={{ static_version('js/stl-viewer.js') }}"></script>

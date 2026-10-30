@@ -1557,8 +1557,9 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     `archive_ratio`, `archive_too_slow`, `archive_encrypted` ("This archive is password-protected; nothing was
     extracted." when every file is encrypted, or a .7z needs a password), `archive_corrupt`,
     `archive_unsupported` (.7z without py7zr). **Caps** (`parse_limits.unpack_caps()`, read when used):
-    `CONSTRUCTICON_UNPACK_MAX_MEMBERS` 5,000 entries; total unpacked bytes = the max upload size
-    (`CONSTRUCTICON_MAX_UPLOAD_MB`, default 25; owner default on #605) unless
+    `CONSTRUCTICON_UNPACK_MAX_MEMBERS` 5,000 entries; total unpacked bytes = 4x the max upload size
+    (`parse_limits.UNPACK_TOTAL_UPLOAD_MULTIPLE` x `CONSTRUCTICON_MAX_UPLOAD_MB`, default 25, so 100 MB; owner
+    decision 2026-10-30, so the work install's 62 MB Venza manual fits a 25 MB-upload install) unless
     `CONSTRUCTICON_UNPACK_MAX_TOTAL_MB` says otherwise; `CONSTRUCTICON_UNPACK_MAX_RATIO` 200x, per member and
     overall, judged only past 1 MB unpacked (`UNPACK_RATIO_FLOOR_BYTES`); `CONSTRUCTICON_UNPACK_MAX_SECONDS`
     300 s. Temp files go in the system temp dir (`constructicon-unpack-*`), always removed.

@@ -14,7 +14,7 @@ The safety rules (untrusted input), each with its own plain-words refusal:
 - **Links.** Symbolic and hard links (tar, zip with Unix modes, 7z) are never followed or extracted:
   that member is skipped and listed ("a link; links are never followed or extracted"). Device files
   and FIFOs likewise ("not a regular file").
-- **Bombs.** `parse_limits.unpack_caps()`: the entry count, the total unpacked bytes (by default the
+- **Bombs.** `parse_limits.unpack_caps()`: the entry count, the total unpacked bytes (by default 4x the
   install's max upload size), the compression ratio (per member, and for the whole archive, once
   past `UNPACK_RATIO_FLOOR_BYTES`) and the time. Declared sizes are checked before anything is
   written (zip, 7z); the bytes actually written are counted as they go (zip, tar), so a member that
@@ -137,7 +137,7 @@ class _Budget:
             what = "declares" if declared else "unpacks to more than"
             raise Refused("archive_too_big",
                           f"This archive was refused: it {what} {_mb(nbytes)}, over the {_mb(self.caps.max_total_bytes)} "
-                          "unpack limit (the install's max upload size). Nothing was extracted.",
+                          "unpack limit. Nothing was extracted.",
                           cap="max_total_bytes", limit=self.caps.max_total_bytes, bytes=nbytes)
         floor = parse_limits.UNPACK_RATIO_FLOOR_BYTES
         if nbytes > floor and nbytes / self.archive_size > self.caps.max_ratio:

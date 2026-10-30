@@ -51,7 +51,7 @@ the app process and in every child.
 the largest real archive has 106) caps how many members a listing reads.
 #605: ``unpack_caps()`` bounds turning an archive into a card (core/archive_reader.py): entries
 (``CONSTRUCTICON_UNPACK_MAX_MEMBERS``, 5,000), total unpacked bytes (``CONSTRUCTICON_UNPACK_MAX_TOTAL_MB``,
-default the max upload size), compression ratio (``CONSTRUCTICON_UNPACK_MAX_RATIO``, 200) and time
+default 4x the max upload size: 100 MB at the defaults), compression ratio (``CONSTRUCTICON_UNPACK_MAX_RATIO``, 200) and time
 (``CONSTRUCTICON_UNPACK_MAX_SECONDS``, 300).
 
 Every setting is read when used (tests set them) and falls back to its default when missing,
@@ -168,11 +168,16 @@ def _env_mb(name):
     return value if value > 0 else None
 
 
+UNPACK_TOTAL_UPLOAD_MULTIPLE = 4  # #605 (owner, 2026-10-30): the unpacked total defaults to 4x the max upload
+
+
 def unpack_caps():
-    """#605 owner default: the unpacked total may be at most the install's max upload size
-    (CONSTRUCTICON_MAX_UPLOAD_MB, default 25, the same number core/storage.py reads), unless
+    """#605: the unpacked total may be at most UNPACK_TOTAL_UPLOAD_MULTIPLE (4) times the install's max
+    upload size (CONSTRUCTICON_MAX_UPLOAD_MB, default 25, the same number core/storage.py reads: 100 MB
+    at the defaults; owner decision 2026-10-30, so a 60 MB manual zipped near 1:1 fits), unless
     CONSTRUCTICON_UNPACK_MAX_TOTAL_MB says otherwise."""
-    total_mb = _env_mb("CONSTRUCTICON_UNPACK_MAX_TOTAL_MB") or _env_mb("CONSTRUCTICON_MAX_UPLOAD_MB") or 25
+    total_mb = _env_mb("CONSTRUCTICON_UNPACK_MAX_TOTAL_MB") or \
+        UNPACK_TOTAL_UPLOAD_MULTIPLE * (_env_mb("CONSTRUCTICON_MAX_UPLOAD_MB") or 25)
     return UnpackCaps(int(setting("CONSTRUCTICON_UNPACK_MAX_MEMBERS")), int(total_mb * 1024 * 1024),
                       float(setting("CONSTRUCTICON_UNPACK_MAX_RATIO")), float(setting("CONSTRUCTICON_UNPACK_MAX_SECONDS")))
 

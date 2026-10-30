@@ -378,8 +378,17 @@ os.environ["CONSTRUCTICON_UNPACK_MAX_SECONDS"] = "0.000001"
 e = refusal(unpack.preview, a1)
 check("time cap: archive_too_slow", e is not None and e.code == "archive_too_slow", e and (e.code, e.message))
 os.environ.pop("CONSTRUCTICON_UNPACK_MAX_SECONDS")
-check("the defaults: total = the max upload size, 5,000 members, 200x, 300 s",
-      unpack.parse_limits.unpack_caps().as_dict()["max_total_mb"] == 25 and unpack.parse_limits.unpack_caps().max_members == 5000)
+caps = unpack.parse_limits.unpack_caps()
+check("the defaults: total = 4x the max upload size (100 MB), 5,000 members, 200x, 300 s",
+      caps.as_dict()["max_total_mb"] == 100 and caps.max_members == 5000 and caps.max_ratio == 200
+      and caps.max_seconds == 300, caps.as_dict())
+os.environ["CONSTRUCTICON_MAX_UPLOAD_MB"] = "60"
+check("the total follows the upload size: 60 MB uploads -> 240 MB unpacked",
+      unpack.parse_limits.unpack_caps().as_dict()["max_total_mb"] == 240)
+os.environ["CONSTRUCTICON_UNPACK_MAX_TOTAL_MB"] = "30"
+check("CONSTRUCTICON_UNPACK_MAX_TOTAL_MB overrides it", unpack.parse_limits.unpack_caps().as_dict()["max_total_mb"] == 30)
+os.environ.pop("CONSTRUCTICON_UNPACK_MAX_TOTAL_MB")
+os.environ.pop("CONSTRUCTICON_MAX_UPLOAD_MB")
 
 print("--- encrypted and corrupt ---")
 

@@ -1465,8 +1465,9 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   ops in `core/provenance_rules.py` and `core/correlations.py`. **Nothing applies without a yes.**
   - **File provenance by gross rule (#354).** A small registry, `apprentice_rules.FILE_RULES` (add a `FileRule`
     as the owner names more). First cut, ONE rule, `text_heavy_reference` -> file provenance `reference`: a
-    **PDF with >= `TEXT_HEAVY_MIN_CHARS` (6,000) characters** of extracted text (the whole text layer; ~2+ pages
-    of prose; a scanned PDF has only page 1's OCR, so rarely passes), or a **PDF / Word file whose name says**
+    **PDF with >= `TEXT_HEAVY_MIN_CHARS` (2,000) characters** of extracted text (the whole text layer; under a
+    page of prose; owner decision 2026-10-30 after the read-only prod measurement: 6,000 gave 8 proposals and
+    the 4 near misses between 2,000 and 6,000 were reference too; a scanned PDF has only page 1's OCR), or a **PDF / Word file whose name says**
     manual, guide, handbook, datasheet / data sheet, instructions, reference, quick start, how to, spec(s)
     (`name_words` splits camelCase and punctuation; "manually" is not "manual") **with >=
     `MANUAL_HINT_MIN_CHARS` (300)**. Page counts are not stored, so text-per-page is not used. Candidates:
@@ -1495,8 +1496,10 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     `EMB_FULL` 0.85 -> 0..1), **tags 0.20** (shared tags on their files / `TAGS_FULL` 3; never a card's linked
     tag, a hobby tag, or a tag on more than `TAG_COMMON_SHARE` 25% of cards once there are 8+), **time 0.15**
     (real-date span overlap as a share of the shorter span, 30 days' slack; 0 when undated) and **shared files
-    0.15** (files on both / 2). Proposed at **score >= `SCORE_THRESHOLD` (0.45)** with some evidence beyond
-    time. Never proposed: pairs linked by ANY type, a card and its nested parts (any depth), two parts of one
+    0.15** (files on both / 2). Proposed at **score >= `SCORE_THRESHOLD` (0.45)** AND **two signals**
+    (`MIN_SIGNALS` 2, `TEXT_REQUIRED`): alike text plus at least one of shared tags / overlapping dates /
+    shared files (owner decision 2026-10-30, "need 2 signals": on prod it dropped one text-only pair of 5).
+    A pair that passes the score but not this is counted as `too_few_signals`; the why names the signals. Never proposed: pairs linked by ANY type, a card and its nested parts (any depth), two parts of one
     parent, two members of one family / collection, pairs answered "Not related"; per actor, a pair with a
     card they can't see (private, #604) is left out and counted (`hidden_pairs`). numpy (in the image) only
     speeds the cosines up; without it the same numbers come from plain Python. `confirm(pairs=None, shown=,
@@ -1515,10 +1518,12 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     "confirm" | "dismiss", slugs= | pairs=, rule=, dry_run, limit, cursor)` (one tool for both, not two: the
     same three actions and roles; confirm / dismiss DRY-RUN BY DEFAULT like `constructicon_lookalikes`).
   - **Measure first:** `scripts/measure_apprentice_354_344.py <db copy> [--text-min-chars N] [--hint-min-chars
-    N] [--threshold X] [--show N]` opens the DB `mode=ro` (falls back to `immutable=1`, saying so), runs the
+    N] [--threshold X] [--min-signals N] [--show N]` (run on a prod copy 2026-10-30: 8 provenance proposals
+    at 6,000, 5 pairs at 0.45 before the two-signal rule) opens the DB `mode=ro` (falls back to `immutable=1`, saying so), runs the
     SAME loaders and rules, and prints per rule the files considered / matched / answered / proposed, the split
     by test and type, a text-length histogram, a sample and the near misses; for correlations the cards
-    considered, pairs scored / excluded by reason / answered / proposed, a score histogram and the top pairs
+    considered, pairs scored / excluded by reason / answered / dropped by the two-signal rule (each listed) /
+    proposed, a score histogram and the top pairs
     with their parts and why. On the box, as for #759: copy the DB, then `sudo docker run --rm --network none
     -v /tmp/ap:/data:ro -v "$PWD/scripts":/app/scripts:ro <the web image> python3
     scripts/measure_apprentice_354_344.py /data/c.db`. Every threshold is a module constant to tune after.

@@ -62,7 +62,8 @@ def _plan(who):
 
 def plan(actor=None):
     """Read-only. {summary: {cards_considered, with_embedding, pairs_scored, excluded: {already_linked,
-    nested, same_parent, same_family}, answered_not_related, below_threshold, proposed, hidden_pairs,
+    nested, same_parent, same_family}, answered_not_related, below_threshold, too_few_signals, min_signals,
+    text_required, proposed, hidden_pairs,
     threshold, weights}, pairs: [{a, b, a_title, b_title, score, parts: {text, tags, time, shared},
     evidence: {cosine, shared_tags, overlap, shared_files}, why, a_url, b_url}]} best first."""
     who = actor_ctx.resolve(actor)
@@ -192,7 +193,8 @@ def queue_items():
         return []
     shown = pairs[:ar.PROPOSALS_SHOWN]
     detail = ("Scored from how alike their files read, shared tags, overlapping dates and shared files "
-              f"(suggested at {ar.SCORE_THRESHOLD:.2f} of 1 or more). Linking adds a “related” link; "
+              f"(suggested at {ar.SCORE_THRESHOLD:.2f} of 1 or more, with at least {ar.MIN_SIGNALS} of those signals, "
+              "alike text one of them). Linking adds a “related” link; "
               "one undo takes a whole answer back.")
     if len(pairs) > len(shown):
         detail += f" Showing {len(shown)} of {len(pairs)}; the rest come up as you answer these."

@@ -1862,11 +1862,12 @@ def constructicon_proposals(which: typing.Literal["provenance", "correlation"],
                             cursor: str | None = None) -> dict:
     """The Curator's proposals that wait for a yes: nothing is written until confirmed.
     which="provenance": file provenance by gross rule. The first (and only) rule, text_heavy_reference:
-      a PDF with 6,000+ characters of text, or a PDF / Word file whose name says manual, guide, datasheet,
+      a PDF with 2,000+ characters of text, or a PDF / Word file whose name says manual, guide, datasheet,
       handbook, instructions, reference or spec, proposed as provenance "reference". A file whose
       provenance is already set is never proposed.
     which="correlation": card pairs that look related (text similarity of their files, shared tags,
-      overlapping dates, shared files; score 0..1, suggested at 0.45+), never ones already linked,
+      overlapping dates, shared files; score 0..1, suggested at 0.45+ with alike text plus at least one
+      other signal), never ones already linked,
       nested, sharing a parent or a family, or a family / collection.
     "list" (default, read-only, paged: limit 1..500, default 20, cursor): provenance -> {items: [{slug,
       title, filename, media_type, chars, reason, evidence}], rule, blocked, summary}; correlation ->

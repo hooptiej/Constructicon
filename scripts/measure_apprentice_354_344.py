@@ -18,7 +18,7 @@ loaders and rules the app does, and prints:
 Tune with the flags (each overrides the module constant for this run only):
 
     python3 scripts/measure_apprentice_354_344.py /path/to/copy-of-constructicon.db
-        [--text-min-chars 6000] [--hint-min-chars 300] [--threshold 0.45] [--show 25]
+        [--text-min-chars 2000] [--hint-min-chars 300] [--threshold 0.45] [--min-signals 2] [--show 25]
 
 Exit status: 0 on success, 2 when the database can't be opened or has no capture_events table.
 """
@@ -74,7 +74,7 @@ def measure_provenance(conn, show):
         by_type = Counter(p.get("media_type") for p in props)
         print("  by type: " + ", ".join(f"{t} {n}" for t, n in by_type.most_common()))
         rows = ar.load_provenance_candidates(conn, rule)
-        edges = [500, 2000, 6000, 20000, 100000]
+        edges = [500, 1000, 2000, 6000, 20000, 100000]
         hist = Counter(_bucket(int(r.get("text_chars") or 0), edges) for r in rows)
         print("  text length of every file considered:")
         for label in [f"< {e:,}" for e in edges] + [f">= {edges[-1]:,}"]:
@@ -83,10 +83,11 @@ def measure_provenance(conn, show):
         for p in props[:show]:
             print(f"    {p['slug']}  {p.get('media_type'):5}  {(p.get('chars') or 0):>8,} chars  "
                   f"{(p.get('display_name') or p.get('filename') or '')[:60]}")
+        lo = ar.TEXT_HEAVY_MIN_CHARS // 2  # the band just under the threshold: half of it up to it
         near = sorted((r for r in rows if r.get("media_type") == "pdf" and rule.test(r) is None
-                       and int(r.get("text_chars") or 0) >= ar.TEXT_HEAVY_MIN_CHARS // 3),
+                       and int(r.get("text_chars") or 0) >= lo),
                       key=lambda r: -int(r.get("text_chars") or 0))
-        print(f"  near misses: PDFs with {ar.TEXT_HEAVY_MIN_CHARS // 3:,}..{ar.TEXT_HEAVY_MIN_CHARS - 1:,} chars "
+        print(f"  near misses: PDFs with {lo:,}..{ar.TEXT_HEAVY_MIN_CHARS - 1:,} chars "
               f"({len(near)}), first {min(show, len(near))}:")
         for r in near[:show]:
             print(f"    {r['slug']}  {int(r.get('text_chars') or 0):>8,} chars  {(r.get('display_name') or r.get('filename') or '')[:60]}")
@@ -106,13 +107,17 @@ def measure_correlations(conn, show):
     print(f"  weights: text {ar.W_TEXT}, tags {ar.W_TAGS}, time {ar.W_TIME}, shared files {ar.W_SHARED}; "
           f"EMB_FLOOR {ar.EMB_FLOOR}, EMB_FULL {ar.EMB_FULL}, TAGS_FULL {ar.TAGS_FULL}, SHARED_FULL {ar.SHARED_FULL}, "
           f"TIME_SLACK_DAYS {ar.TIME_SLACK_DAYS}, TAG_COMMON_SHARE {ar.TAG_COMMON_SHARE}")
-    print(f"  SCORE_THRESHOLD {counts['threshold']}")
+    print(f"  SCORE_THRESHOLD {counts['threshold']}; MIN_SIGNALS {counts['min_signals']}"
+          f"{' (text required)' if counts['text_required'] else ''}")
     print(f"  cards in the database: {len(data['cards'])}; considered (kinds {', '.join(ar.CORRELATION_KINDS)}): "
           f"{counts['cards_considered']}; with an embedding centroid: {counts['with_embedding']}")
     print(f"  pairs scored: {counts['pairs_scored']}; excluded: "
           + (", ".join(f"{k} {v}" for k, v in sorted(counts["excluded"].items())) or "none"))
-    print(f"  under the threshold (or time-only): {counts['below_threshold']}; answered 'not related': "
-          f"{counts['answered_not_related']}; PROPOSED: {counts['proposed']}")
+    print(f"  under the threshold: {counts['below_threshold']}; at the threshold but dropped by the two-signal "
+          f"rule: {counts['too_few_signals']}; answered 'not related': {counts['answered_not_related']}; "
+          f"PROPOSED: {counts['proposed']}")
+    for p in counts["too_few_signal_pairs"][:show]:
+        print(f"    dropped (signals: {', '.join(p['signals']) or 'none'}): {p['score']:.3f}  {p['a']} <-> {p['b']}")
     scores = counts["below_scores"] + [p["score"] for p in pairs]
     hist = Counter(min(9, int(s * 10)) for s in scores)
     print("  score histogram (every scored pair with evidence or not):")
@@ -134,6 +139,7 @@ def main():
     ap.add_argument("--text-min-chars", type=int, default=ar.TEXT_HEAVY_MIN_CHARS)
     ap.add_argument("--hint-min-chars", type=int, default=ar.MANUAL_HINT_MIN_CHARS)
     ap.add_argument("--threshold", type=float, default=ar.SCORE_THRESHOLD)
+    ap.add_argument("--min-signals", type=int, default=ar.MIN_SIGNALS)
     ap.add_argument("--show", type=int, default=25)
     args = ap.parse_args()
     if not os.path.exists(args.db):
@@ -147,6 +153,7 @@ def main():
     ar.TEXT_HEAVY_MIN_CHARS = args.text_min_chars
     ar.MANUAL_HINT_MIN_CHARS = args.hint_min_chars
     ar.SCORE_THRESHOLD = args.threshold
+    ar.MIN_SIGNALS = args.min_signals
     # propose_pairs' default threshold was bound at import; pass the flag explicitly.
     _orig = ar.propose_pairs
     ar.propose_pairs = lambda data, threshold=args.threshold, keep_below=False: _orig(data, threshold, keep_below)

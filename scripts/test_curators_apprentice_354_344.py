@@ -143,7 +143,18 @@ check("identical cards score 1 with every part full", s["score"] == 1.0 and all(
 fc = {"vec": [0.0, 1.0], "tags": set(), "span": (0, 0), "files": set()}
 s2 = ar.score_pair(fa, fc)
 check("orthogonal text, no tags, same day: time only, under the threshold and not evidence",
-      s2["parts"]["text"] == 0 and s2["score"] == ar.W_TIME and s2["score"] < ar.SCORE_THRESHOLD and not ar.has_evidence(s2), s2)
+      s2["parts"]["text"] == 0 and s2["score"] == ar.W_TIME and s2["score"] < ar.SCORE_THRESHOLD and not ar.enough_signals(s2), s2)
+s3 = ar.score_pair({"vec": [1.0, 0.0], "tags": set(), "span": (None, None), "files": set()},
+                   {"vec": [1.0, 0.0], "tags": set(), "span": (None, None), "files": set()})
+check("two signals (owner 2026-10-30): identical text alone scores over the threshold but is not enough",
+      s3["score"] >= ar.SCORE_THRESHOLD and ar.signals(s3) == ["text"] and not ar.enough_signals(s3), s3)
+s4 = ar.score_pair({"vec": [1.0, 0.0], "tags": {9}, "span": (None, None), "files": set()},
+                   {"vec": [1.0, 0.0], "tags": {9}, "span": (None, None), "files": set()})
+check("text plus a shared tag is two signals", ar.signals(s4) == ["text", "tags"] and ar.enough_signals(s4), s4)
+s5 = {"parts": {"text": 0.0, "tags": 1.0, "time": 1.0, "shared": 1.0}}
+check("three signals without text are not enough (text required)", not ar.enough_signals(s5))
+check("the thresholds are the owner's (2026-10-30): 2,000 chars, 0.45, two signals with text",
+      ar.TEXT_HEAVY_MIN_CHARS == 2000 and ar.SCORE_THRESHOLD == 0.45 and ar.MIN_SIGNALS == 2 and ar.TEXT_REQUIRED)
 check("weights sum to 1", abs(ar.W_TEXT + ar.W_TAGS + ar.W_TIME + ar.W_SHARED - 1.0) < 1e-9)
 
 # ---- fixtures ---------------------------------------------------------------------------------------
@@ -180,12 +191,13 @@ with actor.acting_as(actor.ACTOR_MCP):
     CA, CB, CC = card("Router build"), card("Router case"), card("Garden beds")
     CD, CPRIV = card("Router linked"), card("Router secret")
     CE = card("Router part", parent=CA["id"])
+    CLONE = card("Router lone")  # alike text only: undated, no tags, no shared files
     FAM = card("Lamp family", kind="family")
     CM1, CM2 = card("Lamp one"), card("Lamp two")
     cards.add_to_family(FAM["id"], CM1["id"])
     cards.add_to_family(FAM["id"], CM2["id"])
     for c, slug, v, ts in ((CA, "ca1", X, T0), (CA, "ca2", X, T0 + DAY), (CB, "cb1", vec(1, 0.1), T0 + 10 * DAY),
-                           (CC, "cc1", Y, None), (CD, "cd1", X, T0), (CPRIV, "cp1", X, T0), (CE, "ce1", X, T0),
+                           (CC, "cc1", Y, None), (CD, "cd1", X, T0), (CPRIV, "cp1", X, T0), (CE, "ce1", X, T0), (CLONE, "cl1", X, None),
                            (CM1, "cm1", Z, None), (CM2, "cm2", Z, None)):
         mk(slug, f"{slug}.txt", "text", "text", ts=ts)
         db.set_embedding(slug, v)
@@ -289,7 +301,12 @@ ab = CP.get(pk(CA, CB))
 check("Router build / Router case are proposed (alike text, a shared tag, overlapping dates)",
       ab is not None and ab["score"] >= ar.SCORE_THRESHOLD and ab["parts"]["text"] > 0.9
       and ab["evidence"]["shared_tags"] == ["Routers"] and ab["parts"]["time"] > 0, ab)
-check("the why says it in words", ab and "read alike" in ab["why"] and "Routers" in ab["why"], ab and ab["why"])
+check("the why says it in words, naming the signals", ab and "read alike" in ab["why"] and "Routers" in ab["why"]
+      and "3 signals" in ab["why"] and "at least 2" in ab["why"], ab and ab["why"])
+check("a card that only reads alike (no tag, date or shared file) is never proposed, and is counted",
+      not any(CLONE["slug"] in k for k in CP)
+      and correlations.plan(actor=actor.ACTOR_MCP)["summary"]["too_few_signals"] >= 1,
+      correlations.plan(actor=actor.ACTOR_MCP)["summary"])
 check("an unrelated card is not proposed", pk(CA, CC) not in CP and pk(CB, CC) not in CP)
 summ = correlations.plan(actor=actor.ACTOR_MCP)["summary"]
 check("already linked (any type) is excluded and counted", pk(CA, CD) not in CP and summ["excluded"].get("already_linked") == 1, summ)
@@ -500,7 +517,8 @@ check("the script exits 0", proc.returncode == 0, proc.stderr[-800:])
 check("it prints the provenance counts and a sample",
       "PROPOSED:" in outp and "text_heavy_reference" in outp and "p_long" in outp and "near misses" in outp, outp[:1500])
 check("it prints the correlation counts, histogram and a sample",
-      "pairs scored" in outp and "score histogram" in outp and CA["slug"] in outp and "already_linked 1" in outp, outp[-1500:])
+      "pairs scored" in outp and "score histogram" in outp and CA["slug"] in outp and "already_linked 1" in outp
+      and "dropped by the two-signal" in outp and CLONE["slug"] in outp, outp[-1500:])
 check("its proposal count matches the app's (admin view)",
       re.search(r"PROPOSED: (\d+)", outp) and int(re.search(r"PROPOSED: (\d+)", outp).group(1)) == len(proposed()), outp[:800])
 check("it wrote nothing to the copy", open(copy, "rb").read() == before_bytes)

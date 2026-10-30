@@ -16,7 +16,7 @@ connection, so the service and the script read exactly the same rows the same wa
    (a PDF's whole text layer, every page, core/object_types/pdf.py text_layer; a scanned PDF with no
    text layer has only page 1's OCR, so it rarely passes) and the file's name. Page counts are not
    stored (pdf.get_properties opens the file each time), so text-per-page is not used: see
-   TEXT_HEAVY_MIN_CHARS.
+   TEXT_HEAVY_MIN_CHARS (owner decision 2026-10-30 after the read-only prod measurement: 2,000).
 
 2. PROJECT CORRELATIONS (#344, trimmed): "these projects look related: link them?". A pair of cards is
    scored from four signals, each 0..1, weighted (W_*), summed to 0..1:
@@ -30,9 +30,11 @@ connection, so the service and the script read exactly the same rows the same wa
              only), as a share of the shorter span, with TIME_SLACK_DAYS of slack; 0 when either is
              undated;
      shared  files on both cards, min(1, n / SHARED_FULL).
-   A pair is proposed at score >= SCORE_THRESHOLD, and only with some evidence beyond time (time alone
-   is never enough). Left out: group kinds (family, collection: membership is their relation), pairs
-   already linked by ANY link type, a card and its nested parts (any depth), two parts of one parent,
+   A pair is proposed at score >= SCORE_THRESHOLD AND with at least MIN_SIGNALS (2) non-zero signals,
+   text one of them (TEXT_REQUIRED): alike files plus a shared tag, overlapping dates or a shared file.
+   Owner decision 2026-10-30 ("need 2 signals"), from the read-only prod measurement: a pair that only
+   reads alike is not proposed. Pairs that pass the score but not this rule are counted (too_few_signals).
+   Left out: group kinds (family, collection: membership is their relation), pairs already linked by ANY link type, a card and its nested parts (any depth), two parts of one parent,
    two members of one family / collection, and pairs the owner answered "Not related".
 
 Every threshold is a module constant, so it can be tuned after the read-only prod measurement.
@@ -47,11 +49,12 @@ from . import timeline
 
 # --- 1. file provenance rules ------------------------------------------------------------------------
 
-TEXT_HEAVY_MIN_CHARS = 6000
-"""A PDF with at least this many characters of extracted text is "text-heavy". Measured against the
-idea of a page: a page of plain prose is ~2,500-3,500 characters, so 6,000 is two-plus pages of real
-text. Design PDFs, posters, logos exported to PDF, single-page receipts and scanned pages (OCR of page 1
-only) stay under it. Tune after the prod measurement."""
+TEXT_HEAVY_MIN_CHARS = 2000
+"""A PDF with at least this many characters of extracted text is "text-heavy". Owner decision
+2026-10-30 ("lower to 2,000"): the read-only prod measurement at 6,000 gave 8 proposals, and the 4 near
+misses between 2,000 and 6,000 were reference material too. 2,000 is under one page of plain prose
+(~2,500-3,500 characters); posters, logos exported to PDF and scanned pages (OCR of page 1 only) mostly
+stay under it."""
 
 MANUAL_HINT_MIN_CHARS = 300
 """A PDF or Word file whose NAME says manual / guide / datasheet / ... needs only this much text (a
@@ -202,6 +205,9 @@ TAG_COMMON_MIN_CARDS = 8
 TIME_SLACK_DAYS = 30
 SHARED_FULL = 2    # this many files on both cards = full signal
 SCORE_THRESHOLD = 0.45
+MIN_SIGNALS = 2       # owner decision 2026-10-30: "need 2 signals" (text, tags, time, shared: non-zero parts)
+TEXT_REQUIRED = True  # ... and text similarity must be one of them
+SIGNAL_NAMES = {"text": "alike text", "tags": "shared tags", "time": "overlapping dates", "shared": "shared files"}
 CORRELATION_KINDS = ("project", "thing", "action", "event")
 CORRELATION_SKIP_PREFIX = "need:correlation_pair:"
 
@@ -400,10 +406,15 @@ def score_pair(fa, fb, tag_names=None, cos=...):
                          "overlap": None if ov is None else round(ov, 4), "shared_files": sorted(shared_files)}}
 
 
-def has_evidence(s):
-    """Time overlap alone is never a reason to link two cards."""
-    p = s["parts"]
-    return p["text"] > 0 or p["tags"] > 0 or p["shared"] > 0
+def signals(s):
+    """The signals that contributed (non-zero parts), in a fixed order: ["text", "tags", ...]."""
+    return [k for k in ("text", "tags", "time", "shared") if s["parts"][k] > 0]
+
+
+def enough_signals(s):
+    """The two-signal rule: at least MIN_SIGNALS signals, text among them when TEXT_REQUIRED."""
+    got = signals(s)
+    return len(got) >= MIN_SIGNALS and (not TEXT_REQUIRED or "text" in got)
 
 
 def why_text(s, a_title, b_title):
@@ -420,13 +431,17 @@ def why_text(s, a_title, b_title):
         bits.append(f"{n} file{'s are' if n != 1 else ' is'} on both")
     if s["parts"]["time"] > 0:
         bits.append("their dates overlap")
-    return f"{a_title} and {b_title}: " + "; ".join(bits) + f" (score {s['score']:.2f} of 1)."
+    got = signals(s)
+    return (f"{a_title} and {b_title}: " + "; ".join(bits) + f" (score {s['score']:.2f} of 1; "
+            f"{len(got)} signals: {', '.join(SIGNAL_NAMES[g] for g in got)}. A suggestion needs at least "
+            f"{MIN_SIGNALS}{', alike text one of them' if TEXT_REQUIRED else ''}).")
 
 
 def propose_pairs(data, threshold=SCORE_THRESHOLD, keep_below=False):
     """(pairs, counts). pairs: [{a, b, a_id, b_id, a_title, b_title, score, parts, evidence, why}] best first
     (score >= threshold with evidence, not excluded, not answered). counts: {cards_considered,
-    with_embedding, pairs_scored, excluded: {reason: n}, answered_not_related, below_threshold, proposed}.
+    with_embedding, pairs_scored, excluded: {reason: n}, answered_not_related, below_threshold,
+    too_few_signals (scored at the threshold or more but failing the two-signal rule), proposed}.
     keep_below=True also returns the scores under the threshold (the measurement's histogram)."""
     cards = {c["id"]: c for c in data["cards"]}
     feats = card_features(data)
@@ -436,6 +451,7 @@ def propose_pairs(data, threshold=SCORE_THRESHOLD, keep_below=False):
     ids = sorted(feats)
     cosines = _cosines(feats, ids)
     excluded, answered, below, scored, out, under = Counter(), 0, 0, 0, [], []
+    few, few_pairs = 0, []
     for i, ia in enumerate(ids):
         for ib in ids[i + 1:]:
             fa, fb = feats[ia], feats[ib]
@@ -446,10 +462,16 @@ def propose_pairs(data, threshold=SCORE_THRESHOLD, keep_below=False):
                 continue
             scored += 1
             s = score_pair(fa, fb, data["tag_names"], cos=cosines.get((ia, ib)))
-            if s["score"] < threshold or not has_evidence(s):
+            if s["score"] < threshold:
                 below += 1
                 if keep_below:
                     under.append(s["score"])
+                continue
+            if not enough_signals(s):
+                few += 1
+                if keep_below:
+                    under.append(s["score"])
+                    few_pairs.append({"a": a["slug"], "b": b["slug"], "score": s["score"], "signals": signals(s)})
                 continue
             if correlation_skip_key(a["slug"], b["slug"]) in data["dismissed"]:
                 answered += 1
@@ -461,7 +483,9 @@ def propose_pairs(data, threshold=SCORE_THRESHOLD, keep_below=False):
     out.sort(key=lambda p: (-p["score"], p["a"], p["b"]))
     counts = {"cards_considered": len(feats), "with_embedding": sum(1 for f in feats.values() if f["vec"] is not None),
               "pairs_scored": scored, "excluded": dict(excluded), "answered_not_related": answered,
-              "below_threshold": below, "proposed": len(out), "threshold": threshold}
+              "below_threshold": below, "too_few_signals": few, "min_signals": MIN_SIGNALS,
+              "text_required": TEXT_REQUIRED, "proposed": len(out), "threshold": threshold}
     if keep_below:
         counts["below_scores"] = under
+        counts["too_few_signal_pairs"] = few_pairs
     return out, counts

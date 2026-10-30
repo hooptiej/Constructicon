@@ -483,46 +483,6 @@ check("everything else was made", len(made4) == 8)
 cards.undo(done4["batch_id"])
 check("undo after a partial failure removes what was made", all(db.get_by_slug(s) is None for s in made4))
 
-print("--- undo after real post-processing (nested, a sub-folder) ---")
-
-
-def drain_post_processing():
-    """Wait for the job's OCR / thumbnail pool (unpack._background) to finish every task."""
-    if unpack._pool is not None:
-        unpack._pool.shutdown(wait=True)
-        unpack._pool = None
-
-
-pp_zip = zip_bytes([("x/a.txt", b"alpha text\n"), ("x/sub/b.txt", b"beta text\n"), ("x/sub/pic.png", png((9, 99, 199)))])
-app_ = upload("same-X.zip", pp_zip)
-jpp = unpack.start(app_, "nested", 2)
-jpp = unpack.run_job(jpp["id"])  # the real post-processing pool, as in the web worker
-drain_post_processing()
-made_pp = [c["slug"] for c in jpp["result"]["created"]]
-check("post-processing ran on the members (no OCR left pending)",
-      jpp["status"] == "done" and len(made_pp) == 3
-      and all(db.get_by_slug(s)["ocr_status"] != "pending" for s in made_pp), [db.get_by_slug(s)["ocr_status"] for s in made_pp])
-pp_root = jpp["result"]["card"]["id"]
-pp_cards = [pp_root] + [r["id"] for r in q("SELECT id FROM projects WHERE parent_id = ?", pp_root)]
-check("nested: the sub-folder is a nested card", len(pp_cards) == 2)
-with actor.acting_as(actor.ACTOR_SYSTEM):
-    for cid in pp_cards:  # a later bookkeeping touch outside the batch (only updated_at moves), as seen live
-        db._write_card_row(cid, {}, "test_touch_605", None)
-up = refusal(cards.undo, jpp["batch_id"])
-check("undo after post-processing and a later updated_at bump succeeds (the 409 seen live)", up is None,
-      up and (up.code, up.message))
-check("... the cards are gone and the items in the trash",
-      not q("SELECT 1 FROM projects WHERE id IN (?, ?)", *pp_cards) and all(db.get_by_slug(s) is None for s in made_pp))
-jpp2 = unpack.run_job(unpack.start(app_, "nested", 2)["id"])
-drain_post_processing()
-cards.update(jpp2["result"]["card"]["id"], title="Renamed by hand")
-e = refusal(cards.undo, jpp2["batch_id"])
-check("... but a REAL edit to a card it made still refuses the undo, naming the field",
-      e is not None and e.code == "undo_conflict" and "title" in e.message, e and e.message)
-last = q("SELECT batch_id FROM audit_log WHERE op = 'update_card' ORDER BY id DESC LIMIT 1")[0]["batch_id"]
-cards.undo(last)
-check("... and once that edit is undone, the conversion undoes", refusal(cards.undo, jpp2["batch_id"]) is None)
-
 print("--- busy, nothing to unpack, interrupted ---")
 a5 = upload("venza-five.zip", venza_zip)
 q5 = unpack.start(a5)

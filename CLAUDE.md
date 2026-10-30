@@ -1573,12 +1573,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     inverts the images, then `items.undo_creations` sends each created item to the trash under the undo's
     batch (so undoing the undo restores them); an item deleted since is listed (`created_items_already_gone`),
     never an error. `items.CREATION_OPS` are the only rows undo accepts without images. Linked items and the
-    archive are just taken off the card. **Undo is lenient on bookkeeping for rows it removes** (live bug on
-    constructicon-test, 2026-10-30: a nested conversion's undo was refused 409 because a card it made had a
-    later `updated_at` than its `create_writeup` image): `cards.undo` passes `db.BOOKKEEPING_COLUMNS`
-    (`updated_at`) as `invert_image(lenient=...)` for every row whose CREATION is among the rows being undone,
-    for ANY op (the row is going away, so a bumped timestamp can't be lost work). A real field change on such a
-    row (a hand rename) still refuses with `undo_conflict` naming the field.
+    archive are just taken off the card.
   - **Background job (#549: web runs it, the MCP only queues).** Table `unpack_jobs(id, archive_slug,
     batch_id, actor, shape, depth, channel, via_token_id, status queued|running|done|partial|failed, progress JSON, result JSON,
     error, created_at, started_at, finished_at)`, private writers in `core/db.py` (`_insert_unpack_job`,

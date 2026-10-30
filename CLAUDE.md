@@ -1575,13 +1575,16 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     never an error. `items.CREATION_OPS` are the only rows undo accepts without images. Linked items and the
     archive are just taken off the card.
   - **Background job (#549: web runs it, the MCP only queues).** Table `unpack_jobs(id, archive_slug,
-    batch_id, actor, shape, depth, status queued|running|done|partial|failed, progress JSON, result JSON,
+    batch_id, actor, shape, depth, channel, via_token_id, status queued|running|done|partial|failed, progress JSON, result JSON,
     error, created_at, started_at, finished_at)`, private writers in `core/db.py` (`_insert_unpack_job`,
     `_update_unpack_job`, `_claim_unpack_job`), reads `get_unpack_job` / `list_unpack_jobs`; cleared by
     delete-all, not imaged. `start()` queues (409 `unpack_busy` while that archive has one queued / running)
     and wakes the worker; web's `unpack.start_worker()` (startup, one thread, one job at a time, polls every
     5 s too, so the MCP's queued jobs run) calls `run_job`, which runs AS the job's actor (change log and
-    policy are theirs), writes progress ({phase reading|planning|cards|members|finishing, done, total,
+    policy are theirs) and replays how they arrived (`start` stores `actor.current_channel()` and
+    `token_id_for(actor)`; `run_job` wraps the job in `acting_via(channel, token id)`), so members a personal
+    MCP key unpacked say "Arrived via the MCP" and "<user>'s <key name>" (#560 / #778; install-token and web
+    jobs as before), writes progress ({phase reading|planning|cards|members|finishing, done, total,
     current, message}, at most every 0.5 s), ingests member by member (post-insert OCR / thumbnails on a
     two-thread pool, not one thread per member), catches each member's failure (`failed: [{path, reason}]`),
     stops after 25 failures in a row, and ends `done`, `partial` (the message names what failed and says Undo

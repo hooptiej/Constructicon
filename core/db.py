@@ -288,7 +288,8 @@ CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id);
 -- #605 "Unpack the Crate": one archive -> card conversion, run in the background by the web
 -- process (#549: the MCP only queues one). core/unpack.py owns every write. status: queued |
 -- running | done | partial (finished, some members failed) | failed (stopped; see `error`).
--- `progress` / `result` are JSON. Not imaged: the conversion's own rows are in the change log
+-- `progress` / `result` are JSON. `channel` / `via_token_id`: how the starter reached the app and their
+-- personal MCP key (#560 / #778), replayed when the worker runs it, so members get the right credit. Not imaged: the conversion's own rows are in the change log
 -- under `batch_id`, which is what undo reverses.
 CREATE TABLE IF NOT EXISTS unpack_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -297,6 +298,8 @@ CREATE TABLE IF NOT EXISTS unpack_jobs (
     actor TEXT NOT NULL,
     shape TEXT NOT NULL,
     depth INTEGER NOT NULL DEFAULT 0,
+    channel TEXT,
+    via_token_id INTEGER,
     status TEXT NOT NULL,
     progress TEXT NOT NULL DEFAULT '{}',
     result TEXT NOT NULL DEFAULT '{}',
@@ -1227,6 +1230,12 @@ def init_db(migrate=True):
             _add_column(conn, "hobby_settings", "created_via_token_id", "INTEGER")
         if "created_via_token_id" not in existing_blog_entry_columns:
             _add_column(conn, "blog_entries", "created_via_token_id", "INTEGER")
+        # #605: an unpack job replays its starter's channel and personal MCP key in the web worker
+        # (an install that ran an earlier build of the branch has the table without them).
+        existing_unpack_columns = {row["name"] for row in conn.execute("PRAGMA table_info(unpack_jobs)")}
+        for column, ddl_type in (("channel", "TEXT"), ("via_token_id", "INTEGER")):
+            if existing_unpack_columns and column not in existing_unpack_columns:
+                _add_column(conn, "unpack_jobs", column, ddl_type)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_capture_events_owner ON capture_events(uploaded_by_user_id)")
         # #604 step 3: a PRIVATE card or hobby (0 = open, the default). Who else may see it is
         # share_members; core/policy.py decides, core/sharing.py writes.
@@ -6660,12 +6669,13 @@ def _unpack_job_dict(r):
     return d
 
 
-def _insert_unpack_job(archive_slug, batch_id, actor, shape, depth):
+def _insert_unpack_job(archive_slug, batch_id, actor, shape, depth, channel=None, via_token_id=None):
     conn = get_conn()
     try:
         cur = conn.execute(
-            "INSERT INTO unpack_jobs (archive_slug, batch_id, actor, shape, depth, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 'queued', ?)", (archive_slug, batch_id, actor, shape, int(depth or 0), time.time()))
+            "INSERT INTO unpack_jobs (archive_slug, batch_id, actor, shape, depth, channel, via_token_id, status, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+            (archive_slug, batch_id, actor, shape, int(depth or 0), channel, via_token_id, time.time()))
         conn.commit()
         return cur.lastrowid
     finally:

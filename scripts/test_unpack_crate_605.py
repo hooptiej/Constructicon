@@ -557,6 +557,19 @@ check("the page's poll answers the finished job (a viewer may read it)",
 check("the change log names the editor", all(r["actor"] == "user:up_editor"
                                               for r in q("SELECT actor FROM audit_log WHERE batch_id = ?", wj["batch_id"])))
 check("an unknown job is 404", C["up_viewer"].get("/api/unpack/jobs/999999").status_code == 404)
+ED_ID = db.get_user(username="up_editor")["id"]
+
+
+def member_rows(job):
+    return [db.get_by_slug(c["slug"]) for c in unpack.job_status(job["id"])["result"]["created"]]
+
+
+wm = member_rows(wj)
+check("starter 1, the web: members arrived via the web, uploaded by the editor, no key credit",
+      wm and all(m["channel"] == "web" and m["uploaded_by_user_id"] == ED_ID and m.get("uploaded_via_token_id") is None
+                 for m in wm), [(m["channel"], m["uploaded_by_user_id"], m.get("uploaded_via_token_id")) for m in wm])
+check("... and the web job stored channel web, no key", (db.get_unpack_job(wj["id"])["channel"],
+                                                           db.get_unpack_job(wj["id"])["via_token_id"]) == ("web", None))
 ru = C["up_editor"].post(f"/api/changes/{wj['batch_id']}/undo", headers=H["up_editor"])
 check("the editor undoes it over the web", ru.status_code == 200, ru.text[:200])
 
@@ -572,6 +585,41 @@ unpack.run_job(mj, run_background=NOOP)
 r = mcp.constructicon_run_type_action(slug=am, action="unpack", params={"mode": "status", "job": mj})
 check("MCP status reports the result", r.get("ok") and r["job"]["status"] == "done" and r["job"]["result"]["counts"]["created"] == 2,
       str(r)[:300])
+mm = member_rows(r["job"])
+check("starter 2, the install token over MCP: members arrived via the MCP, admin-owned, no key credit",
+      mm and all(m["channel"] == "mcp" and m["uploaded_by_user_id"] is None and m.get("uploaded_via_token_id") is None
+                 for m in mm), [(m["channel"], m["uploaded_by_user_id"], m.get("uploaded_via_token_id")) for m in mm])
+from core import mcp_tokens  # noqa: E402
+from mcp_server import auth as mcp_auth  # noqa: E402
+with actor.acting_as("user:up_editor"):
+    key = mcp_tokens.create("windows claude")
+ak = upload("key-crate.zip", zip_bytes([("k/one.txt", b"key one"), ("k/two.txt", b"key two")]))
+tok = mcp_auth.IDENTITY.set({"actor": "user:up_editor", "user_id": ED_ID, "username": "up_editor",
+                             "token_id": key["id"], "token_name": "windows claude"})
+try:
+    rk = mcp.constructicon_run_type_action(slug=ak, action="unpack", params={"mode": "start"})
+finally:
+    mcp_auth.IDENTITY.reset(tok)
+check("starter 3, a personal MCP key: the job is queued as that user", rk.get("ok") and rk["job"]["status"] == "queued", str(rk)[:300])
+kj = db.get_unpack_job(rk["job"]["id"])
+check("... it stores channel mcp and the key's id", (kj["actor"], kj["channel"], kj["via_token_id"])
+      == ("user:up_editor", "mcp", key["id"]), (kj["actor"], kj["channel"], kj["via_token_id"]))
+unpack.run_job(kj["id"], run_background=NOOP)  # the web worker: no MCP identity in this context
+km = member_rows(kj)
+check("... the worker replays it: members arrived via the MCP, uploaded by the editor, credited to the key",
+      len(km) == 2 and all(m["channel"] == "mcp" and m["uploaded_by_user_id"] == ED_ID
+                           and m.get("uploaded_via_token_id") == key["id"] for m in km),
+      [(m["channel"], m["uploaded_by_user_id"], m.get("uploaded_via_token_id")) for m in km])
+credit = mcp_tokens.credit(ED_ID, km[0]["uploaded_via_token_id"])
+check("... shown as \"<user>'s <key name>\"", credit and credit["text"].endswith("windows claude") and not credit["revoked"], credit)
+kcard = db.get_project(unpack.job_status(kj["id"])["result"]["card"]["id"])
+check("... the card it made is credited to the key too", kcard.get("created_via_token_id") == key["id"]
+      and kcard.get("created_by_user_id") == ED_ID, (kcard.get("created_by_user_id"), kcard.get("created_via_token_id")))
+check("... and so is every change-log row of the batch",
+      all(r["via_token_id"] == key["id"] for r in q("SELECT via_token_id FROM audit_log WHERE batch_id = ?", kj["batch_id"])))
+check("the replay doesn't leak: afterwards this context has no key and its own channel",
+      actor.token_id_for() is None and actor.current_channel() == actor.channel_for_actor(actor.current_actor()))
+cards.undo(kj["batch_id"])
 r = mcp.constructicon_run_type_action(slug=am, action="unpack", params={"mode": "explode"})
 check("MCP: an unknown mode is a clear refusal", r.get("ok") is False and "preview, start or status" in r["error"]["message"], str(r)[:200])
 mb = unpack.job_status(mj)["batch_id"]

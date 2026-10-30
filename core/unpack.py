@@ -44,7 +44,8 @@ restores them). Linked items and the original archive are only taken off the car
 
 **Background job with progress** (#549: the web process runs it; the MCP only queues). `start()`
 inserts an `unpack_jobs` row (queued) and wakes the web worker (`start_worker()`, one thread, one job
-at a time); `run_job()` reads, creates the cards, then ingests member by member, writing progress
+at a time); `run_job()` (as the starter, with their channel and personal MCP key replayed: `acting_via`,
+#560 / #778) reads, creates the cards, then ingests member by member, writing progress
 ({phase, done, total, current}) as it goes. Each member's failure is caught, named and kept
 (`failed: [{path, reason}]`); the job ends `done`, `partial` (some failed: the message says what was
 and wasn't done, and undo still covers what was) or `failed` (nothing made, or stopped: `error` says
@@ -419,7 +420,11 @@ def start(slug, shape=DEFAULT_SHAPE, depth=None, *, actor=None):
     if busy:
         raise Conflict(f"{item_name(row)} is already being unpacked (job {busy[0]['id']}, {busy[0]['status']}); wait "
                        "for it to finish.", code="unpack_busy", details={"job": busy[0]["id"]})
-    job_id = db._insert_unpack_job(row["slug"], changes.new_batch_id(), actor_ctx.resolve(actor), shape, depth)
+    who = actor_ctx.resolve(actor)
+    # #560 / #778: how the starter reached the app and their personal MCP key, replayed by run_job, so
+    # the members say "Arrived via the MCP" and "<user>'s <key name>" when a personal key started it.
+    job_id = db._insert_unpack_job(row["slug"], changes.new_batch_id(), who, shape, depth,
+                                   channel=actor_ctx.current_channel(), via_token_id=actor_ctx.token_id_for(who))
     wake_worker()
     return _job_public(db.get_unpack_job(job_id))
 
@@ -625,7 +630,9 @@ def run_job(job_id, *, run_background=None):
     if not db._claim_unpack_job(job_id):
         return _job_public(db.get_unpack_job(job_id))
     job = db.get_unpack_job(job_id)
-    with actor_ctx.acting_as(job["actor"]):
+    # Runs AS the starter, arriving the way they did (#560 / #778): acting_via ties the key to that actor.
+    with actor_ctx.acting_as(job["actor"]), \
+            actor_ctx.acting_via(job.get("channel") or actor_ctx.channel_for_actor(job["actor"]), job.get("via_token_id")):
         try:
             status, result = _run(job, run_background or _background)
             db._update_unpack_job(job_id, status=status, result=result, finished_at=time.time())

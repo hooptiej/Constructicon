@@ -115,3 +115,11 @@ youtube-transcript-api==1.2.4
 requests==2.34.2
 urllib3==2.8.0
 charset-normalizer==3.5.2
+
+# #742: STL thumbnails through headless OpenGL (core/object_types/stl.py). pyrender itself is pinned in
+# the Dockerfile (installed --no-deps: its declared PyOpenGL==3.1.0 and pyglet are not wanted, see there).
+# PyOpenGL 3.1.10 is the current release (works on Python 3.14 and numpy 2; EGL platform); trimesh needs
+# only numpy (+ scipy / networkx for smooth shading, already pinned); freetype-py ships its own libfreetype.
+PyOpenGL==3.1.10
+trimesh==4.12.2
+freetype-py==2.5.1

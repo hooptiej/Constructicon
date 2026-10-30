@@ -126,6 +126,25 @@
 /* item page: related thumbs only show their remove (x) while the group is being edited */
 .dp-group:not([data-mode="edit"]) .related-remove { display: none; }
 .dp-group .ocr-panel { gap: 8px; }
+/* #751 (owner decision): bigger status lamps on the item page (READ FROM THE FILE: OCR + caption). The
+   8px card-grid dot was easy to miss here. Every state is 14px with a thin ring so even the calm grey
+   ones read as a lamp; red ("failed") is bigger still, with a red halo and three slow pulses, to grab
+   attention. JS sets data-state (object_detail.html). Grid/card lamps (style.css .ocr-lamp) are unchanged. */
+.ocr-panel-header .ocr-lamp {
+  width: 14px; height: 14px;
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 3px var(--border-strong);
+}
+.ocr-panel-header .ocr-lamp[data-state="failed"] {
+  width: 16px; height: 16px;
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 4px rgba(226, 75, 74, 0.55), 0 0 10px 3px rgba(226, 75, 74, 0.45);
+  animation: lamp-alert 1.6s ease-in-out 3;
+}
+@keyframes lamp-alert {
+  50% { box-shadow: 0 0 0 2px var(--card), 0 0 0 5px rgba(226, 75, 74, 0.8), 0 0 16px 6px rgba(226, 75, 74, 0.6); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ocr-panel-header .ocr-lamp[data-state="failed"] { animation: none; }
+}
 .dp-group .related-panel-header { flex-wrap: wrap; }
 .dp-below { display: flex; flex-direction: column; gap: 16px; }
 

@@ -37,6 +37,8 @@ ALLOWED = {
     "pip": "ships in the base image, which the Dockerfile pins by digest",
 }
 
+DOCKERFILE_NO_DEPS = ("pyrender",)  # #742: pinned in the Dockerfile's `pip install --no-deps` line
+
 FAILS = []
 
 
@@ -87,6 +89,14 @@ def pins():
         fail("torch", "no torch==<version> pin found in the Dockerfile")
     else:
         out["torch"] = ("torch", m.group(1), "Dockerfile")
+    # #742: packages the Dockerfile installs on their own with --no-deps (their declared dependencies
+    # conflict with requirements.txt); each must be pinned there.
+    for name in DOCKERFILE_NO_DEPS:
+        m = re.search(r"--no-deps\s+" + re.escape(name) + r"==([^\s]+)", docker)
+        if not m:
+            fail(name, f"no `pip install --no-deps {name}==<version>` pin found in the Dockerfile")
+        else:
+            out[norm(name)] = (name, m.group(1), "Dockerfile")
     return out
 
 

@@ -8,3 +8,6 @@
 *.doc binary
 *.ppt binary
 *.xls binary
+
+# #742: vendored three.js files stay byte-identical to upstream (scripts/vendor_three.sh checks sha256).
+web/static/vendor/three/* -text

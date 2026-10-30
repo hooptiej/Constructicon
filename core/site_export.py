@@ -109,8 +109,8 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
 
     # Gather projects
     if project_slugs is None:
-        # Include every in-progress card (#545: by the live stage alone; the frozen
-        # projects.status column is not read any more).
+        # Include every in-progress card (#545: by the live stage alone; the v1
+        # projects.status column is gone since #760).
         all_projects = [p for p in db.list_projects() if card_rules.export_included_by_default(p)]
         projects = {p["id"]: p for p in all_projects}
     else:

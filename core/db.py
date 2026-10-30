@@ -90,7 +90,6 @@ CREATE TABLE IF NOT EXISTS projects (
     description TEXT NOT NULL DEFAULT '',
     cover_slug TEXT,
     cover_project_id INTEGER REFERENCES projects(id),
-    status TEXT NOT NULL DEFAULT 'active',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     tag_id INTEGER REFERENCES blog_tags(id),
@@ -1093,8 +1092,9 @@ def init_db(migrate=True):
         # --- V2 cards, piece 1 (docs/design/v2-cards.md 3.1, 3.2, 3.13) ---
         # kind: what sort of card this is (project/thing/action/family/collection/event).
         # No CHECK -- core/card_rules.validate_kind is the gate (same stance as media_type).
-        # activity/stage/stop_reason: the live status. Legacy projects.status is
-        # FROZEN and retired (#545): nothing reads it; only the v1 migration did.
+        # activity/stage/stop_reason: the live (and only) status. The legacy v1
+        # projects.status column was retired in #545 and dropped in #760
+        # (_drop_project_status_760, web boot).
         for column, ddl_type in (
             ("kind", "TEXT NOT NULL DEFAULT 'project'"),
             ("activity", "TEXT"),
@@ -1199,6 +1199,7 @@ def init_db(migrate=True):
     if migrate:
         run_pending_migrations()
         _run_drop_dead_columns_704()  # #704: web only, every boot; never refuses to start
+        _run_drop_project_status_760()  # #760: the same, for the retired projects.status
     else:
         pending = pending_migrations()
         if pending:
@@ -1332,13 +1333,6 @@ def _mig_vocab_seed_556():
     # INSERT OR IGNORE only: the old db.BRAND_ROLES / WALLPAPER_TAG_NAMES constants become the lists.
     from . import vocab
     vocab.ensure_seed(get_conn())
-
-
-def _mig_v2c(n):
-    def run():
-        from . import card_migration
-        getattr(card_migration, f"run_v2c_{n}")()
-    return run
 
 
 def _mig_install_config_seed_562():
@@ -1769,11 +1763,10 @@ def _mig_ownership_backfill_604():
     print(f"schema_migrations: ownership_backfill_604 counts {counts}", flush=True)
 
 
-# Order matters (v2c_1 first: later steps read the kind/stage it assigns).
-# #562: v2c_3 (the AlienWhoop family question) and v2c_4 (the AW canopy question) were about the
-# owner's own cards; they moved to scripts/archive/ (already recorded in schema_migrations on the
-# owner's installs, so dropping them from this list changes nothing there; fresh installs never
-# run them). v2c_1/2/5 are generic (legacy status, hobby vocabulary, reference-only cards).
+# #760: the one-time v1 -> v2 card migrations (v2c_1_kind_status, v2c_2_hobbies,
+# v2c_5_referenced_provenance; core/card_migration.py) were removed: both installs are V2 and every
+# new card is created with a stage, so they had nothing left to do. Their schema_migrations rows stay
+# on existing DBs (harmless); a fresh install never runs them. (v2c_3 / v2c_4 went in #562.)
 def _mig_date_guess_backfill_725():
     # #725: undated items (no real date: the upload time and a post-install file mtime don't count)
     # get the high-confidence date guesses (core/date_guess.py: a date in the file name, the file's
@@ -1864,9 +1857,6 @@ MIGRATIONS = [
     ("curator_snooze_519", _mig_curator_snooze_519),
     ("audit_scrub_settings_559", _mig_audit_scrub_559),
     ("provenance_options_seed_529", _mig_provenance_options_seed_529),
-    ("v2c_1_kind_status", _mig_v2c(1)),
-    ("v2c_2_hobbies", _mig_v2c(2)),
-    ("v2c_5_referenced_provenance", _mig_v2c(5)),
     ("install_config_seed_562", _mig_install_config_seed_562),
     ("hobby_physical_piece_562", _mig_hobby_physical_piece_562),
     ("empty_file_ocr_done_587", _mig_empty_file_ocr_done_587),
@@ -2071,6 +2061,69 @@ def _run_drop_dead_columns_704():
         import traceback
         print(f"ERROR {MIGRATION_704}: the step failed and was rolled back (nothing dropped): {e!r}. "
               "The app carries on with the old columns in place; they are no longer read.", flush=True)
+        traceback.print_exc()
+        return None
+
+
+# --- #760: drop the retired projects.status column ("Status quo vadis") -------------------------
+# #545 made the stage the only status; after it nothing read projects.status (the frozen v1 word,
+# which disagreed with the live stage on many cards). Owner decision on #760: drop it. Unlike #704
+# there is no "real data" safeguard: the word is retired by decision, not merely unused, so every
+# value counts as dead. The same shape as #704 otherwise: runs at every web boot (init_db,
+# migrate=True; never the MCP), counts first, and when it drops writes ONE change-log row (op
+# `migration_drop_project_status_760`, actor migration, the counts per word in `details`). Once the
+# column is gone it only reads the schema. The pre-deploy ZFS snapshot (scripts/deploy.sh) is the
+# backup. Row images logged before the drop still name `status`: db.invert_image restores only the
+# columns the table has now (#704), so those undos keep working.
+MIGRATION_760 = "drop_project_status_760"
+
+
+def _drop_project_status_760():
+    """Returns {"dropped": bool, "rows": n, "by_word": {word: n}, "first_run": bool}."""
+    from . import changes
+    with transaction() as tx:
+        conn = tx.conn
+        first_run = conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (MIGRATION_760,)).fetchone() is None
+        present = "status" in {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+        rows, by_word = 0, {}
+        if present:
+            by_word = {(r["status"] if r["status"] is not None else "(null)"): r["n"] for r in conn.execute(
+                "SELECT status, COUNT(*) AS n FROM projects GROUP BY status ORDER BY status")}
+            rows = sum(by_word.values())
+            # Same care as _drop_capture_columns: no index may cover the column, and the search /
+            # chip views and triggers are dropped and re-created around the ALTER so whatever SQLite
+            # re-checks stays valid (none of them reads projects.status).
+            for idx in [r["name"] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'projects' AND sql IS NOT NULL")]:
+                if "status" in {r["name"] for r in conn.execute(f"PRAGMA index_info({idx})")}:
+                    conn.execute(f"DROP INDEX IF EXISTS {idx}")
+            for name in list(_search_sync_triggers()) + list(_chip_triggers()):
+                conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+            conn.execute("DROP VIEW IF EXISTS item_search_src")
+            conn.execute("ALTER TABLE projects DROP COLUMN status")
+            _ensure_search_schema(conn)
+            _ensure_chip_triggers(conn)
+            insert_change_log(conn, "migration_drop_project_status_760", changes.ACTOR_MIGRATION, [],
+                              batch_id=changes.new_batch_id(),
+                              details={"dropped": ["projects.status"], "rows": rows, "by_word": by_word})
+        if first_run:
+            conn.execute("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)", (MIGRATION_760, time.time()))
+    if present:
+        print(f"schema_migrations: {MIGRATION_760} dropped projects.status ({rows} card(s) held a frozen v1 word: "
+              f"{by_word}; nothing read it since #545)", flush=True)
+    return {"dropped": present, "rows": rows, "by_word": by_word, "first_run": first_run}
+
+
+def _run_drop_project_status_760():
+    """init_db's call: the app must start even if the #760 step fails. A failure rolls the whole step
+    back (one transaction: nothing is dropped) and is logged loudly with its traceback."""
+    try:
+        return _drop_project_status_760()
+    except Exception as e:
+        import traceback
+        print(f"ERROR {MIGRATION_760}: the step failed and was rolled back (projects.status NOT dropped): {e!r}. "
+              "The app carries on with the old column in place; nothing reads it, and new cards take its "
+              "default. The step retries at the next web boot.", flush=True)
         traceback.print_exc()
         return None
 
@@ -3468,21 +3521,6 @@ def list_linked_projects(slug):
         conn.close()
 
 
-def list_related_projects(slug):
-    """Projects peer-linked ('related', symmetric) to the given project slug. Typed
-    links are NOT included (use core.cards.list_links for those)."""
-    conn = get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT p.* FROM project_relations r JOIN projects p ON p.slug = r.slug_b "
-            "WHERE r.slug_a = ? AND r.type = 'related' ORDER BY p.updated_at DESC",
-            (slug,),
-        ).fetchall()
-        return [_card_row(r) for r in rows]
-    finally:
-        conn.close()
-
-
 def list_unaccepted_captions(limit=500, offset=0):
     """Rows with an auto_caption suggestion that hasn't been accepted into
     content_description and hasn't been skipped — the confirm_caption bulk
@@ -3817,7 +3855,7 @@ def list_posts_for_tag(tag_id, include_descendants=True, limit=50, offset=0):
 # (title, description, optional cover image) and a hand-ordered set of
 # member posts, rather than being derived from tag membership.
 
-def _create_project(title, description="", cover_slug=None, status="active", tag_id=None, parent_id=None, with_writeup=True,
+def _create_project(title, description="", cover_slug=None, tag_id=None, parent_id=None, with_writeup=True,
                    kind=None, stage=None, stop_reason=None, actor=None, batch_id=None):
     """Auto-generates a unique slug from title, same dedup-with-numeric-
     suffix pattern as get_or_create_tag.
@@ -3833,8 +3871,8 @@ def _create_project(title, description="", cover_slug=None, status="active", tag
 
     kind/stage/stop_reason (V2 cards): default to a Project that is In progress
     (matching v1's default status='active'); validated by core/card_rules and a
-    rule violation raises card_rules.CardError. The legacy `status` column keeps
-    its default and is otherwise frozen; nothing reads it (#545)."""
+    rule violation raises card_rules.CardError. There is no v1 `status` any more
+    (retired in #545, the column dropped in #760)."""
     from . import card_rules, changes
     batch_id = batch_id or changes.new_batch_id()
     kind = card_rules.validate_kind(kind or card_rules.DEFAULT_KIND)
@@ -3865,10 +3903,10 @@ def _create_project(title, description="", cover_slug=None, status="active", tag
         from . import actor as actor_ctx, users  # lazy: users imports this module
         created_by = users.user_id_for_actor(actor_ctx.resolve(actor))  # #604: NULL = admin-owned
         cur = conn.execute(
-            "INSERT INTO projects (slug, title, description, cover_slug, status, created_at, updated_at, tag_id, parent_id, "
+            "INSERT INTO projects (slug, title, description, cover_slug, created_at, updated_at, tag_id, parent_id, "
             "kind, activity, stage, stop_reason, created_by_user_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (slug, title, description, cover_slug, status, now, now, tag_id, parent_id,
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (slug, title, description, cover_slug, now, now, tag_id, parent_id,
              kind, status_triple["activity"], status_triple["stage"], status_triple["stop_reason"], created_by),
         )
         project_id = cur.lastrowid
@@ -3878,7 +3916,6 @@ def _create_project(title, description="", cover_slug=None, status="active", tag
             "title": title,
             "description": description,
             "cover_slug": cover_slug,
-            "status": status,
             "created_at": now,
             "updated_at": now,
             "tag_id": tag_id,
@@ -4051,7 +4088,7 @@ def get_project(id_or_slug):
 
 def list_projects(kind=None, activity=None, stage=None):
     """All projects, most-recently-updated first, optionally filtered on the live V2
-    columns. (#545: no filter on the frozen, retired `status` column.)"""
+    columns. (The v1 `status` column is gone, #545 / #760.)"""
     conn = get_conn()
     try:
         clauses, args = [], []

@@ -154,7 +154,6 @@ CARD_DOORS = {
     ("web/routes/cards.py", "api_card"): "GET /api/cards/{slug}",
     ("web/routes/cards.py", "api_projects"): "GET /api/projects",
     ("web/routes/cards.py", "api_create_project"): "POST /api/projects (its parent)",
-    ("web/routes/cards.py", "_related_projects_public"): "the Related-projects widget",
     ("web/routes/hobbies.py", "api_list_hobbies"): "GET /api/hobbies",
     ("web/routes/hobbies.py", "api_hobbies_html"): "GET /api/hobbies/html",
     ("web/routes/hobbies.py", "api_get_hobby"): "GET /api/hobby/{id}",

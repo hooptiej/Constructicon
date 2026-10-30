@@ -75,9 +75,9 @@ check("fresh: install_config is empty", q("SELECT COUNT(*) FROM install_config")
 check("fresh: hobby_settings is empty", q("SELECT COUNT(*) FROM hobby_settings")[0][0] == 0)
 names = [n for n, _fn in db.MIGRATIONS]
 check("fresh: no v2c_3 / v2c_4 migration exists", not any(n.startswith(("v2c_3", "v2c_4")) for n in names), names)
-check("fresh: card_migration has no AlienWhoop / canopy code",
-      not hasattr(__import__("core.card_migration", fromlist=["x"]), "run_v2c_3")
-      and not hasattr(__import__("core.card_migration", fromlist=["x"]), "run_v2c_4"))
+check("fresh: no v1 -> v2 card migration at all (#760: core/card_migration.py is gone)",
+      not any(n.startswith("v2c") for n in names)
+      and __import__("importlib.util", fromlist=["x"]).find_spec("core.card_migration") is None, names)
 check("fresh: the #562 migrations ran (and seeded nothing)",
       {"install_config_seed_562", "hobby_physical_piece_562"} <= {r[0] for r in q("SELECT name FROM schema_migrations")})
 check("fresh: no IT-client table at all (#704)", not q("SELECT name FROM sqlite_master WHERE name = 'clients'"))

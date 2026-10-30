@@ -23,7 +23,7 @@ except Exception:  # no libcairo on this machine: core imports every object type
     import types
     sys.modules["cairosvg"] = types.ModuleType("cairosvg")
 
-from core import card_migration, captions, cards, db, decisions, revisions, storage  # noqa: E402
+from core import captions, cards, db, decisions, revisions, storage  # noqa: E402
 _testenv.assert_isolated()
 
 FAILS = []
@@ -201,52 +201,9 @@ d = decision_for("chain_c")
 check("#586: a candidate that already has a predecessor gets no 'replaces this' answer",
       "reverse:chain_b" not in keys(d) and "chain_b" in keys(d), str(keys(d)))
 
-# ============================ #584 kind suggestion ============================
-BASE = {"title": "screenshot-correlator", "description": "", "id": 1, "slug": "x"}
-sk = card_migration.suggest_kind
-kind, why, _ = sk(BASE, {"type_counts": {"code": 55, "markdown": 4, "data": 2, "image": 7}})
-check("#584 scripts-heavy card -> Project, reason shows the mix", kind == "project" and "61 of 68 files are" in why
-      and "source code" in why, f"{kind}: {why}")
-kind, why, _ = sk({**BASE, "title": "Walnut shelf"}, {"type_counts": {"code": 6, "image": 2}})
-check("#584 a plain title no longer implies Thing", kind == "project", why)
-kind, why, _ = sk({**BASE, "title": "Tool kit app"}, {"type_counts": {"image": 12, "stl": 3}, "physical_piece_files": 4})
-check("#584 photos + STLs + physical-piece fields -> Thing (even with a software-ish title)", kind == "thing"
-      and "physical-piece" in why, f"{kind}: {why}")
-kind, why, _ = sk(BASE, {"type_counts": {"image": 9}})
-check("#584 photos only -> Thing, reason says so", kind == "thing" and "9 of 9 files are" in why, f"{kind}: {why}")
-kind, why, _ = sk(BASE, {"type_counts": {}, "whereabouts": "on_shelf"})
-check("#584 no files but a whereabouts -> Thing", kind == "thing" and "whereabouts" in why, f"{kind}: {why}")
-kind, why, _ = sk(BASE, {"type_counts": {}})
-check("#584 no evidence -> Project (the less-claiming answer)", kind == "project" and "less-claiming" in why, f"{kind}: {why}")
-kind, why, _ = sk(BASE, {"type_counts": {"image": 5, "code": 5}})
-check("#584 an even split with no physical signal -> Project", kind == "project", why)
-kind, why, _ = sk(BASE, {"type_counts": {"image": 5, "code": 5}, "physical_piece_files": 1})
-check("#584 an even split WITH a physical signal -> Thing", kind == "thing", why)
-kind, why, _ = sk(BASE, {"type_counts": {"image": 65, "pdf": 1}})
-check("#584 mostly photos with one document -> Thing, reason shows the mix", kind == "thing" and "65 of 66" in why, why)
-kind, why, _ = sk(BASE, {})
-check("#584 a caller with no facts at all -> Project", kind == "project")
-
-# the real planner uses the evidence and does not touch an answered decision
+# #584's kind suggestion (card_migration.suggest_kind / build_plan) went with the one-time v1 -> v2
+# card migration in #760; the queue rule it relied on stays checked here.
 a = db._create_project("Scripts Card")["id"]
-b = db._create_project("Photo Card")["id"]
-for i in range(4):
-    mk(f"sc{i}", f"tool{i}.py", media_type="code", data=b"print(1)")
-    db._add_item_to_project(a, f"sc{i}")
-for i in range(3):
-    mk(f"ph{i}", f"photo{i}.jpg", media_type="image", data=b"jpg")
-    db._add_item_to_project(b, f"ph{i}")
-conn = db.get_conn()
-conn.execute("UPDATE projects SET stage = NULL, kind = 'project', status = 'complete' WHERE id IN (?, ?)", (a, b))
-conn.commit()
-conn.close()
-plan = {e["card"]["id"]: e for e in card_migration.build_plan()}
-kinds = {cid: [p for k, p in e["decisions"] if k == "card_kind"] for cid, e in plan.items()}
-sa = kinds.get(a, [{}])[0].get("suggested") if kinds.get(a) else None
-sb = kinds.get(b, [{}])[0].get("suggested") if kinds.get(b) else None
-reason_a = kinds[a][0]["suggested_reason"] if kinds.get(a) else ""
-check("#584 planner: scripts card -> project, photo card -> thing", (sa, sb) == ("project", "thing"), f"{sa} {sb} {reason_a}")
-check("#584 planner: reason shows the file mix", "4 of 4 files are source code" in reason_a, reason_a)
 # an already-answered (resolved) decision is never re-asked
 card_a = db.get_project(a)
 did = db.queue_decision_once("card_kind", f"card:{card_a['slug']}", {"suggested": "thing"})

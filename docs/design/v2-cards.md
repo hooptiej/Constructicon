@@ -909,7 +909,7 @@ This document. Acceptance: file at `docs/design/v2-cards.md`; PR closes #482; no
 - **Scope:** `project_relations` rebuild (3.8), `link`/`unlink`/`retype_link`/bulk retype in core + MCP; `related` <->
   typed rules; `list_links` with directions and labels; the `card_built_for` resolution now creates real links
   (completing piece 1's queue); detail-page links row grouped by type with add-link control; computed need
-  `untyped_link`; existing routes `/api/project/{slug}/related(+remove)` keep working (they create/delete `related`).
+  `untyped_link`; existing routes `/api/project/{slug}/related(+remove)` keep working (they create/delete `related`; retired in #556 / #760, 2026-10-29, use `/api/links`).
 - **Files:** `core/db.py`, `core/card_rules.py`, `core/cards.py`, `core/decisions.py`, `web/app.py`,
   `web/templates/project_detail.html`, `mcp_server/server.py`.
 - **Acceptance:** after migration every pre-existing link is `type='related'` in both directions and row count is

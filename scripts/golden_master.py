@@ -291,7 +291,7 @@ def snapshot_urls(v):
         u += [f"/hobby/{h}", f"/api/hobby/{h}", f"/?hobby={h}"]
     for kind, (pid, slug) in v["projects_by_kind"].items():
         u += [f"/project/{slug}", f"/api/cards/{slug}", f"/api/projects/{pid}/explain",
-              f"/api/project/{slug}/links", f"/api/curator/queue?card={slug}",
+              f"/api/curator/queue?card={slug}",
               f"/api/curator/queue/html?card={slug}"]
     for pid, slug in v["projects_most_items"]:
         u += [f"/project/{slug}", f"/project/{slug}?rev=all"]

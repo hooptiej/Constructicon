@@ -25,7 +25,7 @@ import _testenv  # noqa: E402  (scripts/_testenv.py: temp DB + storage + exports
 TMP = _testenv.isolate("bulkdecisions-")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from core import card_migration, cards, db  # noqa: E402
+from core import cards, db  # noqa: E402
 _testenv.assert_isolated()  # now as core actually resolved the paths
 db.init_db()
 
@@ -79,8 +79,8 @@ def family_decision(fam, children, suggest_slugs):
 
 
 def status_decision(c):
-    opts = [{"key": "done", "label": "Done", "patch": [card_migration._set_status_patch("done")]},
-            {"key": "paused", "label": "Paused", "patch": [card_migration._set_status_patch("paused")]}]
+    opts = [{"key": "done", "label": "Done", "patch": [{"op": "set_status", "stage": "done"}]},
+            {"key": "paused", "label": "Paused", "patch": [{"op": "set_status", "stage": "paused"}]}]
     return decide(cards.KIND_CARD_STATUS, c, "stage", "done", opts)
 
 

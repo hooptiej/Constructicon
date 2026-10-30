@@ -225,7 +225,6 @@ pages = {
     "GET /hobbies": client.get("/hobbies"),
     "GET /object/{slug}": client.get("/object/cn-file-1"),
     "GET /api/image/{slug}": client.get("/api/image/cn-file-1"),
-    "GET /api/project/{slug}/links": client.get(f"/api/project/{ROVER['slug']}/links"),
 }
 for name, r in pages.items():
     check(f"web {name}: {r.status_code}, no notes", r.status_code < 400 and not leaks(r.text), r.status_code)

@@ -448,48 +448,11 @@ def api_export_project(project_id: str):
     )
 
 
-def _related_projects_public(slug):
-    """Trim shape for the project-detail Related-projects widget (#408)."""
-    return [
-        {"slug": p["slug"], "title": p["title"], "stage": p.get("stage"),
-         "stage_label": card_rules.stage_label(p.get("stage"))}
-        for p in policy.filter_visible_cards(db.list_related_projects(slug))  # #604 step 3
-    ]
-
-
-@router.post("/api/project/{slug}/related")
-def api_add_project_related(request: Request, slug: str, related_slug: str = Form(...)):
-    """#408: link two projects as peers (bidirectional). Kept for existing callers;
-    since V2 3.8 it creates a `related` link through core.cards.link. Adding a pair
-    that is already related is a no-op; a pair that already has a typed link is
-    refused (409 link_conflict), as is a self-link (422 bad_link)."""
-    if db.get_project(slug) is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    if db.get_project(related_slug) is None:
-        raise HTTPException(status_code=404, detail="related project not found")
-    try:
-        cards.link(slug, related_slug, "related")
-    except card_rules.CardError as e:
-        if not (e.code == "link_conflict" and e.details.get("reason") == "duplicate"):
-            raise
-    return JSONResponse(_related_projects_public(slug))
-
-
-@router.post("/api/project/{slug}/related/remove")
-def api_remove_project_related(request: Request, slug: str, related_slug: str = Form(...)):
-    if db.get_project(slug) is not None and db.get_project(related_slug) is not None:
-        cards.unlink(slug, related_slug, "related")
-    return JSONResponse(_related_projects_public(slug))
-
-
 # --- Typed links (V2 cards 3.8). Rule violations are CardErrors: 422 bad_link,
 # 409 link_conflict, 404 not_found -- the same codes the MCP tools return. ---
-
-@router.get("/api/project/{slug}/links", dependencies=requires(roles.VIEWER))
-def api_project_links(slug: str):
-    """Every link on a card, both directions, with direction + label."""
-    return JSONResponse(cards.list_links(slug))
-
+# #556: the old peer-link routes POST /api/project/{slug}/related (+ /related/remove) and the
+# read GET /api/project/{slug}/links had no caller left (the card page uses /api/links* below
+# and renders its links server-side) and were retired; they 404 now.
 
 @router.post("/api/links")
 def api_link(a: str = Form(...), b: str = Form(...), type: str = Form(...), note: str = Form("")):

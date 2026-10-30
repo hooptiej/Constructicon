@@ -505,7 +505,7 @@ def family_fields(card):
 # --- Typed links (3.8) -------------------------------------------------------------
 # A link row (a, b, type) reads "a <type> b". Directed types are stored once;
 # `related` is symmetric and stored twice ((a,b) and (b,a)), exactly as in v1, so
-# list_related_projects is unchanged. A pair can't be both typed and related.
+# old v1 readers kept working (list_related_projects, removed in #760). A pair can't be both typed and related.
 
 def _logical_links(rows):
     """Collapses stored rows into logical links: [{a, b, type}]. The two rows of a

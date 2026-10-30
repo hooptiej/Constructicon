@@ -7,8 +7,7 @@ One report card (#545): the checks this score shares with the card pips (cover,
 write-up, dates) are NOT defined here. They come from core/card_level.py's shared_checks
 (check_cover / check_writeup / check_dates, kind-aware for families and collections, #765), so the two can never grade the same card differently
 (write-up >= 200 characters, >= 80% of files with a real date). And the card's
-STAGE is the only status it reads: the frozen v1 `projects.status` word is not an
-input any more (STAGE_APPLICABILITY below is keyed on card_rules.STAGES).
+STAGE is the only status it reads (the v1 `projects.status` column is gone, #545 / #760) (STAGE_APPLICABILITY below is keyed on card_rules.STAGES).
 """
 
 import json

@@ -13,8 +13,8 @@ retired (the stage is the only status). Covers:
   2. every card in the fixture: the pips' cover/dates/writeup checks equal the Curator checklist's
      cover_image/content_dates/writeup_body, and the reasons match word for word;
   3. the stage drives the Curator: paused / idea / stopped are silent, in progress excuses the
-     timeline gap and the highlight, done / in use apply everything; the frozen status column is
-     ignored (a card whose old column says 'shelved' is still scored by its stage);
+     timeline gap and the highlight, done / in use apply everything (the old status column is
+     gone since #760);
   4. nudges: the missing_writeup / missing_dates nudge summary is the pips' reason; the stage
      weights the priority (done 3, in progress 1); the stale nudge is for in-progress cards only;
   5. the export's default selection follows the stage only, whatever the old column says;
@@ -182,10 +182,10 @@ with actor.acting_as(actor.ACTOR_UI):
     cards.set_status(card("Done Card")["id"], "in_use")
 check("stage in use: scored like done", not curator.score_project(card("Done Card"))["silent"]
       and curator.score_project(card("Done Card"))["stage_label"] == card_rules.stage_label("in_use"))
-sql("UPDATE projects SET status = 'shelved' WHERE id = ?", good["id"])
 s = curator.score_project(card("Good Card"))
-check("the frozen status column is ignored: 'shelved' in the column, in progress on the card -> scored",
-      not s["silent"] and s["stage"] == "in_progress", s)
+check("a card in progress is scored (#760: the old status column is gone, so only the stage exists)",
+      not s["silent"] and s["stage"] == "in_progress"
+      and "status" not in {r[1] for r in db.get_conn().execute("PRAGMA table_info(projects)")}, s)
 check("the score result carries stage + stage_label and no v1 `status`",
       s["stage_label"] == "In progress" and "status" not in s, sorted(s))
 check("every stage has a Curator rule", set(curator.STAGE_APPLICABILITY) == set(card_rules.STAGES))
@@ -256,10 +256,7 @@ with actor.acting_as(actor.ACTOR_UI):
     cards.link(card("Good Card")["id"], card("Gap Card")["id"], "related")
     h = hobbies.create("Report Cards").data["hobby"]
     hobbies.add_card(h["id"], card("Good Card")["id"])
-r = client.post(f"/api/project/{card('Good Card')['slug']}/related", data={"related_slug": card("Edge Card")["slug"]})
-rel = r.json() if r.status_code == 200 else None
-check("POST related (answers the related list): stage + stage_label, no status",
-      bool(rel) and all("stage" in p and "status" not in p for p in rel), (r.status_code, r.text[:300]))
+# (POST /api/project/{slug}/related was retired in #556; it 404s now.)
 r = client.get(f"/api/hobby/{h['slug']}")
 hp = r.json().get("projects") if r.status_code == 200 else None
 check("GET hobby: its cards carry stage, not status",

@@ -85,7 +85,7 @@ if WRITE_GOLDEN:
 else:
     from mcp_server import server as S  # noqa: E402  (after the DB env is set)
 
-from core import blog, cards, card_migration, hobbies, items, membership, revisions  # noqa: E402
+from core import blog, cards, hobbies, items, membership, revisions  # noqa: E402
 from core import tags as tags_svc  # noqa: E402
 
 # A real 1x1 PNG, so image items have a picture (hobby covers check that).
@@ -138,8 +138,8 @@ def build_fixture():
         entry = blog.create("Post").data["entry"]
         blog.set_projects(entry["id"], [("rover", "the rover")])
         blog.set_items(entry["id"], [("img1", "a photo")])
-        opts = [{"key": "done", "label": "Done", "patch": [card_migration._set_status_patch("done")]},
-                {"key": "paused", "label": "Paused", "patch": [card_migration._set_status_patch("paused")]}]
+        opts = [{"key": "done", "label": "Done", "patch": [{"op": "set_status", "stage": "done"}]},
+                {"key": "paused", "label": "Paused", "patch": [{"op": "set_status", "stage": "paused"}]}]
         db.add_pending_decision(cards.KIND_CARD_STATUS, cards.card_decision_slug("rover"),
                                 {"question": "Still rolling?", "field": "stage", "suggested": "done", "options": opts})
         db.add_pending_decision("retype", "doc3", {"question": "What is it?",

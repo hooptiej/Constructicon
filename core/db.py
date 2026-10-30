@@ -1988,14 +1988,14 @@ def _owner_upload_backfill(conn):
     An item counts when ALL hold: no uploader recorded yet (fill-only), its Source label is exactly the
     owner's manual-upload label (`source_manual_upload()`, e.g. "Hooptie J (me) — manual upload"), it
     arrived through the web (channel 'web', from _mig_capture_channel_560), and its upload request (when
-    the request log has it) was not made with the install token or by another signed-in user. Install
-    token uploads stay admin-owned (owner default: "install-token work stays admin-owned"). Returns
-    (counts, assigned slugs); raises MigrationDeferred when there is something to assign but the owner's
-    account can't be told (owner_account)."""
+    the request log has it) was not made by ANOTHER signed-in user. Uploads made with the install token
+    under that label count too (owner, 2026-10-30: "Give them to me too"; they were the owner's scripts),
+    counted in `of_which_install_token`. Returns (counts, assigned slugs); raises MigrationDeferred when
+    there is something to assign but the owner's account can't be told (owner_account)."""
     label, _owner_name = _owner_manual_label(conn)
     rows = conn.execute("SELECT slug, channel FROM capture_events WHERE uploaded_by_user_id IS NULL AND tech = ?",
                         (label,)).fetchall()
-    counts = {"label": label, "candidates": len(rows), "assigned": 0, "left_install_token": 0,
+    counts = {"label": label, "candidates": len(rows), "assigned": 0, "of_which_install_token": 0,
               "left_other_user": 0, "left_not_web": 0, "owner": None}
     if not rows:
         return counts, []
@@ -2007,12 +2007,12 @@ def _owner_upload_backfill(conn):
         req = by_request.get(r["slug"])
         if r["channel"] != actor_ctx.CHANNEL_WEB:
             counts["left_not_web"] += 1
-        elif req == actor_ctx.ACTOR_TOKEN:
-            counts["left_install_token"] += 1
         elif isinstance(req, str) and req.startswith("user:") and req[5:].lower() != owner["username"].lower():
             counts["left_other_user"] += 1
         else:
             picked.append(r["slug"])
+            if req == actor_ctx.ACTOR_TOKEN:
+                counts["of_which_install_token"] += 1
     for i in range(0, len(picked), 500):
         part = picked[i:i + 500]
         conn.execute(f"UPDATE capture_events SET uploaded_by_user_id = ? WHERE uploaded_by_user_id IS NULL "
@@ -4689,14 +4689,15 @@ def share_members(kind, target_id):
 
 
 def hobby_privacy(tag_id):
-    """(#604 step 3) {private, created_by_user_id} for a hobby (no hobby_settings row = open,
-    admin-owned)."""
+    """(#604 step 3) {private, created_by_user_id, created_via_token_id (#778)} for a hobby (no
+    hobby_settings row = open, admin-owned)."""
     conn = get_conn()
     try:
-        r = conn.execute("SELECT COALESCE(private, 0) AS private, created_by_user_id FROM hobby_settings "
-                         "WHERE hobby_tag_id = ?", (tag_id,)).fetchone()
-        return {"private": int(r["private"]), "created_by_user_id": r["created_by_user_id"]} if r else \
-            {"private": 0, "created_by_user_id": None}
+        r = conn.execute("SELECT COALESCE(private, 0) AS private, created_by_user_id, created_via_token_id "
+                         "FROM hobby_settings WHERE hobby_tag_id = ?", (tag_id,)).fetchone()
+        return {"private": int(r["private"]), "created_by_user_id": r["created_by_user_id"],
+                "created_via_token_id": r["created_via_token_id"]} if r else \
+            {"private": 0, "created_by_user_id": None, "created_via_token_id": None}
     finally:
         conn.close()
 

@@ -574,6 +574,8 @@ def _to_blog_entry_detail(entry):
         "content_date": entry.get("content_date"),
         "created_at": entry["created_at"],
         "updated_at": entry["updated_at"],
+        # #604 / #778: who made it ({created_by_user, created_via}: "<user>'s <token name>" for a key)
+        **mcp_tokens.creator_fields(entry.get("created_by_user_id"), entry.get("created_via_token_id")),
         # Layer the per-attachment note + sort_order (from list_entry_projects/
         # _items) on top of the standard project/object shape — the reshaping
         # helpers don't carry them, but they're the point of the attachment.

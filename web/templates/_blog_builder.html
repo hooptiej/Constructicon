@@ -21,6 +21,8 @@
   <!-- Entry editor view -->
   <div id="blog-builder-editor-view" class="blog-builder-editor-view" style="display: none">
     <button type="button" class="back-btn" id="blog-builder-back-btn">← Back</button>
+    {# #604 / #778: who made the entry ("<user>'s <token name>" when made with a personal MCP key) #}
+    <p class="dp-muted" id="blog-entry-creator" hidden></p>
     <form id="blog-entry-form">
       <div class="field">
         <label>TITLE <span class="required">*</span></label>
@@ -207,8 +209,20 @@
     } catch (err) { console.error('load entries failed', err); }
   }
 
+  // #778: the entry's creator line. created_via = {text: "<user>'s <token name>", revoked} for a
+  // personal MCP key; created_by_user null = admin-owned (install token, MCP, script).
+  function showCreator(entry) {
+    const el = document.getElementById('blog-entry-creator');
+    if (!entry) { el.hidden = true; el.textContent = ''; return; }
+    const via = entry.created_via;
+    const who = via ? via.text : (entry.created_by_user ? entry.created_by_user.name : 'Admin (no user recorded)');
+    el.textContent = 'Created by ' + who + (via && via.revoked ? ' (that MCP key has since been revoked)' : '');
+    el.hidden = false;
+  }
+
   document.getElementById('blog-new-entry-btn').addEventListener('click', () => {
     state.currentEntrySlug = null;
+    showCreator(null);
     state.projects = [];
     state.objects = [];
     form.reset();
@@ -230,6 +244,7 @@
       if (!res.ok) return;
       const entry = await res.json();
       state.currentEntrySlug = slug;
+      showCreator(entry);
       document.getElementById('blog-entry-title').value = entry.title || '';
       document.getElementById('blog-entry-subtitle').value = entry.subtitle || '';
       document.getElementById('blog-entry-body').value = entry.body || '';

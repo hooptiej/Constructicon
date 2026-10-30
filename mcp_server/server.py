@@ -729,6 +729,12 @@ def _to_public_project(project):
     }
 
 
+def _hobby_creator(hobby_id):
+    """#778: {created_by_user, created_via} for a hobby (null = admin-owned / no personal key)."""
+    hp = db.hobby_privacy(hobby_id)
+    return mcp_tokens.creator_fields(hp["created_by_user_id"], hp["created_via_token_id"])
+
+
 def _to_public_blog_entry(entry):
     """Full detail shape for a blog entry, including hydrated projects and items."""
     projects = policy.filter_visible_cards(db.list_entry_projects(entry["id"]))  # #604 step 3
@@ -744,6 +750,8 @@ def _to_public_blog_entry(entry):
         "content_date": entry.get("content_date"),
         "created_at": entry["created_at"],
         "updated_at": entry["updated_at"],
+        # #604 / #778: {created_by_user, created_via} ("<user>'s <token name>" for a personal key)
+        **mcp_tokens.creator_fields(entry.get("created_by_user_id"), entry.get("created_via_token_id")),
         # Carry the per-attachment note + sort_order (the reshaping helpers
         # drop them, but they're the point of the attachment).
         "projects": [{**_to_public_project(p), "note": p.get("note", ""), "sort_order": p.get("sort_order")} for p in projects],
@@ -2254,7 +2262,8 @@ def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREV
 def constructicon_list_hobbies() -> list[dict]:
     """All hobbies, by name: {id, name, slug, status (active | inactive, set by hand), group_code,
     project_count, flags, cover_slug, cover_picked, cover_source (picked | highlighted_project |
-    recent_project | null), cover_project, picked_cover_slug, picked_cover_unavailable}.
+    recent_project | null), cover_project, picked_cover_slug, picked_cover_unavailable, created_by_user,
+    created_via ("<user>'s <token name>")}.
     flags are computed, never stored: inactive_with_active_work, active_untouched (~2 years)."""
     out = []
     for h in policy.filter_visible_hobbies(db.list_hobbies()):  # #604 step 3
@@ -2268,6 +2277,7 @@ def constructicon_list_hobbies() -> list[dict]:
             "project_count": h.get("project_count", 0),
             "flags": f["flags"],
             **cards.hobby_cover_fields(cards.resolve_hobby_cover(h)),
+            **_hobby_creator(h["id"]),  # #604 / #778
         })
     return out
 
@@ -2498,6 +2508,7 @@ def constructicon_list_blog_entries(status: str | None = None) -> list[dict]:
             "content_date": e.get("content_date"),
             "created_at": e["created_at"],
             "updated_at": e["updated_at"],
+            **mcp_tokens.creator_fields(e.get("created_by_user_id"), e.get("created_via_token_id")),  # #778
         }
         for e in entries
     ]

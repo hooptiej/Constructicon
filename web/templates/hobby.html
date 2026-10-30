@@ -146,6 +146,10 @@
         {% set sharing_v %}{{ sharing_panel(hobby_sharing, hobby_label.one_lc) }}{% endset %}
         {{ dp_group("sharing", "SHARING", sharing_v, editable=false) }}
         {{ dp_group("dates", "DATES", dates_view, editable=false) }}
+        {# #604 step 1 / #778: who made it, credited "<user>'s <token name>" for a personal MCP key #}
+        {% from "_created_by.html" import created_by_row %}
+        {% set origin_v %}<dl class="dp-rows">{{ created_by_row(hobby_creator.created_by_user, hobby_creator.created_via) }}</dl>{% endset %}
+        {{ dp_group("origin", "ORIGIN", origin_v, editable=false) }}
       </div>
     </div>
   </div>

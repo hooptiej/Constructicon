@@ -233,7 +233,7 @@
         <div class="dp-row"><dt>Credit</dt><dd>{% if card_extra.provenance_credit %}{{ card_extra.provenance_credit }}{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>
         {# #604 step 1: the card's creator; none recorded = made by the install (token, MCP, script) = admin-owned #}
         {# #778: made with a personal MCP key = "<user>'s <token name>" (the key's current name); a revoked key "<user>'s claude" #}
-        <div class="dp-row"><dt>Created by</dt><dd>{% if card_created_by %}{% if card_created_by.username %}<a href="/gallery/user/{{ card_created_by.username | urlencode }}" title="Everything {{ card_created_by.name }} uploaded">{{ card_created_via.text if card_created_via else card_created_by.name }}</a>{% else %}{{ card_created_via.text if card_created_via else card_created_by.name }}{% endif %}{% if card_created_via and card_created_via.revoked %} <span class="dp-muted">(that MCP key has since been revoked)</span>{% endif %}{% else %}<span class="dp-muted">Admin (no user recorded)</span>{% endif %}</dd></div>
+        {% from "_created_by.html" import created_by_row %}{{ created_by_row(card_created_by, card_created_via) }}
       </dl>
       {% endset %}
       {% set origin_edit %}

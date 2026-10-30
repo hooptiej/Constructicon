@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse
 
-from core import besteffort, blog, db, install_config, paths, site_export
+from core import besteffort, blog, db, install_config, mcp_tokens, paths, site_export
 from core.errors import AppError
 from web.common import from_request_thread
 from web.shapes import _to_blog_entry_detail
@@ -48,6 +48,7 @@ def api_list_blog_entries(request: Request, status: str = ""):
             "content_date": e.get("content_date"),
             "created_at": e["created_at"],
             "updated_at": e["updated_at"],
+            **mcp_tokens.creator_fields(e.get("created_by_user_id"), e.get("created_via_token_id")),  # #778
         }
         for e in entries
     ])

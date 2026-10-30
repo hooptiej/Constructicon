@@ -529,10 +529,13 @@ def hobby_detail_page(request: Request, slug: str, rev: str = ""):
     loose_grid["cover_pick"] = {"current": current, "can_edit": can_edit, "locked_message": LOCKED_COVER_MESSAGE}
     start, end = hobby_face["effective_start"], hobby_face["effective_end"]
 
+    creator = db.hobby_privacy(hobby["id"])  # #778: who made it, and with which personal MCP key
     return templates.TemplateResponse(
         request, "hobby.html",
         {
             "hobby": fields,
+            # #778: {created_by_user, created_via} for the ORIGIN group
+            "hobby_creator": mcp_tokens.creator_fields(creator["created_by_user_id"], creator["created_via_token_id"]),
             "hobby_card": hobby_face,
             "hobby_queue": queue,
             "active_nodes": active_roots,

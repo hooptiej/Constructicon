@@ -184,6 +184,12 @@ def credit(user_id, token_id):
             "token_name": row["name"] if live else None, "revoked": not live}
 
 
+def creator_fields(user_id, token_id):
+    """#778: {"created_by_user": {id, username, name} | None (admin-owned), "created_via": credit() |
+    None}, for a card, hobby or blog entry shape (web and MCP alike)."""
+    return {"created_by_user": users.owner_info(user_id), "created_via": credit(user_id, token_id)}
+
+
 def revoke(token_id, *, actor=None):
     """Deletes one of your tokens; an MCP client still using it gets 401 from its next call."""
     user = _me(actor)

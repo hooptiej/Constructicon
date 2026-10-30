@@ -1188,14 +1188,15 @@ identity, ownership, visibility or a gallery from `tech` or `channel`.
   an item becomes the owner's when it has no uploader yet, its label is exactly `source_manual_upload()`
   (on the owner's installs "Hooptie J (me) — manual upload": install_config `owner_label` + " — manual
   upload", seeded by #562's LEGACY_VALUES), its channel is `web`, and its request-log row (if any) was not
-  the install token (`token`: stays admin-owned, the owner default) nor another signed-in user. Everything
-  else stays admin-owned. **The owner's account** (`db.owner_account`): the one enabled admin whose
+  another signed-in user's. Install-token web uploads under that label count too (owner, 2026-10-30: "Give
+  them to me too"; they were the owner's own scripts), reported as `of_which_install_token`. Everything
+  else stays admin-owned (a prod DB copy had 1,743 candidates: 1,738 + 5 made with the install token). **The owner's account** (`db.owner_account`): the one enabled admin whose
   display name or username is install_config `owner_name` (any case); with no owner name, the only
   enabled admin. None or several -> `db.MigrationDeferred`: `run_pending_migrations` rolls it back
   (nothing written), prints `schema_migrations: DEFERRED <name>: nothing was changed, because ...` (what to
   fix) to the boot log and the `constructicon.db` logger, leaves it unrecorded (it retries every start)
   and boots on. Nothing to assign = it applies without needing an owner. One change-log row
-  `migration_owner_uploads_560` (`details`: counts incl. `left_install_token` / `left_not_web` /
+  `migration_owner_uploads_560` (`details`: counts incl. `of_which_install_token` / `left_not_web` /
   `left_other_user`, the owner and how it was chosen, and every slug it set: the way back is `UPDATE
   capture_events SET uploaded_by_user_id = NULL WHERE slug IN (...)`; the generic undo refuses
   migration rows). Fill-only, idempotent.
@@ -1208,21 +1209,26 @@ identity, ownership, visibility or a gallery from `tech` or `channel`.
   is the owner's label), else a **404 page that says so** (`id="gallery-not-found"`; the grid API answers
   404 `not_found` with the same words). `/gallery/source/<label>` (grid source `label:<label>`) is the
   label view by name, for when a username and a label clash. The item page's "Uploaded by" and the card
-  page's "Created by" link to the gallery. Not changed: `/api/gallery` and the grid cards' small
-  "uploaded by" badge still group by the label (`source_group`).
+  page's "Created by" link to the gallery. Not changed (owner, 2026-10-30: separate issues): `/api/gallery`
+  and the grid cards' small "uploaded by" badge still group by the label (`source_group`), and a web upload
+  still writes the owner's "— manual upload" label whoever is signed in.
 - **#778 credit: "<user>'s <token name>".** A personal MCP key's id rides in `acting_via` (set by
   `server._call_as_mcp` from `auth.IDENTITY`); `actor.token_id_for(actor)` hands it out ONLY when the
   writing actor is that key's user. Stored as `capture_events.uploaded_via_token_id`,
   `projects.created_via_token_id`, `hobby_settings.created_via_token_id`, `blog_entries.created_via_token_id`
   and `audit_log.via_token_id` (every change-log row, `db.insert_change_log`). Rendered at READ time by
   `mcp_tokens.credit(user_id, token_id)` from the user's and the token's CURRENT names (a rename shows at
-  once); a revoked key (row gone) reads "<user>'s claude" (`revoked: true`; the item / card page add "that
-  MCP key has since been revoked"). Shown: item ORIGIN "Uploaded by", card ORIGIN "Created by", item JSON /
-  MCP `uploaded_via`, MCP `get_project` `created_via`, and `changes.via(row)` = the `via` of every row of
-  `cards.list_changes` / `changes.list_changes` / `explain_card`'s recent rows. Install-token work (actor
-  `mcp`) stays admin-owned with `via` null, as before. Not done (owner defaults): no backfill crediting the
-  2026-10-18 install-token cards to "windows claude"; switching each machine to a personal key is the
-  owner's step. Hobby / blog credit is stored, not shown yet.
+  once); a revoked key (row gone) reads "<user>'s claude" (`revoked: true`; the pages add "that MCP key
+  has since been revoked"). `mcp_tokens.creator_fields(user_id, token_id)` = `{created_by_user,
+  created_via}` for every creator shape. Shown: item ORIGIN "Uploaded by", card ORIGIN "Created by" and the
+  hobby page's new ORIGIN group "Created by" (one macro, `templates/_created_by.html` `created_by_row`),
+  the blog builder's "Created by ..." line (`#blog-entry-creator`, from the entry JSON); item JSON / MCP
+  `uploaded_via`; `created_by_user` + `created_via` on MCP `get_project`, `list_hobbies`, `get_blog_entry` /
+  `list_blog_entries` / create answers, and web `GET /api/blog-entries` (+ `/{slug}`); and
+  `changes.via(row)` = the `via` of every row of `cards.list_changes` / `changes.list_changes` /
+  `explain_card`'s recent rows. Install-token work (actor `mcp`) stays admin-owned with `via` null, as
+  before. Not done (owner defaults): no backfill crediting the 2026-10-18 install-token cards to "windows
+  claude"; switching each machine to a personal key is the owner's step.
 - Check: `scripts/test_whose_claude_560_778.py` (throwaway DB, real sessions and tokens, real MCP calls
   through the streamable-HTTP app).
 

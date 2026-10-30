@@ -554,7 +554,9 @@ ADDED_SINCE_746 = {"private",        # #604 step 3: projects.private, hobby_sett
                    # (capture_events.channel / uploaded_via_token_id, projects / hobby_settings / blog_entries
                    # .created_via_token_id, and the answers' channel / source_note / uploaded_via / created_via)
                    "channel", "source_note", "uploaded_via", "uploaded_via_token_id", "created_via",
-                   "created_via_token_id"}
+                   "created_via_token_id",
+                   # #778 (owner, 2026-10-30): blog entries and hobbies carry their creator too
+                   "created_by_user"}
 
 
 def _strip_added(value):

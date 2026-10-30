@@ -7,8 +7,8 @@
      (migration label, change-log row, request-log row, a card's write-up, the label alone, unknown),
      fill-only and idempotent, one change-log row with the counts;
   2. the owner backfill (owner_upload_backfill_560): the owner's manual-upload label + web channel ->
-     the owner's account; install-token uploads, MCP rows, another user's upload and rows already
-     owned are left alone; counts and slugs in one change-log row; idempotent; an ambiguous owner
+     the owner's account, install-token uploads with that label included (owner, 2026-10-30); MCP rows,
+     another user's upload and rows already owned are left alone; counts and slugs in one change-log row; idempotent; an ambiguous owner
      (no admin with the owner name, two admins with it, no owner name and two admins) is refused
      loudly, writes nothing, stays pending, and the boot carries on;
   3. MCP `uploaded_by` is a source note, never an identity: the install token's upload naming the
@@ -19,7 +19,8 @@
      /gallery/source/<label>;
   5. #778 credit: work made with a personal key reads "<user>'s <token name>" on the item and card
      ORIGIN panels, the MCP shapes and the change log's `via`; a rename shows the new name; a revoked
-     key falls back to "<user>'s claude"; install-token work stays admin-owned with no credit.
+     key falls back to "<user>'s claude"; install-token work stays admin-owned with no credit; the same
+     for hobbies (hobby page ORIGIN, MCP list_hobbies) and blog entries (web API + builder, MCP).
 Prints PASS/FAIL per check, then FAILED: <names> or ALL PASS.
 """
 
@@ -195,7 +196,8 @@ print("--- 2. owner backfill ---")
 owned = {k: row(s)["uploaded_by_user_id"] for k, s in FIX.items()}
 check("the owner's own web uploads (no request row, or a pre-actor one) become the owner's",
       owned["webreq"] == UID["O"] and owned["labelonly"] == UID["O"], owned)
-check("an install-token upload with the owner's label stays admin-owned", owned["tokreq"] is None)
+check("an install-token upload with the owner's label becomes the owner's too (owner, 2026-10-30)",
+      owned["tokreq"] == UID["O"], owned["tokreq"])
 check("an MCP row with the owner's label stays admin-owned", owned["mcpowner"] is None)
 check("another user's upload (request by user:wc_ed) stays as it was", owned["edreq"] is None and owned["edowned"] == UID["E"])
 check("other labels stay admin-owned", owned["migr"] is None and owned["authored"] is None and owned["weird"] is None)
@@ -203,8 +205,9 @@ bf = last_change("migration_owner_uploads_560")
 d = json.loads(bf["form_body"])
 c = d["counts"]
 check("one change-log row: counts, the owner and the slugs it set",
-      c["assigned"] == 2 and c["left_install_token"] == 1 and c["left_not_web"] == 1 and c["left_other_user"] == 1
-      and c["owner"]["id"] == UID["O"] and sorted(d["slugs"]) == sorted([FIX["webreq"], FIX["labelonly"]]), d)
+      c["assigned"] == 3 and c["of_which_install_token"] == 1 and c["left_not_web"] == 1 and c["left_other_user"] == 1
+      and "left_install_token" not in c and c["owner"]["id"] == UID["O"]
+      and sorted(d["slugs"]) == sorted([FIX["webreq"], FIX["labelonly"], FIX["tokreq"]]), d)
 ran, out = rerun("capture_channel_560", "owner_upload_backfill_560")
 d2 = json.loads(last_change("migration_owner_uploads_560")["form_body"])
 check("idempotent: a second run assigns nothing and fills no channel",
@@ -310,6 +313,36 @@ with TestClient(app, base_url="http://testserver") as mc:
     st, err, out = rpc(mc, E_TOK, "constructicon_get_project", {"id_or_slug": ED_CARD["slug"]})
     check("MCP get_project: created_via 'Ed Itor's windows claude'",
           not err and (out.get("created_via") or {}).get("text") == "Ed Itor's windows claude", str(out)[:300])
+    st, err, out = rpc(mc, E_TOK, "constructicon_create_hobby", {"name": "Whose Claude Ed Hobby"})
+    check("a hobby made with Ed's key", st == 200 and not err, str(out)[:300])
+    ED_HOBBY = out.get("slug") if isinstance(out, dict) else None
+    st, err, out = rpc(mc, INSTALL, "constructicon_create_hobby", {"name": "Whose Claude Install Hobby"})
+    INST_HOBBY = out.get("slug") if isinstance(out, dict) else None
+    st, err, out = rpc(mc, E_TOK, "constructicon_create_blog_entry", {"title": "Whose Claude Ed Entry"})
+    check("a blog entry made with Ed's key: created_via in the answer",
+          st == 200 and not err and (out.get("created_via") or {}).get("text") == "Ed Itor's windows claude", str(out)[:300])
+    ED_ENTRY = out.get("slug") if isinstance(out, dict) else None
+    st, err, out = rpc(mc, INSTALL, "constructicon_create_blog_entry", {"title": "Whose Claude Install Entry"})
+    INST_ENTRY = out.get("slug") if isinstance(out, dict) else None
+    hs = {r[0]: (r[1], r[2]) for r in sql("SELECT bt.slug, hs.created_by_user_id, hs.created_via_token_id FROM blog_tags bt "
+                                           "LEFT JOIN hobby_settings hs ON hs.hobby_tag_id = bt.id WHERE bt.is_hobby = 1")}
+    check("hobby rows: Ed's has Ed + the key, the install token's has neither",
+          hs.get(ED_HOBBY) == (UID["E"], E_TID) and hs.get(INST_HOBBY, (None, None)) == (None, None), hs)
+    with actor.acting_as(actor.ACTOR_MCP):  # a list tool answers one content block per element: call it directly
+        out = mcp.constructicon_list_hobbies()
+    hm = {h["slug"]: h for h in out} if isinstance(out, list) else {}
+    check("MCP list_hobbies: created_via 'Ed Itor's windows claude'; install-token hobby: both null",
+          (hm.get(ED_HOBBY, {}).get("created_via") or {}).get("text") == "Ed Itor's windows claude"
+          and hm.get(INST_HOBBY, {}).get("created_by_user") is None and hm.get(INST_HOBBY, {}).get("created_via") is None
+          and INST_HOBBY in hm, str(out)[:300])
+    st, err, out = rpc(mc, INSTALL, "constructicon_get_blog_entry", {"slug": INST_ENTRY})
+    check("MCP get_blog_entry (install token's): admin-owned, no credit",
+          not err and out.get("created_by_user") is None and out.get("created_via") is None, str(out)[:300])
+    with actor.acting_as(actor.ACTOR_MCP):
+        out = mcp.constructicon_list_blog_entries()
+    bm = {e["slug"]: e for e in out} if isinstance(out, list) else {}
+    check("MCP list_blog_entries: Ed's entry credited", (bm.get(ED_ENTRY, {}).get("created_via") or {}).get("text")
+          == "Ed Itor's windows claude", str(out)[:300])
     st, err, out = rpc(mc, INSTALL, "constructicon_create_project", {"title": "Whose Claude Install Card"})
     INST_CARD = next(p for p in db.list_projects() if p["title"] == "Whose Claude Install Card")
     check("install-token card: admin-owned, no key", INST_CARD["created_by_user_id"] is None
@@ -340,11 +373,32 @@ check("item page ORIGIN: Uploaded by 'Ed Itor's windows claude', Arrived via the
       page_has(C["O"], f"/object/{ED_SLUG}", "Ed Itor's windows claude") and page_has(C["O"], f"/object/{ED_SLUG}", "the MCP"))
 check("card page ORIGIN: Created by 'Ed Itor's windows claude'", page_has(C["O"], f"/project/{ED_CARD['slug']}", "Ed Itor's windows claude"))
 check("item page: install-token upload says Admin (no user recorded)", page_has(C["O"], f"/object/{INST_SLUG}", "Admin (no user recorded)"))
+check("hobby page ORIGIN: Created by 'Ed Itor's windows claude'", page_has(C["O"], f"/hobby/{ED_HOBBY}", "Ed Itor's windows claude")
+      and page_has(C["O"], f"/hobby/{ED_HOBBY}", "ORIGIN"))
+check("hobby page ORIGIN (install token's hobby): Admin (no user recorded)",
+      page_has(C["O"], f"/hobby/{INST_HOBBY}", "Admin (no user recorded)"))
+
+
+def blog_via(slug):
+    one = C["O"].get(f"/api/blog-entries/{slug}").json()
+    listed = {e["slug"]: e for e in C["O"].get("/api/blog-entries").json()}
+    return ((one.get("created_via") or {}).get("text"), (listed[slug].get("created_via") or {}).get("text"),
+            (one.get("created_by_user") or {}).get("username"))
+
+
+check("web blog entry API (one and list): 'Ed Itor's windows claude', created_by wc_ed",
+      blog_via(ED_ENTRY) == ("Ed Itor's windows claude", "Ed Itor's windows claude", "wc_ed"), blog_via(ED_ENTRY))
+check("web blog entry API: install token's entry admin-owned, no credit", blog_via(INST_ENTRY) == (None, None, None))
+r = C["O"].get("/")
+check("the blog builder carries the creator line (#blog-entry-creator, filled from created_via)",
+      'id="blog-entry-creator"' in r.text and "created_via" in r.text, r.status_code)
 r = C["E"].post(f"/api/account/mcp-tokens/{E_TID}/rename", json={"name": "mac claude"}, headers=H["E"])
 check("rename the key (200, one change-log row)", r.status_code == 200 and r.json()["name"] == "mac claude"
       and last_change("mcp_token_rename") is not None, r.text[:200])
 check("rename: the item and card now credit 'Ed Itor's mac claude'",
       page_has(C["O"], f"/object/{ED_SLUG}", "Ed Itor's mac claude") and page_has(C["O"], f"/project/{ED_CARD['slug']}", "Ed Itor's mac claude"))
+check("rename: the hobby page and the blog entry follow",
+      page_has(C["O"], f"/hobby/{ED_HOBBY}", "Ed Itor's mac claude") and blog_via(ED_ENTRY)[0] == "Ed Itor's mac claude")
 with actor.acting_as(actor.ACTOR_SCRIPT):
     check("rename: the change log's via follows", via_of("Whose Claude Ed Card") == [("user:wc_ed", "Ed Itor's mac claude")])
 r = C["E"].post(f"/api/account/mcp-tokens/{E_TID}/rename", json={"name": "Mac Claude "}, headers=H["E"])
@@ -361,6 +415,9 @@ cr = mcp_tokens.credit(UID["E"], E_TID)
 check("revoked: credit falls back to 'Ed Itor's claude' (revoked True)", cr["text"] == "Ed Itor's claude" and cr["revoked"], cr)
 check("revoked: the item page says 'Ed Itor's claude' and that the key was revoked",
       page_has(C["O"], f"/object/{ED_SLUG}", "Ed Itor's claude") and page_has(C["O"], f"/object/{ED_SLUG}", "since been revoked"))
+check("revoked: hobby page and blog entry fall back to 'Ed Itor's claude'",
+      page_has(C["O"], f"/hobby/{ED_HOBBY}", "Ed Itor's claude") and page_has(C["O"], f"/hobby/{ED_HOBBY}", "since been revoked")
+      and blog_via(ED_ENTRY)[0] == "Ed Itor's claude")
 with actor.acting_as(actor.ACTOR_SCRIPT):
     check("revoked: the change log's via is 'Ed Itor's claude'", via_of("Whose Claude Ed Card") == [("user:wc_ed", "Ed Itor's claude")])
 check("credit of no token is None (web / install token)", mcp_tokens.credit(UID["E"], None) is None)
@@ -387,9 +444,10 @@ def grid_slugs(client, source):
 
 
 st, mine = grid_slugs(C["V"], "user:wc_owner")
-check("owner's gallery: the backfilled owner uploads", st == 200 and {FIX["webreq"], FIX["labelonly"]} <= mine, mine)
-check("owner's gallery: not the install-token upload naming the owner's label, nor Ed's", INST_SLUG not in mine
-      and FIX["tokreq"] not in mine and ED_SLUG not in mine and WEB_SLUG not in mine)
+check("owner's gallery: the backfilled owner uploads (the install-token web one too)",
+      st == 200 and {FIX["webreq"], FIX["labelonly"], FIX["tokreq"]} <= mine, mine)
+check("owner's gallery: not the MCP install-token upload naming the owner's label, nor Ed's", INST_SLUG not in mine
+      and ED_SLUG not in mine and WEB_SLUG not in mine)
 st, eds = grid_slugs(C["V"], "user:WC_ED")
 check("Ed's gallery (any case): Ed's items only", st == 200 and {ED_SLUG, WEB_SLUG, FIX["edowned"]} <= eds
       and FIX["webreq"] not in eds, eds)

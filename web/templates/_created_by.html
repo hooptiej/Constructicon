@@ -1,0 +1,7 @@
+{#- #604 step 1 / #778: the "Created by" fact row of a card or hobby's ORIGIN group.
+    `user` = users.owner_info (None = admin-owned: the install token, the MCP, a script);
+    `via` = mcp_tokens.credit ("<user>'s <token name>" when made with a personal MCP key, the key's
+    CURRENT name; a revoked key reads "<user>'s claude"). The name links to the user's gallery (#560). -#}
+{% macro created_by_row(user, via, label="Created by") -%}
+<div class="dp-row"><dt>{{ label }}</dt><dd>{% if user %}{% if user.username %}<a href="/gallery/user/{{ user.username | urlencode }}" title="Everything {{ user.name }} uploaded">{{ via.text if via else user.name }}</a>{% else %}{{ via.text if via else user.name }}{% endif %}{% if via and via.revoked %} <span class="dp-muted">(that MCP key has since been revoked)</span>{% endif %}{% else %}<span class="dp-muted">Admin (no user recorded)</span>{% endif %}</dd></div>
+{%- endmacro %}

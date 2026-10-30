@@ -39,11 +39,75 @@
   // The dial's range: from Mountain Jan 1 of the earliest card's year to Mountain Jan 1 of the year
   // after the latest card, so the first and last year labels sit on the band. The needle itself is
   // clamped to the cards' own first..last start (needleBounds), "earliest to latest card date".
-  function range(cards) {
+  // #775 pass 2: with { coverEnds: true } (what the dial uses) the band also reaches the year after
+  // the latest END, so a span bar that runs past the last start is drawn whole, with its year labels.
+  // The needle bounds stay the starts either way.
+  function range(cards, opts) {
     if (!cards.length) return null;
     const first = cards[0].start, last = cards[cards.length - 1].start;
-    const y0 = MT.parts(first).year, y1 = MT.parts(last).year;
+    let tail = last;
+    if (opts && opts.coverEnds) cards.forEach((c) => { if (c.end !== null && c.end > tail) tail = c.end; });
+    const y0 = MT.parts(first).year, y1 = MT.parts(tail).year;
     return { start: MT.toEpoch(y0, 1, 1), end: MT.toEpoch(y1 + 1, 1, 1), first, last, firstYear: y0, lastYear: y1 };
+  }
+
+  // #775 pass 2: start-to-end span bars. A card with a real end after its start gets a bar from
+  // bandX(start) to bandX(end) (clipped to the band), when it is at least `minPx` wide at this zoom;
+  // a start-only card (or one shorter than minPx) stays just its tick. Bars are stacked in up to
+  // `lanes` rows: each takes the lowest row whose last bar ended at least 1 px before it starts;
+  // when every row is busy it shares the row that frees up first, a tie going to the row with fewer
+  // bars (overlaps then read as a brighter
+  // stretch, never a taller one: marks never grow). Lane 0 sits nearest the axis.
+  // -> [{ slug, isChild, x, w, lane }] in start order.
+  function spanBars(cards, rng, pps, opts) {
+    const minPx = Math.max(0, Number(opts && opts.minPx) || 0);
+    const lanes = Math.max(1, Math.round(Number(opts && opts.lanes) || 1));
+    const laneEnd = new Array(lanes).fill(-Infinity);
+    const laneUse = new Array(lanes).fill(0);
+    // Every row busy: the one that frees up first; a tie goes to the row holding fewer bars.
+    const sharedLane = () => laneEnd.reduce((best, e, i) =>
+      (e < laneEnd[best] || (e === laneEnd[best] && laneUse[i] < laneUse[best]) ? i : best), 0);
+    const out = [];
+    cards.forEach((c) => {
+      if (c.end === null || !(c.end > c.start)) return;
+      const x = bandX(Math.max(c.start, rng.start), rng, pps);
+      const x1 = bandX(Math.min(c.end, rng.end), rng, pps);
+      const w = x1 - x;
+      if (!(w >= minPx) || w <= 0) return;
+      let lane = laneEnd.findIndex((e) => e + 1 <= x);
+      if (lane < 0) lane = sharedLane();
+      laneEnd[lane] = Math.max(laneEnd[lane], x1);
+      laneUse[lane]++;
+      out.push({ slug: c.slug, isChild: c.isChild, x, w, lane });
+    });
+    return out;
+  }
+
+  // #775 pass 2: how many cards each band year holds, for the per-year density glow. With
+  // { spans: true } a card counts in every Mountain year its start..end touches (a long project lights
+  // each year it ran); otherwise only in its start year. -> [{ year, start, end, count }], one per
+  // year from rng.firstYear to rng.lastYear, gaps included (count 0).
+  function yearDensity(cards, rng, opts) {
+    const spans = !!(opts && opts.spans);
+    const counts = {};
+    cards.forEach((c) => {
+      const y0 = MT.parts(c.start).year;
+      const y1 = spans && c.end !== null && c.end > c.start ? MT.parts(c.end).year : y0;
+      for (let y = y0; y <= y1; y++) counts[y] = (counts[y] || 0) + 1;
+    });
+    const out = [];
+    for (let y = rng.firstYear; y <= rng.lastYear; y++) {
+      out.push({ year: y, start: MT.toEpoch(y, 1, 1), end: MT.toEpoch(y + 1, 1, 1), count: counts[y] || 0 });
+    }
+    return out;
+  }
+
+  // Density -> glow level 0..1: (count / busiest year's count) ^ curve. curve < 1 lifts quiet years
+  // (a lone card still glows), > 1 keeps only the busy ones bright. An empty year is always 0.
+  function densityLevels(density, curve) {
+    const max = density.reduce((m, d) => Math.max(m, d.count), 0);
+    const k = Number(curve) > 0 ? Number(curve) : 1;
+    return density.map((d) => ({ ...d, level: max && d.count ? Math.pow(d.count / max, k) : 0 }));
   }
 
   // Pixels per second for a window `width` px wide that shows `visibleYears` years, never so tight
@@ -95,6 +159,19 @@
       .map((d) => d.card);
   }
 
+  // What the readout names (owner, batch 14: "spans count"): first every card whose START is within
+  // `tolerancePx` of the needle, nearest first (cardsAtNeedle); then every other card whose
+  // start-to-end span covers the needle (start <= needle <= end, a real end after its start), most
+  // recently started first. -> { near: [...], spans: [...], all: near.concat(spans) }.
+  function cardsUnderNeedle(cards, needle, pps, tolerancePx) {
+    const near = cardsAtNeedle(cards, needle, pps, tolerancePx);
+    const listed = new Set(near);
+    const spans = cards
+      .filter((c) => !listed.has(c) && c.end !== null && c.end > c.start && c.start <= needle && needle <= c.end)
+      .sort((a, b) => b.start - a.start || a.title.localeCompare(b.title));
+    return { near, spans, all: near.concat(spans) };
+  }
+
   // The nearest card to the needle (any distance), or null: the snap target.
   function nearestCard(cards, needle) {
     let best = null, bestDist = Infinity;
@@ -132,5 +209,6 @@
   return {
     SECONDS_PER_YEAR, clamp, parseCards, range, pxPerSecond, bandX, bandOffset, needleAfterDrag,
     yearTicks, monthTicks, cardsAtNeedle, nearestCard, capList, needleLabel, keyStep,
+    spanBars, yearDensity, densityLevels, cardsUnderNeedle,
   };
 });

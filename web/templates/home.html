@@ -10,9 +10,9 @@
 <div class="app-main">
   {# #775 "Tune in to the past": the timeline is a horizontal radio dial across the top (it replaced
      the vertical left rail). Browse only: it never filters or scrolls the cards below. The tuning
-     panel (live sliders for the dial's feel values) shows only on a dev instance, or with ?tune=1
-     for an admin. #}
-  {% set dial_tune = is_dev or (request.query_params.get('tune') == '1' and has_role('admin')) %}
+     panel (live sliders for the dial's feel values) shows only for an admin who asks for it with
+     ?tune=1, on any instance (#788: no longer on every dev instance, the defaults are baked in). #}
+  {% set dial_tune = request.query_params.get('tune') == '1' and has_role('admin') %}
   <section class="radio-dial" id="home-radio-dial" aria-label="Timeline">
     <div class="radio-dial-chassis">
       {% if timeline_projects %}

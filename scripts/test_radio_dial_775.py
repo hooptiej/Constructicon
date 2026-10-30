@@ -13,9 +13,9 @@ Throwaway SQLite DB and storage (scripts/_testenv.py), the real FastAPI app thro
      each with id, slug, title, cover_url, effective_start, effective_end, is_child.
   3. The old vertical left rail is gone: no timeline-rail markup or script, no -shifted layout
      classes on the page; timeline-rail.js is deleted; style.css has no rail or -shifted rules.
-  4. The dev tuning panel: absent on a non-dev instance (admin token and viewer alike), absent for a
-     viewer even with ?tune=1, present for an admin with ?tune=1, present on a dev instance
-     (CONSTRUCTICON_ENV=dev, the `is_dev` template global).
+  4. The tuning panel: absent without ?tune=1 (admin token and viewer alike), absent for a viewer
+     even with ?tune=1, present for an admin with ?tune=1, and (#788) NOT shown just because the
+     instance is dev (CONSTRUCTICON_ENV=dev, the `is_dev` template global).
   5. style.css: the dial's needle, readout and static rules exist, and no dial rule zooms or scales
      a mark (#775's lesson: marks never grow).
   6. The card page's own tuner (project-video-timeline.js) is untouched by the dial.
@@ -149,7 +149,7 @@ check("tune: ?tune=1 does not show it to a viewer", 'id="radio-dial-tune"' not i
 webcommon.templates.env.globals["is_dev"] = True
 try:
     r = viewer.get("/")
-    check("tune: present on a dev instance", 'id="radio-dial-tune"' in r.text and "radio-dial-tuning.js" in r.text)
+    check("tune: #788 not shown just because the instance is dev", 'id="radio-dial-tune"' not in r.text and "radio-dial-tuning.js" not in r.text)
 finally:
     webcommon.templates.env.globals["is_dev"] = False
 
@@ -173,9 +173,14 @@ check("css: the dial's chassis uses the shared chassis colour and shadow",
       "var(--tuner-chassis)" in rule_body(".radio-dial-chassis") and "var(--tuner-shadow)" in rule_body(".radio-dial-chassis"))
 check("css: shared shadow = outer glow + inset backlight",
       re.search(r"--tuner-shadow:[^;]*var\(--tuner-glow\)[^;]*inset[^;]*var\(--tuner-backlight\)", theme) is not None)
-check("css: backlight drives the lamp behind the band", "--tuner-backlight" in rule_body(".radio-dial-window"))
+# #783: the lamp and the plate are --tuner-lamp / --tuner-plate now (so a theme can swap them); in
+# the radio theme (:root) both are built from --tuner-backlight.
+tuner_var = lambda name: (re.search(re.escape(name) + r":([^;]*);", theme) or [None, ""])[1]  # noqa: E731
+check("css: backlight drives the lamp behind the band",
+      "var(--tuner-lamp)" in rule_body(".radio-dial-window") and "--tuner-backlight" in tuner_var("--tuner-lamp"))
 check("css: the readout sits on a plate that thickens with the backlight (legible at max)",
-      "--tuner-backlight" in rule_body(".radio-dial-readout") and "z-index" in rule_body(".radio-dial-readout"))
+      "var(--tuner-plate)" in rule_body(".radio-dial-readout") and "--tuner-backlight" in tuner_var("--tuner-plate")
+      and "z-index" in rule_body(".radio-dial-readout"))
 check("css: the readout and its card links use the shared readout colour",
       "var(--tuner-readout)" in rule_body(".radio-dial-readout") and "var(--tuner-readout)" in rule_body(".radio-dial-station"))
 check("css: the band's year labels stay phosphor green", "var(--tuner-phosphor)" in rule_body(".radio-dial-year-label"))

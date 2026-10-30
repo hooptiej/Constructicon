@@ -1662,19 +1662,52 @@ The home page's timeline is a horizontal dial across the top (`static/js/radio-d
 - **Behaviour (owner decisions on #775):** a fixed needle over a sliding band; 5 years visible by
   default (the owner's tuning on PR #782; #775 started at about a decade; fewer on a narrow screen, so
   every year label fits); drag (pointer events), wheel / trackpad and the
-  arrow keys (Shift or PageUp/Down = a year, Home/End = the ends) slide it. One tick per card at its start.
+  arrow keys (Shift or PageUp/Down = a year, Home/End = the ends) slide it. One tick per card at its start,
+  plus (pass 2) a start-to-end **span bar** for a card with a real end and a per-year **density glow**.
   **Browse only:** it never scrolls or filters the cards. Starts **untuned** (needle mid-range, the readout
-  shows static); once moved, the readout names the cards within a few px of the needle, with dates and
-  links, capped with "+N more". **Marks never grow or zoom** (the old rail's hover-zoom was a time sink).
+  shows static); once moved, the readout names the cards whose START is within a few px of the needle
+  (nearest first), then (owner, batch 14: "spans count") every other card whose start-to-end span covers
+  the needle (latest start first, its date shown as "start - end", class `radio-dial-station--span`),
+  with links, all in one list capped with "+N more" (`radio-dial-math.js` `cardsUnderNeedle`). **Marks never grow or zoom** (the old rail's hover-zoom was a time sink).
 - **Feel values** live in one place: `DIAL_DEFAULTS` in `radio-dial.js` (span, tolerance, inertia and its
-  falloff (a steady brake so a coast eases to a stop), snap, tick density, outer glow, internal backlight) plus the `--dial-*` CSS variables on `.radio-dial`. **The tuning panel**
-  (`radio-dial-tuning.js`, live sliders, "Copy values") shows only on a dev instance (`CONSTRUCTICON_ENV=dev`)
-  or with `/?tune=1` for an admin. Bake the owner's chosen numbers into `DIAL_DEFAULTS`.
+  falloff (a steady brake so a coast eases to a stop), snap, tick density, outer glow, internal backlight,
+  and pass 2's `span*` / `density*` values) plus the `--dial-*` CSS variables on `.radio-dial`
+  (`DIAL_CSS_VARS` maps the CSS ones; their CSS defaults must equal `DIAL_DEFAULTS`). **The tuning panel**
+  (`radio-dial-tuning.js`, live sliders, "Copy values", a "Theme preview" that isn't saved) shows only for
+  an admin who asks for it with `/?tune=1`, on any instance (#788: it no longer shows on every dev
+  instance; viewers and editors never see it). Bake the owner's chosen numbers into `DIAL_DEFAULTS`.
+- **Span bars and density glow (pass 2, batch 14 "Dial It Up").** Maths in `radio-dial-math.js`:
+  `spanBars(cards, rng, pps, {minPx, lanes})` (a bar from `bandX(start)` to `bandX(end)`, clipped to the
+  band; start-only cards, start == end cards and bars narrower than `spanMinPx` stay just their tick;
+  greedy rows, `spanLanes` of them stacked above the ticks, extra overlaps share the row that frees up
+  first, so a pile reads brighter, never taller), `yearDensity(cards, rng, {spans})` (cards per Mountain
+  year; `densitySpans` 1 = every year a span touches, 0 = start year only) and `densityLevels(d, curve)`
+  (`(count / busiest) ^ densityCurve`). `range(cards, {coverEnds: true})` (what the dial uses) runs the
+  band to the year after the latest END; the needle still stops at the first / last start. The widget
+  draws them into `.radio-dial-layer-spans` / `-density` (a bar's row and a year's level are inline
+  `--lane` / `--lvl`; height, gap, opacity, glow strength and spread are `--dial-span-*` /
+  `--dial-density-*`). Defaults (first guesses, owner to tune): `spanMinPx` 3, `spanLanes` 3,
+  `spanHeight` 3 px, `spanGap` 1 px, `spanOpacity` 0.55, `densityStrength` 0.35, `densityCurve` 0.6,
+  `densitySpread` 70 %, `densitySpans` 1. A span under the needle names its card in the readout (above).
+  Data: `timeline_projects` already carried
+  `effective_end` (`cards.card_span`, group spans rolled up, #772).
 - **One colour scheme for both tuners (PR #782):** the `--tuner-*` variables on `:root` in `style.css`
   (chassis, border, outer glow, inner backlight, readout hue and its derived blue + glow, needle/axis
   yellow, phosphor green for the dial's band labels) are read by the home dial AND the card page's
   timeline (`.project-video-timeline-*`, `.timeline-drag-readout`). Change a colour there, never in one
-  tuner's rules. The tuning panel's colour sliders write the base values onto `<html>`.
+  tuner's rules. The tuning panel's colour sliders write the base values onto `<html>`. Since #783 every
+  dial colour goes through them (no literal colour or font is left in a `.radio-dial-*` rule; new
+  variables: `--tuner-font`, `-lamp`, `-plate`, `-minor`, `-needle-glow`, `-card-glow`, `-span`,
+  `-density`, `-link-hover`, `-note`).
+- **Dial themes (#783):** `radio` (the default, the owner's look: `:root` above) or `museum` (a clean
+  gallery look for a professional install: off-white chassis, dark ink readout in a system sans, a dark
+  hairline needle, grey ticks, no glow or backlight). Chosen in Admin > Install "Dial theme"
+  (`install_config` key `tuner_theme`, a `choice` field), default from `CONSTRUCTICON_TUNER_THEME`, else
+  radio (see "Install config"). `base.html` puts it on `<html data-tuner-theme="...">` (Jinja global
+  `tuner_theme()`), and `:root[data-tuner-theme="museum"]` in `style.css` swaps the `--tuner-*` set. Only
+  the two tuners change (the home dial, the card page's timeline and its drag readout), not the app. The
+  museum block sets every DERIVED value as a constant, so the radio colour sliders can't leak into it. A
+  new theme = one value in `install_config.TUNER_THEMES` + one `:root[data-tuner-theme=...]` block.
 - **The accent is hazard yellow (#785, was lavender):** ONE set on `:root`: `--accent-yellow-hue` /
   `--accent-yellow-light` build `--hazard-yellow` (= the needle's `--tuner-yellow`), and `--highlight`,
   `-hover`, `-ink` (dark text on any yellow fill), `-tint`, `-glow`, `-muted` / `-muted-edge` (resting card
@@ -1685,11 +1718,12 @@ The home page's timeline is a horizontal dial across the top (`static/js/radio-d
   `.app-header` on BOTH sides, so every page shares one centred content box; under 760px the right gutter
   stays rail-wide (60px) and the left is 20px (`--rail-gutter-left`). Don't re-pad `.app-main` per page.
 - Empty, malformed or unloadable data shows a plain message in the chassis, never a blank bar.
-- Pass 2 (not built): start-to-end span bars and a per-year density glow; their empty layers
-  (`.radio-dial-layer-spans`, `-density`) and no-op `_renderSpans` / `_renderDensity` are the hooks.
-- Checks: `node scripts/test_radio_dial_775.js` (maths), `node scripts/test_radio_dial_ui_775.js` (the
-  widget against a fake DOM), `scripts/test_radio_dial_775.py` (the rendered page, the rail gone, who sees
-  the tuning panel), `scripts/test_gutters_accent_784_785.py` (the gutters and the accent, static).
+- Checks: `node scripts/test_radio_dial_775.js` (maths), `node scripts/test_dial_it_up_775.js` (pass 2's
+  maths), `node scripts/test_radio_dial_ui_775.js` (the widget against a fake DOM, bars and glow too),
+  `scripts/test_radio_dial_775.py` (the rendered page, the rail gone, who sees the tuning panel),
+  `scripts/test_dial_it_up_775_783_788.py` (end dates on the page, #788's panel rule on dev, the theme
+  setting end to end, the museum CSS; runs both node tests when node is on PATH, else says SKIP),
+  `scripts/test_gutters_accent_784_785.py` (the gutters and the accent, static).
 
 ## Dates: real, approximate, undated (#725, "Import date is not a birthday")
 
@@ -2673,6 +2707,12 @@ JSON body). No secrets there: the publish token stays a write-only API key (`app
   (`install_config.LEGACY_VALUES`; publish targets from the old `pages_publish_targets` app setting
   when it was set). Note: that includes the owner's work install, which got the owner's publish
   targets too (as before); change them there in Admin > Install.
+- **Dial theme (#783):** `tuner_theme` = `radio` | `museum` (`TUNER_THEMES`; any case, trimmed; "" clears
+  it); anything else is 400 `bad_tuner_theme` naming the choices, nothing written. Unset = the env default
+  `CONSTRUCTICON_TUNER_THEME` (read per call), else `radio`; a bad env value is logged once and named on
+  the Install panel (`public()["tuner_theme"]`: current, source setting | env | default, env value,
+  env_invalid), never used. Read with `install_config.tuner_theme()`; the save is the usual imaged
+  `install_config_update` row, undoable. See "Home timeline: the radio dial".
 - **Per-hobby settings** (`hobby_settings`, `core/hobbies.py` `set_physical_piece`, `POST
   /api/hobby/{id}/physical-piece`, editor, undoable): "shows physical-piece fields" puts the
   PHYSICAL PIECE group on items in that hobby's cards (`physical_piece.in_physical_piece_hobby`)

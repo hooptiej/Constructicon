@@ -97,6 +97,9 @@ services:
       # - CONSTRUCTICON_CSP=
       #   Diagnose a page the CSP breaks: send it as Content-Security-Policy-Report-Only instead.
       # - CONSTRUCTICON_CSP_REPORT_ONLY=1
+      #   #783: the timeline dials' default look, radio (default) or museum (a clean gallery look for
+      #   a professional install). Admin > Install "Dial theme" overrides it.
+      # - CONSTRUCTICON_TUNER_THEME=museum
       #   #724 d: a web link's OCR fetches its page's title and summary through core/safe_fetch.py
       #   (public addresses only, 2 MB / 10 s, one fetch at a time). "off" for an offline install:
       #   links then settle grey "page fetching is turned off on this install".

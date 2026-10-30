@@ -64,6 +64,8 @@ templates.env.globals["app_version"] = version_info.get_version
 # its DEV- prefix: base.html puts is_dev in front of whatever name the page's title block makes.
 templates.env.globals["app_name"] = install_config.app_name
 templates.env.globals["app_logo_url"] = install_config.app_logo_url
+# #783: the dial theme ("radio" | "museum"), on <html data-tuner-theme> in base.html.
+templates.env.globals["tuner_theme"] = install_config.tuner_theme
 
 
 class _HobbyLabelGlobal:

@@ -111,7 +111,7 @@ const BASE = { visibleYears: 10, minPxPerYear: 64, monthTickMinPx: 9, toleranceP
 const { root, chassis, dial } = mount(ROWS);
 dial.setTuning(BASE);
 ok('builds the window, band, needle and readout', ['radio-dial-window', 'radio-dial-band', 'radio-dial-needle', 'radio-dial-readout'].every((c) => chassis.qa(c).length === 1));
-ok('pass 2 layers are in the band, empty', chassis.qa('radio-dial-layer-spans').length === 1 && chassis.qa('radio-dial-layer-density').length === 1);
+ok('pass 2 layers are in the band', chassis.qa('radio-dial-layer-spans').length === 1 && chassis.qa('radio-dial-layer-density').length === 1);
 ok('the needle starts mid-range', dial.needle === (day(1999, 1, 1) + day(2024, 12, 24)) / 2);
 ok('untuned: the readout shows static, no card names', /untuned/.test(dial.readout.innerHTML) && !/Desk build/.test(readoutText(dial)), dial.readout.innerHTML);
 ok('untuned: aria-valuetext says so', dial.win.getAttribute('aria-valuetext') === 'untuned');
@@ -242,6 +242,61 @@ ok('month ticks appear when a month is wide enough', dial.ticks.innerHTML.includ
 dial.setTuning({ visibleYears: 'nonsense', bogus: 3 });
 ok('bad tuning values and unknown keys are ignored', dial.tuning.visibleYears === 5 && !('bogus' in dial.tuning));
 ok('every tunable has a default and a range', RadioDial.TUNABLES.every((t) => t.key in RadioDial.DEFAULTS && t.min < t.max));
+
+// --- #775 pass 2 (batch 14 "Dial It Up"): span bars and the per-year density glow ---
+const SPANS = [
+  row('long', 'Long build', day(2000, 1, 1), { effective_end: day(2003, 7, 1) }),
+  row('point', 'Start only', day(2001, 6, 1)),
+  row('mid', 'Overlapping part', day(2001, 1, 1), { effective_end: day(2002, 1, 1), is_child: true }),
+  row('late', 'Runs past the last start', day(2004, 1, 1), { effective_end: day(2008, 6, 1) }),
+];
+const sp = mount(SPANS).dial;
+const spansHtml = sp.spansLayer.innerHTML;
+ok('pass 2: one bar per card with a real span, start-only cards get none',
+  (spansHtml.match(/class="radio-dial-span/g) || []).length === 3 && sp.chassis.qa('radio-dial-layer-spans').length === 1, spansHtml);
+ok('pass 2: start-only and spanned cards all keep their tick', (sp.ticks.innerHTML.match(/class="radio-dial-card/g) || []).length === 4);
+ok('pass 2: an overlapping bar sits in the next row (--lane:1), a child bar is marked',
+  /radio-dial-span radio-dial-span--child"[^>]*--lane:1/.test(spansHtml), spansHtml);
+ok('pass 2: the band reaches the year after the latest END (2008 labelled, 2009 the last tick)',
+  sp.ticks.innerHTML.includes('>2008</span>') && sp.ticks.innerHTML.includes('>2009</span>') && sp.rng.last === day(2004, 1, 1));
+ok('pass 2: bar positions are finite', !/NaN|Infinity/.test(spansHtml));
+const dens = sp.densityLayer.innerHTML;
+ok('pass 2: a density glow per year that holds a card (2000..2008 with spans)', (dens.match(/class="radio-dial-density"/g) || []).length === 9, dens);
+ok('pass 2: the busiest year glows at level 1', /--lvl:1\.000/.test(dens));
+sp.setTuning({ densitySpans: 0 });
+const densStarts = sp.densityLayer.innerHTML;
+ok('pass 2: counting starts only lights just the start years (2000, 2001, 2004)', (densStarts.match(/class="radio-dial-density"/g) || []).length === 3, densStarts);
+sp.setTuning({ spanMinPx: 1000 });
+ok('pass 2: a bar narrower than spanMinPx stays a tick', sp.spansLayer.innerHTML === '');
+sp.setTuning({ spanHeight: 5, spanGap: 2, spanOpacity: 0.8, densityStrength: 0.5, densitySpread: 60 });
+ok('pass 2: the bar and glow looks go to the --dial-* variables on .radio-dial, live',
+  sp.root.style['--dial-span-h'] === '5px' && sp.root.style['--dial-span-gap'] === '2px' && sp.root.style['--dial-span-opacity'] === '0.8'
+  && sp.root.style['--dial-density-strength'] === '0.5' && sp.root.style['--dial-density-spread'] === '60%', sp.root.style);
+ok('pass 2: every span / density value has a slider', ['spanMinPx', 'spanLanes', 'spanHeight', 'spanGap', 'spanOpacity',
+  'densityStrength', 'densityCurve', 'densitySpread', 'densitySpans'].every((k) => RadioDial.TUNABLES.some((t) => t.key === k) && k in RadioDial.DEFAULTS));
+ok('pass 2: every CSS-variable value is a default', Object.keys(RadioDial.CSS_VARS).every((k) => k in RadioDial.DEFAULTS));
+// Owner (batch 14): "spans count": the readout lists starts near the needle, then spans covering it.
+const ro = mount(SPANS).dial;
+ro.setTuning({ visibleYears: 10, minPxPerYear: 64, tolerancePx: 10, snapStrength: 0 });
+ro._setNeedle(day(2001, 6, 1));
+const roNames = ro.readout.qa('radio-dial-station').map((a) => a.textContent);
+ok('readout: the card starting at the needle first, then the spans covering it',
+  JSON.stringify(roNames) === JSON.stringify(['Start only', 'Overlapping part', 'Long build']), roNames);
+ok('readout: a spanning card is marked and shows its range',
+  ro.readout.qa('radio-dial-station--span').length === 2 && / - /.test(ro.readout.qa('radio-dial-station-date')[1].textContent),
+  ro.readout.qa('radio-dial-station-date').map((d) => d.textContent));
+ok('readout: a card listed for its start shows just its start date', !/ - /.test(ro.readout.qa('radio-dial-station-date')[0].textContent));
+ro._setNeedle(day(2002, 9, 1));
+ok('readout: between starts, a covering span is named instead of "no cards here"',
+  /Long build/.test(ro.readout.textContent) && !/no cards here/.test(ro.readout.textContent), ro.readout.textContent);
+ro.setTuning({ readoutMax: 1 });
+ro._setNeedle(day(2001, 6, 1));
+ok('readout: spans count toward the "+N more" cap', ro.readout.qa('radio-dial-station').length === 1
+  && ro.readout.qa('radio-dial-more')[0].textContent === '+2 more', ro.readout.textContent);
+ro._setNeedle(day(2003, 10, 1));
+ok('readout: past every span, still "no cards here"', /no cards here/.test(ro.readout.textContent));
+const marks = sp.spansLayer.innerHTML + sp.densityLayer.innerHTML;
+ok('pass 2: marks never grow or zoom (no scale / zoom / transform in the bars or glow)', !/scale|zoom|transform/.test(marks));
 
 // --- never a blank bar ---
 const empty = mount([]);

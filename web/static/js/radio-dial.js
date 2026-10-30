@@ -13,9 +13,12 @@
 // until the user moves the dial. Marks never grow or zoom (#775's lesson comment): they're static,
 // the readout carries the detail.
 //
-// Pass 2 (not built) hooks: _renderSpans() fills .radio-dial-layer-spans with start-to-end bars from
-// card.end; _renderDensity() fills .radio-dial-layer-density with a per-year glow. Both layers are
-// already in the band, under the ticks, and are laid out with the same bandX maths.
+// Pass 2 (built in batch 14, "Dial It Up"): _renderSpans() fills .radio-dial-layer-spans with a
+// start-to-end bar per card that has a real end (start-only cards stay a tick), stacked in rows above
+// the ticks; _renderDensity() fills .radio-dial-layer-density with a per-year glow, brighter for years
+// holding more cards. Both sit in the band under the ticks, laid out with the same bandX maths, and
+// never grow or zoom. Their feel values are DIAL_DEFAULTS span* / density* (+ --dial-span-*,
+// --dial-density-* on .radio-dial).
 //
 // The maths is radio-dial-math.js (pure, node-tested by scripts/test_radio_dial_775.js).
 
@@ -44,6 +47,26 @@ const DIAL_DEFAULTS = {
   accentLight: 57,      // --accent-yellow-light): the needle, rail tab borders, active chip, Grid / List.
                         // 44 / 57 = #E8B93A. The panel's ranges keep dark text on it and it on the
                         // dark cards above WCAG AA (worst corner: 5.3:1 and 4.8:1).
+  // #775 pass 2: start-to-end span bars and the per-year density glow. First guesses, for the owner
+  // to tune with ?tune=1; the CSS ones mirror the --dial-* variables on .radio-dial (style.css).
+  spanMinPx: 3,         // a span narrower than this at the current zoom stays just its tick
+  spanLanes: 3,         // rows of bars stacked above the card ticks before bars share a row
+  spanHeight: 3,        // a bar's height, px (CSS --dial-span-h)
+  spanGap: 1,           // space between rows and above the ticks, px (CSS --dial-span-gap)
+  spanOpacity: 0.55,    // a bar's opacity, so overlaps read brighter (CSS --dial-span-opacity)
+  densityStrength: 0.35, // the busiest year's glow, 0 = off (CSS --dial-density-strength)
+  densityCurve: 0.6,    // falloff: glow = (count / busiest) ^ curve; < 1 lifts quiet years
+  densitySpread: 70,    // how far the glow spreads across its year, % (CSS --dial-density-spread)
+  densitySpans: 1,      // 1 = a card lights every year its span touches; 0 = only its start year
+};
+
+// #775 pass 2: the feel values that are CSS variables on .radio-dial (key -> [variable, unit]).
+const DIAL_CSS_VARS = {
+  spanHeight: ['--dial-span-h', 'px'],
+  spanGap: ['--dial-span-gap', 'px'],
+  spanOpacity: ['--dial-span-opacity', ''],
+  densityStrength: ['--dial-density-strength', ''],
+  densitySpread: ['--dial-density-spread', '%'],
 };
 
 // Month-tick slider notches: fine at the low end, where the owner tunes (PR #782), coarser above.
@@ -71,6 +94,16 @@ const DIAL_TUNABLES = [
   { key: 'readoutHue', label: 'Readout colour (hue)', min: 0, max: 360, step: 1 },
   { key: 'accentHue', label: 'Accent colour (hue)', min: 30, max: 60, step: 1 },        // #785
   { key: 'accentLight', label: 'Accent tint (lightness %)', min: 45, max: 70, step: 1 },  // #785
+  // #775 pass 2
+  { key: 'spanMinPx', label: 'Span bar from (px wide)', min: 0, max: 40, step: 1 },
+  { key: 'spanLanes', label: 'Span bar rows', min: 1, max: 6, step: 1 },
+  { key: 'spanHeight', label: 'Span bar height (px)', min: 1, max: 8, step: 0.5 },
+  { key: 'spanGap', label: 'Span bar gap (px)', min: 0, max: 4, step: 0.5 },
+  { key: 'spanOpacity', label: 'Span bar opacity', min: 0.1, max: 1, step: 0.05 },
+  { key: 'densityStrength', label: 'Density glow strength (0 = off)', min: 0, max: 1, step: 0.01 },
+  { key: 'densityCurve', label: 'Density falloff (curve)', min: 0.2, max: 3, step: 0.05 },
+  { key: 'densitySpread', label: 'Density glow spread (%)', min: 20, max: 100, step: 1 },
+  { key: 'densitySpans', label: 'Density counts spans (1) or starts (0)', min: 0, max: 1, step: 1 },
 ];
 
 const DIAL_DRAG_CLICK_PX = 3;   // a press that moves less than this isn't a drag
@@ -97,7 +130,7 @@ class RadioDial {
       return;
     }
     this.skipped = parsed.skipped;
-    this.rng = M.range(this.cards);
+    this.rng = M.range(this.cards, { coverEnds: true });  // pass 2: the band reaches the latest end
     this.needle = (this.rng.first + this.rng.last) / 2;  // untuned: mid-range, nothing previewed
     this.tuned = false;
     this._readoutKey = null;
@@ -132,8 +165,8 @@ class RadioDial {
     this.win = el('div', 'radio-dial-window', this.chassis, { tabindex: '0', role: 'slider',
       'aria-label': 'Timeline dial: drag, scroll or use the arrow keys to tune through the years' });
     this.band = el('div', 'radio-dial-band', this.win);
-    el('div', 'radio-dial-layer-density', this.band, hidden);  // pass 2 hook
-    el('div', 'radio-dial-layer-spans', this.band, hidden);    // pass 2 hook
+    this.densityLayer = el('div', 'radio-dial-layer-density', this.band, hidden);  // pass 2: year glow
+    this.spansLayer = el('div', 'radio-dial-layer-spans', this.band, hidden);      // pass 2: span bars
     el('div', 'radio-dial-axis', this.band, hidden);
     this.ticks = el('div', 'radio-dial-ticks', this.band, hidden);
     el('div', 'radio-dial-needle', this.win, hidden);
@@ -175,9 +208,25 @@ class RadioDial {
     this._place();
   }
 
-  _renderSpans() { /* pass 2 (#775): start-to-end bars from card.end into .radio-dial-layer-spans */ }
+  // Pass 2 (#775): a bar from each card's start to its end (radio-dial-math spanBars), in rows above
+  // the ticks. Static, like every mark: the row is a CSS variable, the look is --dial-span-*.
+  _renderSpans() {
+    const bars = this.M.spanBars(this.cards, this.rng, this.pps,
+      { minPx: this.tuning.spanMinPx, lanes: this.tuning.spanLanes });
+    this.spansLayer.innerHTML = bars.map((b) =>
+      `<span class="radio-dial-span${b.isChild ? ' radio-dial-span--child' : ''}" style="left:${b.x.toFixed(1)}px;width:${b.w.toFixed(1)}px;--lane:${b.lane}"></span>`).join('');
+  }
 
-  _renderDensity() { /* pass 2 (#775): per-year density glow into .radio-dial-layer-density */ }
+  // Pass 2 (#775): one glow per year, brighter the more cards it holds (yearDensity + densityLevels).
+  // The level is a CSS variable; --dial-density-strength scales it, so the strength slider is live.
+  _renderDensity() {
+    const M = this.M;
+    const years = M.densityLevels(M.yearDensity(this.cards, this.rng, { spans: !!this.tuning.densitySpans }),
+      this.tuning.densityCurve);
+    const x = (e) => M.bandX(e, this.rng, this.pps);
+    this.densityLayer.innerHTML = years.filter((y) => y.level > 0).map((y) =>
+      `<span class="radio-dial-density" style="left:${x(y.start).toFixed(1)}px;width:${(x(y.end) - x(y.start)).toFixed(1)}px;--lvl:${y.level.toFixed(3)}" title="${y.year}: ${y.count}"></span>`).join('');
+  }
 
   _place() {
     const offset = this.M.bandOffset(this.needle, this.rng, this.pps, this.width);
@@ -196,7 +245,11 @@ class RadioDial {
       this.readout.innerHTML = '<span class="radio-dial-static">~ untuned ~ slide the dial to tune in</span>';
       return;
     }
-    const here = M.cardsAtNeedle(this.cards, this.needle, this.pps, this.tuning.tolerancePx);
+    // Batch 14 (owner: "spans count"): cards starting near the needle first, then cards whose span
+    // covers it (radio-dial-math cardsUnderNeedle), one list, capped with "+N more".
+    const under = M.cardsUnderNeedle(this.cards, this.needle, this.pps, this.tuning.tolerancePx);
+    const here = under.all;
+    const spanning = new Set(under.spans);
     const label = M.needleLabel(this.needle);
     const key = label + '|' + here.map((c) => c.slug).join(',');
     if (key === this._readoutKey) return;
@@ -219,12 +272,13 @@ class RadioDial {
     shown.forEach((c) => {
       const li = document.createElement('li');
       const a = document.createElement('a');
-      a.className = 'radio-dial-station';
+      a.className = spanning.has(c) ? 'radio-dial-station radio-dial-station--span' : 'radio-dial-station';
       a.href = `/project/${encodeURIComponent(c.slug)}`;
       a.textContent = c.title;
       const d = document.createElement('span');
       d.className = 'radio-dial-station-date';
-      d.textContent = this.formatDate(c.start);
+      // A card listed because its span covers the needle shows its range ("start - end").
+      d.textContent = spanning.has(c) ? `${this.formatDate(c.start)} - ${this.formatDate(c.end)}` : this.formatDate(c.start);
       li.append(a, d);
       list.appendChild(li);
     });
@@ -362,10 +416,15 @@ class RadioDial {
     // #785: the accent (needle and UI highlights share one hazard yellow, style.css :root).
     theme.setProperty('--accent-yellow-hue', String(this.tuning.accentHue));
     theme.setProperty('--accent-yellow-light', `${this.tuning.accentLight}%`);
+    // #775 pass 2: the bar and glow looks are the dial's own --dial-* variables (on .radio-dial).
+    Object.entries(DIAL_CSS_VARS).forEach(([k, [name, unit]]) => {
+      this.root.style.setProperty(name, `${this.tuning[k]}${unit}`);
+    });
     this._layout();
   }
 }
 
 RadioDial.DEFAULTS = DIAL_DEFAULTS;
 RadioDial.TUNABLES = DIAL_TUNABLES;
+RadioDial.CSS_VARS = DIAL_CSS_VARS;
 window.RadioDial = RadioDial;

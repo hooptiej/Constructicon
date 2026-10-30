@@ -5200,11 +5200,17 @@ class ImageLog:
         return False
 
 
-def invert_image(conn, mutation, force=False):
+BOOKKEEPING_COLUMNS = ("updated_at",)  # #605: moved by any later touch; not a reason to refuse undoing a creation
+
+
+def invert_image(conn, mutation, force=False, lenient=()):
     """Applies the inverse of one row image (after -> before). Unless `force`, raises
     UndoConflict when the row no longer equals the recorded `after`. Returns the
     mutation that was actually applied ({table, key, before: <what was there>,
-    after: <what is there now>}) so the undo can itself be logged and undone."""
+    after: <what is there now>}) so the undo can itself be logged and undone.
+    `lenient` (#605): columns left out of that comparison (cards.undo passes BOOKKEEPING_COLUMNS for a
+    row whose creation the same undo reverses: the row is going away, so a bumped timestamp on it
+    can't be lost work; a real field change still refuses)."""
     table, key = mutation["table"], mutation["key"]
     if table not in IMAGE_TABLE_KEYS:
         raise UndoConflict(f"Can't undo a change to {table!r}.", {"table": table})
@@ -5233,7 +5239,7 @@ def invert_image(conn, mutation, force=False):
                                    {"table": table, "key": key, "found": "no row", "expected": "row"})
             # updated_at last: it moves on every edit, so a real field difference is the better explanation.
             for col, want in sorted(expected.items(), key=lambda kv: kv[0] == "updated_at"):
-                if col == "rowid":
+                if col == "rowid" or col in lenient:
                     continue
                 if current.get(col) != want:
                     raise UndoConflict(

@@ -2970,13 +2970,19 @@ def undo(target, *, force=False, dry_run=False, actor=None):
     file_plan = _items.undo_prepare(rows)
     batch_id = changes.new_batch_id()
     applied, slugs, moved = [], [], []
+    # #605: rows this undo CREATED-then-removes (an insert image among `rows`). A later bookkeeping bump
+    # on one of them (updated_at) doesn't refuse the undo; a real field change still does.
+    created_here = {(m["table"], json.dumps(m["key"], sort_keys=True)) for r in rows for m in r["mutations"]
+                    if m.get("before") is None and m.get("after") is not None}
     try:
         with db.transaction(dry_run=dry_run):
             conn = db.get_conn()
             for r in sorted(rows, key=lambda x: x["id"], reverse=True):
                 slugs += r["affected_slugs"]
                 for m in reversed(r["mutations"]):
-                    applied.append(db.invert_image(conn, m, force=force))
+                    lenient = (db.BOOKKEEPING_COLUMNS if (m["table"], json.dumps(m["key"], sort_keys=True)) in created_here
+                               else ())
+                    applied.append(db.invert_image(conn, m, force=force, lenient=lenient))
             undo_id = db.insert_change_log(conn, "undo", actor, applied, batch_id=batch_id,
                                            affected_slugs=sorted(set(slugs)))
             reversed_ids = [r["id"] for r in rows]

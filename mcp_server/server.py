@@ -55,7 +55,7 @@ os.environ["CONSTRUCTICON_ROLE"] = "mcp"
 from mcp.server.mcpserver import Image as McpImage, MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
-from core import access_log, actor as actor_ctx, policy, roles, users
+from core import access_log, actor as actor_ctx, mcp_tokens, policy, roles, users
 from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, duplicates, errors, ingest, lookalikes, item_dates, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
@@ -193,7 +193,11 @@ def _request_actor():
 def _call_as_mcp(fn, args, kwargs, need_role=None):
     """(True, result) or (False, error payload). `need_role` (#746, ACTION_ROLES): the role the
     caller must hold for this (tool, action); checked first, as the actor the call runs as."""
-    with actor_ctx.acting_as(_request_actor()):
+    from mcp_server import auth as mcp_auth  # stdlib-only module
+    ident = mcp_auth.current_identity()
+    # #560 / #778: the channel is "mcp" whoever the caller is; a personal key's id rides along so what
+    # the call makes is credited "<user>'s <token name>" (core/actor.acting_via, core/mcp_tokens.credit).
+    with actor_ctx.acting_as(_request_actor()),             actor_ctx.acting_via(actor_ctx.CHANNEL_MCP, ident.get("token_id") if ident else None):
         try:
             if need_role is not None:
                 _require_role(need_role)
@@ -586,6 +590,12 @@ def _to_public(row):
         # #604 step 1: the user who uploaded it ({id, username, name}); null = admin-owned (the
         # install token, the MCP, a script). #603: the sensitive lock and why (type or flag).
         "uploaded_by_user": users.owner_info(row.get("uploaded_by_user_id")),
+        # #778: the personal MCP key it was uploaded with, as {"text": "<user>'s <token name>", ...}
+        # (null = none: the web, the install token). #560: HOW it arrived (web | mcp | migration:<source>
+        # | ...); `uploaded_by` above stays the free-text Source note, never who uploaded it.
+        "uploaded_via": mcp_tokens.credit(row.get("uploaded_by_user_id"), row.get("uploaded_via_token_id")),
+        "channel": row.get("channel"),
+        "source_note": row.get("tech"),
         "sensitive": policy.restriction_reason(row) is not None,
         "sensitive_reason": policy.restriction_reason(row),
     }
@@ -711,11 +721,18 @@ def _to_public_project(project):
         "parent_id": project.get("parent_id"),
         "created_at": project["created_at"],
         "created_by_user": users.owner_info(project.get("created_by_user_id")),  # #604 step 1 (null = admin-owned)
+        "created_via": mcp_tokens.credit(project.get("created_by_user_id"), project.get("created_via_token_id")),  # #778
         "start_date_override": project.get("start_date_override"),
         "end_date_override": project.get("end_date_override"),
         "effective_start": effective_start,
         "effective_end": effective_end,
     }
+
+
+def _hobby_creator(hobby_id):
+    """#778: {created_by_user, created_via} for a hobby (null = admin-owned / no personal key)."""
+    hp = db.hobby_privacy(hobby_id)
+    return mcp_tokens.creator_fields(hp["created_by_user_id"], hp["created_via_token_id"])
 
 
 def _to_public_blog_entry(entry):
@@ -733,6 +750,8 @@ def _to_public_blog_entry(entry):
         "content_date": entry.get("content_date"),
         "created_at": entry["created_at"],
         "updated_at": entry["updated_at"],
+        # #604 / #778: {created_by_user, created_via} ("<user>'s <token name>" for a personal key)
+        **mcp_tokens.creator_fields(entry.get("created_by_user_id"), entry.get("created_via_token_id")),
         # Carry the per-attachment note + sort_order (the reshaping helpers
         # drop them, but they're the point of the attachment).
         "projects": [{**_to_public_project(p), "note": p.get("note", ""), "sort_order": p.get("sort_order")} for p in projects],
@@ -835,8 +854,9 @@ def constructicon_upload(filename: str, content_base64: str, description: str = 
 
     filename: its extension decides the type (.png .pdf .stl .psd .svg .mp3 ...).
     tags: tag names to attach. description: the uploader's note.
-    uploaded_by: the Source label; default "Claude — authored". For migrated content pass
-      db.source_migrated_from("<source>").
+    uploaded_by: a free-text Source NOTE (default "Claude — authored"), never who uploaded it: the
+      uploader is the token's user (the install token = admin-owned). For migrated content pass
+      "Claude — migrated from <source>" (sets channel "migration:<source>").
     source_modified_at: the file's own mtime (unix seconds). When filename, size and this match an
       existing item, that item comes back with "duplicate": true instead.
     sensitive: lock it from the start (admins only).
@@ -1845,7 +1865,8 @@ def constructicon_add_content(media_type: str, external_url: str | None = None, 
     """Create an item with no uploaded file: a YouTube link, a web page, a written post.
     media_type must be a type that takes no file (e.g. "youtube"); external_url its link;
     content_description its own title. Files go through constructicon_upload. sensitive locks it
-    from the start. Text extraction runs in the background. Error: content_refused.
+    from the start. uploaded_by is a free-text Source note, never who added it (the token's user).
+    Text extraction runs in the background. Error: content_refused.
     """
     result = ingest.ingest_content(
         source=uploaded_by,
@@ -2241,7 +2262,8 @@ def constructicon_get_project(id_or_slug: str | int, text_chars: int = TEXT_PREV
 def constructicon_list_hobbies() -> list[dict]:
     """All hobbies, by name: {id, name, slug, status (active | inactive, set by hand), group_code,
     project_count, flags, cover_slug, cover_picked, cover_source (picked | highlighted_project |
-    recent_project | null), cover_project, picked_cover_slug, picked_cover_unavailable}.
+    recent_project | null), cover_project, picked_cover_slug, picked_cover_unavailable, created_by_user,
+    created_via ("<user>'s <token name>")}.
     flags are computed, never stored: inactive_with_active_work, active_untouched (~2 years)."""
     out = []
     for h in policy.filter_visible_hobbies(db.list_hobbies()):  # #604 step 3
@@ -2255,6 +2277,7 @@ def constructicon_list_hobbies() -> list[dict]:
             "project_count": h.get("project_count", 0),
             "flags": f["flags"],
             **cards.hobby_cover_fields(cards.resolve_hobby_cover(h)),
+            **_hobby_creator(h["id"]),  # #604 / #778
         })
     return out
 
@@ -2485,6 +2508,7 @@ def constructicon_list_blog_entries(status: str | None = None) -> list[dict]:
             "content_date": e.get("content_date"),
             "created_at": e["created_at"],
             "updated_at": e["updated_at"],
+            **mcp_tokens.creator_fields(e.get("created_by_user_id"), e.get("created_via_token_id")),  # #778
         }
         for e in entries
     ]

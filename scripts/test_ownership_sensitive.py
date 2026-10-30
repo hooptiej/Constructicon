@@ -122,7 +122,7 @@ j = C["A"].get(f"/api/image/{E1_ITEM}").json()
 check("item JSON: uploaded_by_user = E1 (and the Source label untouched)",
       (j.get("uploaded_by_user") or {}).get("username") == "os_ed1" and isinstance(j.get("uploaded_by"), str), j.get("uploaded_by_user"))
 page = C["A"].get(f"/object/{E1_ITEM}").text
-check("item page ORIGIN: Uploaded by os_ed1", re.search(r"Uploaded by</dt><dd>\s*os_ed1", page) is not None)
+check("item page ORIGIN: Uploaded by os_ed1", re.search(r"Uploaded by</dt><dd>\s*(<a [^>]*>)?\s*os_ed1", page) is not None)  # #560: may be a gallery link
 from mcp_server import server as mcp  # noqa: E402  (after the DB env is set)
 with actor.acting_as(actor.ACTOR_MCP):
     g = mcp.constructicon_get(E1_ITEM)
@@ -144,7 +144,7 @@ CARD = db.get_project(r.json()["slug"] if "slug" in r.json() else r.json()["id"]
 check("card: created_by_user_id = E1", CARD["created_by_user_id"] == UID["os_ed1"], CARD.get("created_by_user_id"))
 check("card's write-up: uploaded_by_user_id = E1", row(CARD["writeup_slug"])["uploaded_by_user_id"] == UID["os_ed1"])
 check("card page ORIGIN: Created by os_ed1",
-      re.search(r"Created by</dt><dd>\s*os_ed1", C["A"].get(f"/project/{CARD['slug']}").text) is not None)
+      re.search(r"Created by</dt><dd>\s*(<a [^>]*>)?\s*os_ed1", C["A"].get(f"/project/{CARD['slug']}").text) is not None)
 with actor.acting_as(actor.ACTOR_MCP):
     gp = mcp.constructicon_get_project(CARD["slug"])
 check("MCP get_project: created_by_user = E1", (gp.get("created_by_user") or {}).get("username") == "os_ed1",

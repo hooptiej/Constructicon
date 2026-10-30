@@ -176,6 +176,15 @@ def api_rotate_my_mcp_token(token_id: str):
     return {"ok": True, **mcp_tokens.rotate(token_id)}
 
 
+@router.post("/api/account/mcp-tokens/{token_id}/rename", dependencies=requires(roles.VIEWER))
+def api_rename_my_mcp_token(token_id: str, request: Request):
+    """(#778) JSON {name}. A new name for one of your tokens (same secret); work made with it is
+    credited "<you>'s <new name>" at once. {ok, id, name, ..., batch_id, message}. 400 bad_token_name,
+    409 token_name_taken, 404 not yours."""
+    body = _json_body(request)
+    return {"ok": True, **mcp_tokens.rename(token_id, body.get("name"))}
+
+
 @router.post("/api/account/mcp-tokens/{token_id}/revoke", dependencies=requires(roles.VIEWER))
 def api_revoke_my_mcp_token(token_id: str):
     """Deletes one of your tokens. 404 when it isn't yours (or is already gone)."""

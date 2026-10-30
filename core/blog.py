@@ -75,7 +75,9 @@ def create(title, subtitle="", body="", status="draft", cover_slug=None, content
                 "status": status or "draft", "cover_slug": cover_slug, "content_date": content_date,
                 "created_at": now, "updated_at": now,
                 # #604 step 1: the signed-in creator (NULL = token / MCP / script = admin-owned).
-                "created_by_user_id": users.user_id_for_actor(actor_ctx.resolve(actor))})
+                "created_by_user_id": users.user_id_for_actor(actor_ctx.resolve(actor)),
+                # #778: the personal MCP key it was made with (None for the web / install token).
+                "created_via_token_id": actor_ctx.token_id_for(actor)})
             log.slugs.append(f"blog:{slug}")
         rows, entry = _done(entry_id, batch_id)
     return Result(True, _changes_from_log(rows), [], batch_id, dry_run, {"entry": entry})

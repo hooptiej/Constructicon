@@ -166,7 +166,14 @@ def _build_breadcrumbs(from_param, current_item_name):
         # Extract and URL-decode the uploader name
         uploader = unquote(from_param[5:])  # Remove "user:" prefix
         breadcrumbs.append({"label": "Home", "href": "/"})
-        breadcrumbs.append({"label": f"{uploader}'s uploads", "href": f"/gallery/user/{quote(uploader)}"})
+        # #560: a username names its account (its display name); an old Source-label link keeps the label
+        u = db.get_user(username=uploader) if uploader else None
+        shown = (u.get("display_name") or u["username"]) if u else uploader
+        breadcrumbs.append({"label": f"{shown}'s uploads", "href": f"/gallery/user/{quote(uploader)}"})
+    elif from_param.startswith("label:"):
+        label = unquote(from_param[6:])
+        breadcrumbs.append({"label": "Home", "href": "/"})
+        breadcrumbs.append({"label": f"Source: {label}", "href": f"/gallery/source/{quote(label)}"})
     else:
         # Unrecognized from param — default to Home
         breadcrumbs.append({"label": "Home", "href": "/"})

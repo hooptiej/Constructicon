@@ -549,7 +549,14 @@ ADDED_SINCE_746 = {"private",        # #604 step 3: projects.private, hobby_sett
                    # the answers' picked_cover_card_id), and a renamed hobby's old slugs are kept.
                    "cover_project_id", "picked_cover_card_id", "picked_cover_card", "hobby_slug_history",
                    # #722: list results trim big type_metadata values and say so
-                   "type_metadata_truncated", "type_metadata_cut_keys"}
+                   "type_metadata_truncated", "type_metadata_cut_keys",
+                   # #560 / #778: how an item arrived, its Source note, and the personal MCP key credit
+                   # (capture_events.channel / uploaded_via_token_id, projects / hobby_settings / blog_entries
+                   # .created_via_token_id, and the answers' channel / source_note / uploaded_via / created_via)
+                   "channel", "source_note", "uploaded_via", "uploaded_via_token_id", "created_via",
+                   "created_via_token_id",
+                   # #778 (owner, 2026-10-30): blog entries and hobbies carry their creator too
+                   "created_by_user"}
 
 
 def _strip_added(value):

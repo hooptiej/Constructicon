@@ -26,7 +26,9 @@ A grid names its SOURCE, the list it shows; everything after "which rows" (visib
 filter, the filed toggle, sorts, cursors) is shared:
   * "home"            every file (db.list_recent_items_by_type), the home Files panel;
   * "unfiled"         files on no card (db.list_unfiled_items), /unfiled;
-  * "user:<label>"    one Source label's uploads (db.search(uploaded_by=...)), /gallery/user/<label>;
+  * "user:<username>" one ACCOUNT's uploads (capture_events.uploaded_by_user_id, #560), /gallery/user/<username>.
+                      An old link naming a Source label instead of a user still works: it lists that label;
+  * "label:<label>"   one Source label's uploads (db.search(uploaded_by=...)), /gallery/source/<label>;
   * "hobby:<slug>"    a hobby's loose objects (db.list_loose_hobby_objects), /hobby/<slug>.
 Each source reads the rows the way its page always did, then policy.filter_visible and
 _split_revisions, so no source shows an item the viewer may not see.
@@ -123,14 +125,35 @@ HOME = ("home", None)
 
 
 def parse_source(raw):
-    """"home" | "unfiled" | "user:<label>" | "hobby:<slug>" -> (kind, arg). 400 bad_source otherwise."""
+    """"home" | "unfiled" | "user:<username>" | "label:<label>" | "hobby:<slug>" -> (kind, arg). 400
+    bad_source otherwise."""
     raw = (raw or "home").strip()
     kind, sep, arg = raw.partition(":")
     if kind in ("home", "unfiled") and not sep:
         return (kind, None)
-    if kind in ("user", "hobby") and arg.strip():
+    if kind in ("user", "label", "hobby") and arg.strip():
         return (kind, arg)
-    raise _bad("bad_source", f"source {raw[:80]!r} is not one of: home, unfiled, user:<uploader>, hobby:<slug>")
+    raise _bad("bad_source", f"source {raw[:80]!r} is not one of: home, unfiled, user:<username>, label:<label>, "
+                             "hobby:<slug>")
+
+
+def resolve_gallery(who):
+    """#560 (owner decision 2026-10-17): what /gallery/user/<who> and source user:<who> show.
+    ("user", user row) when `who` is a username (any case): the files that account uploaded;
+    else ("label", who) when it is a Source label some item carries (old links from before the
+    per-user gallery: the label view, which says it is one); else None (the caller says so, never
+    an empty page)."""
+    user = db.get_user(username=who) if who else None
+    if user:
+        return ("user", user)
+    if db.source_label_exists(who):
+        return ("label", who)
+    return None
+
+
+def unknown_gallery_message(who):
+    return (f"There is no user or Source label called {who!r}. A gallery is per account: "
+            "/gallery/user/<username> (the username shown in Admin > Users).")
 
 
 def source_name(source):
@@ -145,7 +168,16 @@ def _source_rows(source):
     if kind == "unfiled":
         return db.list_unfiled_items(limit=10_000_000, include_superseded=True)
     if kind == "user":
-        # #563/#553: no row cap (limit=1000 once cut both the list and its count short)
+        # #560: an account's uploads; an old Source-label link still lists the label. #563/#553: no row cap.
+        found = resolve_gallery(arg)
+        if found is None:
+            raise NotFound(unknown_gallery_message(arg))
+        if found[0] == "user":
+            return db.search(uploaded_by_user_id=found[1]["id"], limit=10_000_000)
+        return db.search(uploaded_by=arg, limit=10_000_000)
+    if kind == "label":
+        if not db.source_label_exists(arg):
+            raise NotFound(f"No item carries the Source label {arg!r}.")
         return db.search(uploaded_by=arg, limit=10_000_000)
     if kind == "hobby":
         hobby = db.get_hobby(arg)

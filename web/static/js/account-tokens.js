@@ -71,7 +71,17 @@
         call('POST', '/api/account/mcp-tokens/' + t.id + '/revoke').then(function () { newBox.hidden = true; load(); })
           .catch(function (e) { fail(e.message); });
       });
-      li.append(rot, ' ', rev);
+      // #778: renaming keeps the secret; work credited to this key ("<you>'s <name>") shows the new name.
+      var ren = el('button', { type: 'button', className: 'btn' }, 'Rename');
+      ren.setAttribute('aria-label', 'Rename the token ' + t.name);
+      ren.addEventListener('click', function () {
+        var name = window.prompt('New name for "' + t.name + '" (work made with it is credited to this name):', t.name);
+        if (name == null) return;
+        clearError();
+        call('POST', '/api/account/mcp-tokens/' + t.id + '/rename', { name: name.trim() }).then(function () { load(); })
+          .catch(function (e) { fail(e.message); });
+      });
+      li.append(ren, ' ', rot, ' ', rev);
       list.append(li);
     });
   }

@@ -45,6 +45,23 @@ def record(op, actor, mutations, batch_id=None, affected_slugs=None, conn=None, 
         own.close()
 
 
+def via(row):
+    """#778: the credit of a change-log row made with a personal MCP key, "<user>'s <token name>"
+    (e.g. "Hooptie J's windows claude"), from the row's `via_token_id` and the token's CURRENT name, so a
+    renamed key shows its new name; a revoked key reads "<user>'s claude". None for everything else:
+    the web, the install token (actor `mcp`, admin-owned, credited as before by its actor) and the system."""
+    token_id = row.get("via_token_id")
+    who = row.get("actor") or ""
+    if token_id is None or not who.startswith("user:"):
+        return None
+    from . import mcp_tokens, users  # lazy: both import this module's neighbours
+    uid = users.user_id_for_actor(who)
+    if uid is None:
+        return f"{who[5:]}'s {mcp_tokens.REVOKED_CREDIT_NAME}"  # the user is gone; the name is all there is
+    c = mcp_tokens.credit(uid, token_id)
+    return c["text"] if c else None
+
+
 def list_changes(card=None, batch_id=None, limit=50):
-    """Newest-first change-log rows. `card` is a project slug."""
-    return db.list_change_log(card_slug=card, batch_id=batch_id, limit=limit)
+    """Newest-first change-log rows. `card` is a project slug. Each carries `via` (#778, see via())."""
+    return [{**r, "via": via(r)} for r in db.list_change_log(card_slug=card, batch_id=batch_id, limit=limit)]

@@ -354,7 +354,9 @@ point, never a string literal at a call site.
   an install-token request to `token` by its `AccessMiddleware` (#467 step 2). The request-log rows
   in `audit_log` record it too. `owner-ui` is the pre-step-2 anonymous actor: old rows and
   in-process tests still carry it, no request does.
-- MCP: every tool runs inside `acting_as("mcp")` (the `@mcp.tool()` wrapper, below).
+- MCP: every tool runs inside `acting_as("mcp")` (the `@mcp.tool()` wrapper, below), or `user:<name>` with a
+  personal key, and inside `acting_via("mcp", <token id>)` (#560 / #778: the channel and the key; see
+  "Who and how" below).
 - Boot, the OCR watchdog and the caption queue worker run as `system`. A script
   started from `scripts/`, or a tool started as `python3 -m core.manage.<tool>` (#634), defaults to
   `script` (`actor._process_default` reads `sys.argv[0]`; with `-m` it is the module's file).
@@ -963,7 +965,8 @@ system and anonymous, which means **admin-owned**. Read it back with `users.owne
 username, name}, or None).
 - `capture_events.uploaded_by_user_id`: set in `db.insert_upload`, the ONE place an item row is made
   (web upload and `/api/content`, MCP upload / import / add_content, a card's write-up). Not the
-  `tech` Source label, which is unchanged (and is what the JSON key `uploaded_by` still means).
+  `tech` Source label, which is unchanged (and is what the JSON key `uploaded_by` still means; #560: a
+  free-text note only, see "Who and how").
 - `projects.created_by_user_id`: `db._create_project` (every card create, split, conversion).
 - `hobby_settings.created_by_user_id`: `hobbies.create`, only when a signed-in user makes the hobby
   (an imaged `hobby_settings` insert; re-marking an existing hobby never changes it).
@@ -1140,9 +1143,11 @@ token stays the admin key for scripts and ops.
   per user; `POST /api/users/{id}/mcp-tokens/revoke-all` (admin); Admin > Users' "MCP keys" column with
   "Revoke all keys" (confirm first, then the answer's message). No MCP tool for it (the web is enough).
 - **Web:** Account page (`/account/password`, the header's name link), section "My MCP tokens"
-  (`static/js/account-tokens.js`): make (shows the secret once plus the client config line), rotate
-  (confirm), revoke (confirm). API (viewer, JSON bodies): `GET /api/account/mcp-tokens`, `POST
-  /api/account/mcp-tokens` `{name}`, `POST /api/account/mcp-tokens/{id}/rotate`, `.../revoke`.
+  (`static/js/account-tokens.js`): make (shows the secret once plus the client config line), rename
+  (#778, a prompt), rotate (confirm), revoke (confirm). API (viewer, JSON bodies): `GET
+  /api/account/mcp-tokens`, `POST /api/account/mcp-tokens` `{name}`, `POST /api/account/mcp-tokens/{id}/rotate`,
+  `.../rename` `{name}` (#778: `mcp_tokens.rename`, op `mcp_token_rename`, same secret; 409
+  `token_name_taken`), `.../revoke`.
 - **MCP (`mcp_server/auth.py`):** the install token still runs as `mcp` (admin). A Bearer value starting
   `ctu_` is looked up (`mcp_tokens.authenticate`, off the event loop); valid -> the request's identity
   (`auth.IDENTITY`, a ContextVar) and the tool wrapper (`server._call_as_mcp`) runs the tool as
@@ -1156,6 +1161,70 @@ token stays the admin key for scripts and ops.
   rest, authenticate's refusals, the middleware, and real tool calls through the streamable-HTTP app as a
   user: a card they create is theirs, a viewer can't write, a private card is not_found); the admin
   side (#766) with `scripts/test_bouncers_730_749_766_779.py`.
+
+## Who and how: the channel, the per-user gallery, the MCP key credit (#560, #778)
+
+Batch 16, "Whose Claude Is It Anyway" (owner decisions on #560 2026-10-17 / 2026-10-25, #778 2026-10-18).
+**Who** made an item is `uploaded_by_user_id` (from the actor, #604); **how** it arrived is the new
+`capture_events.channel`; the old `tech` column is only the free-text **Source note**. Nothing decides
+identity, ownership, visibility or a gallery from `tech` or `channel`.
+- **Channel** (`web` | `mcp` | `script` | `system` | `migration:<source>` | `unknown`): `core/actor.py`
+  `current_channel()` = `acting_via`'s channel, else the actor's (`channel_for_actor`: a session, the
+  install token, anonymous, owner-ui -> web; mcp -> mcp; script / system / migration -> themselves).
+  `db.insert_upload` records `db.channel_for(label, current_channel())`: a Source label "Claude — migrated
+  from <X>" makes it `migration:<X>`. Shown on the item page's ORIGIN ("Arrived via", `db.channel_label`),
+  in item JSON (`channel`, `channel_label`) and MCP item reads (`channel`, `source_note` = `tech`).
+- **Migration `capture_channel_560`** (web, once, fill-only, idempotent; one change-log row
+  `migration_capture_channel_560`, counts per rule + per channel), first rule that applies: (1) a
+  migrated-from label -> `migration:<X>`; (2) the item's `upload_tags` / `automatch_tags` change-log row
+  within 2 min -> its actor's channel; (3) matched to a successful `POST /api/upload` / `/api/content`
+  request-log row (`db._request_log_items`, #604's filename / URL match) -> web; (4) a card's write-up ->
+  the channel of its `create_card` row's actor; (5) the label alone: the owner's "— manual upload" (only
+  the web routes write it) -> web, "— automated upload" -> script, "Claude — authored" / "Claude" (the
+  MCP's default note) -> mcp; (6) else `unknown` (said so, never guessed).
+- **The MCP's `uploaded_by`** (`constructicon_upload` / `import` / `add_content`) is a **source note**:
+  stored in `tech`, never an identity. The uploader is the token's user (install token = admin-owned).
+- **Owner backfill `owner_upload_backfill_560`** (owner answer (a), 2026-10-25; after the channel fill):
+  an item becomes the owner's when it has no uploader yet, its label is exactly `source_manual_upload()`
+  (on the owner's installs "Hooptie J (me) — manual upload": install_config `owner_label` + " — manual
+  upload", seeded by #562's LEGACY_VALUES), its channel is `web`, and its request-log row (if any) was not
+  the install token (`token`: stays admin-owned, the owner default) nor another signed-in user. Everything
+  else stays admin-owned. **The owner's account** (`db.owner_account`): the one enabled admin whose
+  display name or username is install_config `owner_name` (any case); with no owner name, the only
+  enabled admin. None or several -> `db.MigrationDeferred`: `run_pending_migrations` rolls it back
+  (nothing written), prints `schema_migrations: DEFERRED <name>: nothing was changed, because ...` (what to
+  fix) to the boot log and the `constructicon.db` logger, leaves it unrecorded (it retries every start)
+  and boots on. Nothing to assign = it applies without needing an owner. One change-log row
+  `migration_owner_uploads_560` (`details`: counts incl. `left_install_token` / `left_not_web` /
+  `left_other_user`, the owner and how it was chosen, and every slug it set: the way back is `UPDATE
+  capture_events SET uploaded_by_user_id = NULL WHERE slug IN (...)`; the generic undo refuses
+  migration rows). Fill-only, idempotent.
+- **Per-user gallery** (`/gallery/user/<username>`, any case; owner decision 2026-10-17): the items whose
+  `uploaded_by_user_id` is that account (`db.search(uploaded_by_user_id=)`, the same browse clause), grid
+  source `user:<username>`. **Old links** that name a Source label (`/gallery/user/Hooptie J (me)`, from the
+  label-grouped home panes) keep working **in place, not redirected** (a redirect would change what the URL
+  lists): `files_feed.resolve_gallery` -> a user first, else a label some item carries (the label view,
+  with a note saying a Source label is a note, not an account, and a link to the owner's gallery when it
+  is the owner's label), else a **404 page that says so** (`id="gallery-not-found"`; the grid API answers
+  404 `not_found` with the same words). `/gallery/source/<label>` (grid source `label:<label>`) is the
+  label view by name, for when a username and a label clash. The item page's "Uploaded by" and the card
+  page's "Created by" link to the gallery. Not changed: `/api/gallery` and the grid cards' small
+  "uploaded by" badge still group by the label (`source_group`).
+- **#778 credit: "<user>'s <token name>".** A personal MCP key's id rides in `acting_via` (set by
+  `server._call_as_mcp` from `auth.IDENTITY`); `actor.token_id_for(actor)` hands it out ONLY when the
+  writing actor is that key's user. Stored as `capture_events.uploaded_via_token_id`,
+  `projects.created_via_token_id`, `hobby_settings.created_via_token_id`, `blog_entries.created_via_token_id`
+  and `audit_log.via_token_id` (every change-log row, `db.insert_change_log`). Rendered at READ time by
+  `mcp_tokens.credit(user_id, token_id)` from the user's and the token's CURRENT names (a rename shows at
+  once); a revoked key (row gone) reads "<user>'s claude" (`revoked: true`; the item / card page add "that
+  MCP key has since been revoked"). Shown: item ORIGIN "Uploaded by", card ORIGIN "Created by", item JSON /
+  MCP `uploaded_via`, MCP `get_project` `created_via`, and `changes.via(row)` = the `via` of every row of
+  `cards.list_changes` / `changes.list_changes` / `explain_card`'s recent rows. Install-token work (actor
+  `mcp`) stays admin-owned with `via` null, as before. Not done (owner defaults): no backfill crediting the
+  2026-10-18 install-token cards to "windows claude"; switching each machine to a personal key is the
+  owner's step. Hobby / blog credit is stored, not shown yet.
+- Check: `scripts/test_whose_claude_560_778.py` (throwaway DB, real sessions and tokens, real MCP calls
+  through the streamable-HTTP app).
 
 ## Service layer (#541): one core module per domain
 
@@ -1565,7 +1634,7 @@ matching the V2 mockup's Card template:
   one view's items and cursor, `ItemCards.getJson` reports failures with code, message and status.
   Since #553 every file grid is paged this way (next item). Check with `scripts/test_home_paging_624.py`
   (and `--bench`) and `node scripts/test_home_paging_624.js [--compare DIR]`.
-- **One file grid (#553).** Home's Files panel, /unfiled, the user gallery (`/gallery/user/<label>`) and a
+- **One file grid (#553).** Home's Files panel, /unfiled, the user gallery (`/gallery/user/<username>`, per account since #560) and a
   hobby's loose objects are one component: the page route calls `web/item_grid.py` `build(grid_id, source,
   show_all_revs, ...)` and passes the result as `grid`; the template includes `templates/_item_grid.html`
   (controls + a JSON config block, `<script type="application/json" id="<grid>-config" nonce=...>`, no
@@ -1580,7 +1649,7 @@ matching the V2 mockup's Card template:
   **Viewers get no Select button, no bar and an empty `bulk` list** (`item_grid.can_edit()`, editor+, the
   bulk routes' own role). Every grid is server-paged: the page embeds the first batch of its default view
   plus per-type counts; `GET /api/items/grid` (viewer) = `/api/home/files` with `source` = `home` |
-  `unfiled` | `user:<label>` | `hobby:<slug>` (`files_feed.parse_source`; 400 `bad_source`, unknown hobby
+  `unfiled` | `user:<username>` | `label:<label>` (#560) | `hobby:<slug>` (`files_feed.parse_source`; 400 `bad_source`, unknown hobby
   404), and its answer also carries `counts` / `labels` (the type filter after a refresh). A cursor is
   bound to its source (`cursor_view_mismatch`); home's cursors are unchanged. Each source reads its rows
   as its page did, then `policy.filter_visible` + `_split_revisions` (`files_feed.load`, the door in
@@ -2057,6 +2126,9 @@ One generated file of every registered type and extension, to drop-test a new in
     `source_migrated_from()`/`source_group()` for the fixed vocabulary
     (manual web upload, the legacy automated-upload label, migrated by
     Claude from a named source, or authored by Claude directly).
+    **#560: a note only** (the who is `uploaded_by_user_id`, the how is `channel`); see "Who and how".
+  - `channel` (#560: web | mcp | script | system | migration:<source> | unknown) and
+    `uploaded_via_token_id` (#778, the personal MCP key): see "Who and how".
   - **Gone (#704, owner decision 2026-10-17):** `source` (how the dead uploader app captured a
     row; link vs file comes from the type's `is_file`), `client`, `ticket_id` (imagerepo
     IT-ticketing), `artifact_link` (always `/f/<slug>`; the payloads carry `url`) and the `icon`

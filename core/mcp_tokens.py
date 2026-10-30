@@ -12,7 +12,9 @@ shown ONCE, in the answer to create / rotate, and is never logged, imaged or sto
 
   create(name)          a new token for the signed-in user -> {token (once), id, name, created_at}
   rotate(token_id)      a new secret for one of your tokens (the old one stops working at once)
+  rename(token_id, name)  (#778) a new name for one of your tokens; work credited to it follows
   revoke(token_id)      delete one of your tokens
+  credit(user_id, token_id)  (#778, a read) "<user>'s <token name>", "<user>'s claude" once revoked
   list_mine()           your tokens, without secrets
   authenticate(token)   the MCP's sign-in: (user, token row) or raises TokenRefused with a clear reason
   by_user()             (#766, admin only) every user's keys, for Admin > Users (names, dates; no secrets)
@@ -41,6 +43,8 @@ TOUCH_EVERY_SECONDS = 600  # last_used_at is written at most this often (like se
 OP_CREATE = "mcp_token_create"
 OP_ROTATE = "mcp_token_rotate"
 OP_REVOKE = "mcp_token_revoke"
+OP_RENAME = "mcp_token_rename"  # #778
+REVOKED_CREDIT_NAME = "claude"  # #778: "<user>'s claude" when the key behind the credit is gone
 OP_REVOKE_ALL = "mcp_token_revoke_all"  # #766: an admin revoking every key of one user
 
 
@@ -139,6 +143,45 @@ def rotate(token_id, *, actor=None):
         _record(OP_ROTATE, {"user_id": user["id"], "username": user["username"], "token_id": row["id"],
                             "name": row["name"]}, batch_id, actor)
     return {**_public(db.get_mcp_token(row["id"])), "token": token, "batch_id": batch_id}
+
+
+def rename(token_id, name, *, actor=None):
+    """#778: a new name for one of your tokens (the secret is unchanged). Work made with it is credited
+    by the token's id, so its credit shows the new name everywhere at once. 409 token_name_taken (another
+    of your tokens has it, any case), 400 bad_token_name, 404 not yours. Renaming to the same name
+    changes nothing and says so (batch_id None)."""
+    user = _me(actor)
+    name = _name(name)
+    batch_id = changes.new_batch_id()
+    with db.transaction():
+        row = _own(token_id, user)
+        if row["name"] == name:
+            return {**_public(row), "batch_id": None, "message": f"Nothing was changed: the token is already called {name!r}."}
+        if any(t["id"] != row["id"] and t["name"].lower() == name.lower() for t in db.list_mcp_tokens(user["id"])):
+            raise Conflict(f"You already have a token called {name!r}: pick another name.", code="token_name_taken")
+        db._rename_mcp_token(row["id"], name)
+        _record(OP_RENAME, {"user_id": user["id"], "username": user["username"], "token_id": row["id"],
+                            "old_name": row["name"], "name": name}, batch_id, actor)
+    return {**_public(db.get_mcp_token(row["id"])), "batch_id": batch_id,
+            "message": f"Renamed {row['name']!r} to {name!r}; work made with it is now credited to {name!r}."}
+
+
+def credit(user_id, token_id):
+    """#778, a read: who to credit for work made with a personal MCP key, from the user's CURRENT name
+    and the token's CURRENT name: {"text": "Hooptie J's windows claude", "user", "token_id",
+    "token_name", "revoked"}. A token that is gone (revoked, or the id is no longer this user's) falls
+    back to "<user>'s claude" with revoked True, never a broken label. None when no token is recorded
+    (the web, the install token) or no user."""
+    if token_id is None or user_id is None:
+        return None
+    owner = users.owner_info(user_id)
+    if owner is None:
+        return None
+    row = db.get_mcp_token(token_id)
+    live = row is not None and row["user_id"] == user_id
+    tname = row["name"] if live else REVOKED_CREDIT_NAME
+    return {"text": f"{owner['name']}'s {tname}", "user": owner, "token_id": token_id,
+            "token_name": row["name"] if live else None, "revoked": not live}
 
 
 def revoke(token_id, *, actor=None):

@@ -2,6 +2,7 @@
 
 import functools
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -16,6 +17,8 @@ from pathlib import Path
 # direction of import can't cycle; it's here for list_project_items' sort.
 # #557: policy owns the restricted-items browse filter (imports nothing from db at module load).
 from . import actor as actor_ctx, card_rules, errors, policy, timeline
+
+_log = logging.getLogger("constructicon.db")
 
 # #453: overridable so the DB can live in its own bind-mounted DIRECTORY.
 # WAL mode keeps -wal/-shm next to the DB file; with only the file
@@ -306,8 +309,9 @@ HOBBY_STATUSES = list(card_rules.HOBBY_ACTIVITIES)
 # (SOURCE_MIGRATED is a template — fill in `<source>`). The owner's two come from
 # the install's own config (#562, core/install_config.py owner_label): on the
 # owner's installs exactly "Hooptie J (me) — manual upload" as before; on a fresh
-# install "Owner — manual upload" until an owner is set. Splitting `tech` into user +
-# channel is #467's job.
+# install "Owner — manual upload" until an owner is set. #560: `tech` is only the free-text
+# Source NOTE now: WHO is `uploaded_by_user_id` (from the actor, #604) and HOW is `channel` (below);
+# nothing decides identity, ownership or a gallery from it.
 def source_manual_upload():
     from . import install_config  # lazy: install_config imports this module
     return f"{install_config.owner_label()} — manual upload"
@@ -329,6 +333,39 @@ def source_migrated_from(source):
     that bring in existing content from elsewhere (e.g. source="hooptiej.github.io"
     for scripts/archive/backfill_from_hooptiej_site.py)."""
     return f"Claude — migrated from {source}"
+
+
+# #560: the CHANNEL (capture_events.channel) is how an item arrived; the Source label (`tech`) above
+# stays the free-text note. A label in source_migrated_from's shape names where migrated content came
+# from, so it sets the channel "migration:<source>"; anything else keeps the context's channel. Only
+# ever descriptive: no identity, permission or ownership is decided from a channel or a label.
+_MIGRATED_LABEL = re.compile(r"^Claude [—-] migrated from (.+)$", re.S)
+CHANNEL_MAX = 120
+
+
+def migration_source(label):
+    """"<source>" for a "Claude — migrated from <source>" label, else None."""
+    m = _MIGRATED_LABEL.match((label or "").strip())
+    return " ".join(m.group(1).split())[:CHANNEL_MAX - 10] if m else None
+
+
+def channel_for(label, base_channel):
+    """The channel to record for an item with Source label `label` made through `base_channel`."""
+    src = migration_source(label)
+    return f"migration:{src}" if src else base_channel
+
+
+CHANNEL_LABELS = {"web": "the web app", "mcp": "the MCP", "script": "a script", "system": "the app itself",
+                  "migration": "a migration", "unknown": "not recorded"}
+
+
+def channel_label(channel):
+    """A channel as a person reads it: "the web app", "the MCP", "a migration from hooptiej.com"."""
+    if not channel:
+        return "not recorded"
+    if channel.startswith("migration:"):
+        return f"a migration from {channel[len('migration:'):]}"
+    return CHANNEL_LABELS.get(channel, channel)
 
 
 # Known "who" prefixes a Source string can start with — used to bucket the
@@ -1154,6 +1191,21 @@ def init_db(migrate=True):
         if "created_by_user_id" not in existing_blog_entry_columns:
             _add_column(conn, "blog_entries", "created_by_user_id", "INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_capture_events_sensitive ON capture_events(sensitive)")
+        # #560: `channel` = HOW an item arrived (web | mcp | script | system | migration:<source>), split
+        # from the free-text Source label `tech` (kept as the Source note); filled for old rows once by
+        # the `capture_channel_560` migration. #778: the personal MCP key (mcp_tokens.id) a user's item,
+        # card, hobby, blog entry or change-log row was made with; NULL = none (the web, the install
+        # token). The credit text is rendered from the token's current name at read time.
+        for column, ddl_type in (("channel", "TEXT"), ("uploaded_via_token_id", "INTEGER")):
+            if column not in existing_columns:
+                _add_column(conn, "capture_events", column, ddl_type)
+        if "created_via_token_id" not in existing_project_columns:
+            _add_column(conn, "projects", "created_via_token_id", "INTEGER")
+        if "created_via_token_id" not in existing_hobby_settings_columns:
+            _add_column(conn, "hobby_settings", "created_via_token_id", "INTEGER")
+        if "created_via_token_id" not in existing_blog_entry_columns:
+            _add_column(conn, "blog_entries", "created_via_token_id", "INTEGER")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_capture_events_owner ON capture_events(uploaded_by_user_id)")
         # #604 step 3: a PRIVATE card or hobby (0 = open, the default). Who else may see it is
         # share_members; core/policy.py decides, core/sharing.py writes.
         if "private" not in existing_project_columns:
@@ -1169,7 +1221,7 @@ def init_db(migrate=True):
         # web/proxy_trust.py); NULL on change-log rows and on request-log rows from before #646.
         for column, ddl_type in (("op", "TEXT"), ("actor", "TEXT"), ("batch_id", "TEXT"),
                                  ("mutations", "TEXT"), ("undone_by", "INTEGER"), ("required_role", "TEXT"),
-                                 ("client_ip", "TEXT")):
+                                 ("client_ip", "TEXT"), ("via_token_id", "INTEGER")):
             if column not in existing_audit_columns:
                 _add_column(conn, "audit_log", column, ddl_type)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_batch ON audit_log(batch_id)")
@@ -1763,6 +1815,225 @@ def _mig_ownership_backfill_604():
     print(f"schema_migrations: ownership_backfill_604 counts {counts}", flush=True)
 
 
+class MigrationDeferred(Exception):
+    """Raised by a migration that must NOT run yet (its precondition isn't met, e.g. the owner's account
+    can't be told apart). run_pending_migrations rolls its transaction back (nothing written), prints the
+    reason loudly, leaves it unrecorded (so it tries again at the next start) and carries on booting."""
+
+
+def _request_log_items(conn):
+    """{slug: request actor} for items matched to the request-log row of the successful `POST
+    /api/upload` (logged `file` field = the filename) or `POST /api/content` (its `external_url`) that
+    made them: the nearest item with that name / URL created up to OWNERSHIP_BACKFILL_WINDOW before the
+    row was logged, each item matched once. The actor may be None (rows from before actors were logged:
+    the single-owner, no-login era), "owner-ui", "token" (the install token), "user:<name>", ..."""
+    def body(text):
+        try:
+            data = json.loads(text) if text else {}
+        except ValueError:  # silent-ok: an unreadable request body can't name a file; that row is skipped
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    out = {}
+    for r in conn.execute("SELECT timestamp, actor, path, form_body FROM audit_log WHERE op IS NULL AND method = 'POST' "
+                          "AND path IN ('/api/upload', '/api/content') AND status_code = 200 ORDER BY id").fetchall():
+        fields = body(r["form_body"])
+        if r["path"] == "/api/upload":
+            m = _UPLOAD_FILE_FIELD.match(str(fields.get("file") or ""))
+            column, value = "filename", (m.group(1) if m else None)
+        else:
+            column, value = "external_url", fields.get("external_url")
+        if not value:
+            continue
+        for hit in conn.execute(
+                f"SELECT slug FROM capture_events WHERE {column} = ? AND timestamp BETWEEN ? AND ? "
+                "ORDER BY ABS(timestamp - ?)",
+                (value, r["timestamp"] - OWNERSHIP_BACKFILL_WINDOW, r["timestamp"] + 1, r["timestamp"])).fetchall():
+            if hit["slug"] not in out:
+                out[hit["slug"]] = r["actor"]
+                break
+    return out
+
+
+def _owner_manual_label(conn):
+    """The owner's manual-upload Source label as `source_manual_upload()` builds it, read on `conn`
+    (install_config: owner_label, else owner_name, else "Owner") + " — manual upload"."""
+    from . import install_config  # lazy: install_config imports this module
+    vals = {r["key"]: r["value"] for r in conn.execute(
+        "SELECT key, value FROM install_config WHERE key IN ('owner_label', 'owner_name')")}
+    who = (vals.get("owner_label") or "").strip() or (vals.get("owner_name") or "").strip() or install_config.FALLBACK_OWNER
+    return f"{who} — manual upload", (vals.get("owner_name") or "").strip()
+
+
+def owner_account(conn=None):
+    """#560: the owner's user account, for attributing the owner's own old uploads. Returns
+    (user row, how) or raises MigrationDeferred saying why it can't be told:
+      * install_config.owner_name set -> the ONE enabled admin whose display name or username is that
+        name (any case); none or several -> refused (a name that matches nobody is ambiguous, never
+        guessed);
+      * owner_name unset -> the install's only enabled admin; none or several -> refused."""
+    own = conn is None
+    conn = conn or get_conn()
+    try:
+        _label, owner_name = _owner_manual_label(conn)
+        admins = [dict(r) for r in conn.execute(
+            "SELECT id, username, display_name FROM users WHERE role = 'admin' AND COALESCE(disabled, 0) = 0 "
+            "ORDER BY id")]
+    finally:
+        if own:
+            conn.close()
+    if owner_name:
+        want = owner_name.lower()
+        hits = [a for a in admins if want in ((a["display_name"] or "").strip().lower(), a["username"].lower())]
+        if len(hits) == 1:
+            return hits[0], f"the admin named {owner_name!r} (install config owner_name)"
+        if not hits:
+            raise MigrationDeferred(
+                f"the install's owner is {owner_name!r} (Admin > Install, owner name), but no enabled admin has "
+                f"that display name or username ({len(admins)} admin(s): "
+                f"{', '.join(a['username'] for a in admins) or 'none'}). Set the owner name to the owner's "
+                "display name, or give the owner's account that display name, then restart the web app.")
+        raise MigrationDeferred(
+            f"{len(hits)} enabled admins match the owner name {owner_name!r} "
+            f"({', '.join(a['username'] for a in hits)}); give them different display names, then restart.")
+    if len(admins) == 1:
+        return admins[0], "the install's only admin (no owner name is set)"
+    raise MigrationDeferred(
+        f"no owner name is set (Admin > Install) and the install has {len(admins)} enabled admins, so the "
+        "owner's account can't be told; set the owner name, then restart the web app.")
+
+
+def _mig_capture_channel_560():
+    # #560: capture_events.channel (how an item arrived) for every row made before it was recorded at
+    # write time. Fill-only (channel IS NULL), idempotent, one change-log row with the count per rule.
+    # Rules, first that applies wins (see CLAUDE.md "Who and how"):
+    #   1. a Source label "Claude — migrated from <X>"            -> migration:<X>
+    #   2. its upload_tags / automatch_tags change-log row (made with the item): that row's actor
+    #      (mcp -> mcp; script -> script; the web's actors -> web)
+    #   3. matched to a successful POST /api/upload or /api/content request-log row -> web
+    #   4. a card's write-up: the actor of the create_card row that made the card -> its channel
+    #   5. the label alone: the owner's "— manual upload" (only the web routes write it) -> web,
+    #      "— automated upload" -> script, "Claude — authored" / "Claude" (the MCP's default) -> mcp
+    #   6. otherwise -> unknown (said so, never guessed)
+    from . import changes
+    conn = get_conn()
+    rows = conn.execute("SELECT slug, tech, timestamp FROM capture_events WHERE channel IS NULL").fetchall()
+    counts = {"rows": len(rows), "migration_label": 0, "change_log": 0, "request_log": 0, "writeup": 0,
+              "label": 0, "unknown": 0}
+    if not rows:
+        insert_change_log(conn, "migration_capture_channel_560", changes.ACTOR_MIGRATION, [],
+                          batch_id=changes.new_batch_id(), details={"counts": counts})
+        print(f"schema_migrations: capture_channel_560 nothing to fill {counts}", flush=True)
+        return
+    when = {r["slug"]: r["timestamp"] for r in rows}
+    by_log = {}
+    for r in conn.execute("SELECT actor, affected_slugs, timestamp FROM audit_log WHERE op IN "
+                          "('upload_tags', 'automatch_tags') ORDER BY id").fetchall():
+        try:
+            slugs = json.loads(r["affected_slugs"] or "[]")
+        except ValueError:  # silent-ok: an unreadable slug list names no item; the row is skipped
+            continue
+        for s in slugs if isinstance(slugs, list) else []:
+            if s in when and s not in by_log and abs((r["timestamp"] or 0) - when[s]) <= 120 and r["actor"]:
+                by_log[s] = actor_ctx.channel_for_actor(r["actor"])
+    by_request = _request_log_items(conn)
+    by_writeup = {}
+    for r in conn.execute("SELECT actor, mutations FROM audit_log WHERE op = 'create_card' AND mutations IS NOT NULL "
+                          "ORDER BY id").fetchall():
+        try:
+            muts = json.loads(r["mutations"]) or []
+        except ValueError:  # silent-ok: unreadable images can't name the card; its write-up falls to the label rules
+            continue
+        for m in muts if isinstance(muts, list) else []:
+            if isinstance(m, dict) and m.get("table") == "projects" and m.get("before") is None:
+                card = conn.execute("SELECT writeup_slug FROM projects WHERE id = ?",
+                                    ((m.get("key") or {}).get("id"),)).fetchone()
+                if card and card["writeup_slug"] and r["actor"]:
+                    by_writeup.setdefault(card["writeup_slug"], actor_ctx.channel_for_actor(r["actor"]))
+    from . import install_config
+    groups = source_groups()
+    manual = {f"{g} — manual upload" for g in groups if g != SOURCE_CLAUDE} | {f"{install_config.FALLBACK_OWNER} — manual upload"}
+    automated = {f"{g} — automated upload" for g in groups if g != SOURCE_CLAUDE}
+    for r in rows:
+        slug, tech = r["slug"], (r["tech"] or "").strip()
+        src = migration_source(tech)
+        if src:
+            channel, rule = f"migration:{src}", "migration_label"
+        elif slug in by_log:
+            channel, rule = by_log[slug], "change_log"
+        elif slug in by_request:
+            channel, rule = actor_ctx.CHANNEL_WEB, "request_log"
+        elif slug in by_writeup:
+            channel, rule = by_writeup[slug], "writeup"
+        elif tech in manual:
+            channel, rule = actor_ctx.CHANNEL_WEB, "label"
+        elif tech in automated:
+            channel, rule = actor_ctx.CHANNEL_SCRIPT, "label"
+        elif tech in (SOURCE_AUTHORED, SOURCE_CLAUDE):
+            channel, rule = actor_ctx.CHANNEL_MCP, "label"
+        else:
+            channel, rule = "unknown", "unknown"
+        counts[rule] += 1
+        conn.execute("UPDATE capture_events SET channel = ? WHERE slug = ? AND channel IS NULL", (channel, slug))
+    per_channel = {c: n for c, n in conn.execute(
+        "SELECT channel, COUNT(*) FROM capture_events GROUP BY channel ORDER BY 2 DESC").fetchall()}
+    insert_change_log(conn, "migration_capture_channel_560", changes.ACTOR_MIGRATION, [],
+                      batch_id=changes.new_batch_id(), details={"counts": counts, "per_channel": per_channel})
+    print(f"schema_migrations: capture_channel_560 filled {len(rows)} row(s) by rule {counts}; "
+          f"now per channel {per_channel}", flush=True)
+
+
+def _owner_upload_backfill(conn):
+    """#560 (owner decision 2026-10-25, answer (a)): the owner's own old uploads become the owner's.
+    An item counts when ALL hold: no uploader recorded yet (fill-only), its Source label is exactly the
+    owner's manual-upload label (`source_manual_upload()`, e.g. "Hooptie J (me) — manual upload"), it
+    arrived through the web (channel 'web', from _mig_capture_channel_560), and its upload request (when
+    the request log has it) was not made with the install token or by another signed-in user. Install
+    token uploads stay admin-owned (owner default: "install-token work stays admin-owned"). Returns
+    (counts, assigned slugs); raises MigrationDeferred when there is something to assign but the owner's
+    account can't be told (owner_account)."""
+    label, _owner_name = _owner_manual_label(conn)
+    rows = conn.execute("SELECT slug, channel FROM capture_events WHERE uploaded_by_user_id IS NULL AND tech = ?",
+                        (label,)).fetchall()
+    counts = {"label": label, "candidates": len(rows), "assigned": 0, "left_install_token": 0,
+              "left_other_user": 0, "left_not_web": 0, "owner": None}
+    if not rows:
+        return counts, []
+    owner, how = owner_account(conn)
+    counts["owner"] = {"id": owner["id"], "username": owner["username"], "how": how}
+    by_request = _request_log_items(conn)
+    picked = []
+    for r in rows:
+        req = by_request.get(r["slug"])
+        if r["channel"] != actor_ctx.CHANNEL_WEB:
+            counts["left_not_web"] += 1
+        elif req == actor_ctx.ACTOR_TOKEN:
+            counts["left_install_token"] += 1
+        elif isinstance(req, str) and req.startswith("user:") and req[5:].lower() != owner["username"].lower():
+            counts["left_other_user"] += 1
+        else:
+            picked.append(r["slug"])
+    for i in range(0, len(picked), 500):
+        part = picked[i:i + 500]
+        conn.execute(f"UPDATE capture_events SET uploaded_by_user_id = ? WHERE uploaded_by_user_id IS NULL "
+                     f"AND slug IN ({', '.join('?' * len(part))})", [owner["id"], *part])
+    counts["assigned"] = len(picked)
+    return counts, picked
+
+
+def _mig_owner_upload_backfill_560():
+    # #560: see _owner_upload_backfill. One change-log row with the counts and the slugs it set (no row
+    # images: the slugs are the way back, `UPDATE ... SET uploaded_by_user_id = NULL WHERE slug IN (...)`).
+    # Idempotent: fill-only, a second run finds nothing. Deferred (not recorded, retried every start)
+    # while the owner's account is ambiguous.
+    from . import changes
+    conn = get_conn()
+    counts, slugs = _owner_upload_backfill(conn)
+    insert_change_log(conn, "migration_owner_uploads_560", changes.ACTOR_MIGRATION, [],
+                      batch_id=changes.new_batch_id(), details={"counts": counts, "slugs": slugs})
+    print(f"schema_migrations: owner_upload_backfill_560 counts {counts}", flush=True)
+
+
 # #760: the one-time v1 -> v2 card migrations (v2c_1_kind_status, v2c_2_hobbies,
 # v2c_5_referenced_provenance; core/card_migration.py) were removed: both installs are V2 and every
 # new card is created with a stage, so they had nothing left to do. Their schema_migrations rows stay
@@ -1880,6 +2151,8 @@ MIGRATIONS = [
     ("reread_xls_790", _mig_reread_xls_790),
     ("caption_pdf_ai_556", _mig_caption_pdf_ai_556),
     ("vocab_seed_556", _mig_vocab_seed_556),
+    ("capture_channel_560", _mig_capture_channel_560),
+    ("owner_upload_backfill_560", _mig_owner_upload_backfill_560),  # after the channel fill: it reads it
 ]
 
 
@@ -1903,12 +2176,20 @@ def run_pending_migrations():
     for name, fn in MIGRATIONS:
         if name in applied_migrations():  # cheap pre-check outside the lock
             continue
-        with transaction() as tx:
-            if tx.conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (name,)).fetchone():
-                continue  # another process applied it while we waited for the lock
-            t0 = time.monotonic()
-            fn()
-            tx.conn.execute("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)", (name, time.time()))
+        try:
+            with transaction() as tx:
+                if tx.conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (name,)).fetchone():
+                    continue  # another process applied it while we waited for the lock
+                t0 = time.monotonic()
+                fn()
+                tx.conn.execute("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)", (name, time.time()))
+        except MigrationDeferred as exc:
+            # #560: refused on purpose; the transaction rolled back, so nothing it did is kept. Loud, not fatal.
+            msg = (f"schema_migrations: DEFERRED {name}: nothing was changed, because {exc} "
+                   "It stays pending and runs again at the next start.")
+            print(msg, flush=True)
+            _log.warning(msg)
+            continue
         ran.append(name)
         print(f"schema_migrations: applied {name} ({time.monotonic() - t0:.2f}s)", flush=True)
     return ran
@@ -2215,6 +2496,11 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
         short_title = content_description.strip()
     who = actor_ctx.current_actor()
     owner_id = users.user_id_for_actor(who)
+    # #560: HOW it arrived, from the context (never from the free-text Source label, except that a
+    # label naming a migration source says where migrated content came from). #778: the personal MCP
+    # key, only when the uploader is that key's user.
+    channel = channel_for(uploaded_by, actor_ctx.current_channel())
+    via_token = actor_ctx.token_id_for(who) if owner_id is not None else None
     conn = get_conn()
     try:
         now = time.time()
@@ -2222,13 +2508,14 @@ def insert_upload(slug, filename, stored_filename, uploaded_by, description="", 
             "INSERT INTO capture_events (slug, timestamp, tech, description, "
             "extracted_text, tags, filename, stored_filename, file_size, source_modified_at, ocr_status, ocr_started_at, "
             "media_type, external_url, content_description, content_date, type_metadata, uploaded_by_user_id, "
-            "sensitive, sensitive_by, sensitive_at, short_title) "
-            "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "sensitive, sensitive_by, sensitive_at, short_title, channel, uploaded_via_token_id) "
+            "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (slug, now, uploaded_by, description,
              "[]", filename, stored_filename, file_size, source_modified_at, ocr_status,
              now if ocr_status == "pending" else None,
              media_type, external_url, content_description, content_date, json.dumps(type_metadata or {}), owner_id,
-             1 if sensitive else 0, who if sensitive else None, now if sensitive else None, short_title or None),
+             1 if sensitive else 0, who if sensitive else None, now if sensitive else None, short_title or None,
+             channel, via_token),
         )
         conn.commit()
     finally:
@@ -2738,6 +3025,20 @@ def list_uploaders(query=None):
         conn.close()
 
 
+def source_label_exists(label):
+    """#560: True when any un-redacted item's Source label is `label` or starts with it as its group
+    prefix (the same match as search(uploaded_by=)). Counts hidden items too: it only says the label
+    is a real one, so its gallery explains an empty list instead of calling the label unknown."""
+    if not label:
+        return False
+    conn = get_conn()
+    try:
+        return conn.execute("SELECT 1 FROM capture_events WHERE redacted = 0 AND (tech = ? OR tech LIKE ? OR tech LIKE ?) "
+                            "LIMIT 1", (label, f"{label} —%", f"{label} -%")).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def list_restricted():
     """#443: every non-redacted row of a restricted type, newest first, for
     the admin pane's restricted list (and the MCP). #603: plus every row flagged
@@ -2856,7 +3157,7 @@ def _search_filename_fallback(conn, needle, clauses, params, limit):
 
 
 def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False,
-           include_superseded=True, filename_fallback=False):
+           include_superseded=True, filename_fallback=False, uploaded_by_user_id=None):
     """Keyword/filter search over capture_events. With a `query`, best match first (#543: relevance,
     a hit in a name or tag outranks one inside OCR text; ties newest first). Without one, most recent
     first.
@@ -2924,6 +3225,11 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
             # key the gallery views link with (e.g. "Hooptie J (me)").
             clauses.append("(ce.tech = ? OR ce.tech LIKE ? OR ce.tech LIKE ?)")
             params += [uploaded_by, f"{uploaded_by} —%", f"{uploaded_by} -%"]
+        if uploaded_by_user_id is not None:
+            # #560: the per-user gallery: the items whose recorded uploader is this account (never the
+            # free-text Source label).
+            clauses.append("ce.uploaded_by_user_id = ?")
+            params.append(int(uploaded_by_user_id))
         if tags:
             # #543: in SQL, so the LIMIT below applies after the filter. #555: on the TAG TREE (the one
             # tag store): an item carrying a tag with one of these names (any case), or any tag under
@@ -3902,12 +4208,14 @@ def _create_project(title, description="", cover_slug=None, tag_id=None, parent_
         now = time.time()
         from . import actor as actor_ctx, users  # lazy: users imports this module
         created_by = users.user_id_for_actor(actor_ctx.resolve(actor))  # #604: NULL = admin-owned
+        via_token = actor_ctx.token_id_for(actor) if created_by is not None else None  # #778
         cur = conn.execute(
             "INSERT INTO projects (slug, title, description, cover_slug, created_at, updated_at, tag_id, parent_id, "
-            "kind, activity, stage, stop_reason, created_by_user_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "kind, activity, stage, stop_reason, created_by_user_id, created_via_token_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (slug, title, description, cover_slug, now, now, tag_id, parent_id,
-             kind, status_triple["activity"], status_triple["stage"], status_triple["stop_reason"], created_by),
+             kind, status_triple["activity"], status_triple["stage"], status_triple["stop_reason"], created_by,
+             via_token),
         )
         project_id = cur.lastrowid
         project = {
@@ -3923,6 +4231,7 @@ def _create_project(title, description="", cover_slug=None, tag_id=None, parent_
             "writeup_slug": None,
             "kind": kind,
             "created_by_user_id": created_by,
+            "created_via_token_id": via_token,
             **status_triple,
         }
         insert_change_log(
@@ -4620,11 +4929,14 @@ def insert_change_log(conn, op, actor, mutations, batch_id=None, affected_slugs=
     # #604 step 3: the private-card write guard (a viewer member only looks). It raises before the
     # log row exists, so the caller's transaction rolls the write back.
     policy.check_write(mutations, actor)
+    # #778: the personal MCP key this write was made with (only when `actor` is that key's user);
+    # core/changes.via renders "<user>'s <token name>" from it at read time.
+    via_token = actor_ctx.token_id_for(actor)
     cur = conn.execute(
         "INSERT INTO audit_log (method, path, form_body, affected_slugs, status_code, error_detail, timestamp, "
-        "op, actor, batch_id, mutations) VALUES (?, ?, ?, ?, 200, NULL, ?, ?, ?, ?, ?)",
+        "op, actor, batch_id, mutations, via_token_id) VALUES (?, ?, ?, ?, 200, NULL, ?, ?, ?, ?, ?, ?)",
         ("CORE", f"core:{op}", json.dumps(details or {}), json.dumps(affected_slugs or []), time.time(), op,
-         actor, batch_id, json.dumps(mutations or [])),
+         actor, batch_id, json.dumps(mutations or []), via_token),
     )
     return cur.lastrowid
 
@@ -6173,6 +6485,16 @@ def _rehash_mcp_token(token_id, token_hash, now):
     try:
         conn.execute("UPDATE mcp_tokens SET token_hash = ?, rotated_at = ?, last_used_at = NULL WHERE id = ?",
                      (token_hash, now, token_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _rename_mcp_token(token_id, name):
+    """#778: a token's new name (core/mcp_tokens.rename). Credits read the name at read time."""
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE mcp_tokens SET name = ? WHERE id = ?", (name, token_id))
         conn.commit()
     finally:
         conn.close()

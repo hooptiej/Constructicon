@@ -2204,7 +2204,7 @@ def explain_card(card):
                    "links": [n["link"] for n in needs if n["need"] == NEED_UNTYPED_LINK and n.get("link")]}
     recent = []
     for r in db.list_change_log(card_slug=row["slug"], limit=5):
-        recent.append({"id": r["id"], "op": r["op"], "actor": r["actor"], "batch_id": r["batch_id"],
+        recent.append({"id": r["id"], "op": r["op"], "actor": r["actor"], "via": changes.via(r), "batch_id": r["batch_id"],
                        "timestamp": r["timestamp"], "undone": r.get("undone_by") is not None})
     out = {
         "id": row["id"], "slug": row["slug"], "title": row["title"], "description": row.get("description") or "",
@@ -3034,7 +3034,8 @@ def list_changes(card=None, batch_id=None, limit=50):
                 f"{'was' if withheld == 1 else 'were'} left out: {'it touches' if withheld == 1 else 'they touch'} "
                 f"an item, card or {_sharing._noun(policy.HOBBY)} you can't see (marked sensitive, or private). "
                 f"An admin sees the whole log.")
-    return {"changes": [{"id": r["id"], "op": r["op"], "actor": r["actor"], "batch_id": r["batch_id"],
+    return {"changes": [{"id": r["id"], "op": r["op"], "actor": r["actor"], "via": changes.via(r),  # #778
+                         "batch_id": r["batch_id"],
                          "timestamp": r["timestamp"], "affected_slugs": r["affected_slugs"],
                          "undone_by": r.get("undone_by"), "mutations": r["mutations"]} for r in rows],
             "withheld": withheld, "withheld_note": note}

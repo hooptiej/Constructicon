@@ -125,6 +125,63 @@ def set_actor(actor):
     return _current.set(actor)
 
 
+# --- #560 / #778: HOW it arrived (the channel) and WHICH personal MCP key did it ----------------
+# The actor says who; the channel says how a write reached the app (capture_events.channel): the web
+# app or its API ("web"), the MCP ("mcp"), a script, the system, a migration. A per-user MCP token
+# (#604 step 5) runs as `user:<name>` like a web session does, so the actor alone can't tell them apart;
+# the MCP's tool wrapper sets the channel and the token's id here (acting_via) for the call. The token
+# id rides on what the call creates and on its change-log rows, so the credit "<user>'s <token name>"
+# is rendered from the token's CURRENT name at read time (core/mcp_tokens.credit).
+CHANNEL_WEB = "web"
+CHANNEL_MCP = "mcp"
+CHANNEL_SCRIPT = "script"
+CHANNEL_SYSTEM = "system"
+CHANNEL_MIGRATION = "migration"
+MIGRATION_CHANNEL_PREFIX = "migration:"  # "migration:<source>": content brought in from somewhere else
+
+_via = contextvars.ContextVar("constructicon_via", default=None)  # {"channel", "token_id", "actor"}
+
+
+def channel_for_actor(actor):
+    """The channel an actor implies when nothing set one explicitly: the web's own actors (a session,
+    the install token, anonymous, the legacy owner-ui) -> web; mcp -> mcp; script / system / migration
+    -> themselves."""
+    if actor == ACTOR_MCP:
+        return CHANNEL_MCP
+    if actor in (ACTOR_SCRIPT, ACTOR_SYSTEM, ACTOR_MIGRATION):
+        return actor
+    return CHANNEL_WEB  # user:<name>, token, anonymous, owner-ui
+
+
+def current_channel():
+    """The channel of the code running now (acting_via's, else the actor's)."""
+    via = _via.get()
+    if via and via.get("channel"):
+        return via["channel"]
+    return channel_for_actor(current_actor())
+
+
+def token_id_for(actor=None):
+    """The personal MCP token id behind this write, or None. Only when `actor` (default: the
+    context's) is the user the token belongs to, so an explicit actor override never borrows a
+    credit; the install token and the web have none."""
+    via = _via.get()
+    if not via or via.get("token_id") is None:
+        return None
+    return via["token_id"] if resolve(actor) == via.get("actor") else None
+
+
+@contextlib.contextmanager
+def acting_via(channel, token_id=None):
+    """Run a block as arriving through `channel` (and, for a per-user MCP token, that token's id,
+    tied to the actor in force when the block starts)."""
+    token = _via.set({"channel": channel, "token_id": token_id, "actor": current_actor() if token_id else None})
+    try:
+        yield channel
+    finally:
+        _via.reset(token)
+
+
 def carry(fn):
     """`fn` bound to a copy of the current context, for handing to another thread."""
     ctx = contextvars.copy_context()

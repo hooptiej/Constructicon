@@ -14,11 +14,20 @@
   <div class="user-gallery-title-row">
     <div>
       <h1 class="page-title">{{ uploader_display }}</h1>
-      <p class="page-subtitle" id="uploads-count">{{ grid.count.total }} upload{{ 's' if grid.count.total != 1 else '' }}</p>
+      {% if grid %}<p class="page-subtitle" id="uploads-count">{{ grid.count.total }} upload{{ 's' if grid.count.total != 1 else '' }}</p>{% endif %}
     </div>
   </div>
-  {# #553: the shared file grid, server-paged (source user:<uploader>), so the count above and the
+  {% if not grid %}
+  {# #560: neither a user nor a Source label: say so, never an empty gallery #}
+  <p class="empty-state" id="gallery-not-found" role="alert">{{ not_found_message }}</p>
+  {% else %}
+  {% if label_note %}
+  {# #560: an old Source-label link. A Source label is a free-text note, not an account. #}
+  <p class="page-subtitle" id="gallery-label-note">These are the uploads whose Source label is &ldquo;{{ label_note.label }}&rdquo;. A Source label is a free-text note, not an account.{% if label_note.owner %} Everything {{ label_note.owner.name }} uploaded is at <a href="/gallery/user/{{ label_note.owner.username | urlencode }}">{{ label_note.owner.name }}&rsquo;s gallery</a>.{% endif %}</p>
+  {% endif %}
+  {# #553: the shared file grid, server-paged (source user:<username>), so the count above and the
      list are both every upload. The old "Delete mode" switch is the grid's Select button. #}
   {% include "_item_grid.html" %}
+  {% endif %}
 </div>
 {% endblock %}

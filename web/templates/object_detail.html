@@ -350,7 +350,10 @@
         <div class="dp-row"><dt>Highlight</dt><dd>{{ 'Yes' if item.highlight else 'No' }}</dd></div>
         <div class="dp-row"><dt>Brand asset</dt><dd>{{ 'Yes' if item.is_brand_asset else 'No' }}{% if item.is_brand_asset and item.brand_role %} <span class="dp-muted">&middot; {{ item.brand_role }}</span>{% endif %}</dd></div>
         {# #604 step 1: who uploaded it. None recorded = the install token, the MCP or a script (admin-owned). #}
-        <div class="dp-row"><dt>Uploaded by</dt><dd>{% if item.uploaded_by_user %}{{ item.uploaded_by_user.name }}{% else %}<span class="dp-muted">Admin (no user recorded)</span>{% endif %}</dd></div>
+        {# #560: the uploader is the recorded account (links to their gallery); #778: made with a personal MCP key
+           = "<user>'s <token name>", a revoked key "<user>'s claude". The Source line above is a free-text note. #}
+        <div class="dp-row"><dt>Uploaded by</dt><dd>{% if item.uploaded_by_user %}{% if item.uploaded_by_user.username %}<a href="/gallery/user/{{ item.uploaded_by_user.username | urlencode }}" title="Everything {{ item.uploaded_by_user.name }} uploaded">{{ item.uploaded_via.text if item.uploaded_via else item.uploaded_by_user.name }}</a>{% else %}{{ item.uploaded_via.text if item.uploaded_via else item.uploaded_by_user.name }}{% endif %}{% if item.uploaded_via and item.uploaded_via.revoked %} <span class="dp-muted">(that MCP key has since been revoked)</span>{% endif %}{% else %}<span class="dp-muted">Admin (no user recorded)</span>{% endif %}</dd></div>
+        <div class="dp-row"><dt>Arrived via</dt><dd>{% if item.channel and item.channel != 'unknown' %}{{ item.channel_label }}{% else %}<span class="dp-muted">Not recorded</span>{% endif %}</dd></div>
         {# #603: the sensitive lock. Mark = editor or above; clear = admin only. #}
         <div class="dp-row" id="sensitive-row"><dt>Sensitive</dt><dd>
           {% set reason = item.sensitive_reason %}

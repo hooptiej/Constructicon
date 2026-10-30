@@ -173,10 +173,12 @@ def create(name, status="active", *, dry_run=False, actor=None, batch_id=None):
             if creator is not None:
                 key = {"hobby_tag_id": tag["id"]}
                 current = log.get("hobby_settings", key)
+                # #778: the personal MCP key it was made with (None for the web), credited at read time.
+                made_by = {"created_by_user_id": creator, "created_via_token_id": actor_ctx.token_id_for(actor)}
                 if current is None:
-                    log.insert("hobby_settings", key, {"created_by_user_id": creator})
+                    log.insert("hobby_settings", key, made_by)
                 elif current.get("created_by_user_id") is None and made:
-                    log.update("hobby_settings", key, {"created_by_user_id": creator})
+                    log.update("hobby_settings", key, made_by)
         rows = db.get_change_rows(batch_id=batch_id)
         hobby = db.get_hobby(tag["id"])
     return Result(True, _flat(rows), warnings, batch_id, dry_run, {"hobby": public(hobby), "tag_created": made})

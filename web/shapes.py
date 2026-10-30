@@ -2,7 +2,7 @@
 into the dicts pages and the JSON API return, plus the small pure helpers they use.
 Moved verbatim from web/app.py."""
 
-from core import (captions, card_payload, cards, datefmt, db, install_config, item_dates, item_title, object_types, parse_limits, policy, revisions,
+from core import (captions, card_payload, cards, datefmt, db, install_config, item_dates, item_title, mcp_tokens, object_types, parse_limits, policy, revisions,
                   storage, thumbnails, timeline, users)
 from core import tags as tags_svc
 
@@ -173,6 +173,10 @@ def ownership_fields(row):
         reason = {**reason, "by_label": actor_label(reason.get("by")),
                   "at_display": _friendly_datetime(reason["at"]) if reason.get("at") else None}
     return {"uploaded_by_user": users.owner_info(row.get("uploaded_by_user_id")),
+            # #778: {"text": "<user>'s <token name>", ...} for an item made with a personal MCP key, else None
+            "uploaded_via": mcp_tokens.credit(row.get("uploaded_by_user_id"), row.get("uploaded_via_token_id")),
+            # #560: how it arrived (web | mcp | script | migration:<source> | unknown), and in words
+            "channel": row.get("channel"), "channel_label": db.channel_label(row.get("channel")),
             "sensitive": reason is not None, "sensitive_reason": reason}
 
 

@@ -14,7 +14,7 @@ from core import vocab
 from web import files_feed, item_grid
 from web.common import _build_breadcrumbs, _rev_note, templates
 from web.shapes import _datetime_local_value, _friendly_date, _friendly_datetime, _has_thumbnail, _hobby_cover, _project_effective_cover_url, _should_advertise_thumb, _split_revisions, _to_card_face, _to_content_public, _to_hobby_face, _to_object_detail, _to_public, _to_timeline_project
-from core import access_log, actor as actor_ctx, policy, roles, sharing, users
+from core import access_log, actor as actor_ctx, mcp_tokens, policy, roles, sharing, users
 from web.shapes import actor_label
 from web.roles import RoleRouter, requires
 
@@ -390,6 +390,8 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             # V2 cards 3.4 / 3.5 / 3.12: whereabouts, card provenance + credit, highlight.
             "card_extra": cards.whereabouts_fields(project),
             "card_created_by": users.owner_info(project.get("created_by_user_id")),  # #604 step 1
+            "card_created_via": mcp_tokens.credit(project.get("created_by_user_id"),
+                                                  project.get("created_via_token_id")),  # #778
             # #596: the face text (synopsis, flavor, the cached write-up lead) for the ABOUT group.
             "card_text": cards.text_fields(project),
             "card_text_limits": card_rules.CARD_TEXT_LIMITS,
@@ -577,16 +579,65 @@ def wallpaper_page(request: Request):
 
 @router.get("/gallery/user/{uploader}", response_class=HTMLResponse)
 def user_gallery_page(request: Request, uploader: str, rev: str = ""):
-    # #563: no 1000-row cap (it made "1000 uploads" of 1,640). #553: the shared file grid, server-paged
-    # (source user:<uploader>): the page embeds the first batch and the count of every row, and
-    # GET /api/items/grid serves the rest, so the count and the list are both complete.
-    grid, n_sup = item_grid.build("uploads", ("user", uploader), rev == "all", href_from=f"user:{uploader}",
-                                  empty_text="No uploads yet.")
+    """#560 (owner decision 2026-10-17): a real per-user gallery, the files whose recorded uploader
+    (capture_events.uploaded_by_user_id) is the account `uploader` (a username, any case). An old link
+    that names a Source label instead (from before; the home panes linked labels) still works: it shows
+    that label's uploads in place, saying it is the label view. A name that is neither is a 404 page
+    that says so, never an empty gallery. #563: no row cap. #553: the shared file grid, server-paged."""
+    found = files_feed.resolve_gallery(uploader)
+    if found is None:
+        return _unknown_gallery(request, uploader)
+    if found[0] == "user":
+        user = found[1]
+        name = user.get("display_name") or user["username"]
+        source = ("user", user["username"])
+        return _gallery_page(request, source, rev, title=name, href_from=f"user:{user['username']}",
+                             subtitle_note=None, empty_text=f"{name} hasn't uploaded anything you can see yet.")
+    return _label_gallery(request, uploader, rev, ("user", uploader))
+
+
+@router.get("/gallery/source/{label}", response_class=HTMLResponse)
+def source_gallery_page(request: Request, label: str, rev: str = ""):
+    """#560: the uploads whose free-text Source label is `label` (or starts with it as its "who"
+    prefix). The older view /gallery/user/<label> showed; for when a username and a label clash."""
+    if not db.source_label_exists(label):
+        return _unknown_gallery(request, label, f"No item carries the Source label {label!r}.")
+    return _label_gallery(request, label, rev, ("label", label))
+
+
+def _label_gallery(request, label, rev, source):
+    owner = None
+    if label == install_config.owner_label():
+        owner = db.get_user(username=_owner_username()) if _owner_username() else None
+    note = {"label": label, "owner": ({"username": owner["username"], "name": owner.get("display_name") or owner["username"]}
+                                       if owner else None)}
+    return _gallery_page(request, source, rev, title=label, href_from=f"{source[0]}:{label}", subtitle_note=note,
+                         empty_text="No uploads you can see carry this Source label.")
+
+
+def _owner_username():
+    """The owner's account username, when it can be told (db.owner_account), else None."""
+    try:
+        return db.owner_account()[0]["username"]
+    except db.MigrationDeferred:  # silent-ok: ambiguous owner -> the label page just doesn't link one
+        return None
+
+
+def _gallery_page(request, source, rev, *, title, href_from, subtitle_note, empty_text):
+    grid, n_sup = item_grid.build("uploads", source, rev == "all", href_from=href_from, empty_text=empty_text)
     return templates.TemplateResponse(
         request, "user_gallery.html",
-        {"uploader": uploader, "uploader_display": uploader, "grid": grid,
+        {"uploader": title, "uploader_display": title, "grid": grid, "label_note": subtitle_note,
          "rev_note": _rev_note(request, n_sup, rev == "all")},
     )
+
+
+def _unknown_gallery(request, who, message=None):
+    return templates.TemplateResponse(
+        request, "user_gallery.html",
+        {"uploader": who, "uploader_display": who, "grid": None, "label_note": None, "rev_note": None,
+         "not_found_message": message or files_feed.unknown_gallery_message(who)},
+        status_code=404)
 
 
 @router.get("/object/{slug}", response_class=HTMLResponse)

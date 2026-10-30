@@ -30,6 +30,12 @@ mounted secret, as scripts/run_tool.sh does:
       /s/load_test_732.py load --out /out --files /files
   ... then `load_test_732.py cleanup --out /out` (same docker run form) and `summarize --out ~/lt732/out`.
 
+One scenario per run (run 2, owner decision 2026-10-29: a trip ends only that scenario): give each run
+its own --out directory, guard and STOP file, start the guard, then the same docker run with
+`--scenarios mcp` (or backlog, upload), then touch OUT/LOAD_DONE if the driver died before writing it,
+and wait for the guard to exit. Let the box settle (load1 < 2, prod /healthz at baseline) between runs.
+`cleanup --empty-trash` empties ALL of test's ordinary trash: count it first.
+
 Guards (host, `guard`): any trip writes OUT/STOP (JSON: which guard, the numbers) once.
   - prod /healthz: any failure (non-200, timeout 5 s), or the p95 of the last 20 probes (1 Hz)
     above --prod-factor (3) x the idle baseline p95 measured first (--baseline-samples probes);
@@ -57,6 +63,7 @@ import json
 import math
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -282,7 +289,9 @@ def cmd_guard(a):
         o.rec("guard_trip", **info)
         o.log(f"guard: TRIPPED {guard}: {detail}")
 
-    window = []
+    # Seeded with the last 20 baseline probes, so the p95 is ALWAYS over 20 probes. An unseeded
+    # window of 10-19 probes made "p95" the max, and one slow probe tripped it (#732 run 2).
+    window = list(lat[-20:])
 
     def prod_loop():
         while not stop_threads.is_set():
@@ -292,7 +301,7 @@ def cmd_guard(a):
             o.rec("prod", status=st, ms=round(ms, 2), err=err)
             if st != 200:
                 trip("prod_healthz_failed", status=st, error=err)
-            elif len(window) >= 10:
+            elif len(window) >= 20:
                 p95 = pct(window, 95)
                 if p95 > limit_ms:
                     trip("prod_latency", window_p95_ms=round(p95, 1), limit_ms=round(limit_ms, 1),
@@ -488,12 +497,25 @@ class Client:
             return False, (time.perf_counter() - t) * 1000, f"{type(e).__name__}: {e}"[:200]
         ms = (time.perf_counter() - t) * 1000
         msg = None
-        if "event-stream" in ctype:
-            for line in raw.splitlines():
-                if line.startswith("data:"):
-                    msg = json.loads(line[5:].strip())
-        else:
-            msg = json.loads(raw)
+        try:
+            if "event-stream" in ctype:
+                # SSE: one event's data may span several "data:" lines (joined with "\n"); events
+                # end at a blank line. The last event carrying data is the JSON-RPC answer.
+                # Split on SSE's own line ends only: str.splitlines() would also cut at U+2028,
+                # U+0085 and friends, which JSON may carry unescaped inside a string (#732 run 2).
+                events, cur = [], []
+                for line in re.split(r"\r\n|\n|\r", raw) + [""]:
+                    if line.startswith("data:"):
+                        cur.append(line[5:][1:] if line[5:].startswith(" ") else line[5:])
+                    elif line == "" and cur:
+                        events.append("\n".join(cur))
+                        cur = []
+                if events:
+                    msg = json.loads(events[-1])
+            else:
+                msg = json.loads(raw)
+        except ValueError as e:  # an answer we can't parse is a failed call, recorded with why
+            return False, ms, f"unparseable MCP answer ({ctype}, {len(raw)} chars): {e}"[:200]
         if msg is None:
             return False, ms, "no JSON-RPC message in the answer"
         if "error" in msg:

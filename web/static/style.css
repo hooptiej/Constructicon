@@ -1188,6 +1188,46 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   --tuner-phosphor: var(--accent-hover);  /* the dial's band labels and card ticks stay green */
   --tuner-phosphor-glow: 0 0 4px rgba(166, 212, 119, 0.85), 0 0 12px rgba(166, 212, 119, 0.35);
   --tuner-shadow: 0 0 28px rgba(166, 212, 119, var(--tuner-glow)), inset 0 0 46px rgba(166, 212, 119, var(--tuner-backlight));
+  /* Batch 14 (#783): the rest of the dial's colours, so a theme can swap them too (were literals in
+     the .radio-dial-* rules; the radio values below draw exactly what they drew). */
+  --tuner-font: 'JetBrains Mono', monospace;   /* readouts and band labels */
+  --tuner-lamp: radial-gradient(ellipse 60% 90% at 50% 45%, rgba(166, 212, 119, calc(var(--tuner-backlight) * 1.4)), rgba(166, 212, 119, 0) 70%);
+  --tuner-plate: rgba(10, 13, 18, min(0.85, calc(var(--tuner-backlight) * 1.8)));  /* behind the readout */
+  --tuner-minor: hsl(var(--accent-yellow-hue) 79% var(--accent-yellow-light) / 0.55);  /* month ticks */
+  --tuner-needle-glow: 0 0 8px hsl(var(--accent-yellow-hue) 79% var(--accent-yellow-light) / 0.9), 0 0 2px hsl(var(--accent-yellow-hue) 79% var(--accent-yellow-light));
+  --tuner-card-glow: 0 0 3px rgba(166, 212, 119, 0.7);  /* a card's tick */
+  --tuner-span: rgb(166, 212, 119);       /* #775 pass 2: span bars */
+  --tuner-density: rgb(166, 212, 119);    /* #775 pass 2: the per-year density glow */
+  --tuner-link-hover: var(--text);        /* a readout link under the pointer */
+  --tuner-note: var(--text-2);            /* "N cards left off the dial" */
+}
+/* #783 "Same dial, different museum": the clean gallery theme for professional installs. Admin >
+   Install "Dial theme" (install_config tuner_theme, env default CONSTRUCTICON_TUNER_THEME) puts
+   data-tuner-theme on <html> (base.html); radio, the default, uses :root above unchanged. Only the
+   two tuners change (the home dial and the card page's timeline), not the rest of the app. Every
+   DERIVED value is a constant here, so the tuning panel's colour sliders (which write the base
+   values onto <html>) can't bring the radio glow back. */
+:root[data-tuner-theme="museum"] {
+  --tuner-chassis: #f4f2ee;               /* gallery off-white */
+  --tuner-border: #d6d1c7;
+  --tuner-readout: #1f2023;               /* dark ink, no glow */
+  --tuner-readout-glow: none;
+  --tuner-yellow: #2b2b2e;                /* the needle and axis: a thin dark hairline */
+  --tuner-yellow-glow: none;
+  --tuner-tick-glow: none;
+  --tuner-phosphor: #6b6e75;              /* band labels and card ticks: muted grey */
+  --tuner-phosphor-glow: none;
+  --tuner-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);  /* no backlight, no outer glow */
+  --tuner-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --tuner-lamp: none;
+  --tuner-plate: transparent;
+  --tuner-minor: rgba(43, 43, 46, 0.28);
+  --tuner-needle-glow: none;
+  --tuner-card-glow: none;
+  --tuner-span: #8a8d94;
+  --tuner-density: rgb(60, 62, 68);
+  --tuner-link-hover: #000;
+  --tuner-note: #5a5d63;
 }
 /* #775 "Tune in to the past": the home page timeline as a sliding radio dial (radio-dial.js).
    Replaced the old vertical left rail (.timeline-rail, timeline-rail.js) and its -shifted layout
@@ -1203,6 +1243,12 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   --dial-card-tick-h: 14px;   /* a card's tick, standing on the axis */
   --dial-year-tick-h: 18px;   /* a year's tick, centred on the axis */
   --dial-month-tick-h: 8px;
+  /* #775 pass 2 (mirrors DIAL_DEFAULTS span* / density* in radio-dial.js; the tuning panel sets them live) */
+  --dial-span-h: 3px;              /* a span bar's height */
+  --dial-span-gap: 1px;            /* between bar rows, and above the card ticks */
+  --dial-span-opacity: 0.55;       /* overlapping bars read brighter */
+  --dial-density-strength: 0.35;   /* the busiest year's glow (0 = off) */
+  --dial-density-spread: 70%;      /* how far a year's glow spreads before it fades out */
 }
 .radio-dial-chassis {
   padding: 10px 16px 10px;
@@ -1214,7 +1260,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .radio-dial-message {
   /* Empty, loading or failed (#775 item 9: never a blank bar). */
   margin: 8px 0;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--tuner-font);
   font-size: 13px;
   line-height: 1.45;
   color: var(--tuner-phosphor);
@@ -1232,7 +1278,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   outline: none;
   /* The backlight's second half: a soft lamp behind the band, brightest at the needle. It is the
      window's own background, so the ticks, labels and needle all paint over it. */
-  background: radial-gradient(ellipse 60% 90% at 50% 45%, rgba(166, 212, 119, calc(var(--tuner-backlight) * 1.4)), rgba(166, 212, 119, 0) 70%);
+  background: var(--tuner-lamp);  /* --tuner-backlight drives it (radio theme) */
 }
 .radio-dial-window:focus-visible { box-shadow: 0 0 0 2px var(--tuner-yellow); }
 .radio-dial-window--dragging { cursor: grabbing; }
@@ -1247,8 +1293,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   z-index: 2;
   pointer-events: none;
 }
-.radio-dial-window::before { left: 0; background: linear-gradient(to right, #0a0d12, rgba(10, 13, 18, 0)); }
-.radio-dial-window::after { right: 0; background: linear-gradient(to left, #0a0d12, rgba(10, 13, 18, 0)); }
+.radio-dial-window::before { left: 0; background: linear-gradient(to right, var(--tuner-chassis), transparent); }
+.radio-dial-window::after { right: 0; background: linear-gradient(to left, var(--tuner-chassis), transparent); }
 .radio-dial-band {
   position: absolute;
   top: 0;
@@ -1259,10 +1305,30 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .radio-dial-layer-density,
 .radio-dial-layer-spans,
 .radio-dial-ticks {
-  /* density and spans are pass 2 hooks (#775): empty for now. */
+  /* #775 pass 2: the density glow (bottom), then the span bars, then the ticks on top. */
   position: absolute;
   inset: 0;
 }
+.radio-dial-density {
+  /* One per year with cards: brighter the more it holds (--lvl, 0..1, from radio-dial.js), scaled
+     by --dial-density-strength. Static: it never grows or animates. */
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  opacity: calc(var(--lvl, 0) * var(--dial-density-strength));
+  background: radial-gradient(ellipse 50% 50% at 50% 42%, var(--tuner-density), transparent var(--dial-density-spread));
+  pointer-events: none;
+}
+.radio-dial-span {
+  /* A card's start-to-end bar, in row --lane (0 = nearest the axis), above the card ticks. */
+  position: absolute;
+  top: calc(var(--dial-axis-y) - var(--dial-card-tick-h) - (var(--lane, 0) + 1) * (var(--dial-span-h) + var(--dial-span-gap)));
+  height: var(--dial-span-h);
+  border-radius: 1px;
+  background: var(--tuner-span);
+  opacity: var(--dial-span-opacity);
+}
+.radio-dial-span--child { opacity: calc(var(--dial-span-opacity) * 0.7); }
 .radio-dial-axis {
   position: absolute;
   top: var(--dial-axis-y);
@@ -1284,11 +1350,11 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   width: 2px;
   height: var(--dial-year-tick-h);
   background: var(--tuner-yellow);
-  box-shadow: 0 0 4px rgba(232, 185, 58, 0.5);
+  box-shadow: var(--tuner-tick-glow);
 }
 .radio-dial-year-label {
   margin-top: 1px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--tuner-font);
   font-size: 15px;
   line-height: 1.1;
   color: var(--tuner-phosphor);
@@ -1300,7 +1366,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   top: calc(var(--dial-axis-y) + 1px - var(--dial-month-tick-h) / 2);
   width: 1px;
   height: var(--dial-month-tick-h);
-  background: rgba(232, 185, 58, 0.55);
+  background: var(--tuner-minor);
 }
 .radio-dial-card {
   /* One per card at its start date, standing on the axis. Static: never grows. */
@@ -1310,7 +1376,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   height: var(--dial-card-tick-h);
   margin-left: -1px;
   background: var(--tuner-phosphor);
-  box-shadow: 0 0 3px rgba(166, 212, 119, 0.7);
+  box-shadow: var(--tuner-card-glow);
 }
 .radio-dial-card--child { height: calc(var(--dial-card-tick-h) * 0.6); top: calc(var(--dial-axis-y) - var(--dial-card-tick-h) * 0.6); opacity: 0.75; }
 .radio-dial-needle {
@@ -1323,7 +1389,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   margin-left: -1px;
   z-index: 3;
   background: var(--tuner-yellow);
-  box-shadow: 0 0 8px rgba(232, 185, 58, 0.9), 0 0 2px rgba(232, 185, 58, 1);
+  box-shadow: var(--tuner-needle-glow);
   pointer-events: none;
 }
 .radio-dial-needle::before {
@@ -1345,7 +1411,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   min-height: 24px;
   margin-top: 6px;
   padding: 2px 8px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--tuner-font);
   font-size: 13px;
   color: var(--tuner-readout);
   text-shadow: var(--tuner-readout-glow);
@@ -1354,7 +1420,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   position: relative;
   z-index: 1;
   border-radius: 4px;
-  background: rgba(10, 13, 18, min(0.85, calc(var(--tuner-backlight) * 1.8)));
+  background: var(--tuner-plate);  /* thickens with --tuner-backlight (radio theme) */
 }
 .radio-dial-freq { font-size: 15px; font-weight: 600; letter-spacing: 0.04em; }
 .radio-dial-stations {
@@ -1366,9 +1432,9 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   padding: 0;
   list-style: none;
 }
-.radio-dial-station { color: var(--tuner-readout); text-decoration: none; border-bottom: 1px dotted hsl(var(--tuner-readout-hue) 90% 64% / 0.5); }
+.radio-dial-station { color: var(--tuner-readout); text-decoration: none; border-bottom: 1px dotted color-mix(in srgb, var(--tuner-readout) 50%, transparent); }
 .radio-dial-station:hover,
-.radio-dial-station:focus-visible { color: var(--text); border-bottom-color: var(--tuner-yellow); outline: none; }
+.radio-dial-station:focus-visible { color: var(--tuner-link-hover); border-bottom-color: var(--tuner-yellow); outline: none; }
 .radio-dial-station-date { margin-left: 6px; opacity: 0.7; font-size: 12px; }
 .radio-dial-quiet,
 .radio-dial-more { opacity: 0.6; }
@@ -1387,7 +1453,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 .radio-dial-note {
   margin: 4px 0 0;
   font-size: 12px;
-  color: var(--text-2);
+  color: var(--tuner-note);
   text-align: center;
 }
 .radio-dial-tune {
@@ -1509,7 +1575,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   margin: 14px 0 0;
   font-size: 12px;
   line-height: 1.45;
-  color: var(--text-2);
+  color: var(--tuner-note);  /* inside the chassis: follows the tuner theme (#783) */
 }
 .project-video-timeline-blocks {
   position: relative;
@@ -1574,7 +1640,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   font-size: 17.5px; /* 1.75x the original 10px, per owner's readability pass */
   color: var(--tuner-readout);
   text-shadow: var(--tuner-readout-glow);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--tuner-font);  /* the shared tuner theme (#783) */
   white-space: nowrap;
   margin-top: 2px;
 }
@@ -1621,7 +1687,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   font-size: 15.75px; /* 1.75x the original 9px, per owner's readability pass */
   color: var(--tuner-readout); /* glowing readout, matching the ruler labels (shared tuner theme) */
   text-shadow: var(--tuner-readout-glow);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--tuner-font);  /* the shared tuner theme (#783) */
   white-space: nowrap;
   transform-origin: bottom left;
   transform: rotate(-65deg);
@@ -1723,7 +1789,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
   color: var(--tuner-readout);
   border: 1px solid var(--tuner-yellow);
   border-radius: 5px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--tuner-font);  /* the shared tuner theme (#783) */
   font-size: 13px;
   white-space: nowrap;
   pointer-events: none;

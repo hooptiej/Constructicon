@@ -785,6 +785,28 @@
               i.appendChild(o);
             });
           }).catch(() => {});
+        } else if (f.kind === 'choice') {
+          // #783: a fixed list (the dial theme). Blank = the install default (env, else radio).
+          i = document.createElement('select');
+          i.className = 'input'; i.style.marginTop = '4px';
+          const none = document.createElement('option');
+          none.value = ''; none.textContent = 'Install default: ' + (cfg.fallbacks[f.key] || '');
+          i.appendChild(none);
+          (f.choices || []).forEach(c => {
+            const o = document.createElement('option');
+            o.value = c.value; o.textContent = c.label; i.appendChild(o);
+          });
+          i.value = cfg.values[f.key] || '';
+          const ts = f.key === 'tuner_theme' ? cfg.tuner_theme : null;
+          if (ts && ts.env_invalid) {
+            // Never silent: a bad env default is named here (it is ignored, radio is used).
+            const warn = document.createElement('div');
+            warn.className = 'admin-row-hint backup-status-error';
+            warn.textContent = ts.env_var + '=' + JSON.stringify(ts.env_value) + ' is not a dial theme (use '
+              + (ts.choices || []).map(c => c.value).join(' or ') + '), so the default "' + ts.default
+              + '" is used. Fix it in the install\'s compose / .env, or pick a theme here.';
+            hint.appendChild(warn);
+          }
         } else {
           i = input(cfg.values[f.key], cfg.fallbacks[f.key] ? 'not set (shows "' + cfg.fallbacks[f.key] + '")' : 'not set');
         }

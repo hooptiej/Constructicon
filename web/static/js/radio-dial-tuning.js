@@ -1,10 +1,14 @@
-// Dev-only live tuning panel for the home page radio dial (#775). Loaded only when home.html decides
-// tuning is allowed (CONSTRUCTICON_ENV=dev, or ?tune=1 for an admin), so prod viewers never get it.
+// Live tuning panel for the home page radio dial (#775). Loaded only when home.html decides tuning is
+// allowed: an admin who asks for it with /?tune=1, on any instance (#788: it used to show on every dev
+// instance too; the owner's defaults are baked in now). Viewers and editors never get it.
 // One slider per RadioDial.TUNABLES entry, applied live through dial.setTuning. Values are remembered
 // in this browser only (localStorage, best effort) and "Copy values" puts them on the clipboard as
 // JSON, so the owner can hand the numbers back to bake into DIAL_DEFAULTS in radio-dial.js.
 // #785: the accent yellow's hue and tint are tunables too (accentHue / accentLight), so they get a
 // slider each and ride along in Reset and Copy values; bake them into style.css :root as well.
+// #775 pass 2: the span bars' and density glow's values are sliders too (RadioDial.TUNABLES).
+// #783: "Theme preview" swaps <html data-tuner-theme> on this page only, so a theme can be judged
+// against the live dial; it is not saved (Admin > Install "Dial theme" is the install's setting).
 (function () {
   const STORE_KEY = 'constructicon.radioDial.tuning';
 
@@ -25,8 +29,16 @@
     dial.setTuning(saved);
     panel.innerHTML = `
       <details class="radio-dial-tune" open>
-        <summary>Dial tuning (dev only)</summary>
+        <summary>Dial tuning (admin, ?tune=1)</summary>
         <div class="radio-dial-tune-rows"></div>
+        <label class="radio-dial-tune-row radio-dial-tune-theme">
+          <span>Theme preview (this page only; save it in Admin &gt; Install)</span>
+          <select class="input" data-act="theme">
+            <option value="radio">Radio</option>
+            <option value="museum">Museum</option>
+          </select>
+          <output></output>
+        </label>
         <div class="radio-dial-tune-actions">
           <button type="button" class="btn-secondary" data-act="copy">Copy values</button>
           <button type="button" class="btn-secondary" data-act="reset">Reset to defaults</button>
@@ -67,6 +79,15 @@
       rows.appendChild(row);
       inputs[t.key] = { input, out, t };
       show(t.key, dial.tuning[t.key]);
+    });
+    const html = document.documentElement;
+    const themeSel = panel.querySelector('[data-act="theme"]');
+    themeSel.value = html.getAttribute('data-tuner-theme') || 'radio';
+    themeSel.addEventListener('change', () => {
+      html.setAttribute('data-tuner-theme', themeSel.value);
+      status.textContent = themeSel.value === 'radio'
+        ? 'Previewing the radio theme.'
+        : `Previewing the ${themeSel.value} theme (its colours are fixed: the colour sliders only change the radio theme). Not saved.`;
     });
     panel.querySelector('[data-act="reset"]').addEventListener('click', () => {
       clear();

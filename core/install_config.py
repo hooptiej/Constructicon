@@ -18,6 +18,9 @@ Keys (KEYS below):
   hobby_label_plural  #700: its plural ("Departments"); default "Hobbies". Set both or neither
                     (core/hobby_label.py validates the pair). The web pages and URLs follow it at
                     once; the MCP tool names follow it when the MCP process restarts.
+  tuner_theme       #783: the look of the two radio tuners (the home dial and the card page's
+                    timeline): "radio" (the default) or "museum" (a clean gallery look). Unset =
+                    the env default CONSTRUCTICON_TUNER_THEME, else "radio". Only the tuners change.
 
 Not in KEYS (never edited directly): `hobby_label_known` (#700), every label slug pair the install
 has ever used, so the old pages' URLs keep redirecting (web/hobby_paths.py). Written by update()
@@ -40,6 +43,7 @@ cards.undo (which clears this cache).
 
 import json
 import logging
+import os
 import re
 import sqlite3
 import time
@@ -78,9 +82,23 @@ KEYS = {
                                               "Leave both labels blank for \"Hobby / Hobbies\"."),
     "hobby_label_plural": ("Hobby label (plural)", "The plural, e.g. \"Departments\". It also names the "
                                                    "index page's web address (/departments)."),
+    "tuner_theme": ("Dial theme", "The look of the timeline dials (the home page's dial and a card page's "
+                                  "timeline): Radio (dark, glowing) or Museum (clean, light gallery). Only "
+                                  "the dials change, not the rest of the app."),
 }
 HOBBY_LABEL_KEYS = ("hobby_label", "hobby_label_plural")
-TEXT_KEYS = tuple(k for k in KEYS if k != "publish_targets")
+TEXT_KEYS = tuple(k for k in KEYS if k not in ("publish_targets", "tuner_theme"))
+
+# #783: the tuner themes (style.css :root[data-tuner-theme=...]); value -> label. "radio" is the
+# default and the owner's archive look. The env variable is the install's default when the admin
+# hasn't picked one; a bad env value is logged once and named on Admin > Install, never used.
+TUNER_THEMES = {
+    "radio": "Radio (dark chassis, glowing readout)",
+    "museum": "Museum (clean gallery: off-white, dark ink)",
+}
+DEFAULT_TUNER_THEME = "radio"
+TUNER_THEME_ENV = "CONSTRUCTICON_TUNER_THEME"
+_env_warned = set()
 KNOWN_LABELS_KEY = "hobby_label_known"
 # #700: what the MCP process recorded about itself when it started (app_settings; see
 # mcp_started_label). Written by mcp_server/server.py, read by the admin page.
@@ -271,6 +289,54 @@ def hobby_label_status(vals=None):
             "warning": HOBBY_LABEL_WARNING, "default": hobby_label_rules.DEFAULT.as_dict()}
 
 
+def env_tuner_theme():
+    """#783: the install's default dial theme from CONSTRUCTICON_TUNER_THEME -> (theme or None,
+    the raw value when it is not a known theme, else None). Read on every call (tests set it). A bad
+    value is logged once per value and shown on Admin > Install; it is never used."""
+    raw = (os.environ.get(TUNER_THEME_ENV) or "").strip()
+    if not raw:
+        return None, None
+    theme = raw.lower()
+    if theme in TUNER_THEMES:
+        return theme, None
+    if raw not in _env_warned:
+        _env_warned.add(raw)
+        log.warning("%s=%r is not a dial theme (use one of: %s); using %r",
+                    TUNER_THEME_ENV, raw, ", ".join(TUNER_THEMES), DEFAULT_TUNER_THEME)
+    return None, raw
+
+
+def default_tuner_theme():
+    """#783: the theme used when Admin > Install has none: the env default, else "radio"."""
+    return env_tuner_theme()[0] or DEFAULT_TUNER_THEME
+
+
+def tuner_theme(vals=None):
+    """#783: this install's dial theme ("radio" | "museum"): the Admin > Install pick, else the env
+    default, else "radio". A stored value that is no longer a theme falls back (and is logged)."""
+    vals = values() if vals is None else vals
+    picked = vals.get("tuner_theme")
+    if picked in TUNER_THEMES:
+        return picked
+    if picked:
+        besteffort.warn(log, "install_config: stored tuner_theme is not a known theme, using the default",
+                        ValueError(picked))
+    return default_tuner_theme()
+
+
+def tuner_theme_status(vals=None):
+    """#783: the admin view: the theme in use, where it comes from (setting | env | default), the
+    env value and whether it was refused, and the choices."""
+    vals = _read_all() if vals is None else vals
+    env_theme, env_bad = env_tuner_theme()
+    picked = vals.get("tuner_theme")
+    source = "setting" if picked in TUNER_THEMES else "env" if env_theme else "default"
+    return {"current": tuner_theme(vals), "source": source, "env_var": TUNER_THEME_ENV,
+            "env_value": env_theme or env_bad, "env_invalid": env_bad is not None,
+            "default": DEFAULT_TUNER_THEME,
+            "choices": [{"value": k, "label": v} for k, v in TUNER_THEMES.items()]}
+
+
 def setup_needed():
     """True until the essentials (owner_name) are set: the admin pages show the setup banner.
     #467: the first-run setup screen (first admin account) hooks in here."""
@@ -283,13 +349,18 @@ def public():
     return {
         "values": {k: vals.get(k, {} if k == "publish_targets" else "") for k in KEYS},
         "fields": [{"key": k, "label": lab, "hint": hint,
-                    **({"kind": "brand_asset"} if k == "app_logo" else {})} for k, (lab, hint) in KEYS.items()],
+                    **({"kind": "brand_asset"} if k == "app_logo" else {}),
+                    **({"kind": "choice", "choices": [{"value": t, "label": tl} for t, tl in TUNER_THEMES.items()]}
+                       if k == "tuner_theme" else {})}
+                   for k, (lab, hint) in KEYS.items()],
         "setup_needed": not vals.get("owner_name"),
         "fallbacks": {"owner_name": FALLBACK_OWNER, "site_title": FALLBACK_SITE_TITLE,
                       "app_name": FALLBACK_APP_NAME, "app_logo": "bundled logo",
                       "hobby_label": hobby_label_rules.DEFAULT_ONE,
-                      "hobby_label_plural": hobby_label_rules.DEFAULT_MANY},
+                      "hobby_label_plural": hobby_label_rules.DEFAULT_MANY,
+                      "tuner_theme": TUNER_THEMES[default_tuner_theme()]},
         "hobby_label": hobby_label_status(vals),
+        "tuner_theme": tuner_theme_status(vals),
     }
 
 
@@ -321,6 +392,24 @@ def _clean_logo(value):
     if (item.get("media_type") or "image") != "image":
         raise InvalidInput("The logo must be an image", code="bad_install_config")
     return slug
+
+
+def _clean_tuner_theme(value):
+    """#783: "radio" or "museum" (any case, spaces trimmed); None / "" clears it (back to the env
+    default, else radio). Anything else is refused, naming the choices: 400 bad_tuner_theme."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidInput("tuner_theme must be text: one of " + ", ".join(TUNER_THEMES),
+                           code="bad_tuner_theme")
+    v = value.strip().lower()
+    if not v:
+        return None
+    if v not in TUNER_THEMES:
+        raise InvalidInput(f"Unknown dial theme {value.strip()!r}: choose one of " + ", ".join(TUNER_THEMES)
+                           + f" (or leave it blank for the install default, {default_tuner_theme()}). "
+                           "Nothing was saved.", code="bad_tuner_theme")
+    return v
 
 
 def clean_targets(value):
@@ -366,6 +455,8 @@ def _clean(changes_in):
             out[key] = json.dumps(t) if t else None
         elif key == "app_logo":
             out[key] = _clean_logo(value)
+        elif key == "tuner_theme":
+            out[key] = _clean_tuner_theme(value)
         elif key in HOBBY_LABEL_KEYS:
             continue  # #700: validated as a pair below
         else:

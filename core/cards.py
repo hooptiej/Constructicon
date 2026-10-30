@@ -2958,7 +2958,7 @@ def undo(target, *, force=False, dry_run=False, actor=None):
         if r.get("undone_by") is not None:
             raise CardError("undo_refused", f"Entry {r['id']} was already undone (by entry {r['undone_by']}).",
                             {"audit_id": r["id"], "undone_by": r["undone_by"]})
-        if not r["mutations"]:
+        if not r["mutations"] and r.get("op") not in _items_creation_ops():
             raise CardError("undo_refused", f"Entry {r['id']} ({r['op']}) recorded no row images, so it can't be undone.",
                             {"audit_id": r["id"]})
     # #541 phase B: an item delete/redact moved files into the trash. Plan the file side first so
@@ -2988,6 +2988,10 @@ def undo(target, *, force=False, dry_run=False, actor=None):
                     db.mark_change_rows_undone(orig, None)
             if file_plan and not dry_run:
                 _items.undo_apply(file_plan, moved)  # last: a failure rolls the rows back too
+            # #605: items an op CREATED (an unpacked archive's members) go to the trash, under this
+            # undo's batch (so undoing the undo restores them). After the row images were inverted:
+            # their card memberships are already gone.
+            created = _items.undo_creations(rows, batch_id, actor, moved, dry_run=dry_run)
     except db.UndoConflict as e:
         _items.rollback_moves(moved)
         raise CardError("undo_conflict", str(e), e.details)
@@ -3002,8 +3006,20 @@ def undo(target, *, force=False, dry_run=False, actor=None):
     elif not dry_run and _items.needs_after_undo(rows):  # a retype, or a replaced file (#617)
         _items.after_undo(rows, [])
     flat = _changes_from_log([{"op": "undo", "affected_slugs": sorted(set(slugs)), "mutations": applied}])
-    return Result(True, flat, [], batch_id, dry_run,
-                  {"undone": [r["id"] for r in rows], "undone_ops": [r["op"] for r in rows]})
+    data = {"undone": [r["id"] for r in rows], "undone_ops": [r["op"] for r in rows]}
+    warnings = []
+    if created["deleted"] or created["gone"]:
+        data["created_items_trashed"] = created["deleted"]
+        data["created_items_already_gone"] = created["gone"]
+        if created["gone"]:
+            warnings.append(f"{len(created['gone'])} item(s) this change created were already deleted, so there was "
+                            f"nothing to remove for them: {', '.join(created['gone'][:10])}.")
+    return Result(True, flat, warnings, batch_id, dry_run, data)
+
+
+def _items_creation_ops():
+    from . import items as _items  # lazy: items imports this module
+    return _items.CREATION_OPS
 
 
 def _rows_undone_by(undo_id):

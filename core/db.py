@@ -285,6 +285,31 @@ CREATE TABLE IF NOT EXISTS mcp_tokens (
     last_used_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id);
+-- #605 "Unpack the Crate": one archive -> card conversion, run in the background by the web
+-- process (#549: the MCP only queues one). core/unpack.py owns every write. status: queued |
+-- running | done | partial (finished, some members failed) | failed (stopped; see `error`).
+-- `progress` / `result` are JSON. `channel` / `via_token_id`: how the starter reached the app and their
+-- personal MCP key (#560 / #778), replayed when the worker runs it, so members get the right credit. Not imaged: the conversion's own rows are in the change log
+-- under `batch_id`, which is what undo reverses.
+CREATE TABLE IF NOT EXISTS unpack_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archive_slug TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    shape TEXT NOT NULL,
+    depth INTEGER NOT NULL DEFAULT 0,
+    channel TEXT,
+    via_token_id INTEGER,
+    status TEXT NOT NULL,
+    progress TEXT NOT NULL DEFAULT '{}',
+    result TEXT NOT NULL DEFAULT '{}',
+    error TEXT,
+    created_at REAL NOT NULL,
+    started_at REAL,
+    finished_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_unpack_jobs_status ON unpack_jobs(status, id);
+CREATE INDEX IF NOT EXISTS idx_unpack_jobs_archive ON unpack_jobs(archive_slug, id);
 """
 
 # Provenance (capture_events.provenance, #341): the options live in the provenance_options
@@ -1205,6 +1230,12 @@ def init_db(migrate=True):
             _add_column(conn, "hobby_settings", "created_via_token_id", "INTEGER")
         if "created_via_token_id" not in existing_blog_entry_columns:
             _add_column(conn, "blog_entries", "created_via_token_id", "INTEGER")
+        # #605: an unpack job replays its starter's channel and personal MCP key in the web worker
+        # (an install that ran an earlier build of the branch has the table without them).
+        existing_unpack_columns = {row["name"] for row in conn.execute("PRAGMA table_info(unpack_jobs)")}
+        for column, ddl_type in (("channel", "TEXT"), ("via_token_id", "INTEGER")):
+            if existing_unpack_columns and column not in existing_unpack_columns:
+                _add_column(conn, "unpack_jobs", column, ddl_type)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_capture_events_owner ON capture_events(uploaded_by_user_id)")
         # #604 step 3: a PRIVATE card or hobby (0 = open, the default). Who else may see it is
         # share_members; core/policy.py decides, core/sharing.py writes.
@@ -2123,6 +2154,46 @@ def _mig_search_short_title_542():
     print(f"schema_migrations: search_short_title_542 re-indexed {rows} item(s) in {secs:.2f}s", flush=True)
 
 
+def _mig_archive_stats_605():
+    # #605: archive items stored no member counts unless they were tars (#485): zip and 7z returned {}
+    # from the type's embedded_metadata_fn, which is why the work install's Venza manual showed an
+    # empty type_metadata. Fill the stats (core/object_types/archive.py archive_stats: counts, sizes,
+    # by_type, max_depth) once for every archive row that has none, fill-only (the same merge the
+    # upload path uses; nothing is overwritten). Read through a parser child (#644), so a hostile
+    # file costs one bounded child. A file that is gone or can't be read is counted and named in the
+    # log, never skipped silently. Idempotent: a second run finds every row filled (or unreadable).
+    from . import parse_limits, paths
+    from .object_types import archive
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT slug, stored_filename, type_metadata FROM capture_events WHERE media_type = 'archive' "
+        "AND stored_filename IS NOT NULL AND stored_filename != '' AND COALESCE(redacted, 0) = 0").fetchall()
+    filled, missing, failed = 0, [], []
+    for r in rows:
+        try:
+            meta = json.loads(r["type_metadata"] or "{}") or {}
+        except (TypeError, ValueError):
+            meta = {}  # silent-ok: a garbled column is treated as empty; the merge below keeps nothing it can't read
+        if archive.STATS_KEY in meta:
+            continue
+        path = paths.storage_dir() / r["stored_filename"]
+        if not path.is_file():
+            missing.append(r["slug"])
+            continue
+        try:
+            stats = parse_limits.call(archive.archive_stats, path, kind=parse_limits.BACKGROUND,
+                                      what="archive stats", key=r["stored_filename"])
+        except Exception as e:
+            failed.append(f"{r['slug']} ({e})")
+            continue
+        if stats:
+            _update_content_metadata(r["slug"], type_metadata={archive.STATS_KEY: stats})
+            filled += 1
+    print(f"schema_migrations: archive_stats_605 filled {filled} archive item(s); "
+          f"{len(missing)} with no stored file{(': ' + ', '.join(missing[:20])) if missing else ''}; "
+          f"{len(failed)} unreadable{(': ' + '; '.join(failed[:20])) if failed else ''}", flush=True)
+
+
 MIGRATIONS = [
     ("drop_legacy_uploads", _mig_drop_legacy_uploads),
     ("curator_snooze_519", _mig_curator_snooze_519),
@@ -2153,6 +2224,7 @@ MIGRATIONS = [
     ("vocab_seed_556", _mig_vocab_seed_556),
     ("capture_channel_560", _mig_capture_channel_560),
     ("owner_upload_backfill_560", _mig_owner_upload_backfill_560),  # after the channel fill: it reads it
+    ("archive_stats_605", _mig_archive_stats_605),
 ]
 
 
@@ -6578,3 +6650,91 @@ def _purge_expired_sessions(now, created_before=None):
     finally:
         conn.close()
 
+
+
+# --- #605 "Unpack the Crate": archive -> card conversion jobs (core/unpack.py owns the writes) ------
+
+_UNPACK_JSON = ("progress", "result")
+
+
+def _unpack_job_dict(r):
+    if r is None:
+        return None
+    d = dict(r)
+    for k in _UNPACK_JSON:
+        try:
+            d[k] = json.loads(d.get(k) or "{}")
+        except (TypeError, ValueError):
+            d[k] = {"unreadable": True}  # silent-ok: shown as such; the job row itself says what it was
+    return d
+
+
+def _insert_unpack_job(archive_slug, batch_id, actor, shape, depth, channel=None, via_token_id=None):
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO unpack_jobs (archive_slug, batch_id, actor, shape, depth, channel, via_token_id, status, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+            (archive_slug, batch_id, actor, shape, int(depth or 0), channel, via_token_id, time.time()))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _update_unpack_job(job_id, **fields):
+    """Sets the named columns (progress / result as dicts). Returns the number of rows changed."""
+    if not fields:
+        return 0
+    cols, vals = [], []
+    for k, v in fields.items():
+        if k not in ("status", "progress", "result", "error", "started_at", "finished_at"):
+            raise ValueError(f"unpack_jobs has no writable column {k!r}")
+        cols.append(f"{k} = ?")
+        vals.append(json.dumps(v) if k in _UNPACK_JSON else v)
+    conn = get_conn()
+    try:
+        n = conn.execute(f"UPDATE unpack_jobs SET {', '.join(cols)} WHERE id = ?", (*vals, job_id)).rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+def _claim_unpack_job(job_id):
+    """queued -> running, atomically (two workers never both run one). True when this call won."""
+    conn = get_conn()
+    try:
+        n = conn.execute("UPDATE unpack_jobs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'",
+                         (time.time(), job_id)).rowcount
+        conn.commit()
+        return n == 1
+    finally:
+        conn.close()
+
+
+def get_unpack_job(job_id):
+    conn = get_conn()
+    try:
+        return _unpack_job_dict(conn.execute("SELECT * FROM unpack_jobs WHERE id = ?", (job_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+def list_unpack_jobs(status=None, archive_slug=None, limit=50):
+    """Newest first. `status` a string or a tuple of them."""
+    sql, args = "SELECT * FROM unpack_jobs WHERE 1 = 1", []
+    if status:
+        st = (status,) if isinstance(status, str) else tuple(status)
+        sql += f" AND status IN ({', '.join('?' * len(st))})"
+        args += list(st)
+    if archive_slug:
+        sql += " AND archive_slug = ?"
+        args.append(archive_slug)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(int(limit))
+    conn = get_conn()
+    try:
+        return [_unpack_job_dict(r) for r in conn.execute(sql, args).fetchall()]
+    finally:
+        conn.close()

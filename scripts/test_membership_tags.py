@@ -437,6 +437,7 @@ from core import sharing, users  # noqa: E402  (#604 step 3: a member list row)
 users.create_user("mt_card_member", "member-pw-" + "x" * 12, "viewer")
 sharing.add_member("card", P["id"], "mt_card_member", "viewer")
 items.delete([W])  # a trash row and a file in .trash
+db._insert_unpack_job(A, "unpack-batch", "script", "collection", 0)  # #605: an archive -> card job row
 db.set_setting("some_key", "kept")
 empty = [t for t in reset.CLEARED_TABLES if q(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] == 0]
 check("delete-all fixture: every cleared table has rows", empty == [], empty)

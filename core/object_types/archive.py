@@ -32,7 +32,7 @@ from . import _preview, _textstats
 # #485: tar family. Listed by reading member headers only: never extracted to
 # disk, never following symlinks (a link is reported as "name -> target" and
 # nothing more). The caps bound a hostile archive's cost.
-TAR_EXTENSIONS = (".tar.gz", ".tgz", ".tar")
+TAR_EXTENSIONS = (".tar.gz", ".tgz", ".tar", ".tar.bz2", ".tbz2", ".tar.xz", ".txz")  # #605: + bzip2 / xz
 STATS_KEY = "archive_stats"
 MAX_TAR_SECONDS = 20.0      # wall-clock budget (a gzip bomb decompresses slowly)
 MAX_NAME_CHARS = 300
@@ -166,19 +166,102 @@ def extract_text_for_row(row):
     return extract_file_list(path) if path else ""
 
 
+BY_TYPE_KEEP = 20  # #605: the summary keeps the 20 most common extensions, the rest as "other"
+
+
+def _summarise(stats, names):
+    """#605: adds by_type ({".html": 729, ...}, most common first) and max_depth (folders deep)."""
+    by_type, depth = {}, 0
+    for name in names:
+        name = str(name).replace("\\", "/").rstrip("/")
+        parts = [p for p in name.split("/") if p not in ("", ".")]
+        if not parts:
+            continue
+        depth = max(depth, len(parts) - 1)
+        ext = Path(parts[-1]).suffix.lower() or "(none)"
+        by_type[ext] = by_type.get(ext, 0) + 1
+    ranked = sorted(by_type.items(), key=lambda kv: (-kv[1], kv[0]))
+    kept = dict(ranked[:BY_TYPE_KEEP])
+    other = sum(n for _ext, n in ranked[BY_TYPE_KEEP:])
+    if other:
+        kept["other"] = other
+    stats["by_type"], stats["max_depth"] = kept, depth
+    return stats
+
+
+def archive_stats(path):
+    """#605: the member counts every archive stores in type_metadata[STATS_KEY] at upload: entries,
+    folders, links, uncompressed (and compressed for zip), encrypted, truncated, damaged, by_type,
+    max_depth. Reads the zip central directory / 7z header / tar member headers only (never a
+    member's data, except that a compressed tar must be decompressed to be walked)."""
+    limit = max_members()
+    if is_tar_name(path):
+        names, stats = scan_tar(path)
+        return _summarise(stats, [n for n in names if not n.endswith("/") and " -> " not in n])
+    ext = Path(path).suffix.lower()
+    stats = {"entries": 0, "folders": 0, "links": 0, "uncompressed": 0, "truncated": False, "damaged": False,
+             "encrypted": False}
+    files = []
+    if ext == ".zip":
+        stats["compressed"] = 0
+        with zipfile.ZipFile(path, "r") as zf:
+            infos = zf.infolist()
+            stats["truncated"] = len(infos) > limit
+            for info in infos[:limit]:
+                if info.is_dir():
+                    stats["folders"] += 1
+                    continue
+                stats["entries"] += 1
+                if ((info.external_attr >> 16) & 0o170000) == 0o120000:
+                    stats["links"] += 1
+                stats["uncompressed"] += max(info.file_size, 0)
+                stats["compressed"] += max(info.compress_size, 0)
+                stats["encrypted"] = stats["encrypted"] or bool(info.flag_bits & 0x1)
+                files.append(info.filename)
+    elif ext == ".7z":
+        if py7zr is None:
+            return {}
+        with py7zr.SevenZipFile(path, "r") as zf:
+            stats["encrypted"] = bool(zf.needs_password())
+            members = zf.list()
+            stats["truncated"] = len(members) > limit
+            for info in members[:limit]:
+                if info.is_directory:
+                    stats["folders"] += 1
+                    continue
+                stats["entries"] += 1
+                stats["uncompressed"] += int(getattr(info, "uncompressed", 0) or 0)
+                files.append(info.filename)
+    else:
+        return {}
+    return _summarise(stats, files)
+
+
 def get_embedded_metadata(path):
-    """ObjectTypeSpec.embedded_metadata_fn (#485): a tar's counts need a pass
-    over the whole stream (a .tar.gz must be decompressed to be walked), so
-    they're computed once here and stored, never per view. Zip/7z keep their
-    cheap central-directory read in properties_fn and return {}."""
-    if not is_tar_name(path):
-        return {}
+    """ObjectTypeSpec.embedded_metadata_fn (#485, #605): the member counts and summary, computed once
+    at upload and stored as type_metadata[STATS_KEY], never per view. #485 did this for tar only
+    (its counts need a pass over the stream); #605 found zip and 7z items with an empty
+    type_metadata (`{}`, the work install's Venza manual) because this returned {} for them, so
+    every format stores its stats now. Existing items get them from the `archive_stats_605`
+    migration. A failure is logged and leaves the row as it was (the properties panel still reads
+    the central directory itself)."""
     try:
-        _names, stats = scan_tar(path)
-        return {"type_metadata": {STATS_KEY: stats}}
+        stats = archive_stats(path)
     except Exception as e:
-        print(f"Tar stats failed for {path}: {e!r}")
+        print(f"Archive stats failed for {path}: {e!r}")
         return {}
+    return {"type_metadata": {STATS_KEY: stats}} if stats else {}
+
+
+def _tar_format(path):
+    low = str(path).lower()
+    if low.endswith((".gz", ".tgz")):
+        return "tar (gzip)"
+    if low.endswith((".bz2", ".tbz2")):
+        return "tar (bzip2)"
+    if low.endswith((".xz", ".txz")):
+        return "tar (xz)"
+    return "tar"
 
 
 def _tar_properties(path, row):
@@ -189,7 +272,7 @@ def _tar_properties(path, row):
         return {}
     plus = "+" if stats.get("truncated") else ""
     props = {
-        "Format": "tar (gzip)" if str(path).lower().endswith((".gz", ".tgz")) else "tar",
+        "Format": _tar_format(path),
         "Entries": f"{stats['entries']:,}{plus}",
         "Folders": f"{stats['folders']:,}{plus if stats['folders'] else ''}",
     }
@@ -288,7 +371,35 @@ def get_properties(row):
         print(f"Archive properties extraction failed for {path}: {e!r}")
         pass
 
-    return props
+    return {**props, **_summary_properties(row)}
+
+
+def _summary_properties(row):
+    """#605: "Inside" (the most common kinds) and "Deepest folder", from the stats stored at upload."""
+    stats = (row.get("type_metadata") or {}).get(STATS_KEY) or {}
+    out = {}
+    by_type = stats.get("by_type") or {}
+    if by_type:
+        top = list(by_type.items())[:5]
+        rest = sum(by_type.values()) - sum(n for _e, n in top)
+        out["Inside"] = ", ".join(f"{n:,} {ext}" for ext, n in top) + (f", {rest:,} more" if rest else "")
+    if stats.get("max_depth"):
+        out["Deepest folder"] = f"{stats['max_depth']} level{'s' if stats['max_depth'] != 1 else ''} down"
+    return out
+
+
+def _unpack(row, params):
+    """#605 TypeAction handler: preview / start / status of turning this archive into a card. The
+    work lives in core/unpack.py (a service module); this file only declares the action."""
+    from .. import unpack  # lazy: unpack imports cards, ingest and the registry itself
+    return unpack.run_action(row, params)
+
+
+def _can_unpack(row):
+    """#605: offered for a stored zip / 7z / tar archive (not a redacted one)."""
+    from .. import archive_reader  # lazy: keeps this module light for the parser children
+    return bool(row.get("stored_filename")) and not row.get("redacted") and \
+        archive_reader.archive_format(row.get("filename") or row.get("stored_filename") or "") is not None
 
 
 def preview(ctx):
@@ -312,14 +423,19 @@ def preview(ctx):
 
 
 # Registration: add this type to the object-type registry
-from . import register, ObjectTypeSpec, ThumbnailSource
+from . import register, ObjectTypeSpec, ThumbnailSource, TypeAction
 
 register(ObjectTypeSpec(
     key="archive",
     label="Archive",
     thumbnail_source=ThumbnailSource.NONE,
     ocr_capable=True,  # Enable OCR background task so text_extract_fn gets called (no actual OCR since no thumbnail)
-    extensions=frozenset({".zip", ".7z", ".tar", ".tar.gz", ".tgz"}),
+    extensions=frozenset({".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"}),
+    # #605 "Unpack the Crate": turn the archive into a collection or project of its members. Takes
+    # params (mode=preview|start|status, shape, depth); the item page opens its own dialog
+    # (ui="unpack", static/js/unpack-crate.js) instead of the plain confirm-and-POST.
+    actions=(TypeAction("unpack", "Unpack into a card…", _unpack, applies_fn=_can_unpack, takes_params=True,
+                        ui="unpack"),),
     embedded_metadata_fn=get_embedded_metadata,  # #485: tar counts, once at upload
     text_extract_fn=extract_text_for_row,
     properties_fn=get_properties,

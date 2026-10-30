@@ -71,6 +71,7 @@ DOORS = {
     ("web/routes/items.py", "api_rendered_html"): "GET /api/image/{slug}/rendered (#607)",
     ("web/routes/items.py", "api_get_revisions"): "GET /api/image/{slug}/revisions",
     ("web/routes/items.py", "api_get_similar"): "GET /api/image/{slug}/similar",
+    ("web/routes/items.py", "api_unpack_job"): "GET /api/unpack/jobs/{id} (#605: a conversion's members, by its archive)",
     ("web/routes/items.py", "api_gallery"): "GET /api/gallery",
     ("web/routes/items.py", "api_search"): "GET /api/search",
     ("web/routes/files.py", "get_file"): "/f/{slug}",

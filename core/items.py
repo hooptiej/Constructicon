@@ -73,6 +73,12 @@ OP_SENSITIVE = "item_sensitive"  # #603
 OP_REPLACE_FILE = "item_replace_file"  # #617
 OP_BULK_PROVENANCE = "item_bulk_provenance"  # #553
 OP_DATE_GUESS = "item_date_guess"  # #725: guessed dates applied as content_date, one batch
+# #605: an item an op CREATED (an unpacked archive's member). Item rows are made by the ingest
+# pipeline, unlogged, and OCR / captions keep editing them afterwards, so a row image of the insert
+# could never be undone cleanly. Instead this row (no mutations; details {slug, ...}) records the
+# creation, and undoing its batch sends the item to the trash like any delete (undo_creations).
+OP_CREATE_UNPACKED = "item_create_unpacked"
+CREATION_OPS = (OP_CREATE_UNPACKED,)
 REASON_REDACT = "redact"
 REASON_REPLACE = "replace"  # #617: the bytes a replace_file displaced
 
@@ -1264,6 +1270,49 @@ def delete(slugs, *, missing_ok=False, dry_run=False, actor=None, batch_id=None)
         raise
     return _result(OP_DELETE, all_muts, batch_id, dry_run, None, deleted=len(done), slugs=done,
                    trashed=trashed, expires_at=_expiry(all_muts), trash_days=TRASH_DAYS)
+
+
+# --- items created by an op (#605) ---------------------------------------------------------
+
+def record_created(slug, *, batch_id, details=None, actor=None):
+    """#605: logs that `slug` was just created as part of `batch_id` (op OP_CREATE_UNPACKED), so
+    undoing that batch trashes it. One change-log row, no row images, its own short transaction."""
+    with db.transaction():
+        db.insert_change_log(db.get_conn(), OP_CREATE_UNPACKED, actor, [], batch_id=batch_id,
+                             affected_slugs=[slug], details={"slug": slug, **(details or {})})
+
+
+def created_slugs(rows):
+    """The slugs the creation rows among change-log `rows` made, in creation order."""
+    out = []
+    for r in sorted(rows, key=lambda x: x["id"]):
+        if r.get("op") in CREATION_OPS:
+            for slug in r.get("affected_slugs") or []:
+                if slug not in out:
+                    out.append(slug)
+    return out
+
+
+def undo_creations(rows, batch_id, actor, moved, *, dry_run=False):
+    """Called by cards.undo inside its transaction, after the row images were inverted: deletes every
+    item a creation row in `rows` made (rows imaged, files to the trash, under the undo's `batch_id`,
+    so undoing the undo restores them). An item already gone (deleted since) is listed in `gone`,
+    never an error. -> {"deleted": [slugs], "gone": [slugs]}."""
+    deleted, gone, entries = [], [], []
+    for slug in created_slugs(rows):
+        row = db.get_by_slug(slug)
+        if row is None:
+            gone.append(slug)
+            continue
+        entry, _muts = _delete_one(row, batch_id, actor)
+        deleted.append(slug)
+        if entry:
+            entries.append(entry)
+    if not dry_run:
+        for entry in entries:
+            for src, dst in _file_pairs(entry):
+                _move(src, dst, moved)
+    return {"deleted": deleted, "gone": gone}
 
 
 # --- undo hooks (called by cards.undo) -------------------------------------------------

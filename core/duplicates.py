@@ -97,6 +97,17 @@ def _sha256(path):
     return h.hexdigest()
 
 
+def stored_files():
+    """[(slug, stored_filename)] for every un-redacted item with an uploaded file (#605's identical-
+    member check reads the same set the duplicate plan does)."""
+    return _candidates()
+
+
+def sha256_of(path):
+    """The sha256 (hex) of a file: #615's byte-identity, for #605's unpacked members."""
+    return _sha256(path)
+
+
 def find_groups():
     """Byte-identical groups: ({(size, sha256): [slug, ...]} with 2+ slugs, unreadable). Files are
     sized first and only same-size files are hashed. `unreadable` lists every file that could not be

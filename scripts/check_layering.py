@@ -43,6 +43,7 @@ SERVICE_MODULES = {
     "core/install_config.py": "install identity: owner, site title, publish targets (#562)",
     "core/users.py": "user accounts, passwords and sessions (#467 step 1)",
     "core/mcp_tokens.py": "per-user MCP tokens: create, rotate, revoke, sign-in by token (#604 step 5)",
+    "core/unpack.py": "an archive -> card conversion and its background jobs (#605)",
 }
 
 # Raw writes kept on purpose, outside the service layer. Each needs a reason.

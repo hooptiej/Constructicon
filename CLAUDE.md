@@ -138,7 +138,9 @@ the date and commit forward when you re-verify.
     `safe_fetch.py` (#724 d: **the one way the app fetches a web address it was given**, see
     "Outbound fetches" under "Data model"; never call `httpx.get` / `urllib` on a stored URL directly).
   - *Curator:* `curator.py` (completeness scoring), `curator_needs.py` (derived nudges),
-    `curation_queue.py` (the one queue), `lookalikes.py` + `lookalike_match.py` (look-alike photos, #759). See "Decisions and the Curator".
+    `curation_queue.py` (the one queue), `lookalikes.py` + `lookalike_match.py` (look-alike photos, #759),
+    `provenance_rules.py` + `correlations.py` + the pure `apprentice_rules.py` (file provenance by gross rule,
+    #354; related-project suggestions, #344). See "Decisions and the Curator".
   - *Install, files, export:* `paths.py`, `storage.py`, `backup.py`, `install_token.py`, `version.py`,
     `site_export.py` + `project_export.py` (see "Static export"), `wallpapers.py` (the Wallpaper page's
     streamed "Download all (.zip)", #780; see "Static export"). (`card_migration.py`, the one-time
@@ -277,6 +279,7 @@ the date and commit forward when you re-verify.
     `backfill_content_dates.py`, `regenerate_thumbnails.py`, `make_type_samples.py` + `drop_test.py` (#720),
     `caption_cleanup.py` (#743 / #542: the mid-word scan and re-queue, the short-title proposals),
     `measure_lookalikes_759.py` (#759: read-only look-alike measurement on a DB copy, stdlib only),
+    `measure_apprentice_354_344.py` (#354 / #344: read-only provenance-rule and correlation measurement, stdlib only),
     and the helpers `_http.py` and `_testenv.py`.
     **None of `scripts/` is mounted into the app containers (#634)**: where each kind runs is
     "Scripts: what runs where" below. `reset_password.py` and `mcp_token.py` moved into the app as
@@ -1237,7 +1240,8 @@ identity, ownership, visibility or a gallery from `tech` or `channel`.
 
 **The rule: all writes go through `core/{items,membership,tags,cards,hobbies,blog,decisions,reset}.py`
 (plus `core/revisions.py` for revision chains, `core/duplicates.py` for duplicate folding (#615),
-`core/lookalikes.py` for look-alike photos (#759), `core/install_config.py`, `core/users.py`, and since #604
+`core/lookalikes.py` for look-alike photos (#759), `core/provenance_rules.py` and `core/correlations.py` for the
+Curator's Apprentice proposals (#354, #344), `core/install_config.py`, `core/users.py`, and since #604
 `core/sharing.py` (private cards / members) and `core/mcp_tokens.py` (per-user MCP tokens)); the raw writers in `core/db.py` are private
 (`_`-prefixed); `scripts/check_layering.py` enforces it.** Run `python scripts/check_layering.py`
 (no server, no DB; `--list` prints every db.py writer and its class) before every PR that touches
@@ -1455,6 +1459,70 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
   "$PWD/scripts":/app/scripts:ro -v <storage dir>:/storage:ro <the web image> python3
   scripts/measure_lookalikes_759.py /data/c.db --storage /storage`.
   Check: `scripts/test_lookalikes_759.py` (throwaway DB, synthetic hashes).
+- **The Curator's Apprentice (#354, #344; batch 20, owner decision 2026-10-25 answer (a)): proposals a person
+  confirms.** Pure rules in `core/apprentice_rules.py` (stdlib + `core/timeline.py`; its loaders take a plain
+  sqlite3 connection, so the service and the measurement script read the same rows the same way); the service
+  ops in `core/provenance_rules.py` and `core/correlations.py`. **Nothing applies without a yes.**
+  - **File provenance by gross rule (#354).** A small registry, `apprentice_rules.FILE_RULES` (add a `FileRule`
+    as the owner names more). First cut, ONE rule, `text_heavy_reference` -> file provenance `reference`: a
+    **PDF with >= `TEXT_HEAVY_MIN_CHARS` (6,000) characters** of extracted text (the whole text layer; ~2+ pages
+    of prose; a scanned PDF has only page 1's OCR, so rarely passes), or a **PDF / Word file whose name says**
+    manual, guide, handbook, datasheet / data sheet, instructions, reference, quick start, how to, spec(s)
+    (`name_words` splits camelCase and punctuation; "manually" is not "manual") **with >=
+    `MANUAL_HINT_MIN_CHARS` (300)**. Page counts are not stored, so text-per-page is not used. Candidates:
+    the rule's media types, provenance NOT set (a set provenance is never proposed, and confirm re-checks it:
+    one set meanwhile is skipped and named, never overwritten), not redacted, with a file. `plan(actor, rule)`
+    leaves out a file the actor can't see and counts it (`hidden`); a retired / missing target option shows
+    as `blocked` and confirm refuses 409 `rule_blocked`. `confirm(slugs=None, rule=, shown=, dry_run)`: ONE
+    imaged row (op `provenance_rule_apply`), one batch, one undo; `slugs` = explicit picks (one not proposed
+    = 409 `not_proposed`, nothing written), `shown` = the Curator's on-screen list (stale ones skipped and
+    named), neither = every visible proposal (bulk). `dismiss(slugs, rule=)` = "Not this one", remembered per
+    (rule, file) in `curator_dismissals` (key `need:provenance_rule_skip:<rule>:<slug>`, op
+    `provenance_rule_not_this`, undoable). Curator: ONE need per rule (kind `provenance_rule`, key
+    `need:provenance_rule:<rule>`, Defer works, not dismissible), group "Provenance by rule", listing up to
+    `PROPOSALS_SHOWN` (30) files (`members`) with "Mark Reference" / "Not this one" each and "Mark all N shown
+    Reference" (the bulk-confirm). Why one grouped need and not one per file: the bulk-confirm needs one
+    place, and hundreds of per-file needs would bury the rest of the queue.
+  - **The provenance-diversity nudge (#354, turned on by it).** `curator_needs` emits `no_provenance_diversity`
+    (the scoring check `provenance_diversity`, which had no nudge) ONLY when the card has >= 2 content files,
+    at least one has a file provenance and fewer than two distinct values are used: "3 of 7 files say where
+    they came from, all Reference; 4 say nothing yet. Mark the others ..." (the gap to fill). A
+    never-classified card is not nagged; a family never (`provenance_nag_applies`). Effort 3, impact 2.
+  - **Related projects (#344, trimmed).** `apprentice_rules.propose_pairs` scores every pair of cards of kind
+    project / thing / action / event (families and collections are left out: membership is their relation)
+    from four 0..1 parts, weighted: **text 0.50** (cosine of the cards' embedding centroids: the mean of
+    their files' stored sentence-transformer embeddings, blank write-ups left out; mapped `EMB_FLOOR` 0.35 ..
+    `EMB_FULL` 0.85 -> 0..1), **tags 0.20** (shared tags on their files / `TAGS_FULL` 3; never a card's linked
+    tag, a hobby tag, or a tag on more than `TAG_COMMON_SHARE` 25% of cards once there are 8+), **time 0.15**
+    (real-date span overlap as a share of the shorter span, 30 days' slack; 0 when undated) and **shared files
+    0.15** (files on both / 2). Proposed at **score >= `SCORE_THRESHOLD` (0.45)** with some evidence beyond
+    time. Never proposed: pairs linked by ANY type, a card and its nested parts (any depth), two parts of one
+    parent, two members of one family / collection, pairs answered "Not related"; per actor, a pair with a
+    card they can't see (private, #604) is left out and counted (`hidden_pairs`). numpy (in the image) only
+    speeds the cosines up; without it the same numbers come from plain Python. `confirm(pairs=None, shown=,
+    dry_run)` links each pair `related` through `cards.link` (op `correlation_link`), all in ONE batch (one
+    undo unlinks them all); `dismiss(pairs)` = "Not related", per pair (key `need:correlation_pair:<a>:<b>`,
+    op `correlation_not_related`, undoable). Same refusals as above (`not_proposed`, `nothing_to_confirm`,
+    `forbidden`, `not_found` for an unknown or hidden card, `bad_request`). Curator: ONE need (kind
+    `correlation`, key `need:correlation:global`), group "Related projects?", up to 30 pairs
+    (`member_pairs`) with the plain-words why, "Link them" / "Not related" each and "Link all N shown".
+  - **Who:** list viewer, confirm / dismiss editor (the refusal names the role). Viewers see every button
+    greyed (#779). `curation_queue.for_actor` drops a member file / pair the asker can't see (and the need
+    when none are left). Web: `GET /api/curator/provenance-rules[?rule=]`, `POST
+    /api/curator/provenance-rules/confirm` (`rule`, `slugs`, `shown`, `dry_run`) and `/dismiss`; `GET
+    /api/curator/correlations`, `POST /api/curator/correlations/confirm` (`pairs` / `shown` as `a:b`) and
+    `/dismiss` (`pairs`). MCP `constructicon_proposals(which="provenance" | "correlation", action="list" |
+    "confirm" | "dismiss", slugs= | pairs=, rule=, dry_run, limit, cursor)` (one tool for both, not two: the
+    same three actions and roles; confirm / dismiss DRY-RUN BY DEFAULT like `constructicon_lookalikes`).
+  - **Measure first:** `scripts/measure_apprentice_354_344.py <db copy> [--text-min-chars N] [--hint-min-chars
+    N] [--threshold X] [--show N]` opens the DB `mode=ro` (falls back to `immutable=1`, saying so), runs the
+    SAME loaders and rules, and prints per rule the files considered / matched / answered / proposed, the split
+    by test and type, a text-length histogram, a sample and the near misses; for correlations the cards
+    considered, pairs scored / excluded by reason / answered / proposed, a score histogram and the top pairs
+    with their parts and why. On the box, as for #759: copy the DB, then `sudo docker run --rm --network none
+    -v /tmp/ap:/data:ro -v "$PWD/scripts":/app/scripts:ro <the web image> python3
+    scripts/measure_apprentice_354_344.py /data/c.db`. Every threshold is a module constant to tune after.
+  Check: `scripts/test_curators_apprentice_354_344.py` (throwaway DB, synthetic text lengths and embeddings).
 - Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),
   `test_hobbies_blog.py` (phase D: hobbies, both conversions, card create/Save, blog, the sweep;
   every write undone and the whole DB compared), `check_layering.py`. All run on a throwaway DB.
@@ -1945,6 +2013,10 @@ Two ideas share the nav rail's "Curator" tab and one queue:
   card page's health-badge tooltip, and MCP `constructicon_explain_card` returns it as `caption_check`.
 - **`needs_date` (#725):** a file with no real date and no card range to borrow, one need per item, with its
   best date guess as a one-click "Use <date>" (see "Dates" above).
+- **`provenance_rule` (#354) and `correlation` (#344):** "These look like reference material: mark them
+  Reference?" (group "Provenance by rule") and "These projects look related: link them?" (group "Related
+  projects?"), each ONE need listing its files / card pairs with a yes, a remembered no and a bulk "all
+  shown" (see "The Curator's Apprentice" under "Service layer"). Plus the nudge `no_provenance_diversity`.
 - **`lookalike` (#759):** "These look like the same photo: keep which?", one need per look-alike group in
   the "Look-alike photos" group (whole queue only), the copies side by side with "Same photo, keep this one"
   / "Not the same" (see "Look-alike photos" under "Service layer").
@@ -2605,9 +2677,9 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
 Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
-`mcp_server/server.py`, exposing 62 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
+`mcp_server/server.py`, exposing 63 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
 `constructicon_sharing` (#604), `constructicon_duplicates` (#615), `constructicon_caption_review` (#556),
-`constructicon_lookalikes` (#759) and `constructicon_list_vocab` (#556), 62 in all) like `constructicon_search`, `constructicon_get`,
+`constructicon_lookalikes` (#759), `constructicon_list_vocab` (#556) and `constructicon_proposals` (#354/#344), 63 in all) like `constructicon_search`, `constructicon_get`,
 `constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
 `constructicon_card_files`, `constructicon_needs`, etc.
 (`mcp__constructicon-mcp__*` in a session with it configured). #68 tracked
@@ -2774,6 +2846,12 @@ configuration gap for that session, not evidence the server itself is gone.
   "Not the same". Roles as the web routes: list viewer, confirm / dismiss editor. **confirm and dismiss
   are DRY-RUN BY DEFAULT** (owner, 2026-10-28), like `constructicon_duplicates(apply)`: pass
   `dry_run=false` to fold / record. The web routes are not (a click is the confirmation). See "Look-alike photos" under "Service layer".
+- **The Curator's proposals over MCP (#354, #344).** `constructicon_proposals(which="provenance" |
+  "correlation", action="list" | "confirm" | "dismiss", slugs=, pairs=, rule=, dry_run=True, limit=, cursor=)`:
+  `list` paged like the others (+ `summary`; provenance also `rules`); `confirm` writes Reference on `slugs`
+  / links `pairs` ([[a, b]]) `related` (default: every current proposal); `dismiss` = "not this one" / "not
+  related", remembered. confirm and dismiss DRY-RUN BY DEFAULT. Roles: list viewer, the rest editor. See
+  "The Curator's Apprentice" under "Service layer".
 - `mcp_server/server.py` still carries some stale-vocabulary rough edges
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.

@@ -18,6 +18,11 @@
                              keep + the slugs on screen (shown); the answer's batch_id offers Undo, and any copy
                              left out (answered "Not the same" before) is named in the message
          lookalike-not-same  (#759) "Not the same": POST /api/curator/lookalikes/dismiss with the slugs
+         prov-yes / prov-not / prov-all  (#354) a file provenance proposal: POST
+                             /api/curator/provenance-rules/confirm (shown = that file, or every file shown) or
+                             /dismiss (slugs = that file); Undo from the answer's batch_id
+         corr-yes / corr-not / corr-all  (#344) a related-projects suggestion: POST
+                             /api/curator/correlations/confirm (shown = "a:b" pairs) or /dismiss (pairs)
          defer / bring-back / dismiss
        Resolve uses POST /api/pending-decisions/{id}/resolve, the same route the project page's strip uses.
    Updates are announced through an aria-live region; every control is a real button, link or form. */
@@ -216,6 +221,56 @@
       }
     }
 
+    // #354 / #344: a proposal need lists its files (li[data-cq-slug]) or card pairs (li[data-cq-pair]).
+    function rows(item, attr) {
+      return Array.prototype.slice.call(item.querySelectorAll('.cq-proposal[' + attr + ']'));
+    }
+
+    // One answer to a proposal need. `one` = the row answered (null = every row shown, the bulk button).
+    // The answer's batch_id offers Undo; whatever was skipped (answered meanwhile) is named.
+    async function propose(item, one, kind, verb) {
+      var isProv = kind === 'prov';
+      var attr = isProv ? 'data-cq-slug' : 'data-cq-pair';
+      var targets = one ? [one] : rows(item, attr);
+      var values = targets.map(function (li) { return li.getAttribute(attr); });
+      var base = isProv ? '/api/curator/provenance-rules/' : '/api/curator/correlations/';
+      var params = new URLSearchParams();
+      if (isProv) params.append('rule', item.dataset.cqRule || '');
+      var name = verb === 'dismiss' ? (isProv ? 'slugs' : 'pairs') : 'shown';
+      values.forEach(function (v) { params.append(name, v); });
+      busy(item, true);
+      fail(item, '');
+      try {
+        var res = await fetch(base + verb, { method: 'POST', body: params });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error((data.error && data.error.message) || data.detail || ('Could not save that answer (' + res.status + ').'));
+        var msg;
+        if (verb === 'dismiss') {
+          msg = isProv ? 'Noted: not ' + (item.dataset.cqLabel || 'that') + '. This rule will not propose it again.'
+                       : 'Noted: not related. They will not be suggested again.';
+        } else if (isProv) {
+          var n = (data.applied || []).length;
+          msg = 'Marked ' + n + ' file' + (n === 1 ? '' : 's') + ' ' + (item.dataset.cqLabel || '') + '.';
+        } else {
+          var k = (data.linked || []).length;
+          msg = 'Linked ' + k + ' pair' + (k === 1 ? '' : 's') + ' as related.';
+        }
+        (data.skipped || []).forEach(function (x) { msg += ' Skipped ' + (x.slug || (x.pair || []).join(' / ')) + ': ' + x.reason + '.'; });
+        if (data.batch_id && window.showUndoBar) window.showUndoBar(msg, data.batch_id, null);
+        if (one && rows(item, attr).length > 1) {
+          one.remove();
+          busy(item, false);
+          say(root, msg);
+          document.dispatchEvent(new CustomEvent('constructicon:needs-changed'));
+        } else {
+          changed(msg, item);
+        }
+      } catch (e) {
+        busy(item, false);
+        fail(item, (e && e.message) || 'Network error.');
+      }
+    }
+
     async function simple(item, url, msg, param) {
       busy(item, true);
       fail(item, '');
@@ -258,6 +313,10 @@
         lookalikeKeep(item, btn.dataset.cqKeep);
       } else if (action === 'lookalike-not-same') {
         lookalikeNotSame(item);
+      } else if (action === 'prov-all' || action === 'corr-all') {
+        propose(item, null, action.slice(0, 4), 'confirm');
+      } else if (action === 'prov-yes' || action === 'corr-yes' || action === 'prov-not' || action === 'corr-not') {
+        propose(item, btn.closest('.cq-proposal'), action.slice(0, 4), action.slice(5) === 'yes' ? 'confirm' : 'dismiss');
       } else if (action === 'choose') {
         var form = item.querySelector('.cq-chooser');
         if (!form) return;

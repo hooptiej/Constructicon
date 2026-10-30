@@ -114,6 +114,9 @@ DOORS = {
     ("core/lookalikes.py", "_groups"): "#759 look-alike groups: a group with a photo the actor may not see is left out",
     ("core/lookalikes.py", "confirm"): "#759 fold a look-alike group: every slug named must be visible (viewable_rows)",
     ("core/lookalikes.py", "dismiss"): "#759 'Not the same': every slug named must be visible (viewable_rows)",
+    ("core/provenance_rules.py", "_rule_plan"): "#354 provenance proposals: a file the actor may not see is left out",
+    ("core/provenance_rules.py", "confirm"): "#354 confirm proposals: every slug named must be visible (viewable_rows)",
+    ("core/provenance_rules.py", "dismiss"): "#354 'not this one': every slug named must be visible (viewable_rows)",
     # #709: the write side. Every slug a write names must be visible (else 404, nothing written),
     # checked in the service op itself so web, MCP and any future per-user token are covered.
     ("web/routes/items.py", "api_delete_selected"): "POST /api/delete (bulk delete)",
@@ -180,6 +183,7 @@ CARD_DOORS = {
     ("core/curation_queue.py", "for_actor"): "the Curator queue (card / hobby groups, options)",
     ("core/decisions.py", "list_open"): "the decision queue (card questions, project_match candidates)",
     ("core/curator_needs.py", "list_needs"): "Curator nudges",
+    ("core/correlations.py", "_plan"): "#344 related-project suggestions: a pair with a card the actor can't see is left out",
     ("core/site_export.py", "build_site"): "the static site export (nothing private is published)",
     ("core/project_export.py", "export_project"): "the project zip",
     ("mcp_server/server.py", "constructicon_list_projects"): "MCP list_projects",
@@ -246,6 +250,9 @@ CORE_GUARDED = {
     ("core/lookalikes.py", "plan"): "_groups",     # #759: lists through the visibility filter
     ("core/lookalikes.py", "confirm"): "viewable_rows",  # #759: then re-groups through _groups
     ("core/lookalikes.py", "dismiss"): "viewable_rows",
+    ("core/provenance_rules.py", "plan"): "_rule_plan",     # #354: lists through the visibility filter
+    ("core/provenance_rules.py", "confirm"): "viewable_rows",
+    ("core/provenance_rules.py", "dismiss"): "viewable_rows",
     # #749
     ("core/revisions.py", "mark_superseded"): "_require_items_visible",
     ("core/revisions.py", "remove_from_chain"): "_require_items_visible",
@@ -259,7 +266,8 @@ MODULE_FILES = {"items": "core/items.py", "tags_svc": "core/tags.py", "membershi
                 "captions": "core/captions.py", "curation_queue": "core/curation_queue.py",
                 "decisions": "core/decisions.py", "revisions": "core/revisions.py", "cards": "core/cards.py",
                 "hobbies": "core/hobbies.py", "blog": "core/blog.py", "reset": "core/reset.py",
-                "duplicates": "core/duplicates.py", "lookalikes": "core/lookalikes.py"}
+                "duplicates": "core/duplicates.py", "lookalikes": "core/lookalikes.py",
+                "provenance_rules": "core/provenance_rules.py", "correlations": "core/correlations.py"}
 # The policy calls that decide visibility (`policy.restriction_reason` in a shaper is not a gate).
 POLICY_GATES = {"require_view", "filter_visible", "viewable_rows", "can_view", "viewable_item", "require_file",
                 "filter_exportable", "writable_item", "writable_items"}
@@ -323,6 +331,8 @@ MCP_TOOLS = {
     "constructicon_backup": (ADM, "a backup file's name"),
     "constructicon_duplicates": (I, "duplicate groups (duplicates.plan / apply, filtered per actor); the copies it trashed"),
     "constructicon_lookalikes": (I, "look-alike photo groups (lookalikes.plan / confirm / dismiss, filtered per actor)"),
+    "constructicon_proposals": (I, "provenance proposals' files (provenance_rules, filtered per actor) and related-card "
+                                   "suggestions (correlations, card policy)"),
     "constructicon_set_sensitive": (I, "alias (items.set_sensitive)"),
     "constructicon_related": (I, "related items"),
     "constructicon_add_related": (I, "alias"),

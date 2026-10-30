@@ -606,8 +606,8 @@ listed = asyncio.run(S.mcp.list_tools())
 names = {t.name for t in listed}
 # #746 folded 108 into 55; #725 added constructicon_undated, #604 constructicon_sharing, #615
 # constructicon_duplicates, #555 constructicon_tags, #556 constructicon_caption_review, #759
-# constructicon_lookalikes, #556 constructicon_list_vocab (62).
-check("tools/list: 62 tools", len(names) == 62, len(names))
+# constructicon_lookalikes, #556 constructicon_list_vocab, #354/#344 constructicon_proposals (63).
+check("tools/list: 63 tools", len(names) == 63, len(names))
 check("tools/list: no alias listed", not (names & set(S._HIDDEN_ALIASES)), sorted(names & set(S._HIDDEN_ALIASES)))
 SNAPNAMES = json.load(open(os.path.join(HERE, "data", "mcp_tool_names_700.json"), encoding="utf-8"))["names"]
 check("tools/list equals scripts/data/mcp_tool_names_700.json", sorted(names) == sorted(SNAPNAMES),
@@ -775,10 +775,10 @@ finally:
 # ---- 8. the (tool, action) -> role table -----------------------------------------------------------------
 print("--- 8. who may run which (tool, action) ---")
 visible = {n for n in S._TOOL_FUNCS if n not in S._ALIAS_OF}
-check("62 visible tool functions (#746's 55 + constructicon_undated #725, constructicon_sharing #604, "
+check("63 visible tool functions (#746's 55 + constructicon_undated #725, constructicon_sharing #604, "
       "constructicon_duplicates #615, constructicon_tags #555, constructicon_caption_review #556, "
-      "constructicon_lookalikes #759, constructicon_list_vocab #556)",
-      len(visible) == 62, len(visible))
+      "constructicon_lookalikes #759, constructicon_list_vocab #556, constructicon_proposals #354/#344)",
+      len(visible) == 63, len(visible))
 check("every visible tool has its role rows (startup refuses otherwise)",
       all(any(k[0] == n for k in S.ACTION_ROLES) for n in visible))
 check("permanent actions need admin",

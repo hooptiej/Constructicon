@@ -473,10 +473,10 @@ check("rule 6: a write route back on viewable_item fails (both halves)",
       any("api_delete_image" in x and "viewable_item" in x for x in f)
       and any("api_delete_image" in x and "doesn't call policy.writable_item" in x for x in f), f)
 f = []
-cpd._check_change_log(mutated("core/cards.py", '"withheld": withheld, ', '"held": withheld, '), f)
+cpd._check_change_log(mutated("core/cards/history.py", '"withheld": withheld, ', '"held": withheld, '), f)
 check("rule 7: list_changes that stops reporting 'withheld' fails", any("withheld" in x for x in f), f)
 f = []
-cpd._check_change_log(mutated("core/cards.py", "_sharing.check_undo_allowed(rows, actor)", "pass  # (removed)"), f)
+cpd._check_change_log(mutated("core/cards/history.py", "_sharing.check_undo_allowed(rows, actor)", "pass  # (removed)"), f)
 check("rule 7: undo without check_undo_allowed fails", any("check_undo_allowed" in x for x in f), f)
 
 print()

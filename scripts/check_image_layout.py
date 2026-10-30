@@ -246,7 +246,7 @@ MUST_EXCLUDE = [
     "notes/x.md", "docs/x.md", "CHANGELOG.md", "README.md",
 ]
 MUST_INCLUDE = [
-    "Dockerfile", "requirements.txt", "core/db.py", "core/object_types/image.py",
+    "Dockerfile", "requirements.txt", "core/db/__init__.py", "core/db/conn.py", "core/object_types/image.py",
     "core/backup.py", "web/app.py", "web/templates/base.html", "web/static/js/cards.js",
     "mcp_server/server.py", "assets/brand/logo.png",
 ]

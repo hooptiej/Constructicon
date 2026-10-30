@@ -94,14 +94,34 @@ the date and commit forward when you re-verify.
     the JSON/form API the templates' JS calls; `/f/{slug}` and
     `/f/{slug}/thumb` are the public hotlink + thumbnail routes (stable URLs
     meant to be embedded elsewhere).
-- **`core/db.py`** (~5,000 lines) — the SQLite layer and the schema source of truth (`SCHEMA`,
-  `MIGRATIONS`, `init_db`, `transaction()`, `ImageLog`, every read query, the pipeline writers). No
+- **`core/db/`** (a package since #547 step 1; was the ~6,700-line `core/db.py`) — the SQLite layer
+  and the schema source of truth (`SCHEMA`, `MIGRATIONS`, `init_db`, `transaction()`, `ImageLog`, every
+  read query, the pipeline writers). Callers are unchanged: `from core import db`, then `db.<name>`
+  (public or `_private`); `core/db/__init__.py` re-exports every name of every submodule. The
+  submodules, in load order (each imports only from the ones above it, so there is no cycle; a helper a
+  lower module needs moves down rather than being imported upward): `conn.py` (`DB_PATH`, `get_conn`,
+  `transaction()`, `read_session()`, the ambient connection, `_row_to_dict`, `_table_exists`),
+  `labels.py` (Source labels, channels, `HOBBY_STATUSES`), `settings.py`, `changelog.py` (change log,
+  row images, `ImageLog`, `invert_image`, `write_images`), `audit.py` (request log, sensitive-item
+  access log), `revisions.py` (revision chains, look-alike candidates), `tags.py` (tag tree, chip cache),
+  `search_index.py` (FTS5 index, `search`), `items.py` (item rows, fields, redaction, trash),
+  `pipeline.py` (caption queue, OCR, hashes, extracted text, caption worklists), `projects.py` (cards,
+  card tree, files on cards, privacy reads, family members), `relations.py` (item and card links),
+  `decisions.py` (pending decisions, Curator snooze state), `blog.py`, `hobbies.py`, `dates.py` (#725
+  reads, the first upload), `users.py` (users, sessions, MCP tokens), `unpack.py` (#605 jobs),
+  `migrations.py` (the run-once `_mig_*` and their runner), `schema.py` (`SCHEMA`, `init_db`, the
+  every-boot steps #667 / #704 / #760). **Monkeypatch through the package:** `db.DB_PATH = ...` or
+  `db.get_conn = fake` rebinds that name in every submodule that held the same object (the package's
+  module type does it), so code inside db sees it as it did in the one-file module; assigning on a
+  submodule (`db.conn.DB_PATH = ...`) reaches only that file. One copy of every name: `__init__.py`
+  refuses to load if two submodules bind one name to different objects. Check with
+  `scripts/test_db_package_547.py` (against the old module's names, `scripts/data/db_names_547.txt`). No
   ORM; raw SQL via `sqlite3`, one `get_conn()`/`conn.close()` pair per call (or one shared
   connection inside `db.read_session()` / `transaction()`). **It is not the only module with raw SQL:**
   eleven other core modules (`backup`, `blog`, `curator_needs`, `hobbies`,
   `install_config`, `membership`, `physical_piece`, `provenance_options`, `revisions`, `tags`, `vocab`) and
   `web/routes/admin.py` also call `.execute(...)` themselves (the service-layer cleanup that would pull
-  them in is tracked in the issues, not done). Read the schema in `core/db.py` rather than trusting
+  them in is tracked in the issues, not done). Read the schema in `core/db/schema.py` rather than trusting
   any description here or in README.md, which can drift. Writes still go through the service modules
   ("Service layer" below).
 - **`core/object_types/`** — a package, one module per object/media type (`image.py`, `video.py`,
@@ -460,7 +480,7 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
 - Lists of what a card/hobby/entry holds (project and hobby pages, MCP `get_project`, Related,
   similar, blog entries, brand assets, wallpapers) call `policy.filter_visible(rows)`.
 - General browsing (search, gallery, home, unfiled, tag pages, uploader pages) filters in SQL with
-  `policy.sql_browse_clause(prefix)` inside `core/db.py` (formerly `db._not_restricted`), plus
+  `policy.sql_browse_clause(prefix)` inside `core/db/`'s queries (formerly `db._not_restricted`), plus
   `filter_visible` where the route holds the rows.
 - Exports (static site, project zip, the wallpaper zip #780) call `policy.filter_exportable(rows)`: restricted items never
   leave the install, whoever asks.
@@ -549,7 +569,7 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
 Owner decisions 2026-10-07 (#467): built-in auth, one install per customer, HTTPS later. Step 1
 added accounts and attribution; step 2 enforces them (next section, "Auth enforcement").
 
-**Model (`core/users.py`, the service module; tables in `core/db.py`).**
+**Model (`core/users.py`, the service module; tables in `core/db/schema.py`).**
 - `users(id, username UNIQUE COLLATE NOCASE, display_name, role viewer|editor|admin, password_hash,
   created_at, last_login_at, disabled)`. Usernames are 2-32 of `[A-Za-z0-9._-]`, kept as typed,
   unique in any case.
@@ -1063,7 +1083,7 @@ and their items) **unless ticked Private.**
   deliberate share); `policy.require_file` applies only the sensitive rule.
 - **Schema:** `projects.private`, `hobby_settings.private` (0/1, ADD COLUMN at boot, default 0: no data
   migration), `share_members(target_kind card|hobby, target_id, user_id, role viewer|editor, added_at)`
-  (in `IMAGE_TABLE_KEYS`, cleared by delete-all), all in `core/db.py`.
+  (in `IMAGE_TABLE_KEYS`, cleared by delete-all), all in `core/db/schema.py`.
 - **Policy (`core/policy.py`):** `card_access(actor)` -> an `Access` (the hidden card ids and hobby ids;
   empty for an admin or when nothing is private, which costs one cheap query); `can_view_card`,
   `can_view_hobby`, `require_card_view`, `filter_visible_cards`, `filter_visible_hobbies`,
@@ -1242,9 +1262,9 @@ identity, ownership, visibility or a gallery from `tech` or `channel`.
 (plus `core/revisions.py` for revision chains, `core/duplicates.py` for duplicate folding (#615),
 `core/lookalikes.py` for look-alike photos (#759), `core/provenance_rules.py` and `core/correlations.py` for the
 Curator's Apprentice proposals (#354, #344), `core/install_config.py`, `core/users.py`, and since #604
-`core/sharing.py` (private cards / members) and `core/mcp_tokens.py` (per-user MCP tokens), and since #605 `core/unpack.py` (archive -> card conversions and their jobs)); the raw writers in `core/db.py` are private
+`core/sharing.py` (private cards / members) and `core/mcp_tokens.py` (per-user MCP tokens), and since #605 `core/unpack.py` (archive -> card conversions and their jobs)); the raw writers in `core/db/` are private
 (`_`-prefixed); `scripts/check_layering.py` enforces it.** Run `python scripts/check_layering.py`
-(no server, no DB; `--list` prints every db.py writer and its class) before every PR that touches
+(no server, no DB; `--list` prints every core.db writer and its class) before every PR that touches
 `core/`, `web/` or `mcp_server/`. It fails when:
 - a module outside the service modules calls (or imports) a private `db._*` function. The raw-write
   allowlist, each with its reason in the script: `core/captions.py` (caption status/results),
@@ -1256,7 +1276,7 @@ Curator's Apprentice proposals (#354, #344), `core/install_config.py`, `core/use
 - anything uses an old public writer name (`RETIRED_PUBLIC`: `db.create_project`, `update_project`,
   `get_or_create_tag`, `attach_tags`, `add_item_to_project`, `mark_tag_as_hobby`,
   `add_project_to_hobby`, `create_blog_entry`, `set_entry_items`, `resolve_pending_decision`, ...);
-- `core/db.py` gains a PUBLIC function that writes and isn't classified in `PUBLIC_WRITERS`. The
+- `core/db/` gains a PUBLIC function that writes and isn't classified in `PUBLIC_WRITERS`. The
   public writers left are pipeline/infra, not curation: item creation (`insert_upload`,
   `insert_content`), OCR/similarity state, the caption queue, settings, the request log, the change
   log + undo plumbing (`insert_change_log`, `invert_image`, `mark_change_rows_undone`,
@@ -1576,7 +1596,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     archive are just taken off the card.
   - **Background job (#549: web runs it, the MCP only queues).** Table `unpack_jobs(id, archive_slug,
     batch_id, actor, shape, depth, channel, via_token_id, status queued|running|done|partial|failed, progress JSON, result JSON,
-    error, created_at, started_at, finished_at)`, private writers in `core/db.py` (`_insert_unpack_job`,
+    error, created_at, started_at, finished_at)`, private writers in `core/db/unpack.py` (`_insert_unpack_job`,
     `_update_unpack_job`, `_claim_unpack_job`), reads `get_unpack_job` / `list_unpack_jobs`; cleared by
     delete-all, not imaged. `start()` queues (409 `unpack_busy` while that archive has one queued / running)
     and wakes the worker; web's `unpack.start_worker()` (startup, one thread, one job at a time, polls every
@@ -2328,7 +2348,7 @@ are 14px with a thin ring, and red "failed" is 16px with a red halo and three sl
 item's OCR button reads **"Try anyway"** (it still re-runs OCR); "Run OCR" stays for not-yet-run.
 Shadows, outlines and the page frame (#751's other bucket items) are not done.
 
-## Data model (verify against `core/db.py`'s `SCHEMA` before trusting this — it evolves)
+## Data model (verify against `core/db/schema.py`'s `SCHEMA` before trusting this — it evolves)
 
 - **`capture_events`** — the core item table. Despite the name (a holdover
   from imagerepo's screenshot-capture origins), this holds *every* kind of
@@ -2525,7 +2545,7 @@ Shadows, outlines and the page frame (#751's other bucket items) are not done.
     holds the file in the trash with no expiry until the owner recovers it or
     deletes it permanently, see "Trash" above). Since #282 a
     redacted row is hidden from **every** list/browse/search query in
-    `core/db.py` (`search`, `list_unfiled_items`,
+    `core/db/` (`search`, `list_unfiled_items`,
     `list_recent_items_by_type`, `list_project_items`,
     `list_posts_for_tag`, and `list_uploaders`'
     totals) and reachable only by its direct `/object/<slug>` link, the
@@ -2565,7 +2585,7 @@ Shadows, outlines and the page frame (#751's other bucket items) are not done.
   Cards that drifted before #555 (7 of 75 on prod, per #552) keep their old tag name until renamed;
   renaming the tag to the card's own title is allowed. Older cards have `tag_id` NULL.
   `private` (#604 step 3, 0/1) ticks the card private; its members are `share_members` (see "Private
-  cards and hobbies"). `agent_notes` (#745) is the card's private agent scratch field: never in a row `core/db.py` hands
+  cards and hobbies"). `agent_notes` (#745) is the card's private agent scratch field: never in a row `core.db` hands
   out, read only by `db.get_card_agent_notes` (see the MCP section, "Agent notes on cards").
 - **`project_items`** — many-to-many join, `(project_id, post_slug,
   sort_order)`, with a manual `sort_order` for deliberate (non-chronological)
@@ -2707,7 +2727,7 @@ miss. Don't assume a keyword search is a substitute for a tag-tree walk.
 `db.search()` (behind `GET /api/search`, the object page's related/attach pickers, the blog
 builder, `/api/gallery` and the MCP `constructicon_search`) reads one SQLite FTS5 index,
 `item_search` (rowid = `capture_events.id`). The text it holds per item is defined once, by the
-view `item_search_src` in `core/db.py`: `display_name` (with `short_title` folded in, #542),
+view `item_search_src` in `core/db/search_index.py`: `display_name` (with `short_title` folded in, #542),
 `content_description` and `filename` (every name the item has had, so a rename never makes the old filename unfindable; `core/item_title.py`
 picks only one of them to SHOW), the tag-tree tag names (`post_tags`; #555: not the free-text column,
 which is only a chip cache now, so a card's linked tag is still found by its name),
@@ -2808,7 +2828,7 @@ configuration gap for that session, not evidence the server itself is gone.
     lists); its answer is the card plus `agent_notes` and `batch_id`. `constructicon_get_project` always
     returns the card's `agent_notes` (null when none). Role rows: `(set_agent_notes, "slug")` and
     `(set_agent_notes, "card")`, both editor. **Privacy is enforced at the reader:** `projects.agent_notes`
-    (schema DDL in `init_db`, both processes) is stripped from every whole card row `core/db.py` hands out
+    (schema DDL in `init_db`, both processes) is stripped from every whole card row `core.db` hands out
     (`db._card_row`, `db.PRIVATE_CARD_COLUMNS`: `get_project`, `list_projects`, children, family members,
     hobby / item / blog entry / related / referencing lists), so a route that dumps a raw row (the card
     Save, orphan-child) can't leak it; `db.get_card_agent_notes(id)` is its one reader. Change summaries

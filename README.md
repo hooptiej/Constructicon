@@ -14,7 +14,7 @@ self-contained static website** and preview it — and, when you're ready,
 **publish it to GitHub Pages**.
 
 It runs as a FastAPI/Starlette app (`web/app.py`) backed by SQLite
-(`core/db.py`, no ORM) on a LAN-only home server with **no login** — the
+(`core/db/`, no ORM) on a LAN-only home server with **no login** — the
 network perimeter is the security boundary, not an auth gate. Constructicon
 itself always stays private; only the *exported* static site is ever public.
 
@@ -54,7 +54,7 @@ flowchart TD
 flowchart LR
     Browser -->|HTTP| Web["constructicon-web<br/>FastAPI/Starlette (web/app.py)"]
     Agent["Claude / MCP client"] -->|MCP| MCP["constructicon-mcp<br/>(mcp_server/server.py)"]
-    Web --> DB[("SQLite — imagerepo.db<br/>core/db.py, raw SQL")]
+    Web --> DB[("SQLite — imagerepo.db<br/>core/db/, raw SQL")]
     MCP --> DB
     Web --> STORE[["storage/ — files + thumbnails"]]
     Web --> EXP[["exports/ — site builds (keep last 2)"]]
@@ -64,7 +64,7 @@ flowchart LR
 - **`web/app.py`** — every HTTP route: page routes (Jinja2 templates in
   `web/templates/`), the `/api/*` JSON+form API the templates' JS calls, the
   public `/f/<slug>` hotlink/thumbnail routes, and the `/preview/` static mount.
-- **`core/db.py`** — the schema source of truth and all SQLite access (no ORM).
+- **`core/db/`** — the schema source of truth and all SQLite access (no ORM); a package since #547 (see CLAUDE.md for its modules).
 - **`core/object_types/`** — a registry of per-type specs (thumbnailing, OCR
   eligibility, metadata). Adding a file type is one spec, not edits across the app.
 - **`core/site_export.py`** — the export engine (gather → render the Jinja

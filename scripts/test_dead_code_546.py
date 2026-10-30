@@ -115,7 +115,8 @@ GONE_546 = ["add_test_client", "count_table_rows", "count_project_links_by_type"
             "normalize_avatar", "to_text", "_project_has_tag", "PROVENANCE_TYPES"]
 back = [n for n in GONE_546 if f" {n}\n" in out]
 check("none of the names #546 deleted is defined again (and dead)", not back, back)
-check("db.PROVENANCE_TYPES is gone", "PROVENANCE_TYPES =" not in (HERE.parent / "core" / "db.py").read_text(encoding="utf-8"))
+check("db.PROVENANCE_TYPES is gone", not any("PROVENANCE_TYPES =" in p.read_text(encoding="utf-8")
+                                             for p in (HERE.parent / "core" / "db").glob("*.py")))  # #547: a package
 
 print()
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")

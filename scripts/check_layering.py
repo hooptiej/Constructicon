@@ -1,17 +1,17 @@
 """Layering check (#541 phase D): every archive write goes through the service layer.
 
     python scripts/check_layering.py          exit 0 = clean, 1 = violations (listed)
-    python scripts/check_layering.py --list   also print every db.py writer and its class
+    python scripts/check_layering.py --list   also print every core.db writer and its class
 
 The rule (CLAUDE.md, "Service layer"): all writes go through
-core/{items,membership,tags,cards,hobbies,blog,decisions,reset}.py; the raw writers in core/db.py
-are private (`_`-prefixed); this script enforces it. No server, no DB: it reads the source (AST).
+core/{items,membership,tags,cards,hobbies,blog,decisions,reset}.py; the raw writers in the core/db/
+package (#547: was core/db.py) are private (`_`-prefixed); this script enforces it. No server, no DB: it reads the source (AST).
 
 What fails:
   1. A module outside SERVICE_MODULES / RAW_ALLOWED calls (or imports) a private `db._name`.
   2. Anything uses one of the old public names in RETIRED_PUBLIC (they went private or away in
-     phase D), or core/db.py defines one of them again.
-  3. core/db.py has a PUBLIC function that writes (SQL INSERT/UPDATE/DELETE/REPLACE, an ImageLog,
+     phase D), or core/db/ defines one of them again.
+  3. core/db/ has a PUBLIC function that writes (SQL INSERT/UPDATE/DELETE/REPLACE, an ImageLog,
      or a call to another writer) that isn't classified in PUBLIC_WRITERS. A new writer must either
      be private (owned by a service module) or be listed there with the reason it is public.
 Read functions stay public and are never flagged.
@@ -48,7 +48,7 @@ SERVICE_MODULES = {
 
 # Raw writes kept on purpose, outside the service layer. Each needs a reason.
 RAW_ALLOWED = {
-    "core/db.py": "the writers themselves, plus the run-once migrations (db.MIGRATIONS)",
+    "core/db/": "the writers themselves, plus the run-once migrations (db.MIGRATIONS)",
     "core/captions.py": "pipeline: caption status/results in type_metadata (machine bookkeeping; imaging "
                         "it would make every later undo of a real edit conflict with the pipeline)",
     "core/embedded_metadata.py": "pipeline: upload-time file metadata (title, ID3 tags, EXIF date), fill-only",
@@ -86,7 +86,7 @@ RETIRED_PUBLIC = {
     "resolve_pending_decision", "clear_tables",
 }
 
-# Public db.py functions that write, and why they stay public (not archive curation, or infra the
+# Public core.db functions that write, and why they stay public (not archive curation, or infra the
 # service layer itself is built on).
 PUBLIC_WRITERS = {
     "init_db": "schema DDL + run-once migrations (web process at boot)",
@@ -130,11 +130,24 @@ def _py_files():
                 yield Path(base) / f
 
 
+DB_PACKAGE = "core/db/"  # #547: core/db.py became this package; every file in it is "db"
+
+
+def _in_db_package(rel):
+    return rel.startswith(DB_PACKAGE)
+
+
 def db_functions():
-    """{name: is_writer} for every top-level function in core/db.py."""
-    src = (ROOT / "core" / "db.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    """{name: is_writer} for every top-level function in the core/db/ package (all its files read as
+    one module, as they were one file before #547: a call by bare name reaches any of them)."""
+    funcs = {}
+    for path in sorted((ROOT / "core" / "db").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=_rel(path))
+        for n in tree.body:
+            if isinstance(n, ast.FunctionDef):
+                if n.name in funcs:
+                    raise SystemExit(f"check_layering: {n.name}() is defined twice in {DB_PACKAGE}")
+                funcs[n.name] = n
     direct = {}
     calls = {}
     for name, node in funcs.items():
@@ -186,16 +199,16 @@ def main(argv):
         if name.startswith("_"):
             continue
         if name in RETIRED_PUBLIC:
-            problems.append(f"core/db.py defines retired public writer {name}(): make it private (_{name}) "
+            problems.append(f"core/db/ defines retired public writer {name}(): make it private (_{name}) "
                             "and call it from its service module")
         elif writes and name not in PUBLIC_WRITERS:
-            problems.append(f"core/db.py: public function {name}() writes but is not classified: make it private "
+            problems.append(f"core/db/: public function {name}() writes but is not classified: make it private "
                             "(owned by a service module) or add it to PUBLIC_WRITERS with a reason")
 
     # 1 + 2. callers.
     for path in _py_files():
         rel = _rel(path)
-        if rel == "core/db.py":
+        if _in_db_package(rel):
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
@@ -230,7 +243,7 @@ def main(argv):
                     problems.append(f"{rel}:{node.lineno} calls private db.{attr} ({kind}) outside the service layer")
 
     if "--list" in argv:
-        print("core/db.py functions that write:")
+        print("core.db functions that write:")
         for name, writes in sorted(funcs.items()):
             if writes:
                 cls = "private" if name.startswith("_") else f"public: {PUBLIC_WRITERS.get(name, 'UNCLASSIFIED')}"

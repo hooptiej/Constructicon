@@ -199,7 +199,7 @@ CARD_DOORS = {
 CARD_GATES = {"can_view_card", "can_view_hobby", "require_card_view", "filter_visible_cards", "filter_visible_hobbies",
               "card_access", "access_scope", "outsider_access", "filter_tag_tree", "hidden_tag_ids"}
 # #604 step 3: the write guard on private cards runs for every logged write.
-WRITE_GUARD = ("core/db.py", "insert_change_log", "check_write")
+WRITE_GUARD = ("core/db/changelog.py", "insert_change_log", "check_write")  # #547: was core/db.py
 
 # #604 follow-up 7: doors that OPEN one item must record a sensitive item's access
 # (`policy.note_access(row, how)`, a no-op for an ordinary item).
@@ -563,7 +563,7 @@ def main():
             continue
         for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if any(tok in line for tok in SELF_DECIDING):
-                if rel == "core/db.py" and "restricted_types()" in line and _in_function(tree(rel), i, "list_restricted"):
+                if rel == "core/db/items.py" and "restricted_types()" in line and _in_function(tree(rel), i, "list_restricted"):
                     continue
                 failures.append(f"{rel}:{i}: decides restriction itself ({line.strip()[:90]}); ask core/policy.py")
 

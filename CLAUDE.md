@@ -1242,7 +1242,7 @@ identity, ownership, visibility or a gallery from `tech` or `channel`.
 (plus `core/revisions.py` for revision chains, `core/duplicates.py` for duplicate folding (#615),
 `core/lookalikes.py` for look-alike photos (#759), `core/provenance_rules.py` and `core/correlations.py` for the
 Curator's Apprentice proposals (#354, #344), `core/install_config.py`, `core/users.py`, and since #604
-`core/sharing.py` (private cards / members) and `core/mcp_tokens.py` (per-user MCP tokens)); the raw writers in `core/db.py` are private
+`core/sharing.py` (private cards / members) and `core/mcp_tokens.py` (per-user MCP tokens), and since #605 `core/unpack.py` (archive -> card conversions and their jobs)); the raw writers in `core/db.py` are private
 (`_`-prefixed); `scripts/check_layering.py` enforces it.** Run `python scripts/check_layering.py`
 (no server, no DB; `--list` prints every db.py writer and its class) before every PR that touches
 `core/`, `web/` or `mcp_server/`. It fails when:
@@ -1528,6 +1528,84 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     -v /tmp/ap:/data:ro -v "$PWD/scripts":/app/scripts:ro <the web image> python3
     scripts/measure_apprentice_354_344.py /data/c.db`. Every threshold is a module constant to tune after.
   Check: `scripts/test_curators_apprentice_354_344.py` (throwaway DB, synthetic text lengths and embeddings).
+- **Unpack the Crate (#605): `core/unpack.py` (a service module) + `core/archive_reader.py` (pure file
+  work).** An archive item (zip, 7z, tar, .tar.gz/.tgz, and since #605 .tar.bz2/.tbz2/.tar.xz/.txz) becomes
+  a card holding its members. **No browsable-site mode** (owner decision 2026-10-25, answer (a); that is
+  #792). Shapes: `collection` (flat, the default), `project` (flat), `nested` (a project whose sub-folders
+  become nested cards down to `depth` 1 or 2; deeper folders fold into their level-`depth` card). One top
+  folder holding everything is the card itself. The card is the archive's name minus its extension,
+  percent-decoded; folder cards are their decoded names and get **no linked tag** (`link_tag=False`, so a
+  folder "images" never joins an existing "images" tag). **Members go through `ingest.ingest_file`**
+  (sniffing, thumbnails, OCR, captions queue, embedded metadata, the restricted-type lock) with
+  `run_auto_match=False` (nothing auto-joins a card or asks "does this replace ...?") and the archive's own
+  sensitive flag; each keeps `type_metadata.extracted_from` ({slug, name, path, batch_id}: the decoded path
+  inside, shown as "Extracted from" in the item page's ORIGIN), its own mtime as `source_modified_at` (#725's
+  rule decides whether it counts as a date), and Source "<owner> — extracted from <archive>".
+  **Byte-identical** to a stored item the actor can see (#615: size + sha256) = LINKED onto the card, not
+  stored again; two identical members link the second to the first; an identical item the actor can't see
+  isn't revealed (a new copy is stored). **Skipped and listed with the reason:** junk (`__MACOSX/`,
+  `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*`), links (never followed), devices / pipes, encrypted members,
+  an unsupported type (the upload's own words), a member over the upload size, an ingest refusal. Nested
+  archives stay archive items. An archive under a private card makes the new card private
+  (`sharing.set_private`, same batch), so its members never land on an open card.
+  - **Safety (`archive_reader`, run through `parse_limits.call` in a bounded child, plus its own deadline):**
+    member names are never paths on disk (files are written `m<index>`; .7z, which can only extract by name,
+    goes into its own empty folder after every name passed the checks, then each file is confirmed a regular
+    file inside it). Refusals of the WHOLE archive, nothing created, each its own code and words:
+    `archive_hostile_path` (absolute, drive letter, `..`; names the member), `archive_too_many`,
+    `archive_too_big` (declared or actually written, incl. a member that lies about its size),
+    `archive_ratio`, `archive_too_slow`, `archive_encrypted` ("This archive is password-protected; nothing was
+    extracted." when every file is encrypted, or a .7z needs a password), `archive_corrupt`,
+    `archive_unsupported` (.7z without py7zr). **Caps** (`parse_limits.unpack_caps()`, read when used):
+    `CONSTRUCTICON_UNPACK_MAX_MEMBERS` 5,000 entries; total unpacked bytes = the max upload size
+    (`CONSTRUCTICON_MAX_UPLOAD_MB`, default 25; owner default on #605) unless
+    `CONSTRUCTICON_UNPACK_MAX_TOTAL_MB` says otherwise; `CONSTRUCTICON_UNPACK_MAX_RATIO` 200x, per member and
+    overall, judged only past 1 MB unpacked (`UNPACK_RATIO_FLOOR_BYTES`); `CONSTRUCTICON_UNPACK_MAX_SECONDS`
+    300 s. Temp files go in the system temp dir (`constructicon-unpack-*`), always removed.
+  - **Preview first:** `preview(slug, shape, depth)` extracts to temp (to hash), answers members (first
+    1,000; counts whole), sizes, by-type, skipped + why, linked + to what, the cards it would make, the
+    wrapper folder, whether the card will be private, `nothing_written: true`. Nothing in the library is written.
+  - **One undo:** ONE `batch_id` for everything: `cards.create` (imaged), `membership.add_files` for the
+    archive and every member (imaged), and one `item_create_unpacked` row per item it MADE
+    (`items.record_created`: no row images, `details.slug`; item rows come from the ingest pipeline unlogged
+    and OCR / captions keep editing them, so an insert image could never undo cleanly). `cards.undo(batch)`
+    inverts the images, then `items.undo_creations` sends each created item to the trash under the undo's
+    batch (so undoing the undo restores them); an item deleted since is listed (`created_items_already_gone`),
+    never an error. `items.CREATION_OPS` are the only rows undo accepts without images. Linked items and the
+    archive are just taken off the card.
+  - **Background job (#549: web runs it, the MCP only queues).** Table `unpack_jobs(id, archive_slug,
+    batch_id, actor, shape, depth, status queued|running|done|partial|failed, progress JSON, result JSON,
+    error, created_at, started_at, finished_at)`, private writers in `core/db.py` (`_insert_unpack_job`,
+    `_update_unpack_job`, `_claim_unpack_job`), reads `get_unpack_job` / `list_unpack_jobs`; cleared by
+    delete-all, not imaged. `start()` queues (409 `unpack_busy` while that archive has one queued / running)
+    and wakes the worker; web's `unpack.start_worker()` (startup, one thread, one job at a time, polls every
+    5 s too, so the MCP's queued jobs run) calls `run_job`, which runs AS the job's actor (change log and
+    policy are theirs), writes progress ({phase reading|planning|cards|members|finishing, done, total,
+    current, message}, at most every 0.5 s), ingests member by member (post-insert OCR / thumbnails on a
+    two-thread pool, not one thread per member), catches each member's failure (`failed: [{path, reason}]`),
+    stops after 25 failures in a row, and ends `done`, `partial` (the message names what failed and says Undo
+    covers what was made) or `failed` (`error` says why; nothing made, or what was made is in the batch).
+    `unpack.recover_interrupted()` (web startup) marks a job left `running` failed: "the server restarted".
+  - **Doors:** the archive type's TypeAction `unpack` (`takes_params=True`, `ui="unpack"`):
+    `POST /api/image/{slug}/action/unpack` (editor; form `mode=preview|start|status`, `shape`, `depth`,
+    `job`), `GET /api/unpack/jobs/{id}` (viewer; 404 when the archive is hidden: `job_status` +
+    `policy.viewable_item`, a DOOR in `check_policy_doors.py`), MCP `constructicon_run_type_action(slug,
+    "unpack", params={...})`. The item page's More menu shows "Unpack into a card…" (viewers greyed, #779);
+    `static/js/unpack-crate.js` opens the dialog: shape + depth, Preview, Unpack (enabled only after a preview
+    of that choice), the progress bar polling every 1.5 s, the result (card link, failed / skipped / linked
+    lists) and "Undo the whole conversion".
+  - **The archive's own `type_metadata` (the `{}` on the work install's Venza manual):**
+    `archive.get_embedded_metadata` returned `{}` for zip and 7z (only tars stored stats, #485). Every format
+    now stores `archive_stats` at upload (entries, folders, links, uncompressed, compressed (zip), encrypted,
+    truncated, damaged, `by_type` (top 20 extensions), `max_depth`), and the properties panel adds "Inside" and
+    "Deepest folder". Migration `archive_stats_605` fills it once for every archive row without it
+    (fill-only, through a parser child; missing / unreadable files are counted and named in the boot log).
+  - Not built (owner calls on #605): a relation from each member back to the archive (the archive on the same
+    card plus `extracted_from` is the link; 1,000 related items would swamp both Related panels); the
+    optional "trash the original archive afterwards"; a processing-drawer entry for the job (its progress is on
+    the item page). Converting a nested project to a collection afterwards is refused by `cards.set_kind`
+    with the existing nest_group_kind reason. Check: `scripts/test_unpack_crate_605.py` (throwaway DB,
+    synthetic archives; the .7z part needs py7zr, in the app image).
 - Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),
   `test_hobbies_blog.py` (phase D: hobbies, both conversions, card create/Save, blog, the sweep;
   every write undone and the whole DB compared), `check_layering.py`. All run on a throwaway DB.
@@ -2102,7 +2180,7 @@ To add a new object type (issue #448 contract v2):
 
 2. **Required fields**: Every type must declare `preview_fn` and `properties_fn` at registration (enforced, will raise `ObjectTypeContractError` otherwise).
 
-3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), `raw_text_fn` (#703: `(path) -> codec or None`, whether `/f/<slug>/raw` may show this file as plain text; `code` has one), and `sniff_priority` (for resolution when multiple sniffers claim the same extension). Captioning: `caption_capable=True` opts the type's picture into auto-captions; a type that isn't captioned may set `caption_excuse` (#556: the plain reason the Curator's caption check shows, e.g. Word's "Word documents aren't captioned; their text is extracted instead").
+3. **Optional hooks** (all callbacks, all in the same module file): `sniff_fn` (content-based file detection), `pre_store_fn` (accept/reject/defer uploads), `url_match_fn` (classify external URLs), `actions` (per-row UI actions: `TypeAction(key, label, handler, confirm=, applies_fn=, takes_params=, ui=)`; both doors call `action.run(row, params)`: since #605 an action with `takes_params=True` gets `(row, params)` (web: the POST's form fields; MCP: `constructicon_run_type_action(params=)`) and one without refuses params with a 400 rather than dropping them; `ui="<name>"` leaves the item page's click to that action's own script, e.g. the archive's `unpack` dialog; a handler's `AppError` keeps its own code and status on both doors), `edit_fields` (form fields for type_metadata), `preview_assets` (deferred assets), `embedded_metadata_fn` (extract metadata from the file at upload time — used once, never per-view), `writeup_body_key` (the type_metadata key holding write-up text, if this type can be a project write-up), `raw_text_fn` (#703: `(path) -> codec or None`, whether `/f/<slug>/raw` may show this file as plain text; `code` has one), and `sniff_priority` (for resolution when multiple sniffers claim the same extension). Captioning: `caption_capable=True` opts the type's picture into auto-captions; a type that isn't captioned may set `caption_excuse` (#556: the plain reason the Curator's caption check shows, e.g. Word's "Word documents aren't captioned; their text is extracted instead").
 
 4. **Preview guidance**: previews must escape all data (no raw HTML from untrusted sources; build with `_preview.py` helpers or `markupsafe.escape`) and handle `ctx.mode`: `"live"` (object page) and `"export"` (static site; most types render export markup via the helpers, some deliberately return the download link or `None` to keep the export as it was). A preview that needs its own file reads `ctx.file_path`; never guess at item-dict keys. **Anything expensive goes in `embedded_metadata_fn` (computed once at upload, stored in `type_metadata`), never in `preview_fn`/`properties_fn`, which run on every page view.** Measured lesson: per-view STL mesh parsing took 7.9 s on a real 22 MB file.
 
@@ -3097,7 +3175,7 @@ shows what would run; `--show-output` prints the whole output of anything that d
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
     `test_drop_columns_704` (the dead-column drop and its safeguard), `test_spring_cleaning_760` (the
     `projects.status` drop, the card migration's removal, the retired card-link routes),
-    `test_move_tags_590`, `test_tags_555` (one tag store, tag management, the sweep), `test_revisions`, `test_duplicates_615` (duplicate folding), `test_bulk_decisions`, `test_provenance_options`, `test_wallpaper_vocab_780` (the wallpaper zip, the word lists),
+    `test_move_tags_590`, `test_tags_555` (one tag store, tag management, the sweep), `test_revisions`, `test_duplicates_615` (duplicate folding), `test_unpack_crate_605` (archive -> card, #605), `test_bulk_decisions`, `test_provenance_options`, `test_wallpaper_vocab_780` (the wallpaper zip, the word lists),
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;
   - auth, roles, policy: `test_auth_step1`, `test_auth_step2`, `test_setup_race_648`, `test_session_cap_651`, `test_role_policy`,

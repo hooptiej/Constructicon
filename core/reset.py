@@ -39,6 +39,7 @@ CLEARED_TABLES = (
     "curator_dismissals", "pending_decisions", "trash", "hobby_settings",
     "hobby_slug_history",  # #554: a renamed hobby's old addresses go with the hobbies
     "capture_events", "projects", "blog_tags",
+    "unpack_jobs",  # #605: archive -> card conversions name items and cards that are going
 )
 KEPT_TABLES = ("app_settings", "audit_log", "install_config", "provenance_options",
                "vocab_terms",  # #556: the editable brand roles + wallpaper tags, like provenance options

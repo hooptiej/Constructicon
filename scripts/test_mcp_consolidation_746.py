@@ -556,7 +556,10 @@ ADDED_SINCE_746 = {"private",        # #604 step 3: projects.private, hobby_sett
                    "channel", "source_note", "uploaded_via", "uploaded_via_token_id", "created_via",
                    "created_via_token_id",
                    # #778 (owner, 2026-10-30): blog entries and hobbies carry their creator too
-                   "created_by_user"}
+                   "created_by_user",
+                   # #605: delete-all clears the unpack jobs; an archive item now offers the "unpack" action
+                   # and stores its member stats at upload (type_metadata.archive_stats)
+                   "unpack_jobs", "actions", "archive_stats"}
 
 
 def _strip_added(value):

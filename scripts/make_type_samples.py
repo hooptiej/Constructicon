@@ -36,11 +36,13 @@ Needs the app's packages (run it in the app image). Prints "OK: ..." at the end.
 
 import argparse
 import base64
+import bz2
 import datetime
 import gzip
 import hashlib
 import io
 import json
+import lzma
 import mimetypes
 import os
 import plistlib
@@ -537,6 +539,14 @@ def archive_targz(_name):
     with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0, filename="") as g:
         g.write(_tar_bytes())
     return buf.getvalue()
+
+
+def archive_tarbz2(_name):
+    return bz2.compress(_tar_bytes(), 9)  # #605: deterministic (no timestamp in a bzip2 stream)
+
+
+def archive_tarxz(_name):
+    return lzma.compress(_tar_bytes(), format=lzma.FORMAT_XZ)  # #605: deterministic
 
 
 def archive_7z(_name):
@@ -1053,6 +1063,10 @@ SAMPLES = [
     S("archive-bundle.tar", "archive", archive_tar, shows="member listing (3 files)"),
     S("archive-bundle.tar.gz", "archive", archive_targz, shows="member listing (3 files)"),
     S("archive-bundle.tgz", "archive", archive_targz, shows="member listing (3 files)"),
+    S("archive-bundle.tar.bz2", "archive", archive_tarbz2, shows="member listing (3 files)"),
+    S("archive-bundle.tbz2", "archive", archive_tarbz2, shows="member listing (3 files)"),
+    S("archive-bundle.tar.xz", "archive", archive_tarxz, shows="member listing (3 files)"),
+    S("archive-bundle.txz", "archive", archive_tarxz, shows="member listing (3 files)"),
     # 3D, fonts, SketchUp
     S("stl-cube.stl", "stl", stl_file, shows="rendered mesh (12 triangles)"),
     S("font-sampler.ttf", "font", font_ttf, shows="glyph sample (every letter is a box)"),

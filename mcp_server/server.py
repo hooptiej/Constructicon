@@ -3523,12 +3523,22 @@ def constructicon_resolve_pending_decision(decision_id: int, choice: str = "", p
 
 
 @mcp.tool()
-def constructicon_run_type_action(slug: str, action: str) -> dict:
+def constructicon_run_type_action(slug: str, action: str, params: dict | None = None) -> dict:
     """Run an action on an item. action: one of the item's `actions` (from constructicon_get, e.g.
     "fetch_youtube_metadata"), or the built-in "retry_ocr": run text extraction / OCR again on any
     OCR-capable item (in the background; ocr_status goes "pending").
+    params: for an action that takes them (else refused). Archive "unpack" (turn the archive into a
+    card of its members): {"mode": "preview"} (default; lists members, sizes, what is skipped
+    and why, what already exists byte-identical and will be linked, the cards it would make;
+    nothing written), {"mode": "start"} (queues the conversion; the web app runs it in the
+    background; -> job with id and batch_id), {"mode": "status", "job": <id>} (progress, then the
+    result; partial failures name each member and why), plus "shape": "collection" (flat, default)
+    | "project" (flat) | "nested" (a project, sub-folders as nested cards) and "depth": 1 or 2 (nested
+    only, default 2). The whole conversion undoes with constructicon_undo(batch_id).
     -> {ok, action, item, ...what the action adds}. Errors: redacted, unknown_action,
-    action_failed; retry_ocr: bad_request (redacted, or a type without OCR).
+    action_failed; retry_ocr: bad_request (redacted, or a type without OCR); unpack: archive_encrypted,
+    archive_corrupt, archive_hostile_path, archive_too_big, archive_too_many, archive_ratio,
+    archive_too_slow, archive_unsupported, bad_shape, unpack_busy, nothing_to_unpack.
     """
     if action == RESERVED_ACTION:
         return {"ok": True, "action": action, "item": _retry_ocr(slug)}
@@ -3548,7 +3558,7 @@ def constructicon_run_type_action(slug: str, action: str) -> dict:
         raise InvalidInput(f"{spec.label} has no action '{action}' for this item", code="unknown_action")
 
     try:
-        result = action_obj.handler(row)
+        result = action_obj.run(row, params)  # #605: an action that takes params gets them; others refuse them
     except errors.AppError:
         raise
     except Exception as e:

@@ -49,6 +49,10 @@ the app process and in every child.
 
 **Archives:** ``archive_max_members()`` (``CONSTRUCTICON_ARCHIVE_MAX_MEMBERS``, default 5,000;
 the largest real archive has 106) caps how many members a listing reads.
+#605: ``unpack_caps()`` bounds turning an archive into a card (core/archive_reader.py): entries
+(``CONSTRUCTICON_UNPACK_MAX_MEMBERS``, 5,000), total unpacked bytes (``CONSTRUCTICON_UNPACK_MAX_TOTAL_MB``,
+default the max upload size), compression ratio (``CONSTRUCTICON_UNPACK_MAX_RATIO``, 200) and time
+(``CONSTRUCTICON_UNPACK_MAX_SECONDS``, 300).
 
 Every setting is read when used (tests set them) and falls back to its default when missing,
 unparsable or not positive. ``CONSTRUCTICON_PARSE_SANDBOX=off`` runs the hooks in-process again
@@ -93,7 +97,16 @@ DEFAULTS = {
     "CONSTRUCTICON_PARSE_RETRY_SECONDS": 3600,
     "CONSTRUCTICON_MAX_IMAGE_MEGAPIXELS": 100,
     "CONSTRUCTICON_ARCHIVE_MAX_MEMBERS": 5000,
+    # #605 "Unpack the Crate": the caps on turning an archive into a card (core/archive_reader.py).
+    # Hitting one stops before anything is created and names the cap and the numbers.
+    "CONSTRUCTICON_UNPACK_MAX_MEMBERS": 5000,   # entries (files + folders + links) in the archive
+    "CONSTRUCTICON_UNPACK_MAX_RATIO": 200,      # uncompressed / compressed, per member and overall
+    "CONSTRUCTICON_UNPACK_MAX_SECONDS": 300,    # wall-clock budget for reading + extracting
 }
+
+# #605: a member (or the whole archive) is only judged on its compression ratio once it unpacks to
+# more than this: a 3 KB text file that squeezes to 20 bytes is not a bomb.
+UNPACK_RATIO_FLOOR_BYTES = 1024 * 1024
 
 
 def setting(name):
@@ -130,6 +143,38 @@ def budget(kind):
 
 def archive_max_members():
     return int(setting("CONSTRUCTICON_ARCHIVE_MAX_MEMBERS"))
+
+
+@dataclass(frozen=True)
+class UnpackCaps:
+    """#605: the bomb caps for one unpack, read when used (tests set them)."""
+    max_members: int
+    max_total_bytes: int
+    max_ratio: float
+    max_seconds: float
+
+    def as_dict(self):
+        return {"max_members": self.max_members, "max_total_bytes": self.max_total_bytes,
+                "max_total_mb": round(self.max_total_bytes / (1024 * 1024), 1), "max_ratio": self.max_ratio,
+                "max_seconds": self.max_seconds}
+
+
+def _env_mb(name):
+    raw = (os.environ.get(name) or "").strip()
+    try:
+        value = float(raw) if raw else 0
+    except ValueError:  # silent-ok: an unparsable setting means "use the default", documented above
+        value = 0
+    return value if value > 0 else None
+
+
+def unpack_caps():
+    """#605 owner default: the unpacked total may be at most the install's max upload size
+    (CONSTRUCTICON_MAX_UPLOAD_MB, default 25, the same number core/storage.py reads), unless
+    CONSTRUCTICON_UNPACK_MAX_TOTAL_MB says otherwise."""
+    total_mb = _env_mb("CONSTRUCTICON_UNPACK_MAX_TOTAL_MB") or _env_mb("CONSTRUCTICON_MAX_UPLOAD_MB") or 25
+    return UnpackCaps(int(setting("CONSTRUCTICON_UNPACK_MAX_MEMBERS")), int(total_mb * 1024 * 1024),
+                      float(setting("CONSTRUCTICON_UNPACK_MAX_RATIO")), float(setting("CONSTRUCTICON_UNPACK_MAX_SECONDS")))
 
 
 # --- Images ----------------------------------------------------------------------------------

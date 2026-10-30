@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from core import access_log, besteffort, captions, db, ingest, item_title, items, membership, object_types, ocr, parse_limits, revisions, similarity, storage, thumbnails
-from core import cards, item_dates, tags as tags_svc, timeline
+from core import cards, item_dates, tags as tags_svc, timeline, unpack
 from web import content_security, files_feed
 from web.common import from_request_thread
 from web.shapes import _friendly_date, _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
@@ -731,8 +731,14 @@ def api_run_type_action(request: Request, slug: str, key: str):
     if not action.applies_to(row):
         raise HTTPException(status_code=404, detail=f"{spec.label} has no action '{key}' for this item")
 
+    # #605: an action that takes parameters gets the POST's form fields (multipart or urlencoded).
+    params = {}
+    if (request.headers.get("content-type") or "").startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+        params = {k: v for k, v in from_request_thread(request.form).items() if isinstance(v, str)}
     try:
-        result = action.handler(row)
+        result = action.run(row, params)
+    except AppError:
+        raise  # #605: a refusal with its own code and message (the shared error shape), never a bare 500
     except Exception as e:
         print(f"Action '{key}' failed: {e!r}", flush=True)
         raise HTTPException(status_code=500, detail=f"Action '{key}' failed: {e}")
@@ -744,6 +750,16 @@ def api_run_type_action(request: Request, slug: str, key: str):
         **(result or {}),
         "item": _to_public(updated_row)
     })
+
+
+@router.get("/api/unpack/jobs/{job_id}", dependencies=requires(roles.VIEWER))
+def api_unpack_job(job_id: int):
+    """#605: an archive -> card conversion's progress and result, for the item page's poll. 404 when
+    there is no such job, or the caller can't see its archive (the item policy, via unpack.job_status)."""
+    job = unpack.job_status(job_id)  # 404: no such job, or its archive is hidden from the caller
+    if db.get_by_slug(job["archive_slug"]) is not None:  # (a deleted archive's job: admins only, in job_status)
+        policy.viewable_item(job["archive_slug"], message=f"No unpack job {job_id}.")
+    return JSONResponse({"ok": True, "job": job})
 
 
 @router.post("/api/image/{slug}/related")

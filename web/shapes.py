@@ -166,6 +166,18 @@ def actor_label(actor):
             "migration": "migration", "anonymous": "anonymous"}.get(actor, actor or "unknown")
 
 
+def _extracted_from(row):
+    """#605: {name, path, slug or None} for an item unpacked from an archive, else None. The archive's
+    slug (its link) only when the actor may still see it; its name and the path stay either way."""
+    src = (row.get("type_metadata") or {}).get("extracted_from")
+    if not isinstance(src, dict):
+        return None
+    archive = db.get_by_slug(src.get("slug")) if src.get("slug") else None
+    visible = archive is not None and policy.can_view(archive)
+    return {"name": src.get("name") or "an archive", "path": src.get("path") or "",
+            "slug": src.get("slug") if visible else None}
+
+
 def ownership_fields(row):
     """{uploaded_by_user, sensitive, sensitive_reason} for an item shape (#604, #603)."""
     reason = policy.restriction_reason(row)
@@ -376,7 +388,11 @@ def _to_object_detail(row):
         # #448: per-type actions available on this object (e.g. YouTube's "fetch real date" moves here in PR 2).
         # The type file owns the handler; actions are declared in ObjectTypeSpec.actions.
         # #446: filter actions to only those that applies_to(row).
-        "actions": [{"key": a.key, "label": a.label, "confirm": a.confirm} for a in spec.actions if a.applies_to(row)],
+        # #605: `ui` names an action's own page script (the archive's "unpack" dialog).
+        "actions": [{"key": a.key, "label": a.label, "confirm": a.confirm, "ui": a.ui}
+                    for a in spec.actions if a.applies_to(row)],
+        # #605: an unpacked archive member's origin (the archive and its path inside), for ORIGIN.
+        "extracted_from": _extracted_from(row),
         # #448: editable form fields for type_metadata. Only includes fields with input set.
         "edit_fields": [{"key": f.key, "label": f.label, "input": f.input, "help_text": f.help_text, "value": (row.get("type_metadata") or {}).get(f.key)} for f in spec.edit_fields if f.input],
         # #449: external link button label (types may override).

@@ -189,6 +189,8 @@ def ingest_file(
     project_id=None,
     folder_name="",
     sensitive=False,
+    type_metadata=None,
+    run_auto_match=True,
 ) -> IngestResult:
     """Main entry point for file-based uploads.
 
@@ -210,6 +212,12 @@ def ingest_file(
         sensitive: #603: the upload dialog's "sensitive" checkbox. The flag is set in the INSERT
             itself, so the item is never visible unlocked. A duplicate of an existing item marks
             that item sensitive instead (core/items.set_sensitive, logged).
+        type_metadata: #605: per-type properties to store IN the insert (an unpacked member's
+            `extracted_from`), merged under anything the type's pre-store hook sets. In the INSERT,
+            not a later edit, so no logged edit of the row has to be undone first.
+        run_auto_match: #605: False skips the name-based auto-tag / auto-project and the "does this
+            replace ...?" question (an archive's members are filed by the conversion itself, as
+            one undoable batch; a thousand members must not each join a card on their own).
 
     Returns:
         IngestResult with row (newly created or duplicate) or error details
@@ -292,11 +300,12 @@ def ingest_file(
             file_size=size,
             source_modified_at=source_modified_at,
             media_type=media_type,
-            type_metadata=decision.type_metadata,
+            type_metadata={**(type_metadata or {}), **(decision.type_metadata or {})},
             sensitive=sensitive,
         )
         attach_to_project(slug, project_id or None)
-        auto_match(slug, [Path(filename).stem, folder_name])
+        if run_auto_match:
+            auto_match(slug, [Path(filename).stem, folder_name])
         return IngestResult(row=db.get_by_slug(slug))
 
     if decision.action == "needs_decision":
@@ -321,6 +330,7 @@ def ingest_file(
             media_type=provisional,
             ocr_status="pending" if provisional_spec.ocr_capable else None,
             sensitive=sensitive,
+            type_metadata=type_metadata,
         )
 
         # #448: replaces storage.save_stream's old extension-based save-time
@@ -332,7 +342,8 @@ def ingest_file(
         embedded_metadata.fill_missing(slug)
         post_insert(slug, provisional_spec, run_background)
         attach_to_project(slug, project_id or None)
-        auto_match(slug, [Path(filename).stem, folder_name])
+        if run_auto_match:
+            auto_match(slug, [Path(filename).stem, folder_name])
 
         # Queue the pending decision; detected_type lets the question say
         # what the sniffer thought it was.
@@ -352,9 +363,13 @@ def ingest_file(
         "ocr_status": "pending" if spec.ocr_capable else None,
         "sensitive": sensitive,
     }
+    if type_metadata:
+        insert_kwargs["type_metadata"] = dict(type_metadata)
 
     for key, value in decision.row_overrides.items():
-        if key in ("content_description", "content_date", "type_metadata"):
+        if key == "type_metadata" and type_metadata:
+            insert_kwargs[key] = {**type_metadata, **(value or {})}
+        elif key in ("content_description", "content_date", "type_metadata"):
             insert_kwargs[key] = value
         else:
             print(f"Ignoring unrecognized row_override key: {key}", flush=True)
@@ -388,7 +403,8 @@ def ingest_file(
     # pick above so an already-chosen project is excluded from the
     # candidate set rather than re-asked about. folder_name is the dropped
     # top-level folder for a folder-drop upload (#134), empty otherwise.
-    auto_match(slug, [Path(filename).stem, folder_name])
+    if run_auto_match:
+        auto_match(slug, [Path(filename).stem, folder_name])
 
     return IngestResult(row=db.get_by_slug(slug))
 

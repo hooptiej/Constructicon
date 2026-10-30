@@ -33,7 +33,7 @@
               and a click says the editor role is needed (web/role_lock.py; role-lock.js stops the click
               before the page's own handler), never hidden or dead. #}
           {% for a in item.actions %}
-          <button type="button" role="menuitem" class="type-action-btn{{ role_lock_class('editor') }}" data-action="{{ a.key }}" data-confirm="{{ a.confirm }}"{{ role_lock_if('editor', a.label) }}>{{ a.label }}</button>
+          <button type="button" role="menuitem" class="type-action-btn{{ role_lock_class('editor') }}" data-action="{{ a.key }}" data-confirm="{{ a.confirm }}"{% if a.ui %} data-action-ui="{{ a.ui }}" data-slug="{{ item.slug }}"{% endif %}{{ role_lock_if('editor', a.label) }}>{{ a.label }}</button>
           {% endfor %}
           {% if item.is_file and not item.redacted %}
           {# #617: new bytes, same item: slug, cards, tags, title and captions stay; the old file goes to the trash (undo). #}
@@ -350,6 +350,8 @@
         <div class="dp-row"><dt>Highlight</dt><dd>{{ 'Yes' if item.highlight else 'No' }}</dd></div>
         <div class="dp-row"><dt>Brand asset</dt><dd>{{ 'Yes' if item.is_brand_asset else 'No' }}{% if item.is_brand_asset and item.brand_role %} <span class="dp-muted">&middot; {{ item.brand_role }}</span>{% endif %}</dd></div>
         {# #604 step 1: who uploaded it. None recorded = the install token, the MCP or a script (admin-owned). #}
+        {# #605: a member unpacked from an archive: the archive (linked while visible) and its path inside. #}
+        {% if item.extracted_from %}<div class="dp-row"><dt>Extracted from</dt><dd>{% if item.extracted_from.slug %}<a href="/object/{{ item.extracted_from.slug }}">{{ item.extracted_from.name }}</a>{% else %}{{ item.extracted_from.name }}{% endif %}{% if item.extracted_from.path %} <span class="dp-muted">&middot; {{ item.extracted_from.path }}</span>{% endif %}</dd></div>{% endif %}
         {# #560: the uploader is the recorded account (links to their gallery); #778: made with a personal MCP key
            = "<user>'s <token name>", a revoked key "<user>'s claude". The Source line above is a free-text note. #}
         <div class="dp-row"><dt>Uploaded by</dt><dd>{% if item.uploaded_by_user %}{% if item.uploaded_by_user.username %}<a href="/gallery/user/{{ item.uploaded_by_user.username | urlencode }}" title="Everything {{ item.uploaded_by_user.name }} uploaded">{{ item.uploaded_via.text if item.uploaded_via else item.uploaded_by_user.name }}</a>{% else %}{{ item.uploaded_via.text if item.uploaded_via else item.uploaded_by_user.name }}{% endif %}{% if item.uploaded_via and item.uploaded_via.revoked %} <span class="dp-muted">(that MCP key has since been revoked)</span>{% endif %}{% else %}<span class="dp-muted">Admin (no user recorded)</span>{% endif %}</dd></div>
@@ -511,6 +513,7 @@
   <img class="lightbox-img" id="lightbox-img" src="" alt="">
 </div>
 <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
+{% if item.actions | selectattr('ui', 'equalto', 'unpack') | list %}<script src="/static/js/unpack-crate.js?v={{ static_version('js/unpack-crate.js') }}"></script>{% endif %}
 <script src="/static/js/tag-chips.js?v={{ static_version('js/tag-chips.js') }}"></script>
 <script nonce="{{ csp_nonce() }}">
 const IS_OCR_CAPABLE = {{ item.ocr_capable | tojson }};
@@ -1649,8 +1652,9 @@ document.addEventListener('constructicon:upload-complete', (e) => {
   });
 }
 
-// #448: generic type-action buttons for per-type handlers
-document.querySelectorAll('.type-action-btn').forEach(btn => {
+// #448: generic type-action buttons for per-type handlers. #605: a button with data-action-ui is
+// handled by that action's own script (unpack-crate.js), not here.
+document.querySelectorAll('.type-action-btn:not([data-action-ui])').forEach(btn => {
   btn.addEventListener('click', async (e) => {
     e.preventDefault();
     const action = btn.dataset.action;

@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths, transcripts
+from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths, transcripts, unpack
 from core import items as item_service  # aliased: web.routes.items (imported below) is a different module
 from web import auth as web_auth, body_limit, content_security, hobby_paths, proxy_trust, request_guard
 from web.common import _STATIC_DIR
@@ -330,6 +330,10 @@ def _startup_work():
     # then every CAPTION_SELFHEAL_INTERVAL_SECONDS.
     _heal_captions()
     captions.start_queue_worker()
+    # #605: archive -> card conversions. A job left 'running' was cut off by the restart (marked
+    # failed, saying so; undo still covers what it made); queued ones (some from the MCP) run now.
+    unpack.recover_interrupted()
+    unpack.start_worker()
     asyncio.create_task(_caption_selfheal_loop())
     asyncio.create_task(_trash_purge_loop())
     asyncio.create_task(_decision_sweep_loop())

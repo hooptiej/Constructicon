@@ -143,12 +143,29 @@ class TypeAction:
         offered (object page) and only runnable (action route) on rows it
         returns True for, e.g. "Reclassify" only on .exe installers. None =
         every row of the type.
+    takes_params: #605. True = the handler is (row, params: dict) -> dict, and both doors pass the
+        caller's parameters (web: the POST's form fields; MCP constructicon_run_type_action's
+        `params`). False = (row) -> dict, and any parameters given are refused (bad_request), never
+        silently dropped.
+    ui: #605. "" = the item page's plain button (confirm, POST, reload). A name = the page leaves the
+        click to that action's own script (e.g. "unpack": static/js/unpack-crate.js opens a dialog).
     """
     key: str
     label: str
     handler: object
     confirm: str = ""
     applies_fn: object = None
+    takes_params: bool = False
+    ui: str = ""
+
+    def run(self, row, params=None):
+        """Runs the handler, passing `params` when the action takes them (see takes_params)."""
+        if self.takes_params:
+            return self.handler(row, dict(params or {}))
+        if params:
+            from ..errors import InvalidInput  # lazy: keep the registry's imports as they were
+            raise InvalidInput(f"The action {self.key!r} takes no parameters (got {', '.join(sorted(params))}).")
+        return self.handler(row)
 
     def applies_to(self, row):
         """True when this action is offered for `row` (see applies_fn)."""

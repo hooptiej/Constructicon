@@ -50,7 +50,6 @@ RAW_ALLOWED = {
                         "it would make every later undo of a real edit conflict with the pipeline)",
     "core/embedded_metadata.py": "pipeline: upload-time file metadata (title, ID3 tags, EXIF date), fill-only",
     "core/object_types/youtube.py": "pipeline: a YouTube row's fetched publish date (embedded metadata)",
-    "core/card_migration.py": "migrations: the one-time V2 card migration (actor 'migration', refused by undo)",
     # Retired one-offs that wrote directly against the DB (kept for reference; they refuse to run, #633).
     "scripts/archive/apply_project_groupings.py": "one-off 2026-09 grouping import, already applied",
     "scripts/archive/seed_example_projects.py": "one-off seed of example cards on an empty dev DB",

@@ -37,7 +37,7 @@ ACTOR_TOKEN = "token"        # #467 step 2: a web request carrying the install t
 ACTOR_MCP = "mcp"
 ACTOR_SYSTEM = "system"      # boot, migrations' surrounding work, OCR/caption workers
 ACTOR_SCRIPT = "script"      # a CLI script under scripts/ or core/manage/ calling core directly
-ACTOR_MIGRATION = "migration"  # card_migration's change-log rows (not undoable)
+ACTOR_MIGRATION = "migration"  # one-time data migrations' change-log rows (not undoable)
 
 _current = contextvars.ContextVar("constructicon_actor", default=None)
 _log = logging.getLogger("constructicon.actor")

@@ -352,9 +352,9 @@ def validate_status(kind, stage, stop_reason=None, activity=None, whereabouts=No
 
 
 # --- Legacy v1 status words (4.2) ----------------------------------------------
-# projects.status is frozen and retired (#545): the stage is the only status, and no live
-# code reads the column. What's left here: the one-time v1 -> v2 mapping the migration uses,
-# and the translation of a v1 word a caller still SENDS (API / MCP) into a stage.
+# projects.status was retired in #545 (the stage is the only status) and the column dropped in
+# #760, together with the one-time v1 -> v2 card migration. What's left here: the translation of a
+# v1 word a caller still SENDS (API / MCP) into a stage (legacy_to_status, via migration_target).
 
 LEGACY_STATUSES = ("wip", "complete", "shelved", "means-to-an-end", "abandoned", "failed",
                    "idea", "published", "reference-only", "active", "archived")

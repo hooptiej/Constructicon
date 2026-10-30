@@ -47,7 +47,9 @@ the date and commit forward when you re-verify.
     `items.py` (`/api/upload`, `/api/content`, `/api/image/*` incl. `replace-file`, per-item
     captions, `/api/gallery`, `/api/home/files`, bulk, tags, search, multi-delete), `cards.py`
     (`/api/projects*`, `/api/project/*`, `/api/cards/*`, `/api/links*`,
-    `/api/families/*`, `/api/changes/*`), `hobbies.py`, `curator.py`
+    `/api/families/*`, `/api/changes/*`; card links are `/api/links*` only: the uncalled
+    `POST /api/project/{slug}/related` (+ `/related/remove`) and `GET /api/project/{slug}/links` were
+    retired in #556 and 404), `hobbies.py`, `curator.py`
     (`/api/curator/*`, `/api/pending-decisions*`), `blog_export.py`
     (`/api/blog-entries*`, `/api/export/*`), `admin.py` (settings, backup,
     delete-all, audit log, redacted/restricted, storage stats, provenance
@@ -96,7 +98,7 @@ the date and commit forward when you re-verify.
   `MIGRATIONS`, `init_db`, `transaction()`, `ImageLog`, every read query, the pipeline writers). No
   ORM; raw SQL via `sqlite3`, one `get_conn()`/`conn.close()` pair per call (or one shared
   connection inside `db.read_session()` / `transaction()`). **It is not the only module with raw SQL:**
-  twelve other core modules (`backup`, `blog`, `card_migration`, `curator_needs`, `hobbies`,
+  eleven other core modules (`backup`, `blog`, `curator_needs`, `hobbies`,
   `install_config`, `membership`, `physical_piece`, `provenance_options`, `revisions`, `tags`, `vocab`) and
   `web/routes/admin.py` also call `.execute(...)` themselves (the service-layer cleanup that would pull
   them in is tracked in the issues, not done). Read the schema in `core/db.py` rather than trusting
@@ -139,8 +141,8 @@ the date and commit forward when you re-verify.
     `curation_queue.py` (the one queue), `lookalikes.py` + `lookalike_match.py` (look-alike photos, #759). See "Decisions and the Curator".
   - *Install, files, export:* `paths.py`, `storage.py`, `backup.py`, `install_token.py`, `version.py`,
     `site_export.py` + `project_export.py` (see "Static export"), `wallpapers.py` (the Wallpaper page's
-    streamed "Download all (.zip)", #780; see "Static export"), `card_migration.py` (the V2 card
-    migration run from `init_db()`).
+    streamed "Download all (.zip)", #780; see "Static export"). (`card_migration.py`, the one-time
+    v1 -> v2 card migration, was removed in #760.)
 - **`core/storage.py`** — file storage on local disk under `storage/`
   (gitignored; not baked into the Docker image). Random unguessable slugs
   (`secrets.token_urlsafe`), not sequential IDs.
@@ -1167,7 +1169,7 @@ token stays the admin key for scripts and ops.
 - a module outside the service modules calls (or imports) a private `db._*` function. The raw-write
   allowlist, each with its reason in the script: `core/captions.py` (caption status/results),
   `core/embedded_metadata.py` and `core/object_types/youtube.py` (upload-time file metadata, a
-  YouTube publish date), `core/card_migration.py` (migrations), the one-off scripts
+  YouTube publish date), the one-off scripts
   `scripts/archive/{apply_project_groupings,seed_example_projects,backfill_from_hooptiej_site,link_lil_dragon_brand}.py`
   (retired, kept readable),
   and `scripts/test_*.py` (throwaway-DB fixtures);
@@ -2263,7 +2265,8 @@ One generated file of every registered type and extension, to drop-test a new in
     `core/cards.py`'s `CARD_DECISION_KINDS`): V2 card questions. `post_slug = "card:<project slug>"`,
     NOT a `capture_events` slug, so `decisions.stale_reason()` branches on that prefix (validating
     against `projects`); the file-row stale check would otherwise call every card question stale.
-    `core/card_migration.py` queues the first three; `card_family_members` was queued only by the
+    The one-time v1 -> v2 card migration queued the first three (removed in #760; answered and open
+    questions stay resolvable, their payloads carry the patches); `card_family_members` was queued only by the
     one-time v2c_3 step, now `scripts/archive/v2c_owner_questions.py` (#562; never moves anything).
     Resolving a family question runs unnest -> set_kind family -> add_to_family in one change-log batch.
   Answering is `POST /api/pending-decisions/{id}/resolve` (editor; `core/decisions.py` `resolve`). Since
@@ -2271,18 +2274,20 @@ One generated file of every registered type and extension, to drop-test a new in
   by the explicit, logged `decisions.sweep_stale()` (see "Service layer").
 - **Card kind + status (V2, piece 1)** — `projects.kind` plus
   `activity`/`stage`/`stop_reason` are the *live* status, and the stage is the ONLY status (#545):
-  legacy `projects.status` is **frozen and retired**. No live code reads it (the Curator, the export,
-  every API / page / MCP read go by the stage; no read returns the old word). It is still written
-  with its default on create, and only the one-time v1 -> v2 migration ever read it. Dropping the
-  column is a separate step (#760). A v1 word a caller SENDS (the old `status` form field, the MCP's
+  the legacy `projects.status` column is **gone** (#760, "Status quo vadis"). `db._drop_project_status_760`
+  drops it at web boot (`init_db`, every boot, never the MCP; the #704 shape without a keep-safeguard,
+  since the word was retired by decision): it counts the cards per frozen word, drops the column and
+  writes ONE change-log row (op `migration_drop_project_status_760`, actor migration, `details`: `rows`,
+  `by_word`), first run recorded in `schema_migrations` as `drop_project_status_760`; a failure rolls the
+  step back, logs `ERROR drop_project_status_760 ...` and the app still starts (retried next boot). The
+  pre-deploy snapshot is the backup. Row images logged before the drop still name `status`:
+  `db.invert_image` restores only the columns the table has now (#704), so those undos keep working.
+  The one-time v1 -> v2 card migration (`core/card_migration.py`, `v2c_1/2/5`) went with it (#760, owner
+  answer: both installs are V2). A v1 word a caller SENDS (the old `status` form field, the MCP's
   retired `set_project_status`) is still translated to a stage by `card_rules.legacy_to_status`.
   Rules live in `core/card_rules.py` (pure), operations in `core/cards.py`,
-  every core write is logged with row images in `audit_log` via
-  `core/changes.py`, and the v1 -> v2 mapping is `core/card_migration.py`
-  (run from `init_db()`, idempotent: only cards with `stage IS NULL`). `card_migration.suggest_kind`
-  (Thing or Project) reads what the card holds (#584): mostly non-photo/3D files -> Project ("61 of 68
-  files are source code"); only photos/3D files, physical-piece fields or a whereabouts -> Thing; no
-  evidence -> Project. The title is not read.
+  every core write is logged with row images in `audit_log` via `core/changes.py`. Check with
+  `scripts/test_spring_cleaning_760.py`.
 - **Families + nesting (V2, piece 3)** — `family_members(family_id, member_id)`
   is many-to-many membership for `kind=family|collection` cards (not nesting;
   no files move). `projects.parent_id` now means "part of" only:
@@ -2834,7 +2839,8 @@ shows what would run; `--show-output` prints the whole output of anything that d
   `with_writeup=False`. A new red line is a real failure: fix it or file it.
 - **What each one covers** (the module docstring has the detail; `--list` is the authoritative list):
   - service layer and writes: `test_items_service`, `test_membership_tags`, `test_hobbies_blog`,
-    `test_drop_columns_704` (the dead-column drop and its safeguard),
+    `test_drop_columns_704` (the dead-column drop and its safeguard), `test_spring_cleaning_760` (the
+    `projects.status` drop, the card migration's removal, the retired card-link routes),
     `test_move_tags_590`, `test_tags_555` (one tag store, tag management, the sweep), `test_revisions`, `test_duplicates_615` (duplicate folding), `test_bulk_decisions`, `test_provenance_options`, `test_wallpaper_vocab_780` (the wallpaper zip, the word lists),
     `test_replace_file_617`, `test_card_faces`, `test_hobby_covers_686`, `test_install_config`,
     `test_hobby_label_700` and `check_hobby_label` (the renameable hobby word, #700), `check_layering`;

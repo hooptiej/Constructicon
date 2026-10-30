@@ -67,3 +67,12 @@ a.dp-btn { text-decoration: none; display: inline-block; }
 .cq-lookalike-copy.is-suggested { box-shadow: inset 0 0 0 2px var(--card-pip-on, #E8B93A); }
 .cq-lookalike-thumb img { display: block; width: 100%; height: 160px; object-fit: contain; background: #111; border-radius: 4px; }
 .cq-lookalike-facts { min-width: 0; }
+/* #354 / #344: a proposal need's files or card pairs, one row each with its own yes / not this one. */
+.cq-proposals { flex-basis: 100%; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.cq-proposal {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 8px;
+  border-radius: 6px; box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.cq-proposal-thumb img { display: block; width: 56px; height: 56px; object-fit: contain; background: #111; border-radius: 4px; }
+.cq-proposal-facts { flex: 1 1 220px; min-width: 0; }
+.cq-proposal-actions { display: flex; flex-wrap: wrap; gap: 6px; }

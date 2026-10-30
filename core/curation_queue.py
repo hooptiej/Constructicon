@@ -18,6 +18,13 @@ Three kinds of item used to live in three places. They are one queue now:
             "Not the same" (POST /api/curator/lookalikes/confirm | dismiss). Grouped under
             "Look-alike photos"; carries `item_slugs`, so for_actor hides a group with a photo the
             asker can't see. "Not the same" is remembered per pair (lookalikes.dismiss).
+            #354: also `provenance_rule`, one per gross file-provenance rule with proposals
+            (core/provenance_rules.py; first rule: text-heavy PDFs and manuals -> Reference), its files
+            listed (`members`) with "Mark <label>" / "Not this one" and the bulk "Mark all shown".
+            Grouped under "Provenance by rule". #344: also `correlation`, one need listing the card
+            pairs that look related (core/correlations.py, `member_pairs`) with "Link them" / "Not
+            related" and "Link all shown". Grouped under "Related projects?". for_actor drops the
+            files / pairs the asker can't see (and the need when none are left).
 
 Nothing here stores items: questions are stored by their own table, nudges and needs are
 derived every time. The only thing this module's callers persist is the owner's Defer /
@@ -40,7 +47,7 @@ import threading
 import time
 from urllib.parse import quote
 
-from . import actor as actor_ctx, cards, curator_needs, datefmt, date_guess, db, decisions, install_config, item_dates, item_title, lookalikes, policy, roles
+from . import actor as actor_ctx, cards, correlations, curator_needs, datefmt, date_guess, db, decisions, install_config, item_dates, item_title, lookalikes, policy, provenance_rules, roles
 from .errors import InvalidInput
 
 TYPE_QUESTION = "question"
@@ -296,6 +303,10 @@ def _group_order(g):
         return (2, 1, 0, "")
     if g["type"] == "lookalikes":
         return (2, 2, 0, "")
+    if g["type"] == "provenance_rules":
+        return (2, 3, 0, "")
+    if g["type"] == "correlations":
+        return (2, 4, 0, "")
     return (3, 0, 0, "")
 
 
@@ -444,6 +455,12 @@ def build_queue(card=None, hobby=None):
     if not hobby_row and not card_row:
         for item in lookalikes.queue_items():
             put("lookalikes", _plain_group("lookalikes", "lookalikes", "Look-alike photos", "/curator"), item)
+        # #354: file provenance by gross rule; #344: related projects. Whole queue only, like look-alikes.
+        for item in provenance_rules.queue_items():
+            put("provenance_rules", _plain_group("provenance_rules", "provenance_rules", "Provenance by rule",
+                                                 "/curator"), item)
+        for item in correlations.queue_items():
+            put("correlations", _plain_group("correlations", "correlations", "Related projects?", "/curator"), item)
 
     open_by, deferred_by = {}, {}
     for gid, item in items:
@@ -528,6 +545,16 @@ def _for_actor(q, who, acc, revisions):
             seen_items[slug] = policy.can_view(db.get_by_slug(slug), who)
         return seen_items[slug]
 
+    seen_cards = {}
+
+    def card_visible(slug):
+        if acc.empty:
+            return True
+        if slug not in seen_cards:
+            row = db.get_project(slug)
+            seen_cards[slug] = row is not None and policy.can_view_card(row, access=acc)
+        return seen_cards[slug]
+
     def group_visible(g):
         if acc.empty or not g.get("slug"):
             return True
@@ -565,6 +592,20 @@ def _for_actor(q, who, acc, revisions):
                 if i.get("item_slugs") and not all(item_visible(s) for s in i["item_slugs"]):
                     changed = True  # #759: a look-alike group with a photo the asker can't see
                     continue
+                if i.get("members"):  # #354: a provenance proposal's files, each on its own
+                    kept = [m for m in i["members"] if item_visible(m["slug"])]
+                    if len(kept) != len(i["members"]):
+                        changed = True
+                        if not kept:
+                            continue
+                        i = {**i, "members": kept}
+                if i.get("member_pairs"):  # #344: a pair with a card the asker can't see is left out
+                    kept = [p for p in i["member_pairs"] if card_visible(p["a"]) and card_visible(p["b"])]
+                    if len(kept) != len(i["member_pairs"]):
+                        changed = True
+                        if not kept:
+                            continue
+                        i = {**i, "member_pairs": kept}
                 opts = i.get("options")
                 if opts:
                     shown = [o for o in opts if option_visible(i, o)]
@@ -592,7 +633,7 @@ def cached_queue():
 
 def group_items(gid, section="open"):
     """One group's items (for expanding a collapsed group). `gid` is a group id from the queue
-    (card:<slug>, hobby:<slug>, uploads, collection, undated, lookalikes); `section` is "open" or "deferred".
+    (card:<slug>, hobby:<slug>, uploads, collection, undated, lookalikes, provenance_rules, correlations); `section` is "open" or "deferred".
     Returns (group dict or None, items). A card or hobby builds only its own slice, so
     expanding a group never rebuilds the whole queue."""
     key = "deferred" if section == "deferred" else "groups"

@@ -56,7 +56,7 @@ from mcp.server.mcpserver import Image as McpImage, MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from core import access_log, actor as actor_ctx, mcp_tokens, policy, roles, users
-from core import backup, captions, thumbnails, card_rules, cards, curation_queue, curator_needs, db, decisions, duplicates, errors, ingest, lookalikes, item_dates, item_title, items, object_types, ocr, physical_piece, provenance_options, revisions, storage, timeline
+from core import backup, captions, thumbnails, card_rules, cards, correlations, curation_queue, curator_needs, db, decisions, duplicates, errors, ingest, lookalikes, item_dates, item_title, items, object_types, ocr, physical_piece, provenance_options, provenance_rules, revisions, storage, timeline
 from core.errors import InvalidInput, NotFound
 from core import version as version_info
 from core import blog, changes, hobbies, membership, parse_limits, reset, sharing
@@ -263,6 +263,9 @@ ACTION_ROLES = {
     ("constructicon_lookalikes", "list"): V,     # #759: GET /api/curator/lookalikes (viewer)
     ("constructicon_lookalikes", "confirm"): E,  # POST /api/curator/lookalikes/confirm (editor; one undoable fold)
     ("constructicon_lookalikes", "dismiss"): E,  # POST /api/curator/lookalikes/dismiss (editor; remembered)
+    ("constructicon_proposals", "list"): V,      # #354 / #344: GET /api/curator/provenance-rules | correlations
+    ("constructicon_proposals", "confirm"): E,   # POST .../confirm (editor; one undoable batch)
+    ("constructicon_proposals", "dismiss"): E,   # POST .../dismiss (editor; remembered)
     ("constructicon_item_tags", "attach"): E,
     ("constructicon_item_tags", "detach"): E,
     ("constructicon_related", "add"): E,
@@ -1848,6 +1851,70 @@ def constructicon_lookalikes(action: typing.Literal["list", "confirm", "dismiss"
     if action == "dismiss":
         _only_for('action="dismiss"', keep=(keep, None))
         return lookalikes.dismiss(slugs, dry_run=dry_run).to_dict()
+    raise InvalidInput(f"Unknown action {action!r}: use list, confirm or dismiss.")
+
+
+@mcp.tool(selector="action")
+def constructicon_proposals(which: typing.Literal["provenance", "correlation"],
+                            action: typing.Literal["list", "confirm", "dismiss"] = "list",
+                            slugs: list[str] | None = None, pairs: list[list[str]] | None = None,
+                            rule: str | None = None, dry_run: bool = True, limit: int | None = None,
+                            cursor: str | None = None) -> dict:
+    """The Curator's proposals that wait for a yes: nothing is written until confirmed.
+    which="provenance": file provenance by gross rule. The first (and only) rule, text_heavy_reference:
+      a PDF with 2,000+ characters of text, or a PDF / Word file whose name says manual, guide, datasheet,
+      handbook, instructions, reference or spec, proposed as provenance "reference". A file whose
+      provenance is already set is never proposed.
+    which="correlation": card pairs that look related (text similarity of their files, shared tags,
+      overlapping dates, shared files; score 0..1, suggested at 0.45+ with alike text plus at least one
+      other signal), never ones already linked,
+      nested, sharing a parent or a family, or a family / collection.
+    "list" (default, read-only, paged: limit 1..500, default 20, cursor): provenance -> {items: [{slug,
+      title, filename, media_type, chars, reason, evidence}], rule, blocked, summary}; correlation ->
+      {items: [{a, b, a_title, b_title, score, parts, evidence, why}], summary}.
+    "confirm" and "dismiss" are DRY-RUN BY DEFAULT; pass dry_run=false to write. One call = one batch,
+      one constructicon_undo(batch_id) reverses it.
+    "confirm": provenance writes the rule's provenance on `slugs` (default: every current proposal);
+      correlation links `pairs` ([[a, b], ...], card slugs; default: every current suggestion) as
+      "related". -> {ok, dry_run, batch_id, applied | linked, skipped}. Refusals: forbidden, not_found,
+      not_proposed, nothing_to_confirm, rule_blocked, bad_rule.
+    "dismiss" ("not this one" / "not related", remembered so it is never proposed again): provenance
+      `slugs`, correlation `pairs`. -> {ok, batch_id, slugs | pairs}. Refusal: not_proposed.
+    Example: constructicon_proposals(which="provenance") then
+    constructicon_proposals(which="provenance", action="confirm", slugs=["abc"], dry_run=False).
+    """
+    if which not in ("provenance", "correlation"):
+        raise InvalidInput(f"Unknown which {which!r}: use provenance or correlation.")
+    if which == "correlation":
+        _only_for('which="correlation"', slugs=(slugs, None), rule=(rule, None))
+    else:
+        _only_for('which="provenance"', pairs=(pairs, None))
+    if action == "list":
+        _only_for('action="list"', slugs=(slugs, None), pairs=(pairs, None), dry_run=(dry_run, True))
+        if which == "provenance":
+            built = provenance_rules.plan(rule=rule)
+            rp = built["rules"][0] if rule else None
+            props = rp["proposals"] if rp else [p for r in built["rules"] for p in r["proposals"]]
+            page = _paged(f"proposals:provenance:{rule or 'all'}", lambda n, o: props[o:o + n], limit, cursor, 0,
+                          shape=lambda rows: rows, default=20)
+            return {**page, "summary": built["summary"],
+                    "rules": [{**r["rule"], "blocked": r["blocked"], "summary": r["summary"]} for r in built["rules"]]}
+        built = correlations.plan()
+        found = built["pairs"]
+        page = _paged("proposals:correlation", lambda n, o: found[o:o + n], limit, cursor, 0,
+                      shape=lambda rows: rows, default=20)
+        return {**page, "summary": built["summary"]}
+    _only_for(f'action="{action}"', limit=(limit, None), cursor=(cursor, None))
+    if which == "provenance":
+        if action == "confirm":
+            return provenance_rules.confirm(slugs, rule=rule, dry_run=dry_run).to_dict()
+        if action == "dismiss":
+            return provenance_rules.dismiss(slugs, rule=rule, dry_run=dry_run).to_dict()
+    else:
+        if action == "confirm":
+            return correlations.confirm(pairs, dry_run=dry_run).to_dict()
+        if action == "dismiss":
+            return correlations.dismiss(pairs, dry_run=dry_run).to_dict()
     raise InvalidInput(f"Unknown action {action!r}: use list, confirm or dismiss.")
 
 

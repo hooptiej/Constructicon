@@ -3,7 +3,7 @@
      nothing is marked |safe. -#}
 {% macro item_row(i) -%}
 <li class="cq-item{% if i.deferred %} cq-item-deferred{% endif %}" data-cq-key="{{ i.key }}" data-cq-type="{{ i.type }}"{% if i.id %} data-cq-id="{{ i.id }}"{% endif %}
-    data-cq-multi="{{ 1 if i.multi else 0 }}" data-cq-param="{{ i.answer_param or 'choice' }}" data-cq-suggested='{{ (i.suggested.picks if i.suggested else []) | tojson }}'{% if i.accept_source %} data-cq-item="{{ i.item_slug }}" data-cq-source="{{ i.accept_source }}"{% endif %}{% if i.kind == 'lookalike' and i.lookalike %} data-cq-members='{{ i.lookalike.slugs | tojson }}'{% endif %}>
+    data-cq-multi="{{ 1 if i.multi else 0 }}" data-cq-param="{{ i.answer_param or 'choice' }}" data-cq-suggested='{{ (i.suggested.picks if i.suggested else []) | tojson }}'{% if i.accept_source %} data-cq-item="{{ i.item_slug }}" data-cq-source="{{ i.accept_source }}"{% endif %}{% if i.kind == 'lookalike' and i.lookalike %} data-cq-members='{{ i.lookalike.slugs | tojson }}'{% endif %}{% if i.kind == 'provenance_rule' and i.proposal %} data-cq-rule="{{ i.proposal.rule }}" data-cq-label="{{ i.proposal.provenance_label }}"{% endif %}>
   <div class="cq-item-main">
     <span class="cq-tag cq-tag-{{ i.type }}">{{ 'Question' if i.type == 'question' else ('Nudge' if i.type == 'nudge' else 'Need') }}</span>
     <div class="cq-item-text">
@@ -25,6 +25,10 @@
       {% if i.accept_source %}<button type="button" class="dp-btn dp-btn-primary{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Write this date as the file's date (one undoable change)"{% endif %} data-cq-action="accept-date">Use {{ i.suggested.labels[0].split(',')[0] }}</button>{% endif %}
       {% if i.kind == 'lookalike' %}
         <button type="button" class="dp-btn{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="These are different photos. Remembered: you won't be asked about them again."{% endif %} data-cq-action="lookalike-not-same">Not the same</button>
+      {% elif i.kind == 'provenance_rule' and i.proposal %}
+        <button type="button" class="dp-btn dp-btn-primary{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Mark every file shown here {{ i.proposal.provenance_label }} (one undoable change)."{% endif %} data-cq-action="prov-all">Mark all {{ i.members | length }} shown {{ i.proposal.provenance_label }}</button>
+      {% elif i.kind == 'correlation' and i.member_pairs %}
+        <button type="button" class="dp-btn dp-btn-primary{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Link every pair shown here as related (one undoable change)."{% endif %} data-cq-action="corr-all">Link all {{ i.member_pairs | length }} shown</button>
       {% elif i.type != 'question' or i.kind in ('project_match', 'retype', 'item_supersedes') %}
         <a class="dp-btn" href="{{ i.href }}">{{ i.fix_label }}</a>
       {% endif %}
@@ -49,6 +53,42 @@
         {% if m.slug in i.lookalike.new_members %}<div class="cq-suggest">New since your last answer</div>{% endif %}
       </div>
       {% if not i.deferred %}<button type="button" class="dp-btn{% if m.slug == i.lookalike.keep %} dp-btn-primary{% endif %}{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Keep this copy; the others go to the trash (7-day undo) and it takes over their cards, tags and notes."{% endif %} data-cq-action="lookalike-keep" data-cq-keep="{{ m.slug }}">Same photo, keep this one</button>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if i.kind == 'provenance_rule' and i.members %}
+  {#- #354: the proposed files, each with its own yes / not this one. -#}
+  <ul class="cq-proposals" aria-label="The proposed files">
+    {% for m in i.members %}
+    <li class="cq-proposal" data-cq-slug="{{ m.slug }}">
+      <a href="{{ m.url }}" class="cq-proposal-thumb"><img src="{{ m.thumb_url }}" alt="{{ m.title }}" loading="lazy"></a>
+      <div class="cq-proposal-facts">
+        <div class="cq-label"><a href="{{ m.url }}">{{ m.title }}</a></div>
+        {% if m.filename and m.filename != m.title %}<div class="cq-detail">{{ m.filename }}</div>{% endif %}
+        <div class="cq-detail">Why: {{ m.reason }}.</div>
+      </div>
+      {% if not i.deferred %}<div class="cq-proposal-actions">
+        <button type="button" class="dp-btn{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Set this file's provenance to {{ i.proposal.provenance_label }} (undoable)."{% endif %} data-cq-action="prov-yes">Mark {{ i.proposal.provenance_label }}</button>
+        <button type="button" class="dp-btn{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Not {{ i.proposal.provenance_label }}. Remembered: this rule won't propose it again."{% endif %} data-cq-action="prov-not">Not this one</button>
+      </div>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if i.kind == 'correlation' and i.member_pairs %}
+  {#- #344: the card pairs that look related, each with Link them / Not related. -#}
+  <ul class="cq-proposals" aria-label="The suggested pairs">
+    {% for p in i.member_pairs %}
+    <li class="cq-proposal" data-cq-pair="{{ p.a }}:{{ p.b }}">
+      <div class="cq-proposal-facts">
+        <div class="cq-label"><a href="{{ p.a_url }}">{{ p.a_title }}</a> &harr; <a href="{{ p.b_url }}">{{ p.b_title }}</a></div>
+        <div class="cq-detail">{{ p.why }}</div>
+      </div>
+      {% if not i.deferred %}<div class="cq-proposal-actions">
+        <button type="button" class="dp-btn{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Add a related link between these two cards (undoable)."{% endif %} data-cq-action="corr-yes">Link them</button>
+        <button type="button" class="dp-btn{{ role_lock_class('editor') }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Answering or sorting Curator items') }}{% else %} title="Remembered: these two won't be suggested again."{% endif %} data-cq-action="corr-not">Not related</button>
+      </div>{% endif %}
     </li>
     {% endfor %}
   </ul>

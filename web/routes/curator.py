@@ -3,7 +3,8 @@
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from core import automatch, cards, curation_queue, curator, curator_needs, db, decisions, lookalikes, revisions
+from core import (automatch, cards, correlations, curation_queue, curator, curator_needs, db, decisions, lookalikes,
+                  provenance_rules, revisions)
 from web.common import templates
 from web.shapes import _friendly_datetime, _project_effective_cover_url, _to_card_face, _to_content_public
 from core import policy, roles
@@ -246,3 +247,52 @@ def api_curator_lookalikes_dismiss(slugs: list[str] = Form([]), dry_run: bool = 
     """"Not the same": remember every open look-alike pair among `slugs`, so they are never asked
     about again (one undoable batch). Refusals: bad_request (fewer than two), not_lookalikes."""
     return JSONResponse(lookalikes.dismiss(slugs, dry_run=dry_run).to_dict())
+
+
+# --- The Curator's Apprentice (#354, #344): proposals a person confirms ---
+
+@router.get("/api/curator/provenance-rules")
+def api_curator_provenance_rules(rule: str | None = None):
+    """File provenance by gross rule (core/provenance_rules.plan, read-only): {summary, rules: [{rule,
+    provenance_label, blocked, proposals: [{slug, title, filename, chars, reason, ...}], summary}]}. A file
+    the actor can't see is left out and counted (summary.hidden)."""
+    return JSONResponse(provenance_rules.plan(rule=rule))
+
+
+@router.post("/api/curator/provenance-rules/confirm", dependencies=requires(roles.EDITOR))
+def api_curator_provenance_rules_confirm(rule: str = Form(""), slugs: list[str] = Form([]),
+                                         shown: list[str] = Form([]), dry_run: bool = Form(False)):
+    """Write the rule's provenance on the confirmed files (one undoable batch). `shown` = the files on
+    screen (the Curator's "Mark all shown"; one no longer proposed is skipped and named); `slugs` =
+    explicit picks (one not proposed is refused). Neither = every current proposal. Refusals in the
+    shared shape: forbidden, not_found, bad_request, bad_rule, not_proposed, rule_blocked, nothing_to_confirm."""
+    return JSONResponse(provenance_rules.confirm(slugs or None, rule=rule or None, shown=shown or None,
+                                                 dry_run=dry_run).to_dict())
+
+
+@router.post("/api/curator/provenance-rules/dismiss", dependencies=requires(roles.EDITOR))
+def api_curator_provenance_rules_dismiss(rule: str = Form(""), slugs: list[str] = Form([]),
+                                         dry_run: bool = Form(False)):
+    """"Not this one": the rule never proposes these files again (remembered, one undoable batch)."""
+    return JSONResponse(provenance_rules.dismiss(slugs, rule=rule or None, dry_run=dry_run).to_dict())
+
+
+@router.get("/api/curator/correlations")
+def api_curator_correlations():
+    """Card pairs that look related (core/correlations.plan, read-only): {summary, pairs: [{a, b, a_title,
+    b_title, score, parts, evidence, why}]}. A pair with a card the actor can't see is left out and counted."""
+    return JSONResponse(correlations.plan())
+
+
+@router.post("/api/curator/correlations/confirm", dependencies=requires(roles.EDITOR))
+def api_curator_correlations_confirm(pairs: list[str] = Form([]), shown: list[str] = Form([]),
+                                     dry_run: bool = Form(False)):
+    """Link the confirmed pairs `related` (each "a:b"), all in one undoable batch. `shown` / `pairs` as
+    for provenance rules. Refusals: forbidden, not_found, bad_request, not_proposed, nothing_to_confirm."""
+    return JSONResponse(correlations.confirm(pairs or None, shown=shown or None, dry_run=dry_run).to_dict())
+
+
+@router.post("/api/curator/correlations/dismiss", dependencies=requires(roles.EDITOR))
+def api_curator_correlations_dismiss(pairs: list[str] = Form([]), dry_run: bool = Form(False)):
+    """"Not related": these pairs ("a:b") are never suggested again (remembered, one undoable batch)."""
+    return JSONResponse(correlations.dismiss(pairs, dry_run=dry_run).to_dict())

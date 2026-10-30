@@ -19,8 +19,16 @@ _UNMET_TO_NUDGE = {
     ("connections", "related_projects"): ("weak_connections", 3),
     ("connections", "tags"): ("weak_connections", 3),  # Emit ONE per project even if both unmet
     ("oddball_bonus", "highlighted"): ("no_highlight", 3),  # only fires on done / in use (in progress excuses it)
-    # ("story", "provenance_diversity") is EXCLUDED — no nudge for it
+    # ("story", "provenance_diversity") is not in this table: it is the #354 nudge
+    # `no_provenance_diversity`, built by _provenance_diversity_nudge (it only fires once the card
+    # has SOME file provenance, so a never-classified card isn't nagged about diversity).
 }
+
+# #354: the provenance-diversity nudge turns on once file provenance exists (the gross rules in
+# core/provenance_rules.py are what start filling it in). A card is nudged when it has at least
+# DIVERSITY_MIN_FILES content files, at least one of them has a provenance, and fewer than two
+# distinct values are used (the scoring check `provenance_diversity`).
+DIVERSITY_MIN_FILES = 2
 
 
 # Effort rank per nudge kind: lower = quicker/easier to resolve, so it floats
@@ -35,6 +43,7 @@ _EFFORT_RANK = {
     "stale_wip": 2,           # one stage decision
     "weak_connections": 2,    # add a tag / link
     "missing_dates": 3,       # date items
+    "no_provenance_diversity": 3,  # #354: mark a few files' origin
     "timeline_gap": 3,        # acknowledge / add footage
     "thin_captions": 4,       # caption many items
     "missing_writeup": 5,     # write a narrative
@@ -90,8 +99,11 @@ def project_nudges(project, dismissed=None):
         dimension = unmet["dimension"]
         item = unmet["item"]
 
-        # Skip provenance_diversity entirely
+        # provenance_diversity: its own nudge (#354), only once the card has some file provenance
         if dimension == "story" and item == "provenance_diversity":
+            n = _provenance_diversity_nudge(project, weight, dismissed)
+            if n is not None:
+                nudges.append(n)
             continue
 
         key = (dimension, item)
@@ -161,6 +173,46 @@ def project_nudges(project, dismissed=None):
                         },
                     })
     return nudges
+
+
+def _provenance_diversity_nudge(project, weight, dismissed):
+    """#354: "all of this card's files with a provenance say the same thing" (or most have none), as a
+    nudge, or None. Fires only when the card has >= DIVERSITY_MIN_FILES content files, at least one has
+    a file provenance, and fewer than two distinct values are in use; a family is never nagged
+    (card_rules.provenance_nag_applies). The summary names the one value used and how many files have
+    none: the gap to fill."""
+    from core import card_rules, provenance_options  # lazy: keep this module's import light
+    if not card_rules.provenance_nag_applies(project.get("kind")):
+        return None
+    content = curator.content_items(project, db.list_project_items(project["id"]))
+    if len(content) < DIVERSITY_MIN_FILES:
+        return None
+    values = [i.get("provenance") for i in content if i.get("provenance")]
+    distinct = sorted(set(values))
+    if not values or len(distinct) >= 2:
+        return None
+    nudge_key = _nudge_key_for_project("no_provenance_diversity", project["id"])
+    if nudge_key in dismissed:
+        return None
+    label = provenance_options.label("file", distinct[0])
+    missing = len(content) - len(values)
+    summary = (f"{len(values)} of {len(content)} files say where they came from, all “{label}”"
+               + (f"; {missing} say nothing yet" if missing else "")
+               + ". Mark the others (made by you, a result, a design, found ...) so the story shows more than one side.")
+    base_impact = 2
+    return {
+        "nudge_key": nudge_key,
+        "kind": "no_provenance_diversity",
+        "target_type": "project",
+        "target_id": project["id"],
+        "target_slug": project["slug"],
+        "title": f"{project['title']}: every file has the same origin",
+        "summary": summary,
+        "priority": base_impact * weight,
+        "base_impact": base_impact,
+        "status_weight": weight,
+        "action": {"type": "set_file_provenance", "project_slug": project["slug"]},
+    }
 
 
 def _sort_key(nudge, recency_cache=None):
@@ -290,7 +342,7 @@ def list_needs():
             })
 
     # --- Stage 4 stubs ---
-    # possible_correlation: STUB — do not implement (Stage 4)
+    # Project correlations (Stage 4, #344) are a Curator NEED, not a nudge: core/correlations.py.
 
     # --- Sort and return ---
     nudges = sort_nudges(nudges)

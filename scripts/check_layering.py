@@ -38,6 +38,8 @@ SERVICE_MODULES = {
     "core/revisions.py": "revision chains (#477) and their questions",
     "core/duplicates.py": "byte-identical duplicates folded into one survivor (#615)",
     "core/lookalikes.py": "look-alike photos: 'Not the same' answers, and the confirmed fold via duplicates (#759)",
+    "core/provenance_rules.py": "file provenance by gross rule: confirmed proposals and 'not this one' answers (#354)",
+    "core/correlations.py": "related-project suggestions: confirmed links via cards.link, 'not related' answers (#344)",
     "core/install_config.py": "install identity: owner, site title, publish targets (#562)",
     "core/users.py": "user accounts, passwords and sessions (#467 step 1)",
     "core/mcp_tokens.py": "per-user MCP tokens: create, rotate, revoke, sign-in by token (#604 step 5)",

@@ -124,6 +124,26 @@ the date and commit forward when you re-verify.
   them in is tracked in the issues, not done). Read the schema in `core/db/schema.py` rather than trusting
   any description here or in README.md, which can drift. Writes still go through the service modules
   ("Service layer" below).
+- **`core/cards/`** (a package since #547 step 2; was the ~3,000-line `core/cards.py`) — the V2 card
+  operations (pieces 1-7: setters, links, families, decisions, needs, reshaping, create / update, covers,
+  faces, bulk, undo; the service module for cards, see "Service layer"). Callers are unchanged: `from core
+  import cards`, then `cards.<name>` (public or `_private`), and `from core.cards import Result,
+  _changes_from_log`; `core/cards/__init__.py` re-exports every name of every submodule. The submodules,
+  in load order (each imports only from the ones above it, so there is no cycle): `base.py` (the card
+  decision kinds and patch ops, `Result`, `get_card`, `_change_rows`, `_status_warnings`,
+  `_changes_from_log`), `text.py` (face text, #596: `set_text`, the write-up lead, `face_text`),
+  `ops.py` (one-card setters: status, kind, whereabouts, provenance, highlight; `suggest_provenance`),
+  `families.py` (group spans #772, nest / unnest, families), `links.py` (typed links), `hobbies.py`
+  (`get_hobby`, hobby fields, activity, group code), `decisions.py` (live status, `resolve_decision`,
+  `decision_summary`), `needs.py` (every computed need and `list_needs_decision`), `reshape.py` (piece 6:
+  home, hobby membership, move / copy files, `split_card`, `merge_cards`, `delete_card`), `edit.py`
+  (`create`, `update`, cover picks, `set_agent_notes`), `explain.py` (`explain_card`), `faces.py`
+  (`card_face`, `hobby_card_face`, `file_face`, piles, stacks, the hobby cover), `batch.py` (`bulk`,
+  `resolve_decisions`) and `history.py` (`undo`, `list_changes`); the last two aren't called `bulk` /
+  `undo` because those names are the functions. Same two rules as `core/db/`: one copy of every name
+  (`__init__.py` refuses to load otherwise) and **monkeypatch through the package** (`cards.update =
+  fake` rebinds it in every submodule that held it; `cards.edit.update = ...` reaches only that file).
+  Check with `scripts/test_cards_package_547.py` (against `scripts/data/cards_names_547.txt`).
 - **`core/object_types/`** — a package, one module per object/media type (`image.py`, `video.py`,
   `pdf.py`, `stl.py`, `psd.py`, `svg.py`, `eps.py`, `audio.py`, `youtube.py`, `code.py`, ... plus the
   underscore helpers `_preview.py`, `_textstats.py`, `_office.py`, `_pe.py`). `__init__.py` holds the
@@ -136,7 +156,7 @@ the date and commit forward when you re-verify.
   `if media_type == "..."` branch. Adding a new type means adding one module here, not touching call
   sites elsewhere (see "Adding an object type").
 - **Module map: the rest of `core/`** (one line each; the module docstring is the detail):
-  - *Writes, the service layer (#541):* `items.py`, `membership.py`, `tags.py`, `cards.py`,
+  - *Writes, the service layer (#541):* `items.py`, `membership.py`, `tags.py`, `cards/` (the package above),
     `hobbies.py`, `blog.py`, `decisions.py`, `reset.py`, `revisions.py`, `users.py`,
     `install_config.py`, `provenance_options.py`, `vocab.py` (the editable brand roles + wallpaper tags,
     #556); `changes.py` (the change-log API), `actor.py`
@@ -1285,13 +1305,13 @@ Curator's Apprentice proposals (#354, #344), `core/install_config.py`, `core/use
 A new write = a service op (or a private db writer called only from its service module). Read
 functions stay public.
 
-Every write follows `core/cards.py`'s contract: validate everything first, one
+Every write follows `core/cards/`'s contract: validate everything first, one
 `db.transaction()`, rows written through `db.ImageLog` (row images in `audit_log`), a
 `Result`, `dry_run` where it makes sense. Undo is the generic `cards.undo` (POST
 `/api/changes/{id or batch}/undo`, MCP `constructicon_undo`). Web routes and MCP tools are thin
 adapters; a route that composes two ops passes one `batch_id` inside one `db.transaction()` so
 one undo reverses the request. Every table an op images must be in `db.IMAGE_TABLE_KEYS`.
-- **Cards** (`core/cards.py`, V2 pieces 1-7), **revisions** (`core/revisions.py`),
+- **Cards** (`core/cards/`, V2 pieces 1-7), **revisions** (`core/revisions.py`),
   **provenance options** (`core/provenance_options.py`). Phase D added `cards.create(title, ...)`:
   the linked root tag (reused if one exists, else created and imaged), the card row and its blank
   write-up (added, tagged, set) as ONE batch, so undo leaves nothing behind (web create,
@@ -1680,7 +1700,7 @@ Owner decisions 2026-10-18 (on the issue). Before this, tags lived in two stores
 ## Card faces (#596)
 
 One card component (`web/templates/_card.html`, `static/css/cards.css`; sizes full / small / mini),
-fed by `core/cards.py`: `card_face(card)` (project, thing, action, family, collection, event),
+fed by `core/cards/faces.py`: `card_face(card)` (project, thing, action, family, collection, event),
 `hobby_card_face(...)` and `file_face(...)` (files; `static/js/cards.js` builds the same file face
 client-side for the item grids, `scripts/check_item_cards.py` compares the two). Zones, top to bottom,
 matching the V2 mockup's Card template:
@@ -2608,7 +2628,7 @@ Shadows, outlines and the page frame (#751's other bucket items) are not done.
     under a provisional type and the owner picks the real one.
   - `item_supersedes` (`core/revisions.py`, via `ingest.auto_match`): see "Revision chains" below.
   - `card_status`, `card_kind`, `card_built_for`, `card_family_members` (the "four `card_*` kinds",
-    `core/cards.py`'s `CARD_DECISION_KINDS`): V2 card questions. `post_slug = "card:<project slug>"`,
+    `core/cards/base.py`'s `CARD_DECISION_KINDS`): V2 card questions. `post_slug = "card:<project slug>"`,
     NOT a `capture_events` slug, so `decisions.stale_reason()` branches on that prefix (validating
     against `projects`); the file-row stale check would otherwise call every card question stale.
     The one-time v1 -> v2 card migration queued the first three (removed in #760; answered and open
@@ -2631,7 +2651,7 @@ Shadows, outlines and the page frame (#751's other bucket items) are not done.
   The one-time v1 -> v2 card migration (`core/card_migration.py`, `v2c_1/2/5`) went with it (#760, owner
   answer: both installs are V2). A v1 word a caller SENDS (the old `status` form field, the MCP's
   retired `set_project_status`) is still translated to a stage by `card_rules.legacy_to_status`.
-  Rules live in `core/card_rules.py` (pure), operations in `core/cards.py`,
+  Rules live in `core/card_rules.py` (pure), operations in `core/cards/`,
   every core write is logged with row images in `audit_log` via `core/changes.py`. Check with
   `scripts/test_spring_cleaning_760.py`.
 - **Families + nesting (V2, piece 3)** — `family_members(family_id, member_id)`

@@ -141,9 +141,9 @@ DOORS = {
     # #749: the item-policy gaps the #746 consolidation found (each refuses a hidden item, 403 saying why).
     ("core/revisions.py", "_require_items_visible"): "revision chains: supersede / remove (web, MCP revision, the queue's answer)",
     ("core/revisions.py", "remove_from_chain"): "revisions.remove_from_chain (a hidden neighbour refuses too)",
-    ("core/cards.py", "_transfer_files"): "cards.move_files / copy_files (web + MCP card_files move / copy)",
-    ("core/cards.py", "split_card"): "cards.split_card (the files each part names)",
-    ("core/cards.py", "_require_card_files_visible"): "cards.merge_cards (every file on the absorbed cards)",
+    ("core/cards/reshape.py", "_transfer_files"): "cards.move_files / copy_files (web + MCP card_files move / copy)",
+    ("core/cards/reshape.py", "split_card"): "cards.split_card (the files each part names)",
+    ("core/cards/reshape.py", "_require_card_files_visible"): "cards.merge_cards (every file on the absorbed cards)",
 }
 
 # #604 step 3: doors that hand out CARDS or HOBBIES (or name them: titles in a tag tree, a breadcrumb,
@@ -170,17 +170,17 @@ CARD_DOORS = {
     ("web/shapes.py", "_to_hobby_face"): "a hobby's card face (its cards)",
     ("web/shapes.py", "_to_blog_entry_detail"): "a blog entry's cards",
     ("web/common.py", "_build_breadcrumbs"): "the item page's ?from=project: breadcrumb",
-    ("core/cards.py", "get_card"): "every card op (reads and writes)",
-    ("core/cards.py", "get_hobby"): "every hobby op",
+    ("core/cards/base.py", "get_card"): "every card op (reads and writes)",
+    ("core/cards/hobbies.py", "get_hobby"): "every hobby op",
     ("core/membership.py", "get_card"): "files on / off a card",
-    ("core/cards.py", "family_fields"): "families / members of a card",
-    ("core/cards.py", "list_links"): "a card's links (and its face's relationship lines)",
-    ("core/cards.py", "resolve_home"): "a card's home (a manual override may name any card)",
-    ("core/cards.py", "list_needs_decision"): "card needs (MCP, the queue)",
-    ("core/cards.py", "explain_card"): "explain_card (children, links, home)",
-    ("core/cards.py", "list_changes"): "the change log (row images)",
-    ("core/cards.py", "resolve_hobby_cover"): "a hobby's automatic cover (its cards)",
-    ("core/cards.py", "create"): "a new card's parent",
+    ("core/cards/families.py", "family_fields"): "families / members of a card",
+    ("core/cards/links.py", "list_links"): "a card's links (and its face's relationship lines)",
+    ("core/cards/reshape.py", "resolve_home"): "a card's home (a manual override may name any card)",
+    ("core/cards/needs.py", "list_needs_decision"): "card needs (MCP, the queue)",
+    ("core/cards/explain.py", "explain_card"): "explain_card (children, links, home)",
+    ("core/cards/history.py", "list_changes"): "the change log (row images)",
+    ("core/cards/faces.py", "resolve_hobby_cover"): "a hobby's automatic cover (its cards)",
+    ("core/cards/edit.py", "create"): "a new card's parent",
     ("core/curation_queue.py", "for_actor"): "the Curator queue (card / hobby groups, options)",
     ("core/decisions.py", "list_open"): "the decision queue (card questions, project_match candidates)",
     ("core/curator_needs.py", "list_needs"): "Curator nudges",
@@ -257,15 +257,15 @@ CORE_GUARDED = {
     # #749
     ("core/revisions.py", "mark_superseded"): "_require_items_visible",
     ("core/revisions.py", "remove_from_chain"): "_require_items_visible",
-    ("core/cards.py", "move_files"): "_transfer_files",
-    ("core/cards.py", "copy_files"): "_transfer_files",
-    ("core/cards.py", "split_card"): "viewable_rows",
-    ("core/cards.py", "merge_cards"): "_require_card_files_visible",
+    ("core/cards/reshape.py", "move_files"): "_transfer_files",
+    ("core/cards/reshape.py", "copy_files"): "_transfer_files",
+    ("core/cards/reshape.py", "split_card"): "viewable_rows",
+    ("core/cards/reshape.py", "merge_cards"): "_require_card_files_visible",
 }
 # How server.py names the core modules (for `items.delete(...)` -> core/items.py:delete).
 MODULE_FILES = {"items": "core/items.py", "tags_svc": "core/tags.py", "membership": "core/membership.py",
                 "captions": "core/captions.py", "curation_queue": "core/curation_queue.py",
-                "decisions": "core/decisions.py", "revisions": "core/revisions.py", "cards": "core/cards.py",
+                "decisions": "core/decisions.py", "revisions": "core/revisions.py", "cards": "core/cards/",
                 "hobbies": "core/hobbies.py", "blog": "core/blog.py", "reset": "core/reset.py",
                 "duplicates": "core/duplicates.py", "lookalikes": "core/lookalikes.py",
                 "provenance_rules": "core/provenance_rules.py", "correlations": "core/correlations.py"}
@@ -286,8 +286,8 @@ WRITE_404_KEPT = {
 }
 # #749 rule 7: (file, function) -> (the call its body must make, a string constant it must carry).
 CHANGE_LOG_GUARDS = {
-    ("core/cards.py", "list_changes"): ("_sharing.visible_change_rows", "withheld"),
-    ("core/cards.py", "undo"): ("_sharing.check_undo_allowed", None),
+    ("core/cards/history.py", "list_changes"): ("_sharing.visible_change_rows", "withheld"),
+    ("core/cards/history.py", "undo"): ("_sharing.check_undo_allowed", None),
     ("core/sharing.py", "visible_change_rows"): ("policy.change_row_visible", None),
     ("core/sharing.py", "check_undo_allowed"): ("policy.change_row_visible", None),
 }
@@ -410,7 +410,7 @@ MCP_TOOLS = {
     "constructicon_retype_links": (NONE, "card links"),
     "constructicon_list_links": (NONE, "alias"),
     "constructicon_list_needs_decision": (NONE, "alias (card needs)"),
-    # Card reshaping moves files by slug; since #749 core/cards.py checks the item policy on them
+    # Card reshaping moves files by slug; since #749 core/cards/reshape.py checks the item policy on them
     # (split / move / copy: every named file; merge: every file on the absorbed cards).
     "constructicon_split_card": (I, "cards and file slugs (cards.split_card checks every named file)"),
     "constructicon_merge_cards": (I, "cards and file slugs (cards.merge_cards checks the absorbed cards' files)"),
@@ -580,6 +580,19 @@ def main():
     return 0
 
 
+def _module_file(mod, attr):
+    """The file that defines `<mod>.<attr>`: MODULE_FILES[mod], or for a package (#547: core/cards/) the
+    submodule whose top level defines `attr` (the package re-exports every submodule's names)."""
+    rel = MODULE_FILES[mod]
+    if not rel.endswith("/"):
+        return rel
+    for path in sorted((ROOT / rel).glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == attr for n in tree.body):
+            return path.relative_to(ROOT).as_posix()
+    return rel
+
+
 def _mcp_walk(name, fns, tools, seen):
     """(item reads, gated) for server.py function `name` and the server helpers it calls (not into
     other tools or MCP_SHAPERS). Gated = it calls a POLICY_GATES function, a DOORS function, or a
@@ -594,7 +607,7 @@ def _mcp_walk(name, fns, tools, seen):
             continue
         f = n.func
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in MODULE_FILES:
-            key = (MODULE_FILES[f.value.id], f.attr)
+            key = (_module_file(f.value.id, f.attr), f.attr)
             gated |= key in DOORS or key in CORE_GUARDED
         elif isinstance(f, ast.Name) and f.id in fns:
             gated |= (MCP, f.id) in DOORS

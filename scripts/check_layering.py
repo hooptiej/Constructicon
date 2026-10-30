@@ -30,7 +30,7 @@ SERVICE_MODULES = {
     "core/items.py": "item fields, redact, retype, delete-to-trash, related links (phase B/C)",
     "core/membership.py": "files on/off a card (phase C)",
     "core/tags.py": "the tag tree, the one tag store: item tags, tag creation and management (phase C, #555)",
-    "core/cards.py": "V2 card ops, card create/update, undo (pieces 1-7, phase D)",
+    "core/cards/": "V2 card ops, card create/update, undo (pieces 1-7, phase D; a package since #547 step 2)",
     "core/hobbies.py": "hobbies: create, unmark, convert both ways (phase D)",
     "core/blog.py": "blog entries (phase D)",
     "core/decisions.py": "answering questions + the explicit stale sweep (phase D)",
@@ -181,6 +181,8 @@ def db_functions():
 
 def raw_reason(rel):
     if rel in SERVICE_MODULES:
+        return "service"
+    if any(k.endswith("/") and rel.startswith(k) for k in SERVICE_MODULES):  # a package (#547: core/cards/)
         return "service"
     if rel in RAW_ALLOWED:
         return RAW_ALLOWED[rel]

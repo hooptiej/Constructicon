@@ -1663,8 +1663,10 @@ The home page's timeline is a horizontal dial across the top (`static/js/radio-d
   arrow keys (Shift or PageUp/Down = a year, Home/End = the ends) slide it. One tick per card at its start,
   plus (pass 2) a start-to-end **span bar** for a card with a real end and a per-year **density glow**.
   **Browse only:** it never scrolls or filters the cards. Starts **untuned** (needle mid-range, the readout
-  shows static); once moved, the readout names the cards within a few px of the needle, with dates and
-  links, capped with "+N more". **Marks never grow or zoom** (the old rail's hover-zoom was a time sink).
+  shows static); once moved, the readout names the cards whose START is within a few px of the needle
+  (nearest first), then (owner, batch 14: "spans count") every other card whose start-to-end span covers
+  the needle (latest start first, its date shown as "start - end", class `radio-dial-station--span`),
+  with links, all in one list capped with "+N more" (`radio-dial-math.js` `cardsUnderNeedle`). **Marks never grow or zoom** (the old rail's hover-zoom was a time sink).
 - **Feel values** live in one place: `DIAL_DEFAULTS` in `radio-dial.js` (span, tolerance, inertia and its
   falloff (a steady brake so a coast eases to a stop), snap, tick density, outer glow, internal backlight,
   and pass 2's `span*` / `density*` values) plus the `--dial-*` CSS variables on `.radio-dial`
@@ -1684,8 +1686,8 @@ The home page's timeline is a horizontal dial across the top (`static/js/radio-d
   `--lane` / `--lvl`; height, gap, opacity, glow strength and spread are `--dial-span-*` /
   `--dial-density-*`). Defaults (first guesses, owner to tune): `spanMinPx` 3, `spanLanes` 3,
   `spanHeight` 3 px, `spanGap` 1 px, `spanOpacity` 0.55, `densityStrength` 0.35, `densityCurve` 0.6,
-  `densitySpread` 70 %, `densitySpans` 1. The readout still names cards by their START near the
-  needle (a bar under the needle doesn't name its card). Data: `timeline_projects` already carried
+  `densitySpread` 70 %, `densitySpans` 1. A span under the needle names its card in the readout (above).
+  Data: `timeline_projects` already carried
   `effective_end` (`cards.card_span`, group spans rolled up, #772).
 - **One colour scheme for both tuners (PR #782):** the `--tuner-*` variables on `:root` in `style.css`
   (chassis, border, outer glow, inner backlight, readout hue and its derived blue + glow, needle/axis

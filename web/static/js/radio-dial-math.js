@@ -159,6 +159,19 @@
       .map((d) => d.card);
   }
 
+  // What the readout names (owner, batch 14: "spans count"): first every card whose START is within
+  // `tolerancePx` of the needle, nearest first (cardsAtNeedle); then every other card whose
+  // start-to-end span covers the needle (start <= needle <= end, a real end after its start), most
+  // recently started first. -> { near: [...], spans: [...], all: near.concat(spans) }.
+  function cardsUnderNeedle(cards, needle, pps, tolerancePx) {
+    const near = cardsAtNeedle(cards, needle, pps, tolerancePx);
+    const listed = new Set(near);
+    const spans = cards
+      .filter((c) => !listed.has(c) && c.end !== null && c.end > c.start && c.start <= needle && needle <= c.end)
+      .sort((a, b) => b.start - a.start || a.title.localeCompare(b.title));
+    return { near, spans, all: near.concat(spans) };
+  }
+
   // The nearest card to the needle (any distance), or null: the snap target.
   function nearestCard(cards, needle) {
     let best = null, bestDist = Infinity;
@@ -196,6 +209,6 @@
   return {
     SECONDS_PER_YEAR, clamp, parseCards, range, pxPerSecond, bandX, bandOffset, needleAfterDrag,
     yearTicks, monthTicks, cardsAtNeedle, nearestCard, capList, needleLabel, keyStep,
-    spanBars, yearDensity, densityLevels,
+    spanBars, yearDensity, densityLevels, cardsUnderNeedle,
   };
 });

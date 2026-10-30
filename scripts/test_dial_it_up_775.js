@@ -86,5 +86,23 @@ eq('nothing at all = every level 0, no NaN', M.densityLevels([{ year: 1, count: 
 eq('a bad curve falls back to linear', M.densityLevels(withSpans, 0)[2].level, 0.75);
 eq('levels keep the year fields', Object.keys(lv[0]).sort(), ['count', 'end', 'level', 'start', 'year']);
 
+// --- cardsUnderNeedle: starts near the needle first, then spans covering it (owner: "spans count") ---
+// cards (start order): long 2000-01..2003-07, mid 2001-01..2002-01 (child), short 2001-03..03-05,
+// point 2001-06 (no end), same 2002-02 (start == end), late 2004-01..2008-06.
+const at = (e) => M.cardsUnderNeedle(cards, e, pps, 10);  // 10 px at 100 px/year = ~36 days
+const jun2001 = at(day(2001, 6, 1));
+eq('a start near the needle is listed first, then spans covering it (latest start first)',
+  [jun2001.near.map((c) => c.slug), jun2001.spans.map((c) => c.slug)], [['point'], ['mid', 'long']]);
+eq('all = near then spans', jun2001.all.map((c) => c.slug), ['point', 'mid', 'long']);
+const midSpan = at(day(2002, 9, 1));
+eq('between starts: only the span covering the needle', [midSpan.near.length, midSpan.spans.map((c) => c.slug)], [0, ['long']]);
+eq('a card whose start is near is not listed again as a span', at(day(2000, 1, 2)).all.map((c) => c.slug), ['long']);
+eq('a start-only card never counts as a span', at(day(2001, 9, 1)).all.map((c) => c.slug), ['mid', 'long']);
+eq('a start == end card never counts as a span', at(day(2002, 6, 1)).spans.map((c) => c.slug), ['long']);
+eq('span ends are inclusive', at(day(2003, 7, 1)).spans.map((c) => c.slug), ['long']);
+eq('past every span: nothing', at(day(2003, 10, 1)).all, []);
+eq('a late long span covers its later years', at(day(2007, 1, 1)).all.map((c) => c.slug), ['late']);
+eq('no cards: nothing', M.cardsUnderNeedle([], day(2001, 1, 1), pps, 10).all, []);
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exitCode = failed ? 1 : 0;

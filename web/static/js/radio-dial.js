@@ -245,7 +245,11 @@ class RadioDial {
       this.readout.innerHTML = '<span class="radio-dial-static">~ untuned ~ slide the dial to tune in</span>';
       return;
     }
-    const here = M.cardsAtNeedle(this.cards, this.needle, this.pps, this.tuning.tolerancePx);
+    // Batch 14 (owner: "spans count"): cards starting near the needle first, then cards whose span
+    // covers it (radio-dial-math cardsUnderNeedle), one list, capped with "+N more".
+    const under = M.cardsUnderNeedle(this.cards, this.needle, this.pps, this.tuning.tolerancePx);
+    const here = under.all;
+    const spanning = new Set(under.spans);
     const label = M.needleLabel(this.needle);
     const key = label + '|' + here.map((c) => c.slug).join(',');
     if (key === this._readoutKey) return;
@@ -268,12 +272,13 @@ class RadioDial {
     shown.forEach((c) => {
       const li = document.createElement('li');
       const a = document.createElement('a');
-      a.className = 'radio-dial-station';
+      a.className = spanning.has(c) ? 'radio-dial-station radio-dial-station--span' : 'radio-dial-station';
       a.href = `/project/${encodeURIComponent(c.slug)}`;
       a.textContent = c.title;
       const d = document.createElement('span');
       d.className = 'radio-dial-station-date';
-      d.textContent = this.formatDate(c.start);
+      // A card listed because its span covers the needle shows its range ("start - end").
+      d.textContent = spanning.has(c) ? `${this.formatDate(c.start)} - ${this.formatDate(c.end)}` : this.formatDate(c.start);
       li.append(a, d);
       list.appendChild(li);
     });

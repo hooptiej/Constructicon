@@ -275,6 +275,26 @@ ok('pass 2: the bar and glow looks go to the --dial-* variables on .radio-dial, 
 ok('pass 2: every span / density value has a slider', ['spanMinPx', 'spanLanes', 'spanHeight', 'spanGap', 'spanOpacity',
   'densityStrength', 'densityCurve', 'densitySpread', 'densitySpans'].every((k) => RadioDial.TUNABLES.some((t) => t.key === k) && k in RadioDial.DEFAULTS));
 ok('pass 2: every CSS-variable value is a default', Object.keys(RadioDial.CSS_VARS).every((k) => k in RadioDial.DEFAULTS));
+// Owner (batch 14): "spans count": the readout lists starts near the needle, then spans covering it.
+const ro = mount(SPANS).dial;
+ro.setTuning({ visibleYears: 10, minPxPerYear: 64, tolerancePx: 10, snapStrength: 0 });
+ro._setNeedle(day(2001, 6, 1));
+const roNames = ro.readout.qa('radio-dial-station').map((a) => a.textContent);
+ok('readout: the card starting at the needle first, then the spans covering it',
+  JSON.stringify(roNames) === JSON.stringify(['Start only', 'Overlapping part', 'Long build']), roNames);
+ok('readout: a spanning card is marked and shows its range',
+  ro.readout.qa('radio-dial-station--span').length === 2 && / - /.test(ro.readout.qa('radio-dial-station-date')[1].textContent),
+  ro.readout.qa('radio-dial-station-date').map((d) => d.textContent));
+ok('readout: a card listed for its start shows just its start date', !/ - /.test(ro.readout.qa('radio-dial-station-date')[0].textContent));
+ro._setNeedle(day(2002, 9, 1));
+ok('readout: between starts, a covering span is named instead of "no cards here"',
+  /Long build/.test(ro.readout.textContent) && !/no cards here/.test(ro.readout.textContent), ro.readout.textContent);
+ro.setTuning({ readoutMax: 1 });
+ro._setNeedle(day(2001, 6, 1));
+ok('readout: spans count toward the "+N more" cap', ro.readout.qa('radio-dial-station').length === 1
+  && ro.readout.qa('radio-dial-more')[0].textContent === '+2 more', ro.readout.textContent);
+ro._setNeedle(day(2003, 10, 1));
+ok('readout: past every span, still "no cards here"', /no cards here/.test(ro.readout.textContent));
 const marks = sp.spansLayer.innerHTML + sp.densityLayer.innerHTML;
 ok('pass 2: marks never grow or zoom (no scale / zoom / transform in the bars or glow)', !/scale|zoom|transform/.test(marks));
 

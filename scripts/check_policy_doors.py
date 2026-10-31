@@ -55,6 +55,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# #547 step 3: the MCP server is a package (mcp_server/server.py is only its entry point; the tools live in
+# mcp_server/tools/, the helpers beside them). It is read as ONE tree, as the one server.py was: every
+# .py under mcp_server/ except auth.py (the bearer-token middleware, no tools or doors). Keys below name
+# it MCP; a failure names the real file and line.
+MCP = "mcp_server/"
 
 # (file, function) -> what it serves. Each must call policy.* itself.
 DOORS = {
@@ -81,21 +86,21 @@ DOORS = {
     ("web/routes/files.py", "api_list_wallpapers"): "GET /api/wallpapers",
     ("web/routes/hobbies.py", "api_get_hobby"): "GET /api/hobby/{id_or_slug} (its items)",
     ("web/shapes.py", "_to_blog_entry_detail"): "GET /api/blog-entries/{slug} items",
-    ("mcp_server/server.py", "constructicon_get"): "MCP get (and its include=related / revisions)",
-    ("mcp_server/server.py", "constructicon_download"): "MCP download",
-    ("mcp_server/server.py", "constructicon_search"): "MCP search",
-    ("mcp_server/server.py", "constructicon_get_project"): "MCP get_project (items, cover, write-up)",
-    ("mcp_server/server.py", "_viewable_item"): "MCP one-item reads (the get_related / list_revisions aliases)",
-    ("mcp_server/server.py", "_related_listed"): "MCP get(include=related), related, the related aliases",
-    ("mcp_server/server.py", "_paged"): "MCP list_items(which=tag | unfiled), get_posts_for_tag (#722: one SQL page)",
-    ("mcp_server/server.py", "_similar"): "MCP list_items(which=similar) (#556)",
-    ("mcp_server/server.py", "_to_public_blog_entry"): "MCP get/list blog entry items",
-    ("mcp_server/server.py", "_list_brand_assets"): "MCP list_items(which=brand_assets), list_brand_assets",
-    ("mcp_server/server.py", "constructicon_card_files"): "MCP card_files (add/remove: every slug visible)",
-    ("mcp_server/server.py", "constructicon_item_tags"): "MCP item_tags (detach)",
-    ("mcp_server/server.py", "constructicon_set_caption"): "MCP set_caption",
-    ("mcp_server/server.py", "constructicon_run_type_action"): "MCP run_type_action (#746: was ungated)",
-    ("mcp_server/server.py", "_retry_ocr"): "MCP run_type_action(retry_ocr), retry_ocr (#746: was ungated)",
+    (MCP, "constructicon_get"): "MCP get (and its include=related / revisions)",
+    (MCP, "constructicon_download"): "MCP download",
+    (MCP, "constructicon_search"): "MCP search",
+    (MCP, "constructicon_get_project"): "MCP get_project (items, cover, write-up)",
+    (MCP, "_viewable_item"): "MCP one-item reads (the get_related / list_revisions aliases)",
+    (MCP, "_related_listed"): "MCP get(include=related), related, the related aliases",
+    (MCP, "_paged"): "MCP list_items(which=tag | unfiled), get_posts_for_tag (#722: one SQL page)",
+    (MCP, "_similar"): "MCP list_items(which=similar) (#556)",
+    (MCP, "_to_public_blog_entry"): "MCP get/list blog entry items",
+    (MCP, "_list_brand_assets"): "MCP list_items(which=brand_assets), list_brand_assets",
+    (MCP, "constructicon_card_files"): "MCP card_files (add/remove: every slug visible)",
+    (MCP, "constructicon_item_tags"): "MCP item_tags (detach)",
+    (MCP, "constructicon_set_caption"): "MCP set_caption",
+    (MCP, "constructicon_run_type_action"): "MCP run_type_action (#746: was ungated)",
+    (MCP, "_retry_ocr"): "MCP run_type_action(retry_ocr), retry_ocr (#746: was ungated)",
     ("core/site_export.py", "build_site"): "static site export",
     ("core/project_export.py", "export_project"): "project zip export",
     ("core/wallpapers.py", "plan"): "#780 the wallpaper zip + its summary (GET /api/wallpapers/download.zip, download-summary)",
@@ -106,7 +111,7 @@ DOORS = {
     ("core/captions.py", "accept"): "POST /api/captions/{slug}/accept, MCP caption_review(accept) (#556)",
     ("core/captions.py", "skip"): "POST /api/captions/{slug}/skip, MCP caption_review(skip) (#556)",
     ("web/routes/items.py", "api_access_log"): "GET /api/image/{slug}/access-log (admin)",
-    ("mcp_server/server.py", "constructicon_view"): "MCP view",
+    (MCP, "constructicon_view"): "MCP view",
     ("core/captions.py", "needs_caption"): "MCP list_needs_caption (never a sensitive item)",
     ("core/curation_queue.py", "for_actor"): "the Curator queue (shared cache, filtered per actor)",
     ("core/decisions.py", "list_open"): "the decision queue",
@@ -133,11 +138,11 @@ DOORS = {
     ("core/membership.py", "remove_files"): "membership.remove_files (web + MCP remove_from_project)",
     ("core/tags.py", "_get_item"): "tags.attach / detach / set_item_tags (MCP attach_tags / detach_tag)",
     ("core/tags.py", "merge_item_tags"): "tags.merge_item_tags (bulk attach-tags)",
-    ("mcp_server/server.py", "_relate"): "MCP related(add), add_related",
-    ("mcp_server/server.py", "_add_to_project"): "MCP add_to_project",
-    ("mcp_server/server.py", "_remove_from_project"): "MCP remove_from_project",
-    ("mcp_server/server.py", "_detach_tag"): "MCP detach_tag",
-    ("mcp_server/server.py", "_set_writeup"): "MCP update_project(fields.writeup_slug), set_project_writeup",
+    (MCP, "_relate"): "MCP related(add), add_related",
+    (MCP, "_add_to_project"): "MCP add_to_project",
+    (MCP, "_remove_from_project"): "MCP remove_from_project",
+    (MCP, "_detach_tag"): "MCP detach_tag",
+    (MCP, "_set_writeup"): "MCP update_project(fields.writeup_slug), set_project_writeup",
     # #749: the item-policy gaps the #746 consolidation found (each refuses a hidden item, 403 saying why).
     ("core/revisions.py", "_require_items_visible"): "revision chains: supersede / remove (web, MCP revision, the queue's answer)",
     ("core/revisions.py", "remove_from_chain"): "revisions.remove_from_chain (a hidden neighbour refuses too)",
@@ -187,14 +192,14 @@ CARD_DOORS = {
     ("core/correlations.py", "_plan"): "#344 related-project suggestions: a pair with a card the actor can't see is left out",
     ("core/site_export.py", "build_site"): "the static site export (nothing private is published)",
     ("core/project_export.py", "export_project"): "the project zip",
-    ("mcp_server/server.py", "constructicon_list_projects"): "MCP list_projects",
-    ("mcp_server/server.py", "constructicon_get_project"): "MCP get_project",
-    ("mcp_server/server.py", "constructicon_list_hobbies"): "MCP list_hobbies",
-    ("mcp_server/server.py", "constructicon_list_tags"): "MCP list_tags",
-    ("mcp_server/server.py", "constructicon_update_project"): "MCP update_project",
-    ("mcp_server/server.py", "constructicon_card_files"): "MCP card_files",
-    ("mcp_server/server.py", "constructicon_add_project_to_hobby"): "MCP add_project_to_hobby (alias)",
-    ("mcp_server/server.py", "_to_public_blog_entry"): "MCP blog entry cards",
+    (MCP, "constructicon_list_projects"): "MCP list_projects",
+    (MCP, "constructicon_get_project"): "MCP get_project",
+    (MCP, "constructicon_list_hobbies"): "MCP list_hobbies",
+    (MCP, "constructicon_list_tags"): "MCP list_tags",
+    (MCP, "constructicon_update_project"): "MCP update_project",
+    (MCP, "constructicon_card_files"): "MCP card_files",
+    (MCP, "constructicon_add_project_to_hobby"): "MCP add_project_to_hobby (alias)",
+    (MCP, "_to_public_blog_entry"): "MCP blog entry cards",
 }
 CARD_GATES = {"can_view_card", "can_view_hobby", "require_card_view", "filter_visible_cards", "filter_visible_hobbies",
               "card_access", "access_scope", "outsider_access", "filter_tag_tree", "hidden_tag_ids"}
@@ -209,9 +214,9 @@ ACCESS_LOGGED = {
     ("web/routes/files.py", "get_file"): "/f/{slug}",
     ("web/routes/files.py", "get_thumbnail"): "/f/{slug}/thumb",
     ("web/routes/files.py", "get_raw_file"): "/f/{slug}/raw (#703)",
-    ("mcp_server/server.py", "constructicon_get"): "MCP get",
-    ("mcp_server/server.py", "constructicon_download"): "MCP download",
-    ("mcp_server/server.py", "constructicon_view"): "MCP view",
+    (MCP, "constructicon_get"): "MCP get",
+    (MCP, "constructicon_download"): "MCP download",
+    (MCP, "constructicon_view"): "MCP view",
 }
 
 # db reads that hand out item rows.
@@ -232,7 +237,7 @@ NET_FILES = ["web/routes/pages.py", "web/routes/items.py", "web/routes/files.py"
              "web/routes/meta.py"]
 
 # --- #746: rule 4, every MCP tool ---------------------------------------------------------------------
-MCP = "mcp_server/server.py"
+# (MCP itself is defined above DOORS, which names the server's functions.)
 # Core service ops that guard themselves through a door: (file, op) -> the door function its body
 # must call (checked). A tool reaching one of these counts as gated.
 CORE_GUARDED = {
@@ -262,7 +267,7 @@ CORE_GUARDED = {
     ("core/cards/reshape.py", "split_card"): "viewable_rows",
     ("core/cards/reshape.py", "merge_cards"): "_require_card_files_visible",
 }
-# How server.py names the core modules (for `items.delete(...)` -> core/items.py:delete).
+# How the MCP server names the core modules (for `items.delete(...)` -> core/items.py:delete).
 MODULE_FILES = {"items": "core/items.py", "tags_svc": "core/tags.py", "membership": "core/membership.py",
                 "captions": "core/captions.py", "curation_queue": "core/curation_queue.py",
                 "decisions": "core/decisions.py", "revisions": "core/revisions.py", "cards": "core/cards/",
@@ -486,13 +491,38 @@ def _is_mcp_tool(fn):
                for d in fn.decorator_list)
 
 
+def _mcp_tree():
+    """#547 step 3: the MCP package's files as one module (their top-level statements; the checks look
+    functions up by name, so file order doesn't matter), each node marked with its file for the messages
+    (_at). Refuses a function name defined in two files (a lookup by name would pick one)."""
+    body = []
+    for path in sorted((ROOT / MCP).rglob("*.py")):
+        if (path.name == "auth.py" and path.parent == ROOT / MCP) or "__pycache__" in path.parts:
+            continue
+        t = ast.parse(path.read_text(encoding="utf-8"))
+        rel = path.relative_to(ROOT).as_posix()
+        for node in ast.walk(t):
+            node._file = rel
+        body += t.body
+    names = [n.name for n in body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    twice = sorted({n for n in names if names.count(n) > 1})
+    if twice:
+        sys.exit(f"check_policy_doors: {MCP} defines {twice} in more than one file; each name must live in one (#547)")
+    return ast.Module(body=body, type_ignores=[])
+
+
+def _at(rel, node):
+    """`file:line` for a failure: the node's own file (an MCP package node knows it), else `rel`."""
+    return f"{getattr(node, '_file', rel)}:{node.lineno}"
+
+
 def main():
     failures = []
     trees = {}
 
     def tree(rel):
         if rel not in trees:
-            trees[rel] = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
+            trees[rel] = _mcp_tree() if rel == MCP else ast.parse((ROOT / rel).read_text(encoding="utf-8"))
         return trees[rel]
 
     # 1. known doors
@@ -501,7 +531,7 @@ def main():
         if fn is None:
             failures.append(f"{rel}:{name} ({what}): door not found (renamed? update DOORS)")
         elif not _calls_policy(fn):
-            failures.append(f"{rel}:{fn.lineno} {name} ({what}): doesn't call core/policy.py")
+            failures.append(f"{_at(rel, fn)} {name} ({what}): doesn't call core/policy.py")
 
     # 1b. #604 follow-up 7: the single-item doors log a sensitive item's access
     for (rel, name), what in ACCESS_LOGGED.items():
@@ -510,7 +540,7 @@ def main():
             failures.append(f"{rel}:{name} ({what}): access-logged door not found (renamed? update ACCESS_LOGGED)")
         elif not any(isinstance(n, ast.Attribute) and n.attr == "note_access" and isinstance(n.value, ast.Name)
                      and n.value.id == "policy" for n in ast.walk(fn)):
-            failures.append(f"{rel}:{fn.lineno} {name} ({what}): doesn't record sensitive access (policy.note_access)")
+            failures.append(f"{_at(rel, fn)} {name} ({what}): doesn't record sensitive access (policy.note_access)")
 
     # 5. #604 step 3: card / hobby doors ask the card policy
     for (rel, name), what in CARD_DOORS.items():
@@ -518,7 +548,7 @@ def main():
         if fn is None:
             failures.append(f"{rel}:{name} ({what}): card door not found (renamed? update CARD_DOORS)")
         elif not _calls_card_policy(fn):
-            failures.append(f"{rel}:{fn.lineno} {name} ({what}): doesn't ask the card policy "
+            failures.append(f"{_at(rel, fn)} {name} ({what}): doesn't ask the card policy "
                             f"(policy.{'/'.join(sorted(CARD_GATES))[:60]}..., or cards.get_card / get_hobby)")
     rel, name, gate = WRITE_GUARD
     fn = _functions(tree(rel)).get(name)
@@ -540,7 +570,7 @@ def main():
             if (rel, name) in EXEMPT or (rel, name) in DOORS:
                 continue
             if not _calls_policy(fn):
-                failures.append(f"{rel}:{fn.lineno} {name}: reads items ({', '.join(sorted(reads))}) without "
+                failures.append(f"{_at(rel, fn)} {name}: reads items ({', '.join(sorted(reads))}) without "
                                 "calling core/policy.py (add the policy call, or EXEMPT it here with a reason)")
     for key in EXEMPT:
         if key not in netted_names:
@@ -594,7 +624,7 @@ def _module_file(mod, attr):
 
 
 def _mcp_walk(name, fns, tools, seen):
-    """(item reads, gated) for server.py function `name` and the server helpers it calls (not into
+    """(item reads, gated) for MCP server function `name` and the server helpers it calls (not into
     other tools or MCP_SHAPERS). Gated = it calls a POLICY_GATES function, a DOORS function, or a
     CORE_GUARDED op."""
     fn = fns[name]
@@ -620,7 +650,7 @@ def _mcp_walk(name, fns, tools, seen):
 
 
 def _mcp_roles(tree):
-    """{tool: [roles of its ACTION_ROLES rows]} and {alias: (tool, action)}, read from server.py."""
+    """{tool: [roles of its ACTION_ROLES rows]} and {alias: (tool, action)}, read from the MCP server."""
     rows, aliases, names = {}, {}, {"V": "viewer", "E": "editor", "A": "admin"}
     for n in ast.walk(tree):
         if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "ACTION_ROLES" for t in n.targets):
@@ -641,7 +671,7 @@ def _check_mcp_tools(tree, failures):
     fns = {n.name: n for n in ast.walk(t) if isinstance(n, ast.FunctionDef)}
     tools = {name for name, fn in fns.items() if _is_mcp_tool(fn)}
     for name in sorted(tools - set(MCP_TOOLS)):
-        failures.append(f"{MCP}:{fns[name].lineno} {name}: an MCP tool not in MCP_TOOLS (classify it: opens / "
+        failures.append(f"{_at(MCP, fns[name])} {name}: an MCP tool not in MCP_TOOLS (classify it: opens / "
                         "items / admin / new / none, with what it hands out)")
     for name in sorted(set(MCP_TOOLS) - tools):
         failures.append(f"{MCP}:{name}: stale MCP_TOOLS entry (no such tool); remove it")
@@ -657,7 +687,7 @@ def _check_mcp_tools(tree, failures):
         kind, why = MCP_TOOLS[name]
         counts[kind] = counts.get(kind, 0) + 1
         reads, gated = _mcp_walk(name, fns, tools, {name})
-        where = f"{MCP}:{fns[name].lineno} {name} ({kind}: {why})"
+        where = f"{_at(MCP, fns[name])} {name} ({kind}: {why})"
         if kind in ("opens", "items") and not gated:
             failures.append(f"{where}: reaches no item-policy gate, door or guarded core op")
         if kind == "opens" and not any(isinstance(n, ast.Attribute) and n.attr == "note_access" for n in ast.walk(fns[name])):
@@ -687,9 +717,9 @@ def _check_change_log(tree, failures):
         mod, attr = call.split(".")
         if not any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == attr
                    and isinstance(c.func.value, ast.Name) and c.func.value.id == mod for c in ast.walk(fn)):
-            failures.append(f"{rel}:{fn.lineno} {name}: doesn't call {call}() (the change log's item policy, #749)")
+            failures.append(f"{_at(rel, fn)} {name}: doesn't call {call}() (the change log's item policy, #749)")
         if word and not any(isinstance(c, ast.Constant) and c.value == word for c in ast.walk(fn)):
-            failures.append(f"{rel}:{fn.lineno} {name}: doesn't report {word!r} (never drop rows silently, #749)")
+            failures.append(f"{_at(rel, fn)} {name}: doesn't report {word!r} (never drop rows silently, #749)")
 
 
 def _route_paths(fn, methods=("post", "put", "delete", "patch")):
@@ -716,7 +746,7 @@ def _check_single_writes(tree, failures):
             core = {(n.func.value.id, n.func.attr) for n in ast.walk(fn) if isinstance(n, ast.Call)
                     and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)}
             if "viewable_item" in attrs:
-                failures.append(f"{rel}:{fn.lineno} {name} ({paths[0]}): a write route calls policy.viewable_item "
+                failures.append(f"{_at(rel, fn)} {name} ({paths[0]}): a write route calls policy.viewable_item "
                                 "(404 for a hidden item); use policy.writable_item, which says why (#730)")
             if not any(p.startswith(SINGLE_WRITE_PATHS) for p in paths):
                 continue
@@ -725,7 +755,7 @@ def _check_single_writes(tree, failures):
                 kept_seen.add((rel, name))
                 continue
             if not ({"writable_item", "writable_items"} & attrs or core & WRITABLE_CORE):
-                failures.append(f"{rel}:{fn.lineno} {name} ({paths[0]}): a single-item write route that doesn't call "
+                failures.append(f"{_at(rel, fn)} {name} ({paths[0]}): a single-item write route that doesn't call "
                                 "policy.writable_item(s) (#730: 404 when missing, 403 saying why when hidden)")
     for key in sorted(set(WRITE_404_KEPT) - kept_seen):
         failures.append(f"{key[0]}:{key[1]}: stale WRITE_404_KEPT entry (no such single-item write route)")

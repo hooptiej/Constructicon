@@ -1,0 +1,4452 @@
+{
+ "_about": "#547 step 3: the MCP surface before mcp_server/server.py split into modules, written from the pre-split server. scripts/test_mcp_tools_package_547.py compares the live server with it: tools = tools/list in order (each Tool as the SDK dumps it), registered = every registration in order (hidden aliases included), action_roles = ACTION_ROLES in order, names = every name the old module had with its kind. Rewrite it only when the surface changes on purpose.",
+ "tools": [
+  {
+   "name": "constructicon_version",
+   "description": "Which build is running: {version, commit, deployed_at, env}. CalVer YYYY.M.D (.N for a\nsecond release that day), \"-dev\" on a test instance; \"dev\" = no version file.",
+   "inputSchema": {
+    "properties": {},
+    "title": "constructicon_versionArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_upload",
+   "description": "Upload a file (base64) as a new item. Returns the item, with its hotlink url.\n\nfilename: its extension decides the type (.png .pdf .stl .psd .svg .mp3 ...).\ntags: tag names to attach. description: the uploader's note.\nuploaded_by: a free-text Source NOTE (default \"Claude — authored\"), never who uploaded it: the\n  uploader is the token's user (the install token = admin-owned). For migrated content pass\n  \"Claude — migrated from <source>\" (sets channel \"migration:<source>\").\nsource_modified_at: the file's own mtime (unix seconds). When filename, size and this match an\n  existing item, that item comes back with \"duplicate\": true instead.\nsensitive: lock it from the start (admins only).\nOCR runs in the background (ocr_status \"pending\"; read extracted_text later with\nconstructicon_get). An audio file's own tags fill its title and type_metadata at once.\nFor big files use constructicon_import.",
+   "inputSchema": {
+    "properties": {
+     "filename": {
+      "title": "Filename",
+      "type": "string"
+     },
+     "content_base64": {
+      "title": "Content Base64",
+      "type": "string"
+     },
+     "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+     },
+     "tags": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Tags"
+     },
+     "uploaded_by": {
+      "default": "Claude — authored",
+      "title": "Uploaded By",
+      "type": "string"
+     },
+     "source_modified_at": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Source Modified At"
+     },
+     "sensitive": {
+      "default": false,
+      "title": "Sensitive",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "filename",
+     "content_base64"
+    ],
+    "title": "constructicon_uploadArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_replace_file",
+   "description": "Replace an item's file bytes and KEEP the item: same slug and links, cards, tags, title,\ncaptions, relations and revision chain. Use it to revise a file in place.\n\ncontent_base64: the new bytes, standard base64 (no data: prefix). One MCP message, so at most\n  the upload cap (constructicon_list_import's max_upload_mb); over it: file_too_large, nothing\n  decoded. For a bigger file, constructicon_import it and use\n  constructicon_revision(old, action=\"supersede\", new=...).\nfilename: the NEW file's name (decides the type check); omit to keep the item's name. A new\n  extension keeps the stem and swaps the extension.\nRe-processed like an upload (thumbnail, text/OCR in the background, hash, captions, search).\nThe old bytes go to the trash for 7 days; undo restores file, size and name.\nReturns the item plus {replaced, batch_id, previous_size, new_size, trash_days, expires_at}.\nErrors: replace_redacted, no_file, bad_base64, empty_file, file_too_large, unsupported_type,\ncontent_mismatch, replace_type_mismatch (another type: upload a new item and supersede),\nreplace_needs_decision, replace_rejected, file_unchanged.",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "content_base64": {
+      "title": "Content Base64",
+      "type": "string"
+     },
+     "filename": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Filename"
+     }
+    },
+    "required": [
+     "slug",
+     "content_base64"
+    ],
+    "title": "constructicon_replace_fileArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_search",
+   "description": "Search items by name (title, any filename it has had), tags, card titles, note or extracted\ntext. Each word matches the START of a word (\"tun\" finds \"Tuning\"; a run-together filename is\nsplit too, so \"camino\" finds \"ElCamino.jpeg\"); all words are required; best match first. When\nnothing matches that way, the words run together are looked for INSIDE filenames (\"el camino\"\nfinds \"Elcamino4.jpeg\"); each result's `matched` says which: \"word_start\" or \"inside_filename\"\n(null with no query). query and tags together: both must match.\ntags (any of them, any case) filters on the tag tree: an item carrying one of these tags, or any\ntag under one (a card's own tag counts). Redacted items are left out\n(constructicon_list_items(which=\"redacted\")). The text preview is centred on the first query\nword found. Older revisions are found too, marked superseded_by.",
+   "inputSchema": {
+    "properties": {
+     "query": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Query"
+     },
+     "tags": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Tags"
+     },
+     "text_chars": {
+      "default": 300,
+      "title": "Text Chars",
+      "type": "integer"
+     }
+    },
+    "title": "constructicon_searchArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_get",
+   "description": "One item by slug: metadata, hotlink url, its WHOLE extracted_text and type_metadata, and\n`superseded_by` / `rev` (its place in a revision chain).\nReading a long text by the page: text_chars=N (1..50000) returns only extracted_text[text_offset\n: text_offset+N] (text_offset alone = from there to the end, at most 50000), plus\nextracted_text_chars (the whole length), text_offset, extracted_text_truncated, next_offset\n(where the next page starts; null at the end) and timestamp_seconds / timestamp_url (for a YouTube\nvideo whose transcript has cue times: the moment that position is said, a &t= link; else null).\nA windowed read also trims big type_metadata values (type_metadata_truncated) as list results do.\nE.g. constructicon_get(slug, text_chars=20000), then text_offset=next_offset.\ninclude adds, on request: \"related\" -> `related`, the items linked to it (listed shape);\n\"revisions\" -> `revisions`, its chain {in_chain, chain: [{slug, title, filename, rev,\nis_current, is_this, redacted}], current, superseded, rev, of}; \"agent_notes\" ->\n`agent_notes`, the private notes from constructicon_set_agent_notes.\nE.g. constructicon_get(slug, include=[\"related\"]).",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "include": {
+      "anyOf": [
+       {
+        "items": {
+         "enum": [
+          "related",
+          "revisions",
+          "agent_notes"
+         ],
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Include"
+     },
+     "text_offset": {
+      "default": 0,
+      "title": "Text Offset",
+      "type": "integer"
+     },
+     "text_chars": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Text Chars"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "constructicon_getArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_download",
+   "description": "An item's file bytes, base64, with filename and media_type. Over ~25 MB: metadata and the\nhotlink url instead (content_base64 null); fetch the url.\nErrors: no_file (a link or other file-less item), file_missing (gone from disk).",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "constructicon_downloadArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_import",
+   "description": "Import a file from the server's import inbox (for files too big to send base64, up to the\nupload limit). path is relative to the inbox, e.g. \"drawings/set-A.pdf\"; nothing outside it.\nThe file is COPIED (it stays in the inbox) and named by its basename. source_modified_at\ndefaults to its mtime, so re-importing an unchanged file returns the existing item with\nduplicate: true. Otherwise as constructicon_upload. Error: import_unavailable (no inbox).",
+   "inputSchema": {
+    "properties": {
+     "path": {
+      "title": "Path",
+      "type": "string"
+     },
+     "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+     },
+     "tags": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Tags"
+     },
+     "uploaded_by": {
+      "default": "Claude — authored",
+      "title": "Uploaded By",
+      "type": "string"
+     },
+     "source_modified_at": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Source Modified At"
+     },
+     "sensitive": {
+      "default": false,
+      "title": "Sensitive",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "title": "constructicon_importArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_list_import",
+   "description": "The files waiting in the import inbox (recursive, hidden ones skipped), sorted by path:\n{inbox, max_upload_mb, files: [{path, size_bytes, modified_at, supported}], truncated?}\n(at most 1000 files). Error: import_unavailable.",
+   "inputSchema": {
+    "properties": {},
+    "title": "constructicon_list_importArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_update",
+   "description": "Edit an item, every change in ONE batch. Parameters left out (None) are left alone.\ndescription: the uploader's note. content_description: the item's long caption/description (\"\" clears).\ndisplay_name: its title override. short_title: its short name, a few words (\"\" clears); the title\nis display_name, else short_title, else the filename. tags: the item's full tag list (replaces its chips in the tag tree).\ntype_metadata: MERGED by top-level key; a key set to \"\" is cleared.\ndisplay_date: timeline position override (unix seconds); reset_display_date=true clears it.\nfields: more fields, key present = set it, absent = leave it:\n  provenance: an active file key (constructicon_list_provenance_options(scope=\"file\")) or null;\n  content_date: the content's own date, ISO or unix seconds, null clears;\n  highlight: bool; is_brand_asset: bool; brand_role: \"logo\"/\"icon\"/... or null;\n  sensitive: bool (marking: editor+; clearing: admin);\n  transcript_vtt: a YouTube video's subtitles as WebVTT or SRT text (e.g. from yt-dlp): becomes its\n    transcript (searchable) WITH cue times, so constructicon_get / search can cite a &t= moment.\nE.g. fields={\"provenance\": \"created\", \"highlight\": true, \"content_date\": \"2017-07-31\"}.\ndry_run=true returns the item as it would be, writing nothing.\nReturns the item plus batch_id. Private notes: constructicon_set_agent_notes.",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Description"
+     },
+     "tags": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Tags"
+     },
+     "display_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Display Name"
+     },
+     "type_metadata": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Type Metadata"
+     },
+     "display_date": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Display Date"
+     },
+     "reset_display_date": {
+      "default": false,
+      "title": "Reset Display Date",
+      "type": "boolean"
+     },
+     "content_description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Content Description"
+     },
+     "fields": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Fields"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "short_title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Short Title"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "constructicon_updateArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_view",
+   "description": "Look at an item: its picture as IMAGE content you can see, plus a text block (name, type,\ndescription, suggested caption, OCR text). size=\"preview\" (default): up to 1024 px;\n\"thumb\": the 400 px thumbnail. Other types show through their renderer (a PDF's first page, an\nSTL render, a video frame). Errors: bad_size, not_viewable (redacted, or no picture).",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "size": {
+      "default": "preview",
+      "title": "Size",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "constructicon_viewArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_set_caption",
+   "description": "Write a caption and/or a short title for an item you have looked at (constructicon_view). No model runs.\ntext: the long caption (1-2000 characters), the item's caption SUGGESTION (model \"mcp-agent\").\ntitle: a short title of a few words (at most 100 characters), the item's NAME on tiles; the long\ncaption is never the title, so give one with every caption. Both wait in the owner's caption\nreview; accept=true also sets content_description to the text and short_title to the title.\nNever overwrites silently: replacing a suggestion, description or short title that the local\nmodel did not write (yours, another agent's, the owner's) is refused with would_replace_suggestion\n(details.existing has each text that would go). Read it; pass replace=true only to replace it.\nE.g. set_caption(slug, text=\"Kendall's buggy airborne off the berm, dust trailing.\",\ntitle=\"Kendall's 8IGHT-T carving the berm\", accept=true).\nErrors: bad_caption, bad_title, redacted, would_replace_suggestion.\nReturns the item plus batch_id, accepted, replaced_suggestion (the suggestion text this call\nreplaced, or null), replaced (every replaced text, by field) and in_review_queue.",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "text": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Text"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "accept": {
+      "default": false,
+      "title": "Accept",
+      "type": "boolean"
+     },
+     "replace": {
+      "default": false,
+      "title": "Replace",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "constructicon_set_captionArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_caption_review",
+   "description": "The owner's caption review queue (the web's Captions review page), and its buttons:\n\"list\": items whose caption or short-title suggestion waits for review, PAGED, newest first:\n  {items: [{slug, name, kind (\"caption\" | \"title\": only a title waits), caption, caption_chars,\n  caption_truncated, caption_by, description, description_chars, description_truncated, title,\n  title_by, thumb_url, detail_url}], next_cursor, more, limit}. limit 1..500 (default 50); pass\n  next_cursor back as cursor= (null = the end). caption / description are ~300-character previews;\n  read a whole suggestion with constructicon_get(slug) (type_metadata.auto_caption).\n\"accept\" (slug): the suggestion becomes the description and short title, one undoable batch;\n  text= / title= accept your edited wording instead. Text a local model didn't write is not\n  replaced silently: would_replace_suggestion unless replace=true. -> {item, batch_id,\n  replaced_suggestion, replaced}.\n\"skip\" (slug): reviewed, not used; it leaves the queue. what= all (default) | caption | title.\n  -> {item, batch_id}.\n\"retry\" (slug): run the local caption model on it again (queued; type_metadata.auto_caption_status\n  goes \"pending\"); advance=true tries the next prompt for variety. captions_disabled (409) on an\n  install with no caption model: look at it (constructicon_view) and constructicon_set_caption.\n  -> {item}.\nE.g. constructicon_caption_review(action=\"accept\", slug=\"abc123\").",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "list",
+      "enum": [
+       "list",
+       "accept",
+       "retry",
+       "skip"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Slug"
+     },
+     "text": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Text"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "replace": {
+      "default": false,
+      "title": "Replace",
+      "type": "boolean"
+     },
+     "what": {
+      "default": "all",
+      "enum": [
+       "all",
+       "caption",
+       "title"
+      ],
+      "title": "What",
+      "type": "string"
+     },
+     "advance": {
+      "default": false,
+      "title": "Advance",
+      "type": "boolean"
+     },
+     "limit": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Limit"
+     },
+     "cursor": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cursor"
+     }
+    },
+    "title": "constructicon_caption_reviewArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_undated",
+   "description": "Items with no REAL date (the upload time and a file mtime from after the install's first upload\nare not dates), with date guesses, so you can date them.\n\"list\" (default): {items, total, needs_date}. Each item: slug, name, type, filename, imported,\n  shows (what its card says: \"Undated\" or \"≈ <range> · from <card>\"), inherits (the card range it\n  borrows, or null), needs_date (true = no range to borrow, so it is in the Curator), guesses\n  [{date, epoch, source, confidence, evidence, auto, label}], best first. include_inherited=false\n  lists only the needs_date ones (a card's write-up never needs a date). read_files=true also reads each file's own embedded date\n  (slower: one parser process per file). limit 1..500.\n\"accept\": write `slug`'s guess from `source` (filename | file_metadata | youtube | ocr_text |\n  siblings) as its content_date, source recorded. Returns {slug, batch_id, guess}.\n\"apply_auto\": write every high-confidence guess (in-file evidence: filename, file_metadata,\n  youtube) to the undated items, ONE batch. Returns {applied, skipped, batch_id}; dry_run=true\n  writes nothing and lists what it would do.\nEvery write is undoable (constructicon_undo(batch_id)); an item that already has a real date is\nnever overwritten.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "list",
+      "enum": [
+       "list",
+       "accept",
+       "apply_auto"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Slug"
+     },
+     "source": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Source"
+     },
+     "include_inherited": {
+      "default": true,
+      "title": "Include Inherited",
+      "type": "boolean"
+     },
+     "read_files": {
+      "default": false,
+      "title": "Read Files",
+      "type": "boolean"
+     },
+     "limit": {
+      "default": 50,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "title": "constructicon_undatedArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_redact",
+   "description": "Remove an item's file but keep its metadata (sensitive-content cleanup), and what follows:\n\"redact\" (default): the file is HELD in the trash, no expiry (empty-trash skips it), and the\n  item is hidden from every listing. -> the item + batch_id.\n\"recover\": file back, un-redacted, exactly as before. -> the item + batch_id.\n  Error no_redact_hold (the file was already deleted for good).\n\"delete_file\": PERMANENTLY erase the held file; needs confirm=true; NOT undoable. The item\n  stays redacted, metadata only. -> {deleted: true, slug, bytes}. Error confirm_required.\n\"unredact\": visibility only, for a redaction whose file is already gone (refused with\n  redact_hold_exists while a file is held: recover or delete_file first). -> the item.\nErrors: no_file, not_redacted. List them: constructicon_list_items(which=\"redacted\").",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "action": {
+      "default": "redact",
+      "enum": [
+       "redact",
+       "unredact",
+       "recover",
+       "delete_file"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "confirm": {
+      "default": false,
+      "title": "Confirm",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "constructicon_redactArguments",
+    "type": "object"
+   },
+   "annotations": {
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "constructicon_list_items",
+   "description": "List items of one kind (listed shape: text previews, big type_metadata values trimmed):\n\"tag\": everything tagged `tag` or any tag under it (walks the tag tree; tag required). PAGED.\n\"unfiled\": the items on no card, as the web's Unfiled page lists them (no brand assets, current\n  revisions), newest first. PAGED.\n\"similar\": look-alikes of the item `slug` (required): same picture re-saved, or similar text;\n  each with similarity_reason (visual | text | both) and similarity_score; best first. A list.\n\"brand_assets\": logos, icons and other brand assets, with is_brand_asset and brand_role.\n\"redacted\": every redacted item (the only listing that has them; admin).\n\"restricted\": every sensitive item (keys, certificates, items marked sensitive), each with\n  `projects` [{title, slug}] and `sensitive_reason` (admin).\nPAGED lists answer {items, next_cursor, more, limit}: limit 1..500 (default 100); pass\nnext_cursor back as cursor= for the next page (null = the end). A page can hold fewer than limit\nitems while more is true (items you can't see are left out).\nE.g. constructicon_list_items(which=\"tag\", tag=\"3D Printing\", limit=200).",
+   "inputSchema": {
+    "properties": {
+     "which": {
+      "enum": [
+       "redacted",
+       "restricted",
+       "brand_assets",
+       "tag",
+       "unfiled",
+       "similar"
+      ],
+      "title": "Which",
+      "type": "string"
+     },
+     "tag": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Tag"
+     },
+     "text_chars": {
+      "default": 300,
+      "title": "Text Chars",
+      "type": "integer"
+     },
+     "slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Slug"
+     },
+     "limit": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Limit"
+     },
+     "cursor": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cursor"
+     }
+    },
+    "required": [
+     "which"
+    ],
+    "title": "constructicon_list_itemsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_delete",
+   "description": "Delete ONE kind of thing per call (undoable unless said otherwise):\nslug=\"x\": an item, with its card/tag/relation/revision/blog links and open questions. The file\n  goes to the trash for 7 days; undo restores all of it (after that: trash_expired).\n  -> {deleted: true, batch_id, expires_at}.\nslugs=[...]: several items in one batch; unknown slugs are not_found unless missing_ok=true\n  (then skipped). -> {deleted: <count>, slugs, batch_id, expires_at}.\ncard=<id or slug>: a card. Its blank write-up goes too (a written one stays, with a warning);\n  links, memberships and blog attachments go; nested cards stand alone; files stay.\n  -> {ok, dry_run, changes, warnings, batch_id, deleted, children_orphaned, items_detached, writeup}.\nblog_entry=<slug>: a blog entry (its cards and files stay). -> {deleted: true, slug, batch_id}.\neverything=true AND confirm=\"DELETE EVERYTHING\", nothing else: WIPE THE WHOLE ARCHIVE (items,\n  files, cards, tags, hobbies, blog, questions, trash). PERMANENT, NOT undoable; settings,\n  users and the change log stay. Either one alone is refused. Back up first\n  (constructicon_backup). -> {deleted, counts, files_removed, trash_removed, batch_id}.\ndry_run and batch_id work for every kind except everything.",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Slug"
+     },
+     "slugs": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Slugs"
+     },
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Card"
+     },
+     "blog_entry": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Blog Entry"
+     },
+     "everything": {
+      "default": false,
+      "title": "Everything",
+      "type": "boolean"
+     },
+     "confirm": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Confirm"
+     },
+     "missing_ok": {
+      "default": false,
+      "title": "Missing Ok",
+      "type": "boolean"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "batch_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Batch Id"
+     }
+    },
+    "title": "constructicon_deleteArguments",
+    "type": "object"
+   },
+   "annotations": {
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "constructicon_trash",
+   "description": "The trash. Deleted items' files wait there 7 days (undo brings them back); redacted files\nare held until the owner decides.\n\"list\" (default): {count, bytes, oldest, next_expiry, days, items: [{slug, title, batch_id,\n  reason, size_bytes, created_at, expires_at}], held: {count, bytes, items}}.\n\"empty\": PERMANENTLY purge every ordinary deleted file now; needs confirm=\"EMPTY TRASH\".\n  Redact holds are not touched; those deletes can no longer be undone.\n  -> {purged, bytes, slugs, held_kept, message}. Error confirm_required.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "list",
+      "enum": [
+       "list",
+       "empty"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "confirm": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Confirm"
+     }
+    },
+    "title": "constructicon_trashArguments",
+    "type": "object"
+   },
+   "annotations": {
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "constructicon_duplicates",
+   "description": "Byte-identical duplicate files: the same stored bytes under several items.\n\"plan\" (default, read-only): {summary, summary_text, groups: [{sha256, size_bytes, keep, why,\n  trash: [{slug, title, filename, date, cards, ...}], inherit: {cards, tags, free_text_tags,\n  fields, flags}, in_revision_chain}], skipped, unreadable}. The survivor is the copy with the\n  earliest real date from before Constructicon's first upload (ties: more cards, more metadata,\n  older upload).\n\"apply\": folds every group into its survivor (it inherits the copies' cards, tags, blank text\n  fields, flags, related links, covers) and trashes the copies (7-day undo), ONE batch.\n  DRY-RUN BY DEFAULT (dry_run=false writes). expect_trash = the slugs a dry run listed: if\n  the fresh plan differs it refuses (plan_changed) and writes nothing. Admin only.\n  -> {ok, dry_run, batch_id, changes, trashed, kept, expires_at, summary, groups}.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "plan",
+      "enum": [
+       "plan",
+       "apply"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "dry_run": {
+      "default": true,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "expect_trash": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Expect Trash"
+     }
+    },
+    "title": "constructicon_duplicatesArguments",
+    "type": "object"
+   },
+   "annotations": {
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "constructicon_lookalikes",
+   "description": "Look-alike photos: the same picture under different bytes (resized, recompressed, re-exported),\nfound by perceptual hash and never folded without a yes. Byte-identical copies are\nconstructicon_duplicates' job; items in one revision chain are never look-alikes.\n\"list\" (default, read-only, paged: limit 1..500, default 20, cursor): {items: [{id, slugs, keep,\n  why, members: [{slug, title, filename, width, height, file_size, date, date_is_real, uploaded,\n  cards, copy_marker}], pairs: [{a, b, distance}], answered, new_members}], next_cursor, more,\n  limit, summary}. `keep` is the suggested keeper (same rule as duplicates), `why` says what\n  decided; `answered` = pairs already said \"Not the same\", `new_members` = what is being asked now.\n\"confirm\" and \"dismiss\" are DRY-RUN BY DEFAULT: they answer as the write would and write nothing;\n  pass dry_run=false to fold / record.\n\"confirm\" (keep=<slug>, slugs=optional subset of the group): \"same photo, keep this one\". The kept\n  photo inherits the others' cards, tags, blank text fields, flags, related links and covers; the\n  others go to the trash (7-day undo), ONE batch. A member answered \"Not the same\" against the\n  keeper is left out (left_out). -> {ok, dry_run, batch_id, kept, trashed, left_out, plan, ...}.\n  Refusals: not_found, forbidden, not_in_group, lookalike_conflict, nothing_to_fold.\n\"dismiss\" (slugs=[2+ photos of one group]): \"not the same\", remembered per pair so it is never\n  asked again. -> {ok, batch_id, pairs}. Refusal: not_lookalikes.\nExample: constructicon_lookalikes(action=\"confirm\", keep=\"abc123\") (a dry run), then again with\ndry_run=False to fold.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "list",
+      "enum": [
+       "list",
+       "confirm",
+       "dismiss"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "keep": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Keep"
+     },
+     "slugs": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Slugs"
+     },
+     "dry_run": {
+      "default": true,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "limit": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Limit"
+     },
+     "cursor": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cursor"
+     }
+    },
+    "title": "constructicon_lookalikesArguments",
+    "type": "object"
+   },
+   "annotations": {
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "constructicon_proposals",
+   "description": "The Curator's proposals that wait for a yes: nothing is written until confirmed.\nwhich=\"provenance\": file provenance by gross rule. The first (and only) rule, text_heavy_reference:\n  a PDF with 2,000+ characters of text, or a PDF / Word file whose name says manual, guide, datasheet,\n  handbook, instructions, reference or spec, proposed as provenance \"reference\". A file whose\n  provenance is already set is never proposed.\nwhich=\"correlation\": card pairs that look related (text similarity of their files, shared tags,\n  overlapping dates, shared files; score 0..1, suggested at 0.45+ with alike text plus at least one\n  other signal), never ones already linked,\n  nested, sharing a parent or a family, or a family / collection.\n\"list\" (default, read-only, paged: limit 1..500, default 20, cursor): provenance -> {items: [{slug,\n  title, filename, media_type, chars, reason, evidence}], rule, blocked, summary}; correlation ->\n  {items: [{a, b, a_title, b_title, score, parts, evidence, why}], summary}.\n\"confirm\" and \"dismiss\" are DRY-RUN BY DEFAULT; pass dry_run=false to write. One call = one batch,\n  one constructicon_undo(batch_id) reverses it.\n\"confirm\": provenance writes the rule's provenance on `slugs` (default: every current proposal);\n  correlation links `pairs` ([[a, b], ...], card slugs; default: every current suggestion) as\n  \"related\". -> {ok, dry_run, batch_id, applied | linked, skipped}. Refusals: forbidden, not_found,\n  not_proposed, nothing_to_confirm, rule_blocked, bad_rule.\n\"dismiss\" (\"not this one\" / \"not related\", remembered so it is never proposed again): provenance\n  `slugs`, correlation `pairs`. -> {ok, batch_id, slugs | pairs}. Refusal: not_proposed.\nExample: constructicon_proposals(which=\"provenance\") then\nconstructicon_proposals(which=\"provenance\", action=\"confirm\", slugs=[\"abc\"], dry_run=False).",
+   "inputSchema": {
+    "properties": {
+     "which": {
+      "enum": [
+       "provenance",
+       "correlation"
+      ],
+      "title": "Which",
+      "type": "string"
+     },
+     "action": {
+      "default": "list",
+      "enum": [
+       "list",
+       "confirm",
+       "dismiss"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "slugs": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Slugs"
+     },
+     "pairs": {
+      "anyOf": [
+       {
+        "items": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Pairs"
+     },
+     "rule": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Rule"
+     },
+     "dry_run": {
+      "default": true,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "limit": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Limit"
+     },
+     "cursor": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cursor"
+     }
+    },
+    "required": [
+     "which"
+    ],
+    "title": "constructicon_proposalsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_backup",
+   "description": "Back up the whole database and storage to a timestamped zip:\n{filename, path, size, created_at, integrity}.",
+   "inputSchema": {
+    "properties": {},
+    "title": "constructicon_backupArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_add_content",
+   "description": "Create an item with no uploaded file: a YouTube link, a web page, a written post.\nmedia_type must be a type that takes no file (e.g. \"youtube\"); external_url its link;\ncontent_description its own title. Files go through constructicon_upload. sensitive locks it\nfrom the start. uploaded_by is a free-text Source note, never who added it (the token's user).\nText extraction runs in the background. Error: content_refused.",
+   "inputSchema": {
+    "properties": {
+     "media_type": {
+      "title": "Media Type",
+      "type": "string"
+     },
+     "external_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "External Url"
+     },
+     "content_description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Content Description"
+     },
+     "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+     },
+     "tags": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Tags"
+     },
+     "uploaded_by": {
+      "default": "Claude — authored",
+      "title": "Uploaded By",
+      "type": "string"
+     },
+     "sensitive": {
+      "default": false,
+      "title": "Sensitive",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "media_type"
+    ],
+    "title": "constructicon_add_contentArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_related",
+   "description": "Link two items as related (both directions), or unlink them.\n\"add\" (default): also shares their tags and card memberships both ways, as one batch (undo\n  takes all of it back). \"remove\": the link only; what it shared stays.\nReturns the items now related to `slug` (listed shape). To read them:\nconstructicon_get(slug, include=[\"related\"]).",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "other": {
+      "title": "Other",
+      "type": "string"
+     },
+     "action": {
+      "default": "add",
+      "enum": [
+       "add",
+       "remove"
+      ],
+      "title": "Action",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slug",
+     "other"
+    ],
+    "title": "constructicon_relatedArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_list_projects",
+   "description": "All cards, most recently updated first. Filters: kind (project | thing | action | family |\ncollection | event), activity (active | inactive), stage (in_progress | in_use | idea | paused |\ndone | stopped). Each card has its status fields and labels, and needs_input (an open question).",
+   "inputSchema": {
+    "properties": {
+     "kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Kind"
+     },
+     "activity": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Activity"
+     },
+     "stage": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Stage"
+     }
+    },
+    "title": "constructicon_list_projectsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_create_project",
+   "description": "Create a card, with a root tag of the same name linked to it and a blank write-up, as one\nbatch. kind: project (default) | thing | action | family | collection | event. stage:\nin_progress (default) | in_use | idea | paused | done | stopped (stopped needs stop_reason\nfailed | abandoned). parent_id makes it \"part of\" that card (a family/collection can't nest or\nbe a parent: nest_group_kind). Errors: bad_status, not_found. Returns the card + batch_id.",
+   "inputSchema": {
+    "properties": {
+     "title": {
+      "title": "Title",
+      "type": "string"
+     },
+     "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+     },
+     "cover_slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cover Slug"
+     },
+     "parent_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Parent Id"
+     },
+     "kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Kind"
+     },
+     "stage": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Stage"
+     },
+     "stop_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Stop Reason"
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "title": "constructicon_create_projectArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_update_project",
+   "description": "Edit a card, every change in ONE batch, applied in order (kind, status, whereabouts,\nprovenance, highlight, home, face text, write-up, then title and the rest).\ncard (or project_id): its id or slug. Parameters left out (None) are left alone.\nkind: project | thing | action | family | collection | event. stage: in_progress | in_use\n(active) | idea | paused | done | stopped (inactive); stopped needs stop_reason failed |\nabandoned; an event can't be in_use or paused. status: the old v1 word (wip, complete,\nshelved ...), translated to a stage with a warning.\nstart_date / end_date: timeline overrides (unix seconds); reset_start_date / reset_end_date clear.\nfields: more fields, key present = set it, absent = leave it; null or \"\" clears:\n  activity (must agree with the stage), force_kind (bool: leave a family/collection that has\n  members), whereabouts (have_it | partial | parted_out | sold | gifted | lost | abandoned |\n  never_built; thing / project / collection only; anything but have_it greys the card's art;\n  abandoned = the object was left behind (towed, impound), not stop_reason abandoned, which\n  is walking away from the project), whereabouts_note, provenance (an active card key,\n  constructicon_list_provenance_options(scope=\"card\")), provenance_credit, highlight (bool),\n  home (\"card:<slug>\" | \"hobby:<slug>\" | a card; null = automatic), synopsis (max 600: a few\n  sentences saying what the card is; set it whenever you write a write-up), flavor (one italic\n  line, max 140), writeup_slug (an item that can be a write-up; it joins the card),\n  owner_words (bool: the write-up is the owner's own words), cover_card (a nested part or a\n  family / collection member, id or slug: the card borrows its cover and follows it; bad_cover\n  with details.reason when it can't: not_related, no_cover, cover_loop, hidden, ...).\nE.g. fields={\"whereabouts\": \"have_it\", \"synopsis\": \"A 3D-printed rover.\"}.\ndry_run=true answers as the call would and writes nothing.\nReturns the card plus batch_id, changes and warnings (if any). Codes: bad_status, bad_kind,\nbad_whereabouts, bad_provenance, bad_home, bad_card_text, unknown_field.",
+   "inputSchema": {
+    "properties": {
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Project Id"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Description"
+     },
+     "cover_slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cover Slug"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Status"
+     },
+     "start_date": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Start Date"
+     },
+     "reset_start_date": {
+      "default": false,
+      "title": "Reset Start Date",
+      "type": "boolean"
+     },
+     "end_date": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "End Date"
+     },
+     "reset_end_date": {
+      "default": false,
+      "title": "Reset End Date",
+      "type": "boolean"
+     },
+     "kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Kind"
+     },
+     "stage": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Stage"
+     },
+     "stop_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Stop Reason"
+     },
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Card"
+     },
+     "fields": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Fields"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "title": "constructicon_update_projectArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_card_files",
+   "description": "Put files (item slugs) on a card, take them off, or move / copy them between cards.\n\"add\" (default): like the web's add-to-card: the files get the card's linked tag (both tag\n  stores) and a card with no cover takes the first. Unknown slugs: not_found, unless\n  missing_ok=true (skipped). -> {ok, dry_run, changes, warnings, batch_id, card, slugs, added,\n  already, skipped, tagged, cover, items: [the files, listed shape]}.\n\"remove\": membership only (tags and cover stay). -> {ok, ..., card, removed, items}.\n\"move\" / \"copy\": from from_card to card. A move drops from_card's linked tag and adds card's; a\n  copy keeps the files on from_card and only adds card's tag. A card's own write-up can't move;\n  bad_files if a file isn't on from_card. -> {ok, ..., tags_added, tags_removed}.\nE.g. constructicon_card_files(\"rover\", [\"a1b2\", \"c3d4\"], action=\"move\", from_card=\"misc\").",
+   "inputSchema": {
+    "properties": {
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Card"
+     },
+     "slugs": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Slugs",
+      "type": "array"
+     },
+     "action": {
+      "default": "add",
+      "enum": [
+       "add",
+       "remove",
+       "move",
+       "copy"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "from_card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "From Card"
+     },
+     "missing_ok": {
+      "default": false,
+      "title": "Missing Ok",
+      "type": "boolean"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "batch_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Batch Id"
+     }
+    },
+    "required": [
+     "card",
+     "slugs"
+    ],
+    "title": "constructicon_card_filesArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_get_project",
+   "description": "One card in full: its fields and live status (kind, activity, stage, stop_reason + labels,\nneeds_input), items (with tags; text previews), cover, write-up (a preview like the items: its\ntext and type_metadata.body cut to text_chars (at least 300), with body_chars and body_truncated; full_writeup=true\nsends it whole, or read it with constructicon_get(writeup_slug)), open_decisions, families /\nmembers / children, links (both directions), its face\ntext (synopsis, flavor, writeup_lead, face_text, face_text_source) and agent_notes (your private\nnotes, from constructicon_set_agent_notes(card=...); null when none). For a read-before-change\nview with level, needs and recent changes: constructicon_explain_card.",
+   "inputSchema": {
+    "properties": {
+     "id_or_slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Id Or Slug"
+     },
+     "text_chars": {
+      "default": 300,
+      "title": "Text Chars",
+      "type": "integer"
+     },
+     "full_writeup": {
+      "default": false,
+      "title": "Full Writeup",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "id_or_slug"
+    ],
+    "title": "constructicon_get_projectArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_list_hobbies",
+   "description": "All hobbies, by name: {id, name, slug, status (active | inactive, set by hand), group_code,\nproject_count, flags, cover_slug, cover_picked, cover_source (picked | highlighted_project |\nrecent_project | null), cover_project, picked_cover_slug, picked_cover_unavailable, created_by_user,\ncreated_via (\"<user>'s <token name>\")}.\nflags are computed, never stored: inactive_with_active_work, active_untouched (~2 years).",
+   "inputSchema": {
+    "properties": {},
+    "title": "constructicon_list_hobbiesArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_create_hobby",
+   "description": "Create a hobby from a name (a top-level tag, reused if it exists, marked as a hobby).\nstatus: active (default) | inactive. Returns {id, name, slug, status, group_code, batch_id}.",
+   "inputSchema": {
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "status": {
+      "default": "active",
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "title": "constructicon_create_hobbyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_convert",
+   "description": "Turn a card into a hobby or a hobby into a card, as ONE undoable batch.\n\"card_to_hobby\" (card=): the card becomes a hobby tag; nested cards join the hobby, its files\n  get the tag, the card row goes (links, families, blog attachments, a blank write-up cleared).\n  -> {id, name, slug, status, summary: {children_moved, items_moved}, dry_run, batch_id,\n  changes, warnings}.\n\"hobby_to_card\" (hobby=, kind = family | collection | project, title (default the hobby's\n  name), into_hobby (a hobby it joins)): the card reuses the hobby's tag; stage follows the\n  hobby (active -> in_progress, inactive -> paused); member cards become family members or\n  nested parts; loose files go onto it; homes that named the hobby name the card; the hobby is\n  unmarked. Refused whole (nothing written): bad_membership, nest_group_kind,\n  nest_second_parent. -> {ok, dry_run, changes, warnings, batch_id, card, card_id, kind,\n  title, into_hobby, hobby, members: [{slug, how}], loose_moved, homes_moved}.\nE.g. direction=\"hobby_to_card\", hobby=\"gi-joe\", kind=\"family\", into_hobby=\"collecting\".",
+   "inputSchema": {
+    "properties": {
+     "direction": {
+      "enum": [
+       "card_to_hobby",
+       "hobby_to_card"
+      ],
+      "title": "Direction",
+      "type": "string"
+     },
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Card"
+     },
+     "hobby": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Hobby"
+     },
+     "kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Kind"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "into_hobby": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Into Hobby"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "direction"
+    ],
+    "title": "constructicon_convertArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_unmark_hobby",
+   "description": "Stop treating a tag as a hobby: its status and group code go, its card memberships are\nremoved, and cards whose home was it go back to automatic. The tag and its files stay.\n-> {ok, dry_run, changes, warnings, batch_id, hobby, cards_removed, homes_cleared}.",
+   "inputSchema": {
+    "properties": {
+     "hobby": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Hobby"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "hobby"
+    ],
+    "title": "constructicon_unmark_hobbyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_card_hobby",
+   "description": "Put a card in a hobby (\"add\", default; a card can be in several; twice is a no-op) or take\nit out (\"remove\"). -> {ok, dry_run, changes, warnings, batch_id}.",
+   "inputSchema": {
+    "properties": {
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Card"
+     },
+     "hobby": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Hobby"
+     },
+     "action": {
+      "default": "add",
+      "enum": [
+       "add",
+       "remove"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "batch_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Batch Id"
+     }
+    },
+    "required": [
+     "card",
+     "hobby"
+    ],
+    "title": "constructicon_card_hobbyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_update_hobby",
+   "description": "Edit a hobby, every change in ONE batch. hobby: id or slug. Left out (None) = left alone.\nname: rename it; its page address (slug) follows and the old address redirects.\nstatus: active | inactive (the old words dormant / abandoned are stored as inactive, with a\n  warning). group_code: 2-4 letters/digits shown on cards, unique, stored upper case.\ncover_slug: an item with a picture as its cover; cover_card: one of its cards (id or slug) whose\n  cover it borrows and follows; clear_cover=true goes back to the automatic cover (its\n  highlighted project's, else its latest project's). Only one of the three.\nsynopsis (max 600) / flavor (max 140): its card face text; \"\" clears.\ndry_run=true answers as the call would and writes nothing.\n-> {ok, id, name, slug, status, group_code, flags, synopsis, flavor, cover: {cover_slug,\ncover_picked, cover_source, ...}, changes, warnings, batch_id, dry_run}.\nCodes: bad_hobby_activity, bad_group_code, group_code_conflict, bad_cover (details.reason),\nbad_card_text, hobby_name_conflict.",
+   "inputSchema": {
+    "properties": {
+     "hobby": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Hobby"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Status"
+     },
+     "group_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Group Code"
+     },
+     "cover_slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cover Slug"
+     },
+     "clear_cover": {
+      "default": false,
+      "title": "Clear Cover",
+      "type": "boolean"
+     },
+     "synopsis": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Synopsis"
+     },
+     "flavor": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Flavor"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Name"
+     },
+     "cover_card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cover Card"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "hobby"
+    ],
+    "title": "constructicon_update_hobbyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_list_blog_entries",
+   "description": "All blog entries, most recently updated first; status filters (e.g. \"draft\", \"ready\").",
+   "inputSchema": {
+    "properties": {
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Status"
+     }
+    },
+    "title": "constructicon_list_blog_entriesArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_create_blog_entry",
+   "description": "Create a blog entry (its slug comes from the title). status: \"draft\" (default), \"ready\" ...\ncover_slug: an item as its cover. content_date: the date it is about, best as an ISO date\n(\"2026-10-01\"); don't hand-compute unix seconds (UTC midnight shows as the day before).\nAttach cards and items with constructicon_update_blog_entry. -> the entry + batch_id.",
+   "inputSchema": {
+    "properties": {
+     "title": {
+      "title": "Title",
+      "type": "string"
+     },
+     "subtitle": {
+      "default": "",
+      "title": "Subtitle",
+      "type": "string"
+     },
+     "body": {
+      "default": "",
+      "title": "Body",
+      "type": "string"
+     },
+     "status": {
+      "default": "draft",
+      "title": "Status",
+      "type": "string"
+     },
+     "cover_slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cover Slug"
+     },
+     "content_date": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Content Date"
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "title": "constructicon_create_blog_entryArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_get_blog_entry",
+   "description": "One blog entry with its cards and items (each with its note and sort_order).",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "constructicon_get_blog_entryArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_update_blog_entry",
+   "description": "Edit a blog entry, every change in ONE batch. Left out (None) = left alone.\nclear_cover_slug / clear_content_date clear those two. content_date as in create.\nprojects: the cards attached, in order, as a FULL replace: [{\"project_id\": <card id or\n  slug>, \"note\": \"...\"}]; [] removes them all. items: the same for items: [{\"slug\": \"...\",\n  \"note\": \"...\"}]. An unknown card or item is not_found (nothing written).\n-> the entry (with its cards and items) + batch_id.",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "subtitle": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Subtitle"
+     },
+     "body": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Body"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Status"
+     },
+     "cover_slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cover Slug"
+     },
+     "content_date": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Content Date"
+     },
+     "clear_cover_slug": {
+      "default": false,
+      "title": "Clear Cover Slug",
+      "type": "boolean"
+     },
+     "clear_content_date": {
+      "default": false,
+      "title": "Clear Content Date",
+      "type": "boolean"
+     },
+     "projects": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Projects"
+     },
+     "items": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Items"
+     }
+    },
+    "required": [
+     "slug"
+    ],
+    "title": "constructicon_update_blog_entryArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_list_tags",
+   "description": "The tag tree: root tags, each with nested `children`.",
+   "inputSchema": {
+    "properties": {},
+    "title": "constructicon_list_tagsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_create_tag",
+   "description": "Create a tag (under parent_name, or at the root), or return the one already there.",
+   "inputSchema": {
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "parent_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Parent Name"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "title": "constructicon_create_tagArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_tags",
+   "description": "Manage the tag tree (the one tag store; an item's chips are derived from it). `tag` / `into` /\n`parent` take a tag id or its name. Every write is one batch (constructicon_undo reverses it).\n\"tree\": {tags: [{id, name, path, items, cards, hobby, children}]}.\n\"get\": tag= -> {tags: [every tag with that name (any case), each with path, items, children, cards, hobby]}.\n\"rename\": tag=, name= -> {tag, old_name, items, batch_id}. A card's linked tag follows the card's\n  title (rename the card); a name another tag has is refused (merge instead).\n\"merge\": tag= (the one that goes), into= -> its items and sub-tags move to `into`, then it is deleted.\n\"move\": tag=, parent= (omit or \"\" = the top level) -> no cycles.\n\"delete\": tag= -> it comes off every item. A card's or grouping's tag, or one with sub-tags, is refused.\n\"sweep\": the cleanup list, read-only: {entries: [{id, path, kinds (orphan | empty | near_duplicate),\n  deletable, why_not, suggestion, duplicates}]}. Nothing is deleted.\n\"sweep_apply\": tag_ids= the picked entries -> deletes exactly those (all still deletable, sub-tags\n  picked too, else the whole call is refused), ONE batch.\ndry_run=true answers as the write would and writes nothing.\nE.g. constructicon_tags(action=\"merge\", tag=\"Ancient projects.\", into=\"Ancient Projects\").",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "tree",
+      "enum": [
+       "tree",
+       "get",
+       "rename",
+       "merge",
+       "move",
+       "delete",
+       "sweep",
+       "sweep_apply"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "tag": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Tag"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Name"
+     },
+     "into": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Into"
+     },
+     "parent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Parent"
+     },
+     "tag_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Tag Ids"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "title": "constructicon_tagsArguments",
+    "type": "object"
+   },
+   "annotations": {
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "constructicon_item_tags",
+   "description": "Add tags to an item (\"attach\", default; missing root tags are created) or take them off\n(\"detach\"; an unknown tag is not_found and nothing is changed). One batch either way. This is\nthe tag tree (an item's chips are derived from it); constructicon_update(tags=[...]) replaces the chips.\n-> the item + batch_id.",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "tag_names": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Tag Names",
+      "type": "array"
+     },
+     "action": {
+      "default": "attach",
+      "enum": [
+       "attach",
+       "detach"
+      ],
+      "title": "Action",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slug",
+     "tag_names"
+    ],
+    "title": "constructicon_item_tagsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_set_agent_notes",
+   "description": "Set (or, with null, clear) your private working notes on an item (slug=) or a card (card=, its\nid or slug); exactly one of them. E.g. \"Fusion 360 screenshot, not user-facing\", or story details\nthe owner mentioned for a later write-up. Never shown in the app, the web API, search or exports.\nappend=true ADDS notes under what is there as a dated block (\"--- 2026-10-27 ---\", Mountain Time,\nthen the text) instead of replacing it: the safe way to add to notes you haven't read (empty\nnotes with append is refused).\nRead them back: constructicon_get(slug, include=[\"agent_notes\"]) for an item,\nconstructicon_get_project(card) for a card. Undoable.\n-> the item (or card) plus agent_notes (the whole notes after); a card, and any append, also\ngets batch_id.",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Slug"
+     },
+     "notes": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Notes"
+     },
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Card"
+     },
+     "append": {
+      "default": false,
+      "title": "Append",
+      "type": "boolean"
+     }
+    },
+    "title": "constructicon_set_agent_notesArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_list_provenance_options",
+   "description": "The provenance lists the owner edits in /admin. scope: \"card\" (for\nconstructicon_update_project fields.provenance) or \"file\" (for constructicon_update\nfields.provenance). include_retired=true adds retired keys (not settable on anything new).\n-> {ok, scope, options: [{key, label, sort_order, retired}]}.",
+   "inputSchema": {
+    "properties": {
+     "scope": {
+      "default": "card",
+      "title": "Scope",
+      "type": "string"
+     },
+     "include_retired": {
+      "default": false,
+      "title": "Include Retired",
+      "type": "boolean"
+     }
+    },
+    "title": "constructicon_list_provenance_optionsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_list_vocab",
+   "description": "The word lists the owner edits in /admin. vocab: \"brand_role\" (the suggested roles\nfor constructicon_update fields.brand_role; a custom role is still allowed) or \"wallpaper_tag\"\n(the tag names that put an item on the Wallpaper page, any case).\n-> {ok, vocab, terms: [{term, sort_order}]}.",
+   "inputSchema": {
+    "properties": {
+     "vocab": {
+      "default": "brand_role",
+      "title": "Vocab",
+      "type": "string"
+     }
+    },
+    "title": "constructicon_list_vocabArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_nest",
+   "description": "Make `child` PART OF `parent` (\"nest\", default; it only makes sense inside it, e.g. a Lua\nscript inside the truck it runs on), or take it out of its parent (\"unnest\"; no-op if none).\nNot family membership (constructicon_family). Refused: nest_self, nest_cycle, nest_group_kind\n(a family/collection can't nest or be a parent), nest_second_parent (already part of another\ncard: replace=true moves it). -> {ok, dry_run, changes, warnings, batch_id}.",
+   "inputSchema": {
+    "properties": {
+     "child": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Child"
+     },
+     "parent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Parent"
+     },
+     "replace": {
+      "default": false,
+      "title": "Replace",
+      "type": "boolean"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "action": {
+      "default": "nest",
+      "enum": [
+       "nest",
+       "unnest"
+      ],
+      "title": "Action",
+      "type": "string"
+     }
+    },
+    "required": [
+     "child"
+    ],
+    "title": "constructicon_nestArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_family",
+   "description": "Put a card in a family or collection (\"add\", default; many-to-many, moves no files, twice is\na no-op) or take it out (\"remove\"). `family` must be a family/collection card and `member` must\nnot be one (bad_membership). -> {ok, dry_run, changes, warnings, batch_id}.",
+   "inputSchema": {
+    "properties": {
+     "family": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Family"
+     },
+     "member": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Member"
+     },
+     "action": {
+      "default": "add",
+      "enum": [
+       "add",
+       "remove"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "family",
+     "member"
+    ],
+    "title": "constructicon_familyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_sharing",
+   "description": "Private cards and hobbies. Cards and hobbies are open to everyone signed in unless ticked\nprivate; then only admins, the owner (its creator) and its members see it and everything under it\n(nested cards, family members, a hobby's cards and loose files). Give exactly one of card= or hobby=\n(id or slug), except for action=\"users\".\naction: \"get\" (default) -> {private (ticked here), effective (here or above), inherited_from\n[{kind, id, title, slug}], owner, members [{user_id, username, name, role, capped}], can_manage};\n\"set_private\" (private=true|false); \"add_member\" (user=id or username, role=viewer|editor,\ndefault viewer; adding again changes the role); \"remove_member\" (user=); \"users\" -> the people\nyou can add [{id, username, name, role}]. The writes return {ok, changes, warnings, batch_id,\nsharing} and only the owner or an admin may make them (forbidden otherwise). A viewer member only\nlooks; an editor member may change the card and its files. The install role is the ceiling: a\nviewer can't be made an editor (role_ceiling). Example: constructicon_sharing(action=\"add_member\",\ncard=\"desk-build\", user=\"sam\", role=\"editor\").",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "get",
+      "enum": [
+       "get",
+       "set_private",
+       "add_member",
+       "remove_member",
+       "users"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Card"
+     },
+     "hobby": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Hobby"
+     },
+     "private": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Private"
+     },
+     "user": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "User"
+     },
+     "role": {
+      "anyOf": [
+       {
+        "enum": [
+         "viewer",
+         "editor"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Role"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "title": "constructicon_sharingArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_link",
+   "description": "Typed links between cards, read \"a <type> b\". type: built_for | applies_to | used_in |\ninspired_by (directed) | related (symmetric).\n\"add\" (default; b, type, note): a typed link over a related pair UPGRADES it; related over a\n  typed pair is refused. Errors: bad_link (unknown type, self-link, a family/collection as the\n  source of built_for/applies_to/used_in), link_conflict.\n\"remove\" (b, type optional): only that type, or with no type every link between the pair\n  (no-op with a warning when nothing matches).\n\"retype\" (b, from_type, to_type): swap the type in one step; the note carries over unless note\n  is given.\n\"list\": every link on card `a`, both directions: [{slug, title, kind, stage, type, direction\n  (out | in | both), label, note}].\nWrites -> {ok, dry_run, changes, warnings, batch_id}; batch_id joins an earlier call's batch.\nE.g. constructicon_link(\"lua-script\", \"rc-truck\", \"used_in\").",
+   "inputSchema": {
+    "properties": {
+     "a": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "A"
+     },
+     "b": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "B"
+     },
+     "type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Type"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Note"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "batch_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Batch Id"
+     },
+     "action": {
+      "default": "add",
+      "enum": [
+       "add",
+       "remove",
+       "retype",
+       "list"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "from_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "From Type"
+     },
+     "to_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "To Type"
+     }
+    },
+    "required": [
+     "a"
+    ],
+    "title": "constructicon_linkArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_retype_links",
+   "description": "Retype many v1 `related` links at once. DRY-RUN BY DEFAULT (dry_run=false writes).\nmapping: [{a, b, to_type, from_type=\"related\"}], each read \"a <to_type> b\". All-or-nothing\nin one transaction unless partial_ok=true (valid ones applied, the rest reported). Candidates:\nconstructicon_needs(view=\"card_decisions\", need=\"untyped_link\").\n-> {ok, dry_run, applied, changes, warnings, batch_id, items: [{a, b, to_type, ok, changes,\nerror?}]}.",
+   "inputSchema": {
+    "properties": {
+     "mapping": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Mapping",
+      "type": "array"
+     },
+     "dry_run": {
+      "default": true,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "partial_ok": {
+      "default": false,
+      "title": "Partial Ok",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "mapping"
+    ],
+    "title": "constructicon_retype_linksArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_split_card",
+   "description": "Carve files (and description) out of one card into new cards, in one batch.\nparts: [{title, kind=\"project\", relation=\"sibling\" | \"child\", stage, stop_reason, provenance,\nprovenance_credit, whereabouts, whereabouts_note, description, move_description, file_slugs,\nlink_to_source: {type, note?} | null, hobbies: \"inherit\" | [slugs], families: \"inherit\" |\n[slugs], highlight}]. A child is nested under the source; a sibling copies the source's hobbies\nand families by default. Each part is a full card with a blank write-up. Files are MOVED out of\nthe source unless keep_in_source=true; the source's write-up can't be split out. Pass the\nreturned batch_id to later calls (constructicon_link, constructicon_card_hobby) to keep a\nreorganization in one undo.\n-> {ok, dry_run, changes, warnings, batch_id, created: [{id, slug, title, kind, relation,\nfiles}]}.",
+   "inputSchema": {
+    "properties": {
+     "source": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Source"
+     },
+     "parts": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Parts",
+      "type": "array"
+     },
+     "keep_in_source": {
+      "default": false,
+      "title": "Keep In Source",
+      "type": "boolean"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "batch_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Batch Id"
+     }
+    },
+    "required": [
+     "source",
+     "parts"
+    ],
+    "title": "constructicon_split_cardArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_merge_cards",
+   "description": "Fold cards into `keep` (the reverse of split), in one batch. Files, hobbies and families are\nunioned; children re-parented; links and blog attachments re-pointed (duplicates dropped; typed\nbeats related). keep's cover and write-up win; an absorbed blank write-up goes, a real one stays\nas a file. Undo restores the absorbed cards with their ids. Refused: nest_cycle, bad_merge (a\nfamily/collection with a non-group card). -> {ok, dry_run, changes, warnings, batch_id, keep,\nabsorbed}.",
+   "inputSchema": {
+    "properties": {
+     "keep": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Keep"
+     },
+     "absorb": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "title": "Absorb",
+      "type": "array"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "batch_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Batch Id"
+     }
+    },
+    "required": [
+     "keep",
+     "absorb"
+    ],
+    "title": "constructicon_merge_cardsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_explain_card",
+   "description": "Everything about a card, to read BEFORE proposing a change (read-only): identity, status (+\nlabels, `provisional`), whereabouts, provenance, highlight, hobbies, families, members, parent,\nchildren, links, `home` (+ source, dangling_override) and `home_chain`, `files` (counts, date\nrange), `level` (the 0-5 pips, each with a reason), `caption_check` (the Curator's caption\ncheck: passed, excused, reason, excused_files = [{type, label, count, reason}] for files of a\ntype that isn't captioned, e.g. Word/PowerPoint/spreadsheets), open_decisions, needs, warnings,\nsuggestions (provenance, typed links) and recent_changes (last 5, with batch ids).",
+   "inputSchema": {
+    "properties": {
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Card"
+     }
+    },
+    "required": [
+     "card"
+    ],
+    "title": "constructicon_explain_cardArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_bulk_edit",
+   "description": "Run ONE setter over many cards. DRY-RUN BY DEFAULT (dry_run=false writes).\nop: set_status, set_kind, set_whereabouts, set_card_provenance, set_home, set_card_highlight,\nadd_to_hobby, remove_from_hobby, add_to_family, remove_from_family, nest, unnest, link, unlink,\nretype_link, set_hobby_activity (these are the core operation names).\nitems: [{card, args}]: e.g. set_status {card: \"x\", args: {stage: \"done\"}}; add_to_hobby {card:\n\"x\", args: {hobby: \"3d-printing\"}}; add_to_family {card: <member>, args: {family: <family>}};\nnest {card: <child>, args: {parent}}; link {card: a, args: {b, type, note?}};\nset_hobby_activity {card: <hobby>, args: {value: \"inactive\"}}. Unknown args are refused.\nIn order, one transaction; all-or-nothing unless partial_ok=true.\n-> {ok, dry_run, op, applied, changes, warnings, batch_id, items: [{card, ok, applied, changes,\nwarnings, error?}]}.",
+   "inputSchema": {
+    "properties": {
+     "op": {
+      "title": "Op",
+      "type": "string"
+     },
+     "items": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Items",
+      "type": "array"
+     },
+     "dry_run": {
+      "default": true,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "partial_ok": {
+      "default": false,
+      "title": "Partial Ok",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "op",
+     "items"
+    ],
+    "title": "constructicon_bulk_editArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_resolve_decisions",
+   "description": "Answer many card questions (card_status, card_built_for, card_kind, card_family_members) at\nonce. DRY-RUN BY DEFAULT (dry_run=false writes).\nitems: [{decision_id, choice}] (or choices: [...] for multi-answer); with\naccept_suggested=true just decision ids, each answered with its OWN suggestion (none:\nskipped). Find them with constructicon_needs(view=\"card_decisions\"). All-or-nothing unless\npartial_ok=true. -> {ok, dry_run, batch_id, applied, would_apply, skipped, failed, changes,\nwarnings, items: [{decision_id, card_slug, choice, status, changes, reason?, error?}]}.",
+   "inputSchema": {
+    "properties": {
+     "items": {
+      "items": {},
+      "title": "Items",
+      "type": "array"
+     },
+     "accept_suggested": {
+      "default": false,
+      "title": "Accept Suggested",
+      "type": "boolean"
+     },
+     "dry_run": {
+      "default": true,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "partial_ok": {
+      "default": false,
+      "title": "Partial Ok",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "items"
+    ],
+    "title": "constructicon_resolve_decisionsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_undo",
+   "description": "Reverse a change-log row, or a whole batch (audit_id = a row id or a batch_id), newest\nfirst, in one transaction. An undo is logged, so it can be undone too. Refused: undo_conflict\n(changed since; the message says what; force=true overrides), undo_refused (a migration, an\nalready-undone entry, no row images), trash_expired. -> {ok, dry_run, changes, warnings,\nbatch_id, undone, undone_ops}.",
+   "inputSchema": {
+    "properties": {
+     "audit_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       }
+      ],
+      "title": "Audit Id"
+     },
+     "force": {
+      "default": false,
+      "title": "Force",
+      "type": "boolean"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "audit_id"
+    ],
+    "title": "constructicon_undoArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_list_changes",
+   "description": "The change log, newest first: {changes: [{id, op, actor, batch_id, timestamp, affected_slugs,\nundone_by, mutations: [{table, key, before, after}]}], withheld, withheld_note}. Filter by card or\nbatch_id. A non-admin token gets only rows touching nothing hidden from them; `withheld` counts\nthe rest of the newest `limit` rows (withheld_note says why).",
+   "inputSchema": {
+    "properties": {
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Card"
+     },
+     "batch_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Batch Id"
+     },
+     "limit": {
+      "default": 50,
+      "title": "Limit",
+      "type": "integer"
+     }
+    },
+    "title": "constructicon_list_changesArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_sweep_stale_decisions",
+   "description": "Resolve every open question nothing can answer any more (its file or card is gone, a\ncard-match question has under 2 candidates left, a \"does this replace ...?\" question has no\ncandidate). The web app also runs this hourly; listing never resolves anything.\n-> {ok, dry_run, changes, warnings, batch_id, resolved: [{id, kind, post_slug, reason}], count,\nby_kind}.",
+   "inputSchema": {
+    "properties": {
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "title": "constructicon_sweep_stale_decisionsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_needs",
+   "description": "What waits on curation, in one of five views:\n\"queue\" (default; card, include_deferred): every open question, nudge and need, grouped by\n  card, as the owner's Curator tab shows it -> {groups, deferred, counts}. Groups: cards\n  (active first, then most recently touched), then hobby / uploads / collection buckets;\n  inside, questions first. Item: {type: question | nudge | need, key, label, kind, group,\n  href, deferred, dismissible} (+ for a question: id, options, suggested, confidence, multi).\n  counts.open is the tab's badge.\n\"card_decisions\" (card, card_kind, need, hobby, limit): cards waiting on a decision, each with\n  a suggestion: [{need, card_slug, hobby_slug, title, detail, suggested, suggested_reason,\n  confidence, decision_id, options, link?}]. Stored questions (card_status, card_built_for,\n  card_kind, card_family_members: answer with constructicon_resolve_pending_decision or\n  constructicon_resolve_decisions) and computed needs (hobby_inactive_with_active_work,\n  hobby_active_untouched, untyped_link, missing_provenance, missing_provenance_credit,\n  missing_whereabouts, status_conflict, blank_writeup_with_files: fix the field).\n  card_kind \"hobby\" = hobby needs only.\n\"pending\" (no filters): every open stored question with its options: card questions,\n  project_match (candidates), retype (options; the item's current type = keep it),\n  item_supersedes (options, suggested).\n\"nudges\" (nudge_kind, limit): Curator nudges by priority: [{nudge_key, kind, target_type,\n  target_id, target_slug, title, summary, priority, base_impact, status_weight, action,\n  deferred}].\n\"caption\" (limit default 50, max 500; include_failed): items with no caption yet (never\n  sensitive) -> {items: [{slug, name, type, filename, caption_status, projects, hobbies}],\n  total}. Then constructicon_view and constructicon_set_caption.\nAct on an item with constructicon_queue_item(key, action).",
+   "inputSchema": {
+    "properties": {
+     "view": {
+      "default": "queue",
+      "enum": [
+       "queue",
+       "nudges",
+       "caption",
+       "card_decisions",
+       "pending"
+      ],
+      "title": "View",
+      "type": "string"
+     },
+     "card": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Card"
+     },
+     "include_deferred": {
+      "default": true,
+      "title": "Include Deferred",
+      "type": "boolean"
+     },
+     "nudge_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Nudge Kind"
+     },
+     "card_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Card Kind"
+     },
+     "need": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Need"
+     },
+     "hobby": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Hobby"
+     },
+     "limit": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Limit"
+     },
+     "include_failed": {
+      "default": true,
+      "title": "Include Failed",
+      "type": "boolean"
+     }
+    },
+    "title": "constructicon_needsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_queue_item",
+   "description": "Act on one Curator queue item by its `key` (from constructicon_needs: \"decision:<id>\",\n\"<kind>:project:<id>\", \"need:<need>:<slug>\"):\n\"defer\": set it aside in the Deferred section, no timer, until answered or brought back.\n\"bring_back\": back into the main queue (a dismissed one is not).\n\"dismiss\": a nudge or need, for good. A question can't be dismissed: answer or defer it.\nLogged and undoable. -> {ok, changed}.",
+   "inputSchema": {
+    "properties": {
+     "key": {
+      "title": "Key",
+      "type": "string"
+     },
+     "action": {
+      "enum": [
+       "defer",
+       "bring_back",
+       "dismiss"
+      ],
+      "title": "Action",
+      "type": "string"
+     }
+    },
+    "required": [
+     "key",
+     "action"
+    ],
+    "title": "constructicon_queue_itemArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_revision",
+   "description": "Revision chains of files (linear: A -> B -> C; the CURRENT one has nothing newer). An older\nrevision shows \"Superseded\" and leaves browse listings (search still finds it).\n\"supersede\" (slug = the older file, new = the file that replaces it): -> {ok, dry_run,\n  batch_id, old, new, chain}. Errors: bad_revision (self-link, redacted), revision_cycle,\n  revision_conflict (old already has a newer one, or new already replaces another).\n\"remove\": take `slug` out and close the gap (A -> B -> C minus B is A -> C). A no-op\n  (removed: false) for a file in no chain. -> {ok, dry_run, batch_id, slug, removed, chain}.\nRead a chain with constructicon_get(slug, include=[\"revisions\"]). Upload-time \"does this\nreplace ...?\" questions are the owner's (constructicon_resolve_pending_decision).",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "action": {
+      "enum": [
+       "supersede",
+       "remove"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "new": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "New"
+     },
+     "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "batch_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Batch Id"
+     }
+    },
+    "required": [
+     "slug",
+     "action"
+    ],
+    "title": "constructicon_revisionArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_resolve_pending_decision",
+   "description": "Answer one stored question (see constructicon_needs(view=\"pending\")), applied in one batch.\nproject_match: project_ids = the cards to attach the file to ([] = none of these).\nretype: choice = the type to keep it as (the item's current type keeps it as is).\nitem_supersedes: choice = the older file's slug (this one replaces it), \"reverse:<slug>\",\n  \"same:<slug>\" (identical: this upload goes to the trash) or \"none\".\ncard questions: choice = an option key, or choices = several for card_built_for /\n  card_family_members (a family answer makes the card a family with the picked members).\nAn answer that breaks a rule leaves the question open and returns that rule's error.\n-> {ok, applied, remaining}. Errors: already_resolved, unknown_decision_kind, invalid_choice.",
+   "inputSchema": {
+    "properties": {
+     "decision_id": {
+      "title": "Decision Id",
+      "type": "integer"
+     },
+     "choice": {
+      "default": "",
+      "title": "Choice",
+      "type": "string"
+     },
+     "project_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Project Ids"
+     },
+     "choices": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Choices"
+     }
+    },
+    "required": [
+     "decision_id"
+    ],
+    "title": "constructicon_resolve_pending_decisionArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "constructicon_run_type_action",
+   "description": "Run an action on an item. action: one of the item's `actions` (from constructicon_get, e.g.\n\"fetch_youtube_metadata\"), or the built-in \"retry_ocr\": run text extraction / OCR again on any\nOCR-capable item (in the background; ocr_status goes \"pending\").\nparams: for an action that takes them (else refused). Archive \"unpack\" (turn the archive into a\ncard of its members): {\"mode\": \"preview\"} (default; lists members, sizes, what is skipped\nand why, what already exists byte-identical and will be linked, the cards it would make;\nnothing written), {\"mode\": \"start\"} (queues the conversion; the web app runs it in the\nbackground; -> job with id and batch_id), {\"mode\": \"status\", \"job\": <id>} (progress, then the\nresult; partial failures name each member and why), plus \"shape\": \"collection\" (flat, default)\n| \"project\" (flat) | \"nested\" (a project, sub-folders as nested cards) and \"depth\": 1 or 2 (nested\nonly, default 2). The whole conversion undoes with constructicon_undo(batch_id).\n-> {ok, action, item, ...what the action adds}. Errors: redacted, unknown_action,\naction_failed; retry_ocr: bad_request (redacted, or a type without OCR); unpack: archive_encrypted,\narchive_corrupt, archive_hostile_path, archive_too_big, archive_too_many, archive_ratio,\narchive_too_slow, archive_unsupported, bad_shape, unpack_busy, nothing_to_unpack.",
+   "inputSchema": {
+    "properties": {
+     "slug": {
+      "title": "Slug",
+      "type": "string"
+     },
+     "action": {
+      "title": "Action",
+      "type": "string"
+     },
+     "params": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Params"
+     }
+    },
+    "required": [
+     "slug",
+     "action"
+    ],
+    "title": "constructicon_run_type_actionArguments",
+    "type": "object"
+   }
+  }
+ ],
+ "registered": [
+  "constructicon_version",
+  "constructicon_upload",
+  "constructicon_replace_file",
+  "constructicon_search",
+  "constructicon_get",
+  "constructicon_get_related",
+  "constructicon_list_revisions",
+  "constructicon_download",
+  "constructicon_import",
+  "constructicon_list_import",
+  "constructicon_update",
+  "constructicon_list_needs_caption",
+  "constructicon_view",
+  "constructicon_set_caption",
+  "constructicon_caption_review",
+  "constructicon_undated",
+  "constructicon_redact",
+  "constructicon_unredact",
+  "constructicon_recover_redacted",
+  "constructicon_delete_redacted_file",
+  "constructicon_list_items",
+  "constructicon_list_redacted",
+  "constructicon_list_restricted",
+  "constructicon_delete",
+  "constructicon_delete_multiple",
+  "constructicon_delete_all",
+  "constructicon_trash",
+  "constructicon_list_trash",
+  "constructicon_empty_trash",
+  "constructicon_duplicates",
+  "constructicon_lookalikes",
+  "constructicon_proposals",
+  "constructicon_backup",
+  "constructicon_add_content",
+  "constructicon_set_sensitive",
+  "constructicon_related",
+  "constructicon_add_related",
+  "constructicon_remove_related",
+  "constructicon_list_projects",
+  "constructicon_create_project",
+  "constructicon_update_project",
+  "constructicon_card_files",
+  "constructicon_add_to_project",
+  "constructicon_remove_from_project",
+  "constructicon_add_items_to_project",
+  "constructicon_set_project_writeup",
+  "constructicon_get_project",
+  "constructicon_list_hobbies",
+  "constructicon_create_hobby",
+  "constructicon_convert",
+  "constructicon_convert_project_to_hobby",
+  "constructicon_convert_hobby_to_card",
+  "constructicon_unmark_hobby",
+  "constructicon_card_hobby",
+  "constructicon_update_hobby",
+  "constructicon_add_project_to_hobby",
+  "constructicon_set_hobby_status",
+  "constructicon_set_hobby_code",
+  "constructicon_set_hobby_cover",
+  "constructicon_list_blog_entries",
+  "constructicon_create_blog_entry",
+  "constructicon_get_blog_entry",
+  "constructicon_update_blog_entry",
+  "constructicon_delete_blog_entry",
+  "constructicon_set_blog_entry_projects",
+  "constructicon_set_blog_entry_items",
+  "constructicon_list_tags",
+  "constructicon_create_tag",
+  "constructicon_tags",
+  "constructicon_get_posts_for_tag",
+  "constructicon_item_tags",
+  "constructicon_attach_tags",
+  "constructicon_detach_tag",
+  "constructicon_retry_ocr",
+  "constructicon_set_agent_notes",
+  "constructicon_list_provenance_options",
+  "constructicon_list_vocab",
+  "constructicon_set_provenance",
+  "constructicon_set_content_date",
+  "constructicon_set_highlight",
+  "constructicon_set_brand_asset",
+  "constructicon_list_brand_assets",
+  "constructicon_set_project_status",
+  "constructicon_set_status",
+  "constructicon_set_kind",
+  "constructicon_set_whereabouts",
+  "constructicon_set_card_text",
+  "constructicon_set_card_provenance",
+  "constructicon_set_card_highlight",
+  "constructicon_nest",
+  "constructicon_unnest",
+  "constructicon_family",
+  "constructicon_add_to_family",
+  "constructicon_remove_from_family",
+  "constructicon_sharing",
+  "constructicon_link",
+  "constructicon_unlink",
+  "constructicon_retype_link",
+  "constructicon_retype_links",
+  "constructicon_list_links",
+  "constructicon_list_needs_decision",
+  "constructicon_split_card",
+  "constructicon_delete_project",
+  "constructicon_merge_cards",
+  "constructicon_move_files",
+  "constructicon_copy_files",
+  "constructicon_add_to_hobby",
+  "constructicon_remove_from_hobby",
+  "constructicon_set_home",
+  "constructicon_explain_card",
+  "constructicon_bulk_edit",
+  "constructicon_resolve_decisions",
+  "constructicon_undo",
+  "constructicon_list_changes",
+  "constructicon_sweep_stale_decisions",
+  "constructicon_needs",
+  "constructicon_list_needs",
+  "constructicon_curation_queue",
+  "constructicon_queue_item",
+  "constructicon_dismiss_need",
+  "constructicon_defer",
+  "constructicon_bring_back",
+  "constructicon_list_pending_decisions",
+  "constructicon_revision",
+  "constructicon_mark_superseded",
+  "constructicon_remove_from_revisions",
+  "constructicon_resolve_pending_decision",
+  "constructicon_run_type_action"
+ ],
+ "action_roles": [
+  [
+   "constructicon_version",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_upload",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_replace_file",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_search",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_get",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_download",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_import",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_list_import",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_update",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_view",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_set_caption",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_undated",
+   "list",
+   "viewer"
+  ],
+  [
+   "constructicon_undated",
+   "accept",
+   "editor"
+  ],
+  [
+   "constructicon_undated",
+   "apply_auto",
+   "editor"
+  ],
+  [
+   "constructicon_set_agent_notes",
+   "slug",
+   "editor"
+  ],
+  [
+   "constructicon_set_agent_notes",
+   "card",
+   "editor"
+  ],
+  [
+   "constructicon_add_content",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_backup",
+   null,
+   "admin"
+  ],
+  [
+   "constructicon_redact",
+   "redact",
+   "editor"
+  ],
+  [
+   "constructicon_redact",
+   "unredact",
+   "editor"
+  ],
+  [
+   "constructicon_redact",
+   "recover",
+   "editor"
+  ],
+  [
+   "constructicon_redact",
+   "delete_file",
+   "admin"
+  ],
+  [
+   "constructicon_delete",
+   "slug",
+   "editor"
+  ],
+  [
+   "constructicon_delete",
+   "slugs",
+   "editor"
+  ],
+  [
+   "constructicon_delete",
+   "card",
+   "editor"
+  ],
+  [
+   "constructicon_delete",
+   "blog_entry",
+   "editor"
+  ],
+  [
+   "constructicon_delete",
+   "everything",
+   "admin"
+  ],
+  [
+   "constructicon_trash",
+   "list",
+   "admin"
+  ],
+  [
+   "constructicon_trash",
+   "empty",
+   "admin"
+  ],
+  [
+   "constructicon_duplicates",
+   "plan",
+   "editor"
+  ],
+  [
+   "constructicon_duplicates",
+   "apply",
+   "admin"
+  ],
+  [
+   "constructicon_lookalikes",
+   "list",
+   "viewer"
+  ],
+  [
+   "constructicon_lookalikes",
+   "confirm",
+   "editor"
+  ],
+  [
+   "constructicon_lookalikes",
+   "dismiss",
+   "editor"
+  ],
+  [
+   "constructicon_proposals",
+   "list",
+   "viewer"
+  ],
+  [
+   "constructicon_proposals",
+   "confirm",
+   "editor"
+  ],
+  [
+   "constructicon_proposals",
+   "dismiss",
+   "editor"
+  ],
+  [
+   "constructicon_item_tags",
+   "attach",
+   "editor"
+  ],
+  [
+   "constructicon_item_tags",
+   "detach",
+   "editor"
+  ],
+  [
+   "constructicon_related",
+   "add",
+   "editor"
+  ],
+  [
+   "constructicon_related",
+   "remove",
+   "editor"
+  ],
+  [
+   "constructicon_list_items",
+   "redacted",
+   "admin"
+  ],
+  [
+   "constructicon_list_items",
+   "restricted",
+   "admin"
+  ],
+  [
+   "constructicon_list_items",
+   "brand_assets",
+   "viewer"
+  ],
+  [
+   "constructicon_list_items",
+   "tag",
+   "viewer"
+  ],
+  [
+   "constructicon_list_items",
+   "unfiled",
+   "viewer"
+  ],
+  [
+   "constructicon_list_items",
+   "similar",
+   "viewer"
+  ],
+  [
+   "constructicon_caption_review",
+   "list",
+   "viewer"
+  ],
+  [
+   "constructicon_caption_review",
+   "accept",
+   "editor"
+  ],
+  [
+   "constructicon_caption_review",
+   "skip",
+   "editor"
+  ],
+  [
+   "constructicon_caption_review",
+   "retry",
+   "editor"
+  ],
+  [
+   "constructicon_revision",
+   "supersede",
+   "editor"
+  ],
+  [
+   "constructicon_revision",
+   "remove",
+   "editor"
+  ],
+  [
+   "constructicon_run_type_action",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_list_projects",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_create_project",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_update_project",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_get_project",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_explain_card",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_card_files",
+   "add",
+   "editor"
+  ],
+  [
+   "constructicon_card_files",
+   "remove",
+   "editor"
+  ],
+  [
+   "constructicon_card_files",
+   "move",
+   "editor"
+  ],
+  [
+   "constructicon_card_files",
+   "copy",
+   "editor"
+  ],
+  [
+   "constructicon_card_hobby",
+   "add",
+   "editor"
+  ],
+  [
+   "constructicon_card_hobby",
+   "remove",
+   "editor"
+  ],
+  [
+   "constructicon_family",
+   "add",
+   "editor"
+  ],
+  [
+   "constructicon_family",
+   "remove",
+   "editor"
+  ],
+  [
+   "constructicon_nest",
+   "nest",
+   "editor"
+  ],
+  [
+   "constructicon_nest",
+   "unnest",
+   "editor"
+  ],
+  [
+   "constructicon_sharing",
+   "get",
+   "viewer"
+  ],
+  [
+   "constructicon_sharing",
+   "users",
+   "editor"
+  ],
+  [
+   "constructicon_sharing",
+   "set_private",
+   "editor"
+  ],
+  [
+   "constructicon_sharing",
+   "add_member",
+   "editor"
+  ],
+  [
+   "constructicon_sharing",
+   "remove_member",
+   "editor"
+  ],
+  [
+   "constructicon_link",
+   "add",
+   "editor"
+  ],
+  [
+   "constructicon_link",
+   "remove",
+   "editor"
+  ],
+  [
+   "constructicon_link",
+   "retype",
+   "editor"
+  ],
+  [
+   "constructicon_link",
+   "list",
+   "viewer"
+  ],
+  [
+   "constructicon_retype_links",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_split_card",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_merge_cards",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_convert",
+   "card_to_hobby",
+   "admin"
+  ],
+  [
+   "constructicon_convert",
+   "hobby_to_card",
+   "admin"
+  ],
+  [
+   "constructicon_bulk_edit",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_undo",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_list_changes",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_list_hobbies",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_create_hobby",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_update_hobby",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_unmark_hobby",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_list_blog_entries",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_get_blog_entry",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_create_blog_entry",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_update_blog_entry",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_list_tags",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_create_tag",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_tags",
+   "tree",
+   "viewer"
+  ],
+  [
+   "constructicon_tags",
+   "get",
+   "viewer"
+  ],
+  [
+   "constructicon_tags",
+   "sweep",
+   "editor"
+  ],
+  [
+   "constructicon_tags",
+   "rename",
+   "editor"
+  ],
+  [
+   "constructicon_tags",
+   "merge",
+   "editor"
+  ],
+  [
+   "constructicon_tags",
+   "move",
+   "editor"
+  ],
+  [
+   "constructicon_tags",
+   "delete",
+   "editor"
+  ],
+  [
+   "constructicon_tags",
+   "sweep_apply",
+   "editor"
+  ],
+  [
+   "constructicon_list_provenance_options",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_list_vocab",
+   null,
+   "viewer"
+  ],
+  [
+   "constructicon_needs",
+   "queue",
+   "viewer"
+  ],
+  [
+   "constructicon_needs",
+   "nudges",
+   "viewer"
+  ],
+  [
+   "constructicon_needs",
+   "caption",
+   "viewer"
+  ],
+  [
+   "constructicon_needs",
+   "card_decisions",
+   "viewer"
+  ],
+  [
+   "constructicon_needs",
+   "pending",
+   "viewer"
+  ],
+  [
+   "constructicon_queue_item",
+   "dismiss",
+   "editor"
+  ],
+  [
+   "constructicon_queue_item",
+   "defer",
+   "editor"
+  ],
+  [
+   "constructicon_queue_item",
+   "bring_back",
+   "editor"
+  ],
+  [
+   "constructicon_resolve_pending_decision",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_resolve_decisions",
+   null,
+   "editor"
+  ],
+  [
+   "constructicon_sweep_stale_decisions",
+   null,
+   "editor"
+  ]
+ ],
+ "instructions": "Constructicon: a personal archive. Items are files or links (by slug); cards are projects, things, actions, families, collections and events (by id or slug); hobbies group cards; plus tags and blog entries.\n\nConventions for every tool:\n- Errors: a refusal is an error result {\"ok\": false, \"error\": {\"code\", \"message\", \"details\"?}}, with the HTTP API's codes, and nothing is written. A missing target is \"not_found\" (never null/false); bad input is \"bad_request\" unless a more specific code applies; \"forbidden\" says who may do it and why.\n- Undo: every write is logged with row images and returns \"batch_id\" (null when nothing changed). One call is one batch: constructicon_undo(batch_id) reverses all of it; constructicon_list_changes shows the log. A tool that takes batch_id joins an earlier call's batch.\n- dry_run=true answers as the write would and writes nothing. constructicon_bulk_edit, constructicon_resolve_decisions and constructicon_retype_links are dry-run by DEFAULT.\n- Visibility: sensitive and restricted items are admin-only (or their uploader's). Private cards and hobbies (and everything under them) are seen only by admins, their owner and their members; constructicon_sharing manages that. A hidden item or card reads as not_found; a write that names a hidden item is refused as forbidden, saying why.\n- Identity: the install token acts as the admin; a personal MCP token (made in the web app under Account > MCP tokens) acts as that user, with their role and what they can see.\n- Text: a tool returning many items sends a ~300-character preview of each one's extracted_text, plus extracted_text_chars and extracted_text_truncated (text_chars=0..5000 where offered), and trims big type_metadata values (type_metadata_truncated, type_metadata_cut_keys). constructicon_get(slug) returns one item whole; constructicon_get(slug, text_offset=, text_chars=) reads a long text by the page (next_offset). Long lists page: limit + cursor -> next_cursor (null at the end).\n- Dates: an ISO date or datetime with no offset is Mountain Time (America/Denver); unix seconds also work.\n- Selector tools take action= (or view=, which=, direction=); each value is listed with what it returns.\n- Names retired in 2026-10 (#746) still answer but are not listed; use the listed tools.",
+ "names": {
+  "ACTION_ROLES": "value",
+  "BASE_URL": "value",
+  "CAPTION_REVIEW_PAGE_DEFAULT": "value",
+  "CARD_FIELDS": "value",
+  "CallToolResult": "class",
+  "DOWNLOAD_INLINE_MAX_BYTES": "value",
+  "GET_INCLUDES": "value",
+  "GET_WINDOW_MAX_CHARS": "value",
+  "IMPORT_DIR": "value",
+  "ITEM_FIELDS": "value",
+  "InvalidInput": "class",
+  "LIST_PAGE_DEFAULT": "value",
+  "LIST_PAGE_MAX": "value",
+  "MCPServer": "class",
+  "META_VALUE_MAX_CHARS": "value",
+  "McpImage": "class",
+  "NotFound": "class",
+  "Path": "class",
+  "RESERVED_ACTION": "value",
+  "SERVER_INSTRUCTIONS": "value",
+  "STARTED_LABEL": "value",
+  "TEXT_PREVIEW_CHARS": "value",
+  "TEXT_PREVIEW_MAX_CHARS": "value",
+  "TextContent": "class",
+  "ToolAnnotations": "class",
+  "VIEW_OCR_CHARS": "value",
+  "_ALIAS_LABELS": "value",
+  "_ALIAS_OF": "value",
+  "_Collect": "class",
+  "_DESTRUCTIVE": "value",
+  "_ELLIPSIS": "value",
+  "_HIDDEN_ALIASES": "value",
+  "_NOTHING_CHANGED": "value",
+  "_SELECTORS": "value",
+  "_TOOL_FUNCS": "value",
+  "_TOOL_WORD": "value",
+  "_WRAPPED_TOOLS": "value",
+  "_action_of": "callable",
+  "_add_to_project": "callable",
+  "_agent_notes_target": "callable",
+  "_alias_log": "value",
+  "_attachments": "callable",
+  "_call_as_mcp": "callable",
+  "_caption_context": "callable",
+  "_caption_review_rows": "callable",
+  "_check_action_roles": "callable",
+  "_check_every_tool_wrapped": "callable",
+  "_convert_card_to_hobby": "callable",
+  "_dedupe": "callable",
+  "_delete_card": "callable",
+  "_delete_redacted_file": "callable",
+  "_delete_target": "callable",
+  "_detach_tag": "callable",
+  "_empty_list_visible": "callable",
+  "_empty_trash": "callable",
+  "_error_payload": "callable",
+  "_fields_arg": "callable",
+  "_first_hit": "callable",
+  "_fold": "callable",
+  "_hobby_creator": "callable",
+  "_hobby_or_404": "callable",
+  "_ingest": "callable",
+  "_list_brand_assets": "callable",
+  "_list_redacted": "callable",
+  "_list_restricted": "callable",
+  "_list_tools_without_aliases": "callable",
+  "_make_cursor": "callable",
+  "_meta_fields": "callable",
+  "_needs_caption": "callable",
+  "_nudges": "callable",
+  "_only_for": "callable",
+  "_page_limit": "callable",
+  "_paged": "callable",
+  "_pending_decisions": "callable",
+  "_posts_for_tag": "callable",
+  "_queue": "callable",
+  "_read_cursor": "callable",
+  "_recover_redacted": "callable",
+  "_redact": "callable",
+  "_relate": "callable",
+  "_related_listed": "callable",
+  "_remove_from_project": "callable",
+  "_request_actor": "callable",
+  "_require_role": "callable",
+  "_resolve_import_path": "callable",
+  "_retry_ocr": "callable",
+  "_run_in_thread": "callable",
+  "_sdk_list_tools": "callable",
+  "_sdk_tool": "callable",
+  "_selector_values": "callable",
+  "_set_writeup": "callable",
+  "_similar": "callable",
+  "_tag_or_404": "callable",
+  "_text_preview": "callable",
+  "_text_window": "callable",
+  "_to_public": "callable",
+  "_to_public_blog_entry": "callable",
+  "_to_public_listed": "callable",
+  "_to_public_project": "callable",
+  "_tool": "callable",
+  "_transcript_from_vtt": "callable",
+  "_trim_meta": "callable",
+  "_unfiled": "callable",
+  "_unredact": "callable",
+  "_unrelate": "callable",
+  "_viewable_item": "callable",
+  "_whole_number": "callable",
+  "_written": "callable",
+  "access_log": "module",
+  "actor_ctx": "module",
+  "backup": "module",
+  "base64": "module",
+  "besteffort": "module",
+  "binascii": "module",
+  "blog": "module",
+  "captions": "module",
+  "card_rules": "module",
+  "cards": "module",
+  "changes": "module",
+  "constructicon_add_content": "callable",
+  "constructicon_add_items_to_project": "callable",
+  "constructicon_add_project_to_hobby": "callable",
+  "constructicon_add_related": "callable",
+  "constructicon_add_to_family": "callable",
+  "constructicon_add_to_hobby": "callable",
+  "constructicon_add_to_project": "callable",
+  "constructicon_attach_tags": "callable",
+  "constructicon_backup": "callable",
+  "constructicon_bring_back": "callable",
+  "constructicon_bulk_edit": "callable",
+  "constructicon_caption_review": "callable",
+  "constructicon_card_files": "callable",
+  "constructicon_card_hobby": "callable",
+  "constructicon_convert": "callable",
+  "constructicon_convert_hobby_to_card": "callable",
+  "constructicon_convert_project_to_hobby": "callable",
+  "constructicon_copy_files": "callable",
+  "constructicon_create_blog_entry": "callable",
+  "constructicon_create_hobby": "callable",
+  "constructicon_create_project": "callable",
+  "constructicon_create_tag": "callable",
+  "constructicon_curation_queue": "callable",
+  "constructicon_defer": "callable",
+  "constructicon_delete": "callable",
+  "constructicon_delete_all": "callable",
+  "constructicon_delete_blog_entry": "callable",
+  "constructicon_delete_multiple": "callable",
+  "constructicon_delete_project": "callable",
+  "constructicon_delete_redacted_file": "callable",
+  "constructicon_detach_tag": "callable",
+  "constructicon_dismiss_need": "callable",
+  "constructicon_download": "callable",
+  "constructicon_duplicates": "callable",
+  "constructicon_empty_trash": "callable",
+  "constructicon_explain_card": "callable",
+  "constructicon_family": "callable",
+  "constructicon_get": "callable",
+  "constructicon_get_blog_entry": "callable",
+  "constructicon_get_posts_for_tag": "callable",
+  "constructicon_get_project": "callable",
+  "constructicon_get_related": "callable",
+  "constructicon_import": "callable",
+  "constructicon_item_tags": "callable",
+  "constructicon_link": "callable",
+  "constructicon_list_blog_entries": "callable",
+  "constructicon_list_brand_assets": "callable",
+  "constructicon_list_changes": "callable",
+  "constructicon_list_hobbies": "callable",
+  "constructicon_list_import": "callable",
+  "constructicon_list_items": "callable",
+  "constructicon_list_links": "callable",
+  "constructicon_list_needs": "callable",
+  "constructicon_list_needs_caption": "callable",
+  "constructicon_list_needs_decision": "callable",
+  "constructicon_list_pending_decisions": "callable",
+  "constructicon_list_projects": "callable",
+  "constructicon_list_provenance_options": "callable",
+  "constructicon_list_redacted": "callable",
+  "constructicon_list_restricted": "callable",
+  "constructicon_list_revisions": "callable",
+  "constructicon_list_tags": "callable",
+  "constructicon_list_trash": "callable",
+  "constructicon_list_vocab": "callable",
+  "constructicon_lookalikes": "callable",
+  "constructicon_mark_superseded": "callable",
+  "constructicon_merge_cards": "callable",
+  "constructicon_move_files": "callable",
+  "constructicon_needs": "callable",
+  "constructicon_nest": "callable",
+  "constructicon_proposals": "callable",
+  "constructicon_queue_item": "callable",
+  "constructicon_recover_redacted": "callable",
+  "constructicon_redact": "callable",
+  "constructicon_related": "callable",
+  "constructicon_remove_from_family": "callable",
+  "constructicon_remove_from_hobby": "callable",
+  "constructicon_remove_from_project": "callable",
+  "constructicon_remove_from_revisions": "callable",
+  "constructicon_remove_related": "callable",
+  "constructicon_replace_file": "callable",
+  "constructicon_resolve_decisions": "callable",
+  "constructicon_resolve_pending_decision": "callable",
+  "constructicon_retry_ocr": "callable",
+  "constructicon_retype_link": "callable",
+  "constructicon_retype_links": "callable",
+  "constructicon_revision": "callable",
+  "constructicon_run_type_action": "callable",
+  "constructicon_search": "callable",
+  "constructicon_set_agent_notes": "callable",
+  "constructicon_set_blog_entry_items": "callable",
+  "constructicon_set_blog_entry_projects": "callable",
+  "constructicon_set_brand_asset": "callable",
+  "constructicon_set_caption": "callable",
+  "constructicon_set_card_highlight": "callable",
+  "constructicon_set_card_provenance": "callable",
+  "constructicon_set_card_text": "callable",
+  "constructicon_set_content_date": "callable",
+  "constructicon_set_highlight": "callable",
+  "constructicon_set_hobby_code": "callable",
+  "constructicon_set_hobby_cover": "callable",
+  "constructicon_set_hobby_status": "callable",
+  "constructicon_set_home": "callable",
+  "constructicon_set_kind": "callable",
+  "constructicon_set_project_status": "callable",
+  "constructicon_set_project_writeup": "callable",
+  "constructicon_set_provenance": "callable",
+  "constructicon_set_sensitive": "callable",
+  "constructicon_set_status": "callable",
+  "constructicon_set_whereabouts": "callable",
+  "constructicon_sharing": "callable",
+  "constructicon_split_card": "callable",
+  "constructicon_sweep_stale_decisions": "callable",
+  "constructicon_tags": "callable",
+  "constructicon_trash": "callable",
+  "constructicon_undated": "callable",
+  "constructicon_undo": "callable",
+  "constructicon_unlink": "callable",
+  "constructicon_unmark_hobby": "callable",
+  "constructicon_unnest": "callable",
+  "constructicon_unredact": "callable",
+  "constructicon_update": "callable",
+  "constructicon_update_blog_entry": "callable",
+  "constructicon_update_hobby": "callable",
+  "constructicon_update_project": "callable",
+  "constructicon_upload": "callable",
+  "constructicon_version": "callable",
+  "constructicon_view": "callable",
+  "correlations": "module",
+  "curation_queue": "module",
+  "curator_needs": "module",
+  "datetime": "class",
+  "db": "module",
+  "decisions": "module",
+  "duplicates": "module",
+  "errors": "module",
+  "functools": "module",
+  "hobbies": "module",
+  "hobby_label_rules": "module",
+  "ingest": "module",
+  "inspect": "module",
+  "install_config": "module",
+  "io": "module",
+  "item_dates": "module",
+  "item_title": "module",
+  "items": "module",
+  "json": "module",
+  "logging": "module",
+  "lookalikes": "module",
+  "mcp": "value",
+  "mcp_tokens": "module",
+  "membership": "module",
+  "object_types": "module",
+  "ocr": "module",
+  "os": "module",
+  "parse_limits": "module",
+  "paths": "module",
+  "physical_piece": "module",
+  "policy": "module",
+  "provenance_options": "module",
+  "provenance_rules": "module",
+  "pydantic": "module",
+  "re": "module",
+  "reset": "module",
+  "revisions": "module",
+  "role_for": "callable",
+  "roles": "module",
+  "sharing": "module",
+  "similarity": "module",
+  "storage": "module",
+  "sys": "module",
+  "tags_svc": "module",
+  "text_chars_arg": "callable",
+  "thumbnails": "module",
+  "timeline": "module",
+  "tool_description_for": "callable",
+  "tool_name_for": "callable",
+  "tool_registrations": "callable",
+  "transcripts": "module",
+  "typing": "module",
+  "unicodedata": "module",
+  "users": "module",
+  "version_info": "module",
+  "vocab_svc": "module"
+ }
+}

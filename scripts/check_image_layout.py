@@ -248,7 +248,8 @@ MUST_EXCLUDE = [
 MUST_INCLUDE = [
     "Dockerfile", "requirements.txt", "core/db/__init__.py", "core/db/conn.py", "core/object_types/image.py",
     "core/backup.py", "web/app.py", "web/templates/base.html", "web/static/js/cards.js",
-    "mcp_server/server.py", "assets/brand/logo.png",
+    "mcp_server/server.py", "mcp_server/wrapper.py", "mcp_server/tools/items.py",  # #547 step 3: the MCP package
+    "assets/brand/logo.png",
 ]
 for p in MUST_EXCLUDE:
     check(f".dockerignore keeps out {p}", excluded(pats, p))

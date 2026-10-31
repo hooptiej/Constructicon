@@ -162,8 +162,10 @@ print("--- 4. references ---")
 for rel in ("scripts/test_auth_step1.py", "scripts/test_setup_race_648.py"):
     src = open(os.path.join(ROOT, rel)).read()
     check(f"{rel} imports reset_password from core.manage", "from core.manage import reset_password" in src)
-for rel in ("web/templates/setup.html", "core/users.py", "core/install_token.py", "mcp_server/server.py",
-            "docker-compose.yml.example"):
+MCP_FILES = sorted(os.path.relpath(os.path.join(d, f), ROOT).replace(os.sep, "/")  # #547 step 3: a package now
+                   for d, _dirs, fs in os.walk(os.path.join(ROOT, "mcp_server")) for f in fs if f.endswith(".py"))
+for rel in ["web/templates/setup.html", "core/users.py", "core/install_token.py"] + MCP_FILES + [
+            "docker-compose.yml.example"]:
     src = open(os.path.join(ROOT, rel)).read()
     check(f"{rel} no longer points at scripts/reset_password.py or scripts/mcp_token.py",
           "scripts/reset_password" not in src and "scripts/mcp_token" not in src)

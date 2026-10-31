@@ -307,10 +307,33 @@ the date and commit forward when you re-verify.
 - **`core/backup.py`** — standalone `POST /api/backup` backup-to-zip
   (DB snapshot + `storage/`). Deliberately **not** wired into any delete
   path (a past incident wiped storage while only the DB got backed up).
-- **`mcp_server/server.py`** — the live `constructicon-mcp` sidecar (see
+- **`mcp_server/`** — the live `constructicon-mcp` sidecar (see
   "MCP server: `constructicon-mcp`" below for the tool surface and how it
   runs alongside `constructicon-web`). Tool names are `constructicon_*`;
-  the old imagerepo vocabulary is gone from here.
+  the old imagerepo vocabulary is gone from here. **Since #547 step 3** the one 3,660-line
+  `server.py` is split, moved verbatim with no behaviour change: `server.py` is only the entry point
+  (`python -m mcp_server.server`; the `__main__` start-up, the data-folder and token-file refusals) and
+  re-exports every name the old module had, so `from mcp_server import server` then `server.<name>`
+  (public or `_private`) is unchanged for tests and callers. The modules, in load order (each imports
+  only from the ones above it, so there is no cycle): `_boot.py` (the process role #549, the file mode
+  #652, then core in the old order), `app.py` (settings, the hobby-label tool names #700,
+  `SERVER_INSTRUCTIONS`, the `mcp` MCPServer), `action_roles.py` (`ACTION_ROLES`, `role_for`), `wrapper.py`
+  (the one `@mcp.tool()` wrapper: actor, errors, aliases, roles; `_call_as_mcp`), `shapes.py` (`_to_public`,
+  `_to_public_listed` and the other shapers, the text preview #697), `_common.py` (helpers more than one tool
+  module shares), `listing.py` (the item lists, #722's paging), `tools/` (the tools, one module per area:
+  `files`, `items`, `lists`, `housekeeping`, `content`, `cards`, `hobbies`, `blog`, `tags`, `fields`,
+  `card_ops`, `curator`) and `checks.py` (the startup checks). **The order of `tools/__init__.py`'s modules is
+  the tools/list order** (each module is a run of tools that sat together in the old file): a new tool goes
+  at the end of its area's module, or a new module at the end of the list. A tool module imports only the
+  shared modules, never another tool module (a helper two need goes in `_common.py`). Same two rules as
+  `core/db/` and `core/cards/`: one copy of every name (`server.py` refuses to load otherwise) and
+  **monkeypatch through `mcp_server.server`** (`server._call_as_mcp = fake` rebinds it in every module
+  that held it, so the wrapper calls the fake; `mcp_server.wrapper._call_as_mcp = ...` reaches only that
+  file). Check with `scripts/test_mcp_tools_package_547.py`: tools/list (names, descriptions, schemas,
+  annotations), every registration (aliases too), `ACTION_ROLES` and the instructions, in order, against
+  `scripts/data/mcp_tools_547.json` (written from the pre-split server; rewrite it only when the surface
+  changes on purpose), plus the names, one copy, forwarding, the wrapper over every tool module, the load
+  order. `mcp_server/auth.py` (the bearer-token middleware) is unchanged.
 - **`scripts/`** — four kinds of file; the folder says which is which (#552):
   - *Tests and checks* (`test_*.py`, `test_*.js`, `check_*.py`): run them with `scripts/run_checks.py`,
     see "Build / test / run".
@@ -432,8 +455,9 @@ Don't map these by hand in routes or tools: the two front ends do it.
   validation error keeps its `detail` list, with code `validation_error`. **`detail` stays**
   because the page JS reads it. New JS should read `(body.error && body.error.message) ||
   body.detail`.
-- **MCP** (the `@mcp.tool()` wrapper in `mcp_server/server.py`, which replaces
-  `MCPServer.tool`; startup refuses if a registered tool bypassed it): an `AppError`,
+- **MCP** (the `@mcp.tool()` wrapper in `mcp_server/wrapper.py`, which replaces
+  `MCPServer.tool`; every tool module in `mcp_server/tools/` registers through it, and startup
+  (`mcp_server/checks.py`) refuses if a registered tool bypassed it): an `AppError`,
   `ValueError` or pydantic `ValidationError` raised in a tool becomes `{"ok": false,
   "error": {"code", "message"[, "details"]}}`. Over MCP it is an isError result whose
   text is that JSON. **Not found is an error**: a getter or setter whose target doesn't
@@ -2804,7 +2828,8 @@ the titles of the cards it is on (`project_items`), the uploader's note (`descri
 Constructicon **does have a live MCP server** — `constructicon-mcp` runs
 as its own container alongside `constructicon-web` (and
 `constructicon-test-mcp` alongside `constructicon-test`), built from
-`mcp_server/server.py`, exposing 63 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
+`mcp_server/` (entry point `server.py`, the tools in `mcp_server/tools/` since #547 step 3; see the
+module map above), exposing 63 tools (55 after #746, plus `constructicon_tags` (#555), `constructicon_undated` (#725),
 `constructicon_sharing` (#604), `constructicon_duplicates` (#615), `constructicon_caption_review` (#556),
 `constructicon_lookalikes` (#759), `constructicon_list_vocab` (#556) and `constructicon_proposals` (#354/#344), 63 in all) like `constructicon_search`, `constructicon_get`,
 `constructicon_update`, `constructicon_list_projects`, `constructicon_update_project`,
@@ -2883,15 +2908,20 @@ configuration gap for that session, not evidence the server itself is gone.
     undo / batch ids, dry runs, visibility, text previews, dates, selectors), not in every description;
     descriptions say usage and one short example, no issue numbers or history. **No tool publishes an
     `outputSchema`** (`structured_output=False`): results are the JSON text (an empty list is `[]`).
-  - **Who may run what: `ACTION_ROLES`** in `server.py`, one row per `(tool, action)` (viewer for reads,
+  - **Who may run what: `ACTION_ROLES`** in `mcp_server/action_roles.py` (`server.ACTION_ROLES`), one row per `(tool, action)` (viewer for reads,
     editor for curation, admin for anything permanent or install-wide). The wrapper checks it on every
     call (an alias uses the row of the call it stands for). The install token is admin, so it is never
     refused; a per-user MCP token (#604 step 5) runs as its user, and this table refuses what their role
     doesn't allow (403 forbidden naming the role). Startup
-    refuses a visible tool or selector value with no row.
-  - **Adding or changing a tool:** add its `ACTION_ROLES` row(s), classify it in
+    refuses a visible tool or selector value with no row (`mcp_server/checks.py`, run when `server.py`
+    loads, after every tool module).
+  - **Adding or changing a tool:** put it in its area's module under `mcp_server/tools/` (at the end:
+    the module order and the order inside each module are the tools/list order), decorated
+    `@mcp.tool(...)` (every tool goes through the wrapper), add its `ACTION_ROLES` row(s), classify it in
     `scripts/check_policy_doors.py` `MCP_TOOLS` (rule 4 covers EVERY MCP tool and alias: opens | items |
-    admin | new | none, each verified), and update `scripts/data/mcp_tool_names_700.json`.
+    admin | new | none, each verified; it reads every file of `mcp_server/` but `auth.py` as one tree),
+    and update `scripts/data/mcp_tool_names_700.json` and, on purpose, `scripts/data/mcp_tools_547.json`
+    (`scripts/test_mcp_tools_package_547.py` fails until the snapshot matches).
 - **Captioning through MCP (#588, #585, #587 item 5).** On an install with no Ollama
   (`CAPTION_DISABLED=1`) an agent that can see images does the captioning:
   1. `constructicon_needs(view="caption", limit=50, include_failed=True)`: caption-capable items with no
@@ -2979,7 +3009,7 @@ configuration gap for that session, not evidence the server itself is gone.
   / links `pairs` ([[a, b]]) `related` (default: every current proposal); `dismiss` = "not this one" / "not
   related", remembered. confirm and dismiss DRY-RUN BY DEFAULT. Roles: list viewer, the rest editor. See
   "The Curator's Apprentice" under "Service layer".
-- `mcp_server/server.py` still carries some stale-vocabulary rough edges
+- `mcp_server/` still carries some stale-vocabulary rough edges
   from its imagerepo origin in places; treat naming inconsistencies as
   worth fixing opportunistically, not as evidence the server isn't real.
 
@@ -3798,7 +3828,7 @@ docker restart <container>` explicitly rather than re-running deploy.sh.
 - **The imagerepo ticketing vestiges are gone (#704).** `client`, `ticket_id`, `source`,
   `artifact_link`, the `icon` override and the client tables were dropped; don't bring them back.
   `tech` stays (it is the Source label).
-- **`mcp_server/server.py` IS live** (`constructicon-mcp` / `constructicon-test-mcp`
+- **`mcp_server/` IS live** (`constructicon-mcp` / `constructicon-test-mcp`
   containers — see the MCP section above). If a session can't see
   `mcp__constructicon-mcp__*` tools, that's a session configuration gap,
   not evidence the server is missing.

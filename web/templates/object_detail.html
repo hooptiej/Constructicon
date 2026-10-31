@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ item.display_name }} — {{ app_name() }}{% endblock %}
 {% block body %}
-{% include "_header.html" %}
-{% include "_upload_drawer.html" %}
-{% include "_blog_builder.html" %}
-{% include "_export_builder.html" %}
 {% from "_details_group.html" import dp_group %}
 <div class="app-main dp-page">
   <span class="dp-status-live" id="dp-status-live" role="status" aria-live="polite"></span>

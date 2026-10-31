@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ title }} — {{ app_name() }}{% endblock %}
 {% block body %}
-{% include "_header.html" %}
-{% include "_upload_drawer.html" %}
-{% include "_blog_builder.html" %}
-{% include "_export_builder.html" %}
 {#- #562: an in-app how-to guide (web/guides/*.md, GET /guides/<name>). `body` is already safe
     Markdown (core/markdown_render: raw HTML off), so it is not escaped again here. -#}
 <div class="app-main">

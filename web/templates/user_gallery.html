@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ uploader_display }} — {{ app_name() }}{% endblock %}
 {% block body %}
-{% include "_header.html" %}
-{% include "_upload_drawer.html" %}
-{% include "_blog_builder.html" %}
-{% include "_export_builder.html" %}
 <div class="app-main">
   {# #553: was "Back to gallery" -> /gallery, which only redirects home; say where it goes. #}
   <a class="back-link" href="/">

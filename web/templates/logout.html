@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Sign out — {{ app_name() }}{% endblock %}
 {% block body %}
-{% include "_header.html" %}
-{% include "_upload_drawer.html" %}
-{% include "_blog_builder.html" %}
-{% include "_export_builder.html" %}
 {#- #467 step 1: signing out is a POST (a GET never ends a session), from this page's button. -#}
 <div class="app-main">
   <section class="admin-panel auth-card">

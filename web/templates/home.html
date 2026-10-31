@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% from "_card.html" import card %}
 {% block title %}{{ app_name() }}{% endblock %}
+{#- #547 opt-out: the home page swaps base.html's click-open Upload drawer for its hover pop-out
+    (_gallery_drawer.html: the same form, so the same element ids; never both on one page). The
+    header, Blog and Export drawers still come from base.html. -#}
+{% block upload_drawer %}{% include "_gallery_drawer.html" %}{% endblock %}
 {% block body %}
-{% include "_header.html" %}
-{% include "_gallery_drawer.html" %}
-{% include "_blog_builder.html" %}
-{% include "_export_builder.html" %}
 
 <div class="app-main">
   {# #775 "Tune in to the past": the timeline is a horizontal radio dial across the top (it replaced

@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Set up — {{ app_name() }}{% endblock %}
 {% block body %}
-{% include "_header.html" %}
-{% include "_upload_drawer.html" %}
-{% include "_blog_builder.html" %}
-{% include "_export_builder.html" %}
 {#- #467 step 1: first-run setup. Served only while the install has no user (404 afterwards).
     Creates the first admin, signs them in, and fills the install's owner name when unset.
     #648: claiming the install needs its install token (the secret file made on the server during

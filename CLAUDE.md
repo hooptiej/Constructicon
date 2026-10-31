@@ -94,6 +94,20 @@ the date and commit forward when you re-verify.
     the JSON/form API the templates' JS calls; `/f/{slug}` and
     `/f/{slug}/thumb` are the public hotlink + thumbnail routes (stable URLs
     meant to be embedded elsewhere).
+  - **The page shell lives in `templates/base.html` (#547 step 4).** Every page extends it and gets,
+    once each: the header (`_header.html`, which holds the hidden drawer triggers), the Upload,
+    Blog and Export drawers (`_upload_drawer.html`, `_blog_builder.html`, `_export_builder.html`),
+    in that order and BEFORE the page's `{% block body %}` (so page scripts still run after the
+    drawer scripts), then after the body the Brand, Hobbies, Curator and Admin drawers, the nav rail
+    (`_nav_tabs.html`) and the Processing drawer. **A page never includes these itself** (their ids
+    would appear twice). Each drawer partial checks `has_role` itself (#779: below the role nothing of
+    it is sent and the rail tab is greyed). Opting out: `?embed=1` (`embed` in the context, the Admin
+    drawer's iframe) drops the whole shell; a page that needs a different or no drawer overrides that
+    one block (`header`, `upload_drawer`, `blog_builder`, `export_builder`) with a comment saying why.
+    The only override today: `home.html` puts its hover pop-out (`_gallery_drawer.html`) in
+    `upload_drawer`. Before this, pages copied the includes and `/curator` and `/captions/review`
+    skipped some, so their Blog / Export / Upload tabs clicked a trigger with no drawer behind it.
+    Check with `scripts/test_drawers_base_547.py`.
 - **`core/db/`** (a package since #547 step 1; was the ~6,700-line `core/db.py`) — the SQLite layer
   and the schema source of truth (`SCHEMA`, `MIGRATIONS`, `init_db`, `transaction()`, `ImageLog`, every
   read query, the pipeline writers). Callers are unchanged: `from core import db`, then `db.<name>`

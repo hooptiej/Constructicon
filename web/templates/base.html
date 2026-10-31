@@ -31,6 +31,22 @@
   <script src="/static/js/project-picker.js?v={{ static_version('js/project-picker.js') }}"></script>
 </head>
 <body>
+{#- #547: the always-on page chrome (header + the Upload, Blog and Export drawers) lives HERE, once,
+    for every page that extends base, ahead of the page's own body (so page scripts still run after
+    the drawers' scripts, as when each page included them itself). It used to be four includes
+    copied into every page; /curator and /captions/review skipped some, so their nav-rail tabs
+    clicked a trigger with no drawer behind it. Each drawer partial still checks has_role itself
+    (#779): below the role nothing of it is sent and the rail shows the tab greyed.
+    Opting out: ?embed=1 (the Admin drawer's iframe) drops all of it, like the nav rail below. A
+    page that genuinely needs a different or no drawer overrides that one block, with a comment
+    saying why (home.html swaps upload_drawer for its hover pop-out, _gallery_drawer.html). Never
+    include these partials from a page as well: their element ids would appear twice. -#}
+{% if not embed %}
+{% block header %}{% include "_header.html" %}{% endblock %}
+{% block upload_drawer %}{% include "_upload_drawer.html" %}{% endblock %}
+{% block blog_builder %}{% include "_blog_builder.html" %}{% endblock %}
+{% block export_builder %}{% include "_export_builder.html" %}{% endblock %}
+{% endif %}
 {% block body %}{% endblock %}
 {# #345: the nav rail + its global drawers. Skipped in ?embed=1 mode so the
    Admin drawer's iframe (which loads /admin?embed=1) has no nested chrome. #}

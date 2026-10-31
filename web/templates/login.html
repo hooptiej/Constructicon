@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Sign in — {{ app_name() }}{% endblock %}
 {% block body %}
-{% include "_header.html" %}
-{% include "_upload_drawer.html" %}
-{% include "_blog_builder.html" %}
-{% include "_export_builder.html" %}
 {#- #467 step 1: sign in. Nothing requires it yet (step 2 turns the roles on). The form is
     submitted by JS as JSON; method="post" only so a no-JS submit can never put the password
     in a URL. -#}

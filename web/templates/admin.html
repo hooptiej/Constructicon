@@ -1,12 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Admin — {{ app_name() }}{% endblock %}
 {% block body %}
-{% if not embed %}
-{% include "_header.html" %}
-{% include "_upload_drawer.html" %}
-{% include "_blog_builder.html" %}
-{% include "_export_builder.html" %}
-{% endif %}
+{#- #547: the header and the Upload / Blog / Export drawers come from base.html, which leaves them
+    out in ?embed=1 mode (the Admin drawer's iframe), as this page used to itself. -#}
 <!-- Admin page (#295) — the full-page home of every admin/destructive/meta
      control. This started life as #24's small bottom-right pop-out
      (_admin_pane.html, included on every page); by the time the pending

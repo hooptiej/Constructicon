@@ -93,7 +93,7 @@ MAX_FAILURES_IN_A_ROW = 25          # a job stops when this many members fail on
 PROGRESS_EVERY_SECONDS = 0.5
 ACTIVE = ("queued", "running")
 FINISHED = ("done", "partial", "failed")
-INGEST_SKIP_KINDS = ("unsupported", "content_mismatch", "rejected", "too_large")
+INGEST_SKIP_KINDS = ("unsupported", "content_mismatch", "rejected", "too_large", "empty")
 UNNAMED_FOLDER = "(unnamed folder)"
 INTERRUPTED = ("Stopped: the server restarted while this was running. What it made before the restart is "
                "listed here, and Undo (this job's batch) removes it; run the conversion again for the rest.")
@@ -309,6 +309,8 @@ def analyse(row, answer, shape, depth, actor=None, existing=None):
                 why = f"Unsupported file type: {Path(filename).suffix or '(no extension)'}"
             elif e["size"] > storage.MAX_BYTES:
                 why = f"larger than the {storage.MAX_MB} MB upload limit"
+            elif e["size"] == 0:
+                why = ingest.empty_file_message(filename)  # #830: the same refusal an upload gets
             elif not e.get("file"):
                 why = "it couldn't be extracted"
         if why:

@@ -123,6 +123,8 @@ async def api_upload(
         # web/body_limit.py and is refused here. Same answer as the body cap: 413 payload_too_large.
         raise body_limit.file_too_large(result.error)
     elif result.error:
+        if result.error_kind == "empty":  # #830: its own code, the shared error shape (UI shows the message)
+            raise AppError(ingest.EMPTY_FILE_CODE, result.error, status=400)
         raise HTTPException(status_code=400, detail=result.error)
 
     response = _to_public(result.row)

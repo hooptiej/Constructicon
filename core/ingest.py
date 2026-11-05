@@ -25,7 +25,7 @@ class IngestResult:
     - row: The created/found row dict, or None if error/duplicate (check duplicate flag).
     - duplicate: True if this is an existing row (file already uploaded).
     - error: Human-readable error message, or None if successful.
-    - error_kind: Category of error — one of "too_large", "unsupported", "content_mismatch", "invalid", "rejected", or None.
+    - error_kind: Category of error — one of "too_large", "empty" (#830), "unsupported", "content_mismatch", "invalid", "rejected", or None.
     - pending_decision_id: #448: if action is "needs_decision", the id of the pending_decisions row queued.
     """
     row: dict | None = None
@@ -33,6 +33,16 @@ class IngestResult:
     error: str | None = None
     error_kind: str | None = None
     pending_decision_id: int | None = None
+
+
+# #830: the error code a refused 0-byte upload carries on every front end (core/items.replace_file already
+# uses it for an empty replacement), and the one message every path shows for it.
+EMPTY_FILE_CODE = "empty_file"
+
+
+def empty_file_message(filename):
+    """#830: why a 0-byte upload was refused, in plain words (what happened, what changed, what to do)."""
+    return f"{filename} is empty (0 bytes), so nothing was saved. Check the original file and upload it again."
 
 
 def _apply_pre_store(spec, candidate):
@@ -229,6 +239,12 @@ def ingest_file(
             error_kind="too_large"
         )
 
+    # #830: a 0-byte file (an interrupted upload, a broken export, a placeholder) is refused here, before
+    # the duplicate check and before anything is stored, so every caller (web upload, MCP upload / import,
+    # an unpacked archive member) gets the same refusal. Checked again below against the bytes actually written.
+    if size == 0:
+        return IngestResult(error=empty_file_message(filename), error_kind="empty")
+
     # Duplicate check
     dupe = db.find_duplicate(filename, size, source_modified_at)
     if dupe is not None:
@@ -250,12 +266,17 @@ def ingest_file(
 
     # Save file to storage
     try:
-        slug, stored_filename, _ = storage.save_stream(filename, fileobj)
+        slug, stored_filename, bytes_written = storage.save_stream(filename, fileobj)
     except ValueError as e:
         return IngestResult(
             error=str(e),
             error_kind="too_large"
         )
+
+    # #830: the declared size can be wrong (or measured wrongly); what reached the disk decides.
+    if bytes_written == 0:
+        storage.path_for(stored_filename).unlink(missing_ok=True)
+        return IngestResult(error=empty_file_message(filename), error_kind="empty")
 
     # Now with the path available, detect media_type again (may sniff the content)
     path = storage.path_for(stored_filename)

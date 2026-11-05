@@ -65,7 +65,8 @@ def _ingest(filename, fileobj, file_size, description, tags, uploaded_by, source
     )
 
     if result.error:
-        raise InvalidInput(result.error, code="upload_refused")
+        # #830: a 0-byte file has its own code (the same one replace_file uses)
+        raise InvalidInput(result.error, code=ingest.EMPTY_FILE_CODE if result.error_kind == "empty" else "upload_refused")
     elif result.duplicate:
         response = {**_to_public(result.row), "duplicate": True}
         if result.pending_decision_id:

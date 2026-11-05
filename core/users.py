@@ -683,6 +683,33 @@ def owner_info(user_id):
     return {"id": u["id"], "username": u["username"], "name": u.get("display_name") or u["username"]}
 
 
+# #820: what a file grid, /api/gallery and the item / card / hobby ORIGIN rows call an item whose
+# uploader was not recorded (NULL uploaded_by_user_id: the install token, the MCP, a script, anything
+# made before #604). The templates carry the same words.
+NO_USER_LABEL = "Admin (no user recorded)"
+
+
+def uploader_label(owner):
+    """#820: the name to show for an `owner_info()` result (display name, else username), or
+    NO_USER_LABEL for None."""
+    return owner["name"] if owner else NO_USER_LABEL
+
+
+def manual_upload_source():
+    """#819: the default Source note a WEB upload (/api/upload, /api/content) writes. When a signed-in
+    user is uploading it names THEM ("<display name> — manual upload", the username when there is no
+    display name), not the owner. Any other actor (the install token: the owner's own scripts; anonymous
+    and in-process callers) keeps the owner's label, `db.source_manual_upload()`, as before. The note is
+    free text only; who uploaded is `uploaded_by_user_id` (#560). Existing rows are not touched."""
+    from . import actor as actor_mod  # lazy: actor must not be imported before users is ready
+    current = actor_mod.current_actor()
+    if isinstance(current, str) and current.startswith(USER_ACTOR_PREFIX):
+        u = db.get_user(username=current[len(USER_ACTOR_PREFIX):])
+        if u:
+            return f"{u.get('display_name') or u['username']} — manual upload"
+    return db.source_manual_upload()
+
+
 def role_for_actor(actor):
     """core/roles.role_of() for a "user:<name>" actor: that user's role (PUBLIC when the user is
     gone or disabled)."""

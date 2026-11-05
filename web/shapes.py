@@ -77,6 +77,7 @@ def _to_public(row):
     # same value and can never disagree. #725: the REAL date, else the range inherited from its card
     # (approximate, "≈ ... · from <card>"), else "Undated" (core/item_dates.py).
     shown = item_dates.item_date(row)
+    uploader = users.owner_info(row.get("uploaded_by_user_id"))  # #820 (read once: the badge and ownership_fields)
     return {
         "slug": row["slug"],
         "url": f"/f/{row['slug']}",
@@ -117,14 +118,15 @@ def _to_public(row):
         # distinct from uploaded_at above — omitted here until now, even
         # though the MCP server's equivalent shape already included it.
         "content_date": row.get("content_date"),
-        # uploaded_by keeps the exact Source string (identity/filter key —
-        # used by /api/gallery and search); uploaded_by_display is the short
-        # grouping label (see core/db.py's source_group()) for compact card
-        # UI, so a long Source sentence like "Hooptie J (me) — manual upload"
-        # doesn't overflow a gallery card's small meta line. The full string
-        # is only spelled out in full on the object detail page.
+        # uploaded_by keeps the exact free-text Source note (`tech`; search filters on it). #820:
+        # uploaded_by_display is WHO uploaded it: the uploader's display name (users.uploader_label),
+        # "Admin (no user recorded)" for a NULL uploaded_by_user_id, for the card badge's compact
+        # meta line; uploaded_by_username is the key of that user's gallery
+        # (/gallery/user/<username>), None when there is no account to link. The Source note is
+        # spelled out in full on the object detail page.
         "uploaded_by": row["tech"],
-        "uploaded_by_display": db.source_group(row["tech"]),
+        "uploaded_by_display": users.uploader_label(uploader),
+        "uploaded_by_username": uploader["username"] if uploader else None,
         "redacted": bool(row["redacted"]),
         "extracted_text": row["extracted_text"],
         "ocr_status": row["ocr_status"],
@@ -152,7 +154,7 @@ def _to_public(row):
         "card_date_epoch": shown["sort_epoch"],
         # #604 step 1 / #603: who uploaded it (a user, or None = admin-owned: token / MCP / script)
         # and the sensitive lock. `uploaded_by` above is the older free-text Source label.
-        **ownership_fields(row),
+        **ownership_fields(row, owner=uploader),
     }
 
 
@@ -178,13 +180,19 @@ def _extracted_from(row):
             "slug": src.get("slug") if visible else None}
 
 
-def ownership_fields(row):
-    """{uploaded_by_user, sensitive, sensitive_reason} for an item shape (#604, #603)."""
+_UNSET = object()
+
+
+def ownership_fields(row, owner=_UNSET):
+    """{uploaded_by_user, sensitive, sensitive_reason} for an item shape (#604, #603). `owner` =
+    the row's `users.owner_info(...)` when the caller already has it (saves a lookup)."""
     reason = policy.restriction_reason(row)
     if reason and reason.get("kind") == "flag":
         reason = {**reason, "by_label": actor_label(reason.get("by")),
                   "at_display": _friendly_datetime(reason["at"]) if reason.get("at") else None}
-    return {"uploaded_by_user": users.owner_info(row.get("uploaded_by_user_id")),
+    if owner is _UNSET:
+        owner = users.owner_info(row.get("uploaded_by_user_id"))
+    return {"uploaded_by_user": owner,
             # #778: {"text": "<user>'s <token name>", ...} for an item made with a personal MCP key, else None
             "uploaded_via": mcp_tokens.credit(row.get("uploaded_by_user_id"), row.get("uploaded_via_token_id")),
             # #560: how it arrived (web | mcp | script | migration:<source> | unknown), and in words

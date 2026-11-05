@@ -245,7 +245,7 @@ def _search_filename_fallback(conn, needle, clauses, params, limit):
 
 
 def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=False, include_brand=False,
-           include_superseded=True, filename_fallback=False, uploaded_by_user_id=None):
+           include_superseded=True, filename_fallback=False, uploaded_by_user_id=None, no_uploader_user=False):
     """Keyword/filter search over capture_events. With a `query`, best match first (#543: relevance,
     a hit in a name or tag outranks one inside OCR text; ties newest first). Without one, most recent
     first.
@@ -318,6 +318,10 @@ def search(query=None, tags=None, uploaded_by=None, limit=50, include_redacted=F
             # free-text Source label).
             clauses.append("ce.uploaded_by_user_id = ?")
             params.append(int(uploaded_by_user_id))
+        if no_uploader_user:
+            # #820: the items with NO recorded uploader (install token / MCP / script / pre-#604):
+            # /api/gallery's "Admin (no user recorded)" group.
+            clauses.append("ce.uploaded_by_user_id IS NULL")
         if tags:
             # #543: in SQL, so the LIMIT below applies after the filter. #555: on the TAG TREE (the one
             # tag store): an item carrying a tag with one of these names (any case), or any tag under

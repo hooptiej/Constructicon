@@ -111,6 +111,7 @@ def main():
             "process.stdout.write(window.ItemCards.html(JSON.parse(process.argv[2]), "
             "{selectable: 'row', unfiledSlugs: new Set(['x9'])}));")
     item = dict(ITEMS[2], client=HOSTILE, tags=[HOSTILE, "a", "b", "c"], uploaded_by_display=HOSTILE,
+                uploaded_by_username=HOSTILE,  # #820: the badge's gallery link must be URL-encoded
                 type_icon=HOSTILE, ocr_status="done", extracted_text=HOSTILE)
     r = subprocess.run(["node", "-e", shim, str(ROOT / "web" / "static" / "js" / "cards.js"), json.dumps(item)],
                        capture_output=True, text=True, encoding="utf-8")

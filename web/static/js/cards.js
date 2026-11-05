@@ -132,7 +132,12 @@
     // #563: the per-card client badge is gone (keyed on the dead `client` field, so it showed the
     // same empty-state text on every card); the amber unfiled lamp above is the real signal.
     var by = item.uploaded_by_display;
-    if (by) parts.push('<span class="uploader-label" title="Uploaded by">' + esc(by) + '</span>');
+    // #820: the badge names the uploader (the account, not the free-text Source note) and links to
+    // that user's gallery; an item with no recorded uploader (or a deleted user) is a plain label.
+    if (by) {
+      if (item.uploaded_by_username) parts.push('<a class="uploader-label" href="/gallery/user/' + encodeURIComponent(item.uploaded_by_username) + '" title="Everything ' + esc(by) + ' uploaded">' + esc(by) + '</a>');
+      else parts.push('<span class="uploader-label" title="Uploaded by">' + esc(by) + '</span>');
+    }
     var tags = item.tags || [];
     if (tags.length) {
       var shown = tags.slice(0, 3).map(function (t) { return '<span class="chip">' + esc(t) + '</span>'; }).join('');

@@ -3472,13 +3472,23 @@ deployed_at}`, deployed_at = build time) and the OCI labels (`sudo docker inspec
 into the checkout, as before (#508). `core/version.py` reads the file (fallback `dev`) and appends
 `-dev` at read time when the instance has `CONSTRUCTICON_ENV=dev` (unless the file already carries
 it), so one image reports correctly wherever it runs. The version shows in the bottom-left page
-badge (`base.html`), `GET /api/version` (`{version, commit, deployed_at, env}`),
+badge (`base.html`), `GET /api/version` (`{version, commit, deployed_at, env}` plus, #835,
+`build`, `built_at`, `build_origin`, `build_label`),
 the MCP `constructicon_version` tool and server info, and the static export
 footer ("Built with Constructicon <version>"). `deploy.sh --write-version-only`
 runs just the file step. A tar-over-ssh deploy has no version file, so the app
 shows `dev` (this is expected on constructicon-test for branch work). The ZFS
 snapshot name includes the version being replaced. Check with
 `python scripts/test_release.py` (the next-version logic).
+**The build stamp (#835, the family rule "version plus build on every screen").** There is no second
+stamp file: `VERSION.json`'s `commit` (git short sha) and `deployed_at` ARE the stamp (the image's
+`CONSTRUCTICON_COMMIT` / `_BUILT_AT` build args, or `deploy.sh`'s `write_version_file`). The badge reads
+`v2026.10.30.3 - build a1b2c3d (2026-11-01)` on every page (`app_build()` Jinja global); `/api/version`
+adds `build` (the sha), `built_at`, `build_origin` and `build_label`. With no `VERSION.json` (a plain
+checkout, a tar-over-ssh branch, an image built without the args) `core/version.py` falls back to
+`build source <git short sha>` when git answers (cached 60 s so a render never spawns git each time), else
+`build source`; it never raises. `/healthz` stays `{"ok": true}` (public). Check with
+`python scripts/test_build_stamp_835.py`.
 
 **Pre-deploy backup = a ZFS snapshot, taken by `scripts/deploy.sh` itself
 (#442, 2026-09-30).** Prod's data (DB dir + storage) lives in its own dataset,

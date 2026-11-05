@@ -59,7 +59,7 @@
    that _processing_drawer.html's script looks up when it runs. #}
 {% include "_nav_tabs.html" %}
 {% include "_processing_drawer.html" %}
-<div class="app-version" title="Constructicon version (#508)">{% set _v = app_version() %}{{ "v" ~ _v if _v[0].isdigit() else _v }}</div>
+<div class="app-version" title="Constructicon version and build (#508, #835)">{% set _v = app_version() %}{{ "v" ~ _v if _v[0].isdigit() else _v }} - {{ app_build() }}</div>
 {% endif %}
 </body>
 </html>

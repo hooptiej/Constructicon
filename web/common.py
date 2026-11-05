@@ -58,6 +58,9 @@ templates.env.globals["is_dev"] = _IS_DEV
 # #508: build version, shown subtly on every page via base.html. A callable
 # global so each render re-reads core/VERSION.json (written by deploy.sh).
 templates.env.globals["app_version"] = version_info.get_version
+# #835: the build stamp beside it ("build a1b2c3d (2026-11-01)", or "build source <sha>" on a plain
+# checkout). Never raises; the footer shows it on every page.
+templates.env.globals["app_build"] = version_info.get_build_label
 
 # #581: the install's own name and logo (install config, cached per process). Callables so each
 # render sees a saved change; "Constructicon" and the bundled logo when unset. The tab title keeps

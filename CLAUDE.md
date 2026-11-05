@@ -1293,9 +1293,13 @@ identity, ownership, visibility or a gallery from `tech` or `channel`.
   is the owner's label), else a **404 page that says so** (`id="gallery-not-found"`; the grid API answers
   404 `not_found` with the same words). `/gallery/source/<label>` (grid source `label:<label>`) is the
   label view by name, for when a username and a label clash. The item page's "Uploaded by" and the card
-  page's "Created by" link to the gallery. Not changed (owner, 2026-10-30: separate issues): `/api/gallery`
-  and the grid cards' small "uploaded by" badge still group by the label (`source_group`), and a web upload
-  still writes the owner's "— manual upload" label whoever is signed in.
+  page's "Created by" link to the gallery. **#819 / #820 (owner, 2026-10-30; batch after 16):** `/api/gallery`
+  and the grid cards' small "uploaded by" badge now group and name by `uploaded_by_user_id` (the user's display name,
+  linking to `/gallery/user/<username>`; NULL = "Admin (no user recorded)", no link; `db.list_uploaders` returns
+  `uploaded_by_user_id`, `db.search(no_uploader_user=True)` lists the NULL group; the free-text Source note stays visible in the
+  item details panel). A web upload by a signed-in user writes "<their display name> — manual upload" (`users.manual_upload_source`);
+  other actors (the install token) keep the owner's label. Existing rows were not rewritten. Left to the owner: dropping the label. Before this, a web upload
+  wrote the owner's "— manual upload" label whoever was signed in.
 - **#778 credit: "<user>'s <token name>".** A personal MCP key's id rides in `acting_via` (set by
   `server._call_as_mcp` from `auth.IDENTITY`); `actor.token_id_for(actor)` hands it out ONLY when the
   writing actor is that key's user. Stored as `capture_events.uploaded_via_token_id`,

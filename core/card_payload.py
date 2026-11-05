@@ -14,7 +14,9 @@ CARD_ITEM_FIELDS = (
     "thumb_url", "has_thumbnail", "redacted", "highlight",
     "stacked",  # #596: title of the card the file is on (the face's "Stacked · <card>"); provenance left the face
     # #546: no "client": the card stopped reading it with the badge (#563), and it is empty on every item
-    "uploaded_by_display", "uploaded_at", "tags", "codes",
+    # #820: the badge names the UPLOADER (display name, "Admin (no user recorded)" for none) and links
+    # to /gallery/user/<uploaded_by_username> (None = nothing to link)
+    "uploaded_by_display", "uploaded_by_username", "uploaded_at", "tags", "codes",
     "ocr_status", "extracted_text", "caption_capable", "type_metadata",
     "superseded_by", "rev",  # #477: revision chain (slug of the current revision | None, 1-based position | None)
 )

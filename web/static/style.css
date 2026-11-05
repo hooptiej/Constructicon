@@ -404,6 +404,8 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); }
 }
 
 .uploader-label { font-size: 10.5px; color: var(--text-3); }
+a.uploader-label { text-decoration: none; }  /* #820: the badge links to the uploader's gallery */
+a.uploader-label:hover, a.uploader-label:focus-visible { text-decoration: underline; }
 .ocr-lamp {
   display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   cursor: default; box-shadow: 0 0 0 2px var(--card);

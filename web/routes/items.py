@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from datetime import datetime
+from urllib.parse import quote
 
 from fastapi import Request, Form, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.responses import JSONResponse, Response
@@ -15,7 +16,7 @@ from core import cards, item_dates, tags as tags_svc, timeline, unpack
 from web import body_limit, content_security, files_feed
 from web.common import from_request_thread
 from web.shapes import _friendly_date, _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
-from core import policy, roles
+from core import policy, roles, users
 from core.errors import AppError
 from core.object_types import code as code_type
 from web.roles import RoleRouter, requires
@@ -72,7 +73,8 @@ async def api_upload(
     sensitive: str = Form(""),
 ):
     # The Source string is decided server-side, never by a client-supplied field.
-    user = await run_in_threadpool(db.source_manual_upload)  # #562 (reads the owner label from the DB)
+    # #819: it names the signed-in uploader (not the owner); #562: any other actor keeps the owner label.
+    user = await run_in_threadpool(users.manual_upload_source)
 
     # #433: get file size early for duplicate check; use file.size if available,
     # otherwise measure via seek/tell
@@ -173,7 +175,7 @@ def api_create_content(
     link" field (#184): the client no longer decides youtube-vs-url itself,
     it just posts the URL and lets the server figure out what it is.
     """
-    user = db.source_manual_upload()  # #562
+    user = users.manual_upload_source()  # #819 (names the signed-in uploader), #562 (owner label otherwise)
     tag_list = _parse_tags_form(tags)
     try:
         parsed_type_metadata = json.loads(type_metadata) if type_metadata else None
@@ -873,17 +875,30 @@ def api_gallery(request: Request, query: str = "", per_user: int = 4):
     """Grouped-by-uploader gallery data: each uploader's most recent N items
     plus their real total, queried per-uploader so no single prolific
     uploader's activity can push others out of a global result limit.
+
+    #820: grouped by the real uploader (`uploaded_by_user_id`), not the free-text Source label.
+    Each group: `uploaded_by` / `uploaded_by_display` = the user's display name (username when
+    there is none; "Admin (no user recorded)" for items with no recorded uploader),
+    `uploaded_by_user` = {id, username, name} or null, `gallery_url` = that user's gallery
+    (/gallery/user/<username>) or null when there is no account to link (the no-user group, or a
+    user deleted since), then `total` and `items`.
     """
     uploaders = db.list_uploaders(query=query or None)
     groups = []
     for u in uploaders:
-        items = db.search(query=query or None, uploaded_by=u["uploaded_by"], limit=per_user)
+        uid = u["uploaded_by_user_id"]
+        owner = users.owner_info(uid)
+        name = users.uploader_label(owner)
+        if uid is None:
+            items = db.search(query=query or None, no_uploader_user=True, limit=per_user)
+        else:
+            items = db.search(query=query or None, uploaded_by_user_id=uid, limit=per_user)
+        username = owner["username"] if owner else None
         groups.append({
-            # u["uploaded_by"] is already the short group key (see
-            # db.list_uploaders) — used both as the display label and as the
-            # /gallery/user/<uploader> link target.
-            "uploaded_by": u["uploaded_by"],
-            "uploaded_by_display": u["uploaded_by"],
+            "uploaded_by": name,
+            "uploaded_by_display": name,
+            "uploaded_by_user": owner,
+            "gallery_url": f"/gallery/user/{quote(username, safe='')}" if username else None,
             "total": u["total"],
             "items": [_to_public(r) for r in policy.filter_visible(items)],  # #557 (+ the browse clause in db.search)
         })

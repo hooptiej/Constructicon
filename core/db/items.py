@@ -309,15 +309,16 @@ def list_wallpapers():
 
 
 def list_uploaders(query=None):
-    """Distinct Source *groups* (see source_group()) matching the given
-    filters, each with their total count and most recent capture time — used
-    to group the gallery fairly so one prolific uploader can't crowd others
-    out of a single global LIMIT. Grouped in Python rather than SQL `GROUP BY
-    tech` since Source values are now full sentences (e.g. "Hooptie J (me) —
-    manual upload" vs "... — automated upload") and the gallery groups on the
-    shorter "who" prefix, not the exact string — row counts here are small
-    enough (single-owner site) that this is simpler than fighting SQL string
-    slicing.
+    """Distinct uploaders matching the given filters, each with their total
+    count and most recent capture time — used to group the gallery fairly so
+    one prolific uploader can't crowd others out of a single global LIMIT.
+
+    #820: grouped by `uploaded_by_user_id` (who really uploaded, #560/#604),
+    NOT by the free-text Source label (`tech`, now only a note). Each entry is
+    {"uploaded_by_user_id": <users.id or None>, "total", "most_recent"}; None
+    is the group of items with no recorded uploader (install token, MCP,
+    scripts, anything from before #604), which the caller names. The caller
+    turns an id into a name (this module sits below core/users.py).
     """
     conn = get_conn()
     try:
@@ -335,12 +336,12 @@ def list_uploaders(query=None):
             if match:
                 params.append(match)
         where = f"WHERE {' AND '.join(clauses)}"
-        rows = conn.execute(f"SELECT ce.tech AS tech, ce.timestamp AS timestamp FROM capture_events ce {where}",
-                            params).fetchall()
+        rows = conn.execute(f"SELECT ce.uploaded_by_user_id AS uid, ce.timestamp AS timestamp "
+                            f"FROM capture_events ce {where}", params).fetchall()
         groups = {}
         for r in rows:
-            key = source_group(r["tech"])
-            g = groups.setdefault(key, {"uploaded_by": key, "total": 0, "most_recent": 0})
+            key = r["uid"]
+            g = groups.setdefault(key, {"uploaded_by_user_id": key, "total": 0, "most_recent": 0})
             g["total"] += 1
             g["most_recent"] = max(g["most_recent"], r["timestamp"])
         return sorted(groups.values(), key=lambda g: g["most_recent"], reverse=True)

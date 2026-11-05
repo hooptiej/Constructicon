@@ -357,6 +357,8 @@ the date and commit forward when you re-verify.
     `caption_cleanup.py` (#743 / #542: the mid-word scan and re-queue, the short-title proposals),
     `measure_lookalikes_759.py` (#759: read-only look-alike measurement on a DB copy, stdlib only),
     `measure_apprentice_354_344.py` (#354 / #344: read-only provenance-rule and correlation measurement, stdlib only),
+    `list_empty_files_830.py` (#830: read-only list of items whose stored file is 0 bytes, to re-upload or remove; a 0-byte
+    upload is refused at `ingest.ingest_file` with code `empty_file` on every path: web, MCP upload / import, unpacked members),
     and the helpers `_http.py` and `_testenv.py`.
     **None of `scripts/` is mounted into the app containers (#634)**: where each kind runs is
     "Scripts: what runs where" below. `reset_password.py` and `mcp_token.py` moved into the app as

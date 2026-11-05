@@ -2335,7 +2335,7 @@ a.uploader-label:hover, a.uploader-label:focus-visible { text-decoration: underl
 .proc-empty { color: var(--icon-muted); font-size: 13px; text-align: center; padding: 28px 0; }
 
 /* #508: build version badge, bottom-left, deliberately quiet */
-.app-version { position: fixed; left: 8px; bottom: 6px; z-index: 1; font: 400 10px/1 "JetBrains Mono", monospace; color: var(--icon-muted, #888); opacity: 0.55; pointer-events: none; user-select: text; }
+.app-version { position: fixed; left: 8px; bottom: 6px; z-index: 1; font: 400 10px/1 "JetBrains Mono", monospace; color: var(--text-2); pointer-events: none; user-select: text; }  /* #848: light grey, opaque — was --icon-muted (#3F4530) at 0.55, invisible on the dark footer gradient */
 
 /* #467 step 1: the header's user chip, and the small sign-in / setup / password cards */
 .user-chip { display: flex; align-items: center; gap: 10px; font-size: 13px; }

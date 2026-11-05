@@ -19,11 +19,24 @@ pass (--no-import):
     itself on disk anyway, so it has to run somewhere that shares the
     instance's DB and storage (./scripts/run_tool.sh <web container> ..., #634).
   - Extraction is core.embedded_metadata.extract — literally the code
-    path a fresh upload goes through, not a re-implementation — filtered
-    through the same plausibility gate fill_missing applies.
+    path a fresh upload goes through, not a re-implementation — and the
+    date is then decided by core.embedded_metadata.resolve_file_date, the
+    SAME function fill_missing calls (#806): the plausibility gate, the
+    tag that dated the row, and #769's export-time rule (a video's
+    container creation_time / a photo's EXIF date that sits within
+    EXPORT_TIME_WINDOW_SECONDS of the row's own upload time, after the
+    install's first upload, is applied but FLAGGED suspect_export_time;
+    Apple's quicktime creationdate is never flagged). Nothing here
+    re-implements that rule. The context it needs is all in the target's
+    own database: the row's upload time is row["timestamp"] (what the
+    live path sees at upload) and the cutoff is timeline.first_upload(),
+    read once per run.
   - Writes go through POST /api/image/{slug}'s content_date field (the
     surface the YouTube sync's publishedAt correction already uses), not
-    a direct UPDATE. Only description/tags-free payloads are sent:
+    a direct UPDATE, and the same call carries
+    type_metadata={"content_date_source": <record>} so the date and its
+    source land together as ONE undoable change, exactly what
+    fill_missing records. Only description/tags-free payloads are sent:
     api_update_image leaves every field it isn't given alone (#213).
   - Fill-only-missing: only rows whose content_date is currently NULL are
     candidates, and each is re-read immediately before its write in case
@@ -51,7 +64,8 @@ Usage:
     python scripts/backfill_content_dates.py --base-url http://localhost:80 --slug <slug> [--slug ...]
 
     --dry-run lists every candidate with the date that would be written
-    (Mountain Time and UTC) and makes no writes. --slug restricts the run
+    (Mountain Time and UTC), the tag that dated it, and #769's possible-
+    export-time note when the rule flags it, and makes no writes. --slug restricts the run
     to specific rows — for checking one real file end to end before
     running the whole backlog. --media-type (repeatable) overrides the
     default image+video set.
@@ -98,11 +112,29 @@ def candidate_rows(media_types, slugs=None):
     return rows
 
 
-def write_content_date(base_url, slug, epoch):
-    """POST /api/image/{slug} with only content_date — see the module
+def resolve_row(row, first_upload_at):
+    """(#806) (epoch, content_date_source record) for one candidate row, decided by the SAME function
+    the upload path uses (core.embedded_metadata.resolve_file_date): the plausibility gate, the tag
+    that dated the row and #769's export-time flag. (None, None) = no usable embedded date. The
+    row's own upload time (row["timestamp"]) and the install's first upload are the context the
+    export-time rule needs; both come from the target's database, as they did at upload."""
+    return embedded_metadata.resolve_file_date(embedded_metadata.extract(row), row, first_upload_at)
+
+
+def write_fields(epoch, record=None):
+    """The form fields POSTed to /api/image/{slug}: content_date, plus the content_date_source
+    record (type_metadata is merged into the row's, never replaced) when the rule produced one."""
+    fields = {"content_date": repr(epoch)}
+    if record is not None:
+        fields["type_metadata"] = json.dumps({"content_date_source": record})
+    return fields
+
+
+def write_content_date(base_url, slug, epoch, record=None):
+    """POST /api/image/{slug} with only content_date (and its source record) — see the module
     docstring for why nothing else is resubmitted."""
     url = f"{base_url.rstrip('/')}/api/image/{slug}"
-    data = urllib.parse.urlencode({"content_date": repr(epoch)}).encode("utf-8")
+    data = urllib.parse.urlencode(write_fields(epoch, record)).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -163,19 +195,48 @@ def main():
         print("--dry-run set: no writes will be made.")
     print("=" * 70)
 
+    # #806: the same cutoff the live upload path hands resolve_file_date (timeline.first_upload()),
+    # read once. It comes from the target's own database, which this process shares by design.
+    first_upload_at = timeline.first_upload()
+    stats = process_rows(rows, media_types, first_upload_at, args.dry_run,
+                         lambda slug, epoch, record: write_content_date(args.base_url, slug, epoch, record))
+    written, no_date, skipped_raced, flagged = (stats["written"], stats["no_date"],
+                                                stats["skipped_raced"], stats["flagged"])
+
+    print("=" * 70)
+    would = "Would write" if args.dry_run else "Wrote"
+    dated = sum(1 for r in rows) - sum(no_date.values()) - skipped_raced
+    print(f"{would} content_date on {dated if args.dry_run else written} row(s).  "
+          + "  ".join(f"{mt}: {by_type[mt] - no_date[mt]} dated / {no_date[mt]} without embedded date" for mt in media_types))
+    if flagged:
+        print(f"{flagged} of those carry #769's possible-export-time flag (suspect_export_time): the date is "
+              "applied, and the item page shows the note beside it so it can be checked.")
+    if skipped_raced:
+        print(f"Skipped {skipped_raced} row(s) that gained a content_date between enumeration and write.")
+    print("=" * 70)
+
+
+def process_rows(rows, media_types, first_upload_at, dry_run, write):
+    """The per-row loop, split out of main() so a test can drive it with its own `write`
+    (slug, epoch, record). Returns {"written", "no_date", "skipped_raced", "flagged"}. `flagged`
+    counts rows whose record says suspect_export_time (dry run: would be; real run: were)."""
     written = 0
+    flagged = 0
     no_date = {mt: 0 for mt in media_types}
     skipped_raced = 0
     for row in rows:
         slug, media_type, filename = row["slug"], row["media_type"], row.get("filename")
-        found = embedded_metadata.extract(row)
-        epoch = embedded_metadata.plausible_content_date(found.get("content_date"))
+        epoch, record = resolve_row(row, first_upload_at)
         if epoch is None:
             no_date[media_type] += 1
             print(f"  -    {slug} {media_type:5} {filename!r}: no usable embedded date")
             continue
-        print(f"  {'DRY' if args.dry_run else 'SET'}  {slug} {media_type:5} {filename!r}: {_describe(epoch)}")
-        if args.dry_run:
+        suspect = bool(record and record.get("suspect_export_time"))
+        source = f" [{record['source']}]" if record else ""
+        note = f"  ** {record['suspect_note']}" if suspect else ""
+        print(f"  {'DRY' if dry_run else 'SET'}  {slug} {media_type:5} {filename!r}: {_describe(epoch)}{source}{note}")
+        if dry_run:
+            flagged += suspect
             continue
         # Re-read right before writing: the candidate list above is a
         # snapshot, and the whole point is never to overwrite a date that
@@ -185,17 +246,10 @@ def main():
             skipped_raced += 1
             print(f"       ^ skipped: row gone or content_date set since enumeration")
             continue
-        write_content_date(args.base_url, slug, epoch)
+        write(slug, epoch, record)
         written += 1
-
-    print("=" * 70)
-    would = "Would write" if args.dry_run else "Wrote"
-    dated = sum(1 for r in rows) - sum(no_date.values()) - skipped_raced
-    print(f"{would} content_date on {dated if args.dry_run else written} row(s).  "
-          + "  ".join(f"{mt}: {by_type[mt] - no_date[mt]} dated / {no_date[mt]} without embedded date" for mt in media_types))
-    if skipped_raced:
-        print(f"Skipped {skipped_raced} row(s) that gained a content_date between enumeration and write.")
-    print("=" * 70)
+        flagged += suspect
+    return {"written": written, "no_date": no_date, "skipped_raced": skipped_raced, "flagged": flagged}
 
 
 if __name__ == "__main__":

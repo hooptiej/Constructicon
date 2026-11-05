@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from core import access_log, besteffort, captions, db, ingest, item_title, items, membership, object_types, ocr, parse_limits, revisions, similarity, storage, thumbnails
 from core import cards, item_dates, tags as tags_svc, timeline, unpack
-from web import content_security, files_feed
+from web import body_limit, content_security, files_feed
 from web.common import from_request_thread
 from web.shapes import _friendly_date, _friendly_datetime, _split_revisions, _to_project_option, _to_public, actor_label as shapes_actor_label
 from core import policy, roles
@@ -118,6 +118,10 @@ async def api_upload(
             status_code=409,
             detail=f"Already uploaded by {result.row['tech']} on {dupe_date} — see /object/{result.row['slug']}",
         )
+    elif result.error_kind == "too_large":
+        # #812: a file between the upload cap and the cap + the body cap's framing allowance gets past
+        # web/body_limit.py and is refused here. Same answer as the body cap: 413 payload_too_large.
+        raise body_limit.file_too_large(result.error)
     elif result.error:
         raise HTTPException(status_code=400, detail=result.error)
 

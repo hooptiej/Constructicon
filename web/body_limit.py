@@ -92,6 +92,22 @@ def _human(n):
     return f"{n} bytes"
 
 
+def too_large_details(limit, kind):
+    """The `details` of every "too big" refusal: {max_bytes, limit_kind}. One definition, so the body
+    cap below and the per-file check inside an upload (#812) can never answer in different shapes."""
+    return {"max_bytes": limit, "limit_kind": kind}
+
+
+def file_too_large(message, limit=None):
+    """#812: the 413 `payload_too_large` for a file that got past the body cap (which allows the upload
+    cap plus UPLOAD_OVERHEAD_BYTES of multipart framing) but is itself over the upload cap, as found by
+    `storage.save_stream` / `ingest.ingest_file`. Same code, status and details shape as `BodyTooLarge`;
+    `max_bytes` is the per-file cap that applied (default `storage.MAX_BYTES`). Raise it: web/app.py's
+    AppError handler shapes it."""
+    return errors.AppError("payload_too_large", message, status=413,
+                           details=too_large_details(storage.MAX_BYTES if limit is None else limit, KIND_UPLOAD))
+
+
 class BodyTooLarge(HTTPException):
     """413 payload_too_large. An HTTPException so FastAPI's own body parsing re-raises it as is
     (it turns any other exception into a 400) and web/app.py's handler shapes it."""
@@ -121,7 +137,7 @@ class BodyTooLarge(HTTPException):
 
     def response(self):
         return JSONResponse(errors.http_body("payload_too_large", self.message,
-                                             {"max_bytes": self.limit, "limit_kind": self.kind}),
+                                             too_large_details(self.limit, self.kind)),
                             status_code=413, headers={"Connection": "close"})
 
 

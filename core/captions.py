@@ -55,6 +55,7 @@ import base64
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -602,7 +603,7 @@ def title_from_caption(caption, max_words=TITLE_MAX_WORDS):
     from . import item_title
     if _is_garbage(caption):  # empty, no letters, or a mid-word fragment: nothing to build on
         return None
-    t = " ".join((caption or "").split())
+    t = " ".join(strip_caption_quotes(caption or "").split())  # #804: `!"FT Versa Wing"` -> `FT Versa Wing`
     if t.startswith("(") and 0 < t.find(")") <= 20:  # "(video) ..." / "(animated) ..."
         t = t[t.find(")") + 1:].strip()
     for end in (". ", "! ", "? "):
@@ -629,6 +630,8 @@ def title_from_caption(caption, max_words=TITLE_MAX_WORDS):
     if not words:
         return None
     title = item_title.clean_short_title(" ".join(words))
+    if title:
+        title = tidy_title(title)  # #804: never an unbalanced quote or bracket, no leading `!?,;:`
     if not title:
         return None
     title = title[0].upper() + title[1:]
@@ -1013,6 +1016,104 @@ def starts_mid_word(text):
     return word.lower().strip("-'") not in _LOWER_STARTS
 
 
+# #804: stray punctuation and quote marks. moondream reads a PDF page's title text back as
+# `!"FT Versa Wing"`; title_from_caption then cut the closing quote and left `!"FT Versa Wing`.
+# A sibling of starts_mid_word: pure string cleanup, no model call and no new status. (Whether to
+# re-ask the model instead is a separate owner decision, #804.)
+# Leading junk: !?,;: and whitespace, plus a "." that is not the start of a word (so ".NET" stays).
+_LEAD_JUNK = re.compile(r"^(?:[!?,;:\s]|\.(?![A-Za-z0-9]))*")
+_OPEN_QUOTES = "\"“‘'"
+_BRACKET_OPEN = {"(": "p", "[": "s", "{": "c", "“": "d"}
+_BRACKET_CLOSE = {")": "p", "]": "s", "}": "c", "”": "d"}
+
+
+def _delimiter_pairs(t):
+    """#804: (pairs, orphans) for the quotes and brackets in `t`: `pairs` is a list of (open, close)
+    indexes, `orphans` the indexes of every opener with no closer and every closer with no opener.
+    Handles ( ) [ ] { }, straight and smart double quotes and single quotes. An apostrophe is NOT a
+    delimiter: one between two letters ("dog's"), or a trailing one with no single quote open
+    ("the dogs' toys"), is skipped."""
+    pairs, orphans = [], []
+    stacks = {k: [] for k in "pscdQq"}
+    n = len(t)
+    for i, ch in enumerate(t):
+        if ch in _BRACKET_OPEN:
+            stacks[_BRACKET_OPEN[ch]].append(i)
+        elif ch in _BRACKET_CLOSE:
+            st = stacks[_BRACKET_CLOSE[ch]]
+            if st:
+                pairs.append((st.pop(), i))
+            else:
+                orphans.append(i)
+        elif ch == '"':
+            if stacks["Q"]:
+                pairs.append((stacks["Q"].pop(), i))
+            else:
+                stacks["Q"].append(i)
+        elif ch in "'‘’":
+            prev = t[i - 1] if i else " "
+            nxt = t[i + 1] if i + 1 < n else " "
+            if ch == "‘" or (not prev.isalnum() and nxt.isalnum()):
+                stacks["q"].append(i)  # an opening single quote
+            elif stacks["q"] and not nxt.isalnum():
+                pairs.append((stacks["q"].pop(), i))  # its closer
+            # else an apostrophe: not a delimiter
+    for st in stacks.values():
+        orphans.extend(st)
+    return pairs, sorted(orphans)
+
+
+def _drop_orphans(t):
+    pairs, orphans = _delimiter_pairs(t)
+    if not orphans:
+        return t
+    gone = set(orphans)
+    return "".join(c for i, c in enumerate(t) if i not in gone)
+
+
+def strip_caption_quotes(caption):
+    """#804: a caption that is only stray punctuation plus a quoted phrase ("!\\"FT Versa Wing\\"",
+    moondream reading a page's title text) -> the phrase: leading `!?,;:` taken off, and the quote
+    marks that wrap the whole text taken off (a trailing `.!?` after the closing quote too). A caption
+    that does not start (after that punctuation) with a quote mark is returned UNCHANGED, as is one with
+    a quote in the middle (`the "fast" car`, `a dog's toy`) or a quoted phrase followed by more text
+    (`"Wing" is the title`): only the junk before the quote goes there. A lone opening quote with no
+    closer is dropped. Text with no letters is returned as is (_is_garbage's business). Pure."""
+    if not isinstance(caption, str) or not any(ch.isalpha() for ch in caption):
+        return caption
+    t = " ".join(caption.split())
+    rest = t[_LEAD_JUNK.match(t).end():]
+    if not rest or rest[0] not in _OPEN_QUOTES:
+        return caption
+    tail = rest.rstrip(" .!?,;:")
+    pairs, orphans = _delimiter_pairs(tail)
+    if len(tail) > 2 and not orphans and (0, len(tail) - 1) in pairs:
+        return tail[1:-1].strip() or caption  # the whole text is one quoted phrase
+    if 0 in orphans and rest[0] in "\"“‘":
+        rest = rest[1:].lstrip()  # `!"FT Versa Wing`: an opening quote nothing closes (not a bare ')
+    return rest
+
+
+def tidy_title(t):
+    """#804: a title that never leaves unbalanced quotes or brackets. Leading `!?,;:` come off, every
+    opener with no closer and every closer with no opener among the quotes " “ ” ‘ ’ ' and the brackets
+    ( ) [ ] { } is dropped (an apostrophe is not one: "dog's"), and a title wrapped whole in one quote
+    pair loses it; trailing `,;:` come off. "Wing" -> Wing; `!"FT Versa Wing` -> FT Versa Wing;
+    `Bolt (M3 thread` -> Bolt M3 thread. Pure; may return an empty string."""
+    t = " ".join((t or "").split())
+    for _ in range(4):  # each pass can expose the next (junk, then a quote, then junk inside it)
+        before = t
+        t = _LEAD_JUNK.sub("", t).rstrip(" ,;:")
+        t = _drop_orphans(t)
+        pairs, _orphans = _delimiter_pairs(t)
+        if len(t) > 2 and t[0] in _OPEN_QUOTES and (0, len(t) - 1) in pairs:
+            t = t[1:-1].strip()
+        t = " ".join(t.split())
+        if t == before:
+            break
+    return t
+
+
 def _bad_response_label(caption):
     """Log wording for a response _is_garbage rejected — tells the owner
     reading `docker logs` whether the model said nothing, said '!!!!', or started mid-word."""
@@ -1081,10 +1182,12 @@ def _run_caption_now(slug, start_step=0, cascade=True):
                                                              "auto_caption_failed_reason": reason[:300]})
             return
         # #542: the caption comes with a short title, derived from it (no second model call).
-        title = title_from_caption(result["caption"])
+        # #804: a caption that is only stray punctuation plus a quoted phrase is stored without them
+        caption = strip_caption_quotes(result["caption"])
+        title = title_from_caption(caption)
         title_note = "no title could be derived from the caption"
         meta = {
-            METADATA_KEY: result["caption"],
+            METADATA_KEY: caption,
             STATUS_KEY: "done",
             STEP_KEY: step_index,
             "auto_caption_model": OLLAMA_MODEL,

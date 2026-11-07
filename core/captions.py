@@ -1022,6 +1022,9 @@ def starts_mid_word(text):
 # re-ask the model instead is a separate owner decision, #804.)
 # Leading junk: !?,;: and whitespace, plus a "." that is not the start of a word (so ".NET" stays).
 _LEAD_JUNK = re.compile(r"^(?:[!?,;:\s]|\.(?![A-Za-z0-9]))*")
+# #846: a leading list enumerator ("1) Bolt", "2. M3 screw") is not an orphan closer: take it off whole
+# before _drop_orphans can mistake the ")" for one and leave "1 Bolt".
+_LEAD_ENUM = re.compile(r"^\s*\d+[.)]\s+")
 _OPEN_QUOTES = "\"“‘'"
 _BRACKET_OPEN = {"(": "p", "[": "s", "{": "c", "“": "d"}
 _BRACKET_CLOSE = {")": "p", "]": "s", "}": "c", "”": "d"}
@@ -1104,6 +1107,7 @@ def tidy_title(t):
     for _ in range(4):  # each pass can expose the next (junk, then a quote, then junk inside it)
         before = t
         t = _LEAD_JUNK.sub("", t).rstrip(" ,;:")
+        t = _LEAD_ENUM.sub("", t)
         t = _drop_orphans(t)
         pairs, _orphans = _delimiter_pairs(t)
         if len(t) > 2 and t[0] in _OPEN_QUOTES and (0, len(t) - 1) in pairs:

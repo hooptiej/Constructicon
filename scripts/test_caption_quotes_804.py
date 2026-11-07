@@ -97,6 +97,8 @@ for cap, want in (('"FT Versa Wing"', "FT Versa Wing"),
                   ('A red car with a "fast stripe', "Red car with a fast stripe"),     # a lone opening quote goes
                   ("Bolt (M3 thread and a nut on a tray", "Bolt M3 thread and a nut"),  # 8-word cut, then "(" has no ")"
                   ("Washers) in a jar", "Washers in a jar"),                            # a closer nothing opened
+                  ("2) M3 screw", "M3 screw"),                                          # #846: an enumerator, not an orphan ")"
+                  ("1) A green bolt", "A green bolt"),                                  # #846: article survives (first word was "1)")
                   ("?!Wing spar on a table", "Wing spar on a table"),
                   ("a dog's toy on a rug", "Dog's toy on a rug"),                       # apostrophe is not a quote
                   ("The dogs' toys on a rug", "Dogs' toys on a rug"),
@@ -114,7 +116,7 @@ fuzz = [BUG, '"', '""', '"a"', "((", ")(", "[x", "x]", "{x", "“x", "x”", "�
         'He said "hi', 'He said hi"', "!(Wing) \"spar", ";:Wing, spar", "...", "...Wing", "a \"b\" \"c", "(a) (b",
         "The \"Quick\" brown fox jumps over the lazy dog and keeps going far away",
         '"Alpha beta gamma delta epsilon zeta eta theta iota kappa"', "rock 'n' roll club night",
-        '“First” and “second']
+        '“First” and “second', "1) Bolt"]
 bad = []
 for cap in fuzz:
     t = TT(cap)

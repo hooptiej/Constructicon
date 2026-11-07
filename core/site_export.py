@@ -60,7 +60,7 @@ def _bundle_item_media(item, media_dir, copied_slugs, warnings):
 EXPORT_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "web" / "export_templates"
 
 
-def build_site(config: dict, out_dir: str | Path = None) -> dict:
+def build_site(config: dict, out_dir: str | Path = None, *, root: str | Path = None, scope: dict = None) -> dict:
     """Build a self-contained static website from selected projects and blog entries.
 
     Args:
@@ -73,6 +73,12 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         out_dir: Output directory (if None, uses <exports dir>/<timestamp>/ and the build also
             becomes exports/current and old builds are pruned). A custom out_dir is written
             and nothing else is touched: no `current` refresh, no pruning (#576).
+        root: #781: the sandbox a default (no out_dir) build goes into: `<root>/<timestamp>/`,
+            `<root>/current`, pruned within `<root>` only (core/export_sandbox.py). Default: the
+            install's exports dir, as before.
+        scope: #781: core/export_sandbox.plan(config, actor): the cards and entries this builder's
+            site takes and what it left out and why. Without it the config is read as before (the
+            cards named, or every in-progress card).
 
     Returns:
         Dict with keys:
@@ -80,10 +86,12 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
             - blog_entries: Number of blog entries included
             - media_files: Number of media files copied
             - warnings: List of warning strings (missing files, empty projects, etc.)
+            - left_out (#781, with `scope`): [{reason, count, names}], cards / entries / files
     """
+    base = Path(root) if root is not None else paths.exports_dir()
     if out_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_dir = paths.exports_dir() / timestamp
+        out_dir = base / timestamp
         is_default_out = True
     else:
         out_dir = Path(out_dir)
@@ -108,7 +116,9 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     private_items = outsider.hidden_slugs() if not outsider.empty else frozenset()
 
     # Gather projects
-    if project_slugs is None:
+    if scope is not None:
+        projects = dict(scope["projects"])  # #781: the builder's own plan (core/export_sandbox.py)
+    elif project_slugs is None:
         # Include every in-progress card (#545: by the live stage alone; the v1
         # projects.status column is gone since #760).
         all_projects = [p for p in db.list_projects() if card_rules.export_included_by_default(p)]
@@ -135,7 +145,8 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         # owner's reference, but never in the museum.
         # #477: only the current revision of a chain goes in the museum; no revisions, no change.
         # #557: what may leave the install is core/policy.py's call (filter_exportable).
-        items = [i for i in policy.filter_exportable(db.list_project_items(project_id))
+        # #781: and only what the builder can see (an editor's sandbox build).
+        items = [i for i in policy.filter_exportable(policy.filter_visible(db.list_project_items(project_id)))
                  if i["slug"] not in older_revisions and i["slug"] not in private_items]
         project_items[project_id] = items
         if not items:
@@ -151,7 +162,9 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
                     project["writeup"] = ""
 
     # Gather blog entries
-    if blog_entry_slugs is None:
+    if scope is not None:
+        blog_entries = list(scope["entries"])
+    elif blog_entry_slugs is None:
         # Include all "ready" blog entries
         blog_entries = db.list_blog_entries(status="ready")
     else:
@@ -167,8 +180,9 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
     entry_projects = {}  # entry_id -> list of projects with sort_order and note
     entry_items = {}  # entry_id -> list of items with sort_order and note
     for entry_id in blog_entries_dict:
-        entry_projects[entry_id] = [p for p in db.list_entry_projects(entry_id) if not outsider.card_hidden(p["id"])]
-        entry_items[entry_id] = [i for i in policy.filter_exportable(db.list_entry_items(entry_id))  # #443, #557
+        entry_projects[entry_id] = [p for p in db.list_entry_projects(entry_id) if not outsider.card_hidden(p["id"])
+                                    and policy.can_view_card(p)]  # #781: the builder's view too
+        entry_items[entry_id] = [i for i in policy.filter_exportable(policy.filter_visible(db.list_entry_items(entry_id)))  # #443, #557, #781
                                  if i["slug"] not in private_items]  # #604 step 3
         if not entry_items[entry_id]:
             warnings.append(f"Blog entry '{blog_entries_dict[entry_id]['slug']}' has no attachments")
@@ -299,10 +313,26 @@ def build_site(config: dict, out_dir: str | Path = None) -> dict:
         "media_files": media_count,
         "warnings": warnings,
     }
+    if scope is not None:
+        # #781: what the plan left out (cards, entries) and, per included card, the files that stayed
+        # behind and why (core/project_export.left_out), never silently.
+        from core import project_export  # lazy: project_export imports this module lazily too
+        left = [dict(n, names=list(n["names"])) for n in scope["left_out"]]
+        for project_id, project in projects.items():
+            for n in project_export.left_out(project_id, outsider=True)[1]:
+                reason = f"file {n['reason']}"
+                hit = next((x for x in left if x["reason"] == reason), None)
+                if hit is None:
+                    left.append({"reason": reason, "count": n["count"], "names": list(n["names"])})
+                else:
+                    hit["count"] += n["count"]
+                    hit["names"] += n["names"]
+        report["left_out"] = left
 
-    # Update current pointer and prune old builds: only for the install's own builds (#576)
+    # Update current pointer and prune old builds: only for a default build, within its own sandbox
+    # (#576; #781: an editor's sandbox is <exports>/users/<id>, so it never touches anyone else's).
     if is_default_out:
-        _update_current_pointer(out_dir)
+        _update_current_pointer(out_dir, base)
 
     return report
 
@@ -318,13 +348,14 @@ def _copy_tree_fresh(src: Path, dst: Path) -> None:
             shutil.copyfile(Path(root) / name, target / name)
 
 
-def _update_current_pointer(build_dir: Path) -> None:
+def _update_current_pointer(build_dir: Path, root: Path = None) -> None:
     """Update the 'current' pointer to the latest build and prune to last 2 builds.
 
     Uses a 'current' symlink on Unix-like systems (or a current/ directory on Windows)
-    that the StaticFiles mount can follow.
+    that the StaticFiles mount can follow. #781: `root` = the sandbox (default: the install's
+    exports dir); both the pointer and the prune stay inside it.
     """
-    exports = paths.exports_dir()
+    exports = Path(root) if root is not None else paths.exports_dir()
     exports.mkdir(parents=True, exist_ok=True)
 
     # Strategy: Use a 'current' directory that we re-populate on each build.
@@ -339,7 +370,7 @@ def _update_current_pointer(build_dir: Path) -> None:
     shutil.copytree(build_dir, current_dir)
 
     # Prune: keep only the last 2 timestamped builds
-    _prune_old_builds()
+    _prune_old_builds(root=exports)
 
 
 def publish_build(remote_url, branch, build_dir, work_dir, *, auth_url=None, commit_message=None, author=("Constructicon", "constructicon@localhost")) -> dict:
@@ -549,9 +580,10 @@ def _strip_token_from_error(error_msg: str) -> str:
     return re.sub(r"x-access-token:[^@]+@", "x-access-token:[REDACTED]@", error_msg)
 
 
-def _prune_old_builds(keep: int = 2) -> None:
-    """Remove old timestamped builds, keeping only the most recent `keep` builds."""
-    exports = paths.exports_dir()
+def _prune_old_builds(keep: int = 2, root: Path = None) -> None:
+    """Remove old timestamped builds, keeping only the most recent `keep` builds. #781: within
+    `root` (a sandbox; default the install's exports dir): its `users/` folder never matches."""
+    exports = Path(root) if root is not None else paths.exports_dir()
     if not exports.exists():
         return
 

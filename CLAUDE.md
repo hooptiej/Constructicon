@@ -2122,7 +2122,29 @@ time (`timestamp`) is shown only as **"Imported <date>"** (the item page's heade
 ## Static export, preview and publish
 
 The dynamic app freezes into a self-contained static site (relative links, media bundled), which can
-be previewed in the app and pushed to a GitHub Pages repo. All of it is admin-only.
+be previewed in the app and pushed to a GitHub Pages repo. **Since #781 scope (a) (owner 2026-10-25)
+building and previewing are editor and up, each in their own sandbox; publishing (and the publish
+targets) stays admin-only** until #325 brings per-user targets and tokens.
+- **Sandboxes and what goes in (#781): `core/export_sandbox.py`.** An admin (signed in, the install token,
+  the MCP, scripts) builds into the install's space (`<exports>/current`, `/preview/`, what Publish pushes),
+  as before; an editor into `<exports>/users/<user id>/` (numeric id, the resolved path must stay under
+  `<exports>`), previewed at `/preview/u/<id>/` (`_CurrentExportFiles` dispatches it to a per-folder
+  `StaticFiles`; only that user and admins, else 403 saying why; no build yet = 404 saying so). Newest two
+  builds kept per sandbox (`build_site(root=)`), the config saved per sandbox (`export_config` /
+  `export_config:user:<id>`), one build per sandbox at a time (`build_lock`: 409 `export_busy` saying when
+  it started; the install's keeps sharing the publish lock). `plan(config, actor)` is what goes in, with
+  every card / entry / file left out listed WITH the reason (`left_out`, `left_out_lines` in the build
+  answer): only what the builder can see (hidden cards counted, never named); never a private card ("you're
+  a viewer on it" for a viewer member); **"they can publish your words on their site, but never their words
+  on yours"**: with nothing picked, only the builder's OWN in-progress cards and ready entries go in
+  (`created_by_user_id`; NULL = admin-owned = an admin's own; the install token counts every admin's as its
+  own), another user's is "held back: owned by <name>"; picked by hand, any open card goes in (an admin's
+  explicit include). Files follow the card (sensitive never, current revision only). **This changes an
+  admin's default build too:** cards editors created are held back unless ticked. `GET /api/export/sandbox`
+  (editor) = the sandbox info plus `candidates` (every visible card / entry with owner, own, ok + why,
+  default), which the drawer lists (another user's card unticked with its owner; a private one disabled with
+  why). The drawer (`_export_builder.html`, Export tab = editor, `_nav_tabs.html`) shows Publish greyed and
+  explained for an editor. Check: `scripts/test_editor_export_781.py`.
 - **Build** (`core/site_export.py` `build_site(config, out_dir=None)`, `POST /api/export/build`):
   renders `web/export_templates/` for the chosen cards (default: `card_rules.export_included_by_default`,
   every in-progress card that isn't a collection, by its stage alone since #545)
@@ -2141,7 +2163,8 @@ be previewed in the app and pushed to a GitHub Pages repo. All of it is admin-on
   targets are install config (`GET /api/export/targets`; none configured = 400 `no_publish_target`,
   never someone else's repo, see "Install config"); the token is the write-only `pages_publish_token`
   setting, used only for the push URL and scrubbed from errors and from `.git/config`.
-- **One lock:** build and publish share one lock; a second one while one runs is 409 `export_busy`.
+- **One lock:** the install's build and publish share one lock; a second one while one runs is 409
+  `export_busy`. (#781: an editor's sandbox has its own.)
 - **UI:** the **Export** tab in the nav rail opens the export builder drawer
   (`web/templates/_export_builder.html`). Live pages only: the static site's own templates are
   `web/export_templates/`, not `web/templates/`.

@@ -54,7 +54,10 @@ and type_metadata is merged key by key (only absent keys are added) rather
 than replaced. So this is safe to call on a row more than once, and safe
 as a backfill over rows uploaded before the hook for their type existed:
 scripts/backfill_content_dates.py runs extract() over every undated
-image/video row and writes the result through POST /api/image/{slug}.
+image/video row, resolves the date through resolve_file_date (#769's
+export-time rule), and writes the date together with
+type_metadata.content_date_source through POST /api/image/{slug}, i.e.
+parity with the live upload path (#806).
 
 Synchronous, not a background task like OCR/captioning: reading a tag
 block is one ffprobe call over the file header — the same call the detail

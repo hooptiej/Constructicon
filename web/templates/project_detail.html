@@ -30,6 +30,11 @@
       <div class="dp-more" data-dp-more>
         <button type="button" class="dp-btn dp-more-btn" id="project-more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="project-more-menu">More <span aria-hidden="true">&#9662;</span></button>
         <div class="dp-menu" id="project-more-menu" role="menu" aria-labelledby="project-more-btn" hidden>
+          {#- #556: why the card has its pips, status and needs (GET /api/projects/{id}/explain), and an
+              export in a choice of formats (core/project_export.FORMATS); static/js/card-tools.js. Both
+              are for anyone who can see the card; a format the role can't use is greyed in the dialog. #}
+          <button type="button" role="menuitem" id="explain-card-btn" title="Why this card has its pips, status and needs, in plain words">Explain this card…</button>
+          <button type="button" role="menuitem" id="export-card-btn" title="Download this card as a zip of its files or as a small HTML site">Export this card…</button>
           {#- #779: converting is admin (whole-card conversions), deleting editor; below that each item
               stays, greyed, and a click says the role it needs (web/role_lock.py). #}
           <button type="button" role="menuitem" id="convert-to-hobby-btn" class="{{ role_lock_class('admin') | trim }}"{% if role_locked('admin') %}{{ role_lock_attrs('admin', 'Converting a card to a ' ~ hobby_label.one_lc) }}{% else %} title="Convert this project to a {{ hobby_label.one_lc }}"{% endif %}>Convert to {{ hobby_label.one_lc }}</button>
@@ -474,6 +479,9 @@
   <script src="/static/js/stacks.js?v={{ static_version('js/stacks.js') }}" defer></script>
   <script src="/static/js/undo-bar.js?v={{ static_version('js/undo-bar.js') }}"></script>
   <script src="/static/js/sharing.js?v={{ static_version('js/sharing.js') }}" defer></script>
+  {#- #556: the Explain and Export dialogs' config (static/js/card-tools.js). -#}
+  <script type="application/json" id="card-tools-config" nonce="{{ csp_nonce() }}">{{ {"id": project.id, "slug": project.slug, "title": project.title, "formats": card_export_formats} | tojson }}</script>
+  <script src="/static/js/card-tools.js?v={{ static_version('js/card-tools.js') }}" defer></script>
   {{ cover_pick_config(cover_pick_cfg) }}
 
   {% if timeline_children or timeline_items %}

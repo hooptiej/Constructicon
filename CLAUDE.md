@@ -290,7 +290,10 @@ the date and commit forward when you re-verify.
   (`ollama_default`, external) to resolve `http://ollama:11434` (the ipvlan `questlog-lan` network
   can't reach the host's published port). Set `CAPTION_DISABLED=1` to skip captioning entirely. Tune with the admin
   page's (`/admin`) "Caption tuning" panel (`POST /api/captions/test`) before
-  changing the defaults in that module.
+  changing the defaults in that module. **#556: the same panel shows the circuit breaker** (open or closed,
+  why, the failures so far against `CAPTION_MAX_CONSECUTIVE_FAILURES`, the restart cooldown; from
+  `/api/captions/defaults` `breaker`) with a **Reset breaker** button (`POST /api/captions/reset-breaker`,
+  admin; it logs who reset it and what was open). The breaker is per web process: a web restart clears it too.
 - **`core/embedded_metadata.py`** (#255, #265) — metadata the uploaded
   file itself carries, read *synchronously* at upload time via
   `ObjectTypeSpec.embedded_metadata_fn`: an audio file's ID3/Vorbis/RIFF
@@ -2145,6 +2148,18 @@ be previewed in the app and pushed to a GitHub Pages repo. All of it is admin-on
 - **Separate and older:** `core/project_export.py` / `GET /api/projects/{id}/export.zip` bundles one
   card's contents as a zip for offline or agent analysis; it is not the site export. (It builds the zip
   in memory.)
+- **Export this card (#556, owner 2026-10-18: "zip or HTML, and later pick an export template"):** the card
+  page's More > "Export this card…" (`static/js/card-tools.js`) offers `project_export.FORMATS` (the picker is
+  built from it: a new format or template is one more entry plus its route). `zip` = the export above (viewer);
+  `html` = `GET /api/projects/{id}/export.html.zip?template=default` (editor; viewers see it greyed, #779):
+  `export_card_site` runs `build_site` for just that card into a temp folder (removed once the download is
+  sent), zipped with a README.txt. Refusals: 404, 400 `bad_template`, 409 `card_private` (a private card never
+  goes into a static site; the zip includes it for those who may see it). **Nothing is left out silently:**
+  `project_export.left_out` counts, by reason, what didn't go in (not visible to you; sensitive or a restricted
+  type; an older revision; under a private card), in the zip's `manifest.json` `left_out` and the README.
+  More > "Explain this card…" shows `GET /api/projects/{id}/explain` in plain words (status, the five pips with
+  their reasons, needs, open questions, warnings, files, the caption check, the last changes). Check:
+  `scripts/test_card_tools_556.py`.
 - **Wallpaper to go (#780):** the Wallpaper page's "Download all (.zip)" (`GET
   /api/wallpapers/download.zip`, viewer, like the page). `core/wallpapers.py` `plan()` takes the page's
   list, then `policy.filter_visible` (left out: "N not included (no access)") and `filter_exportable`
@@ -2156,7 +2171,7 @@ be previewed in the app and pushed to a GitHub Pages repo. All of it is admin-on
   file that vanished mid-stream. `GET /api/wallpapers/download-summary` (viewer) gives the same counts and
   sentences, shown beside the button. Nothing to download = 404 `no_wallpapers`, never an empty zip.
   No selection mode yet (#780 v1). Check: `scripts/test_wallpaper_vocab_780.py`.
-- There is no test file of its own for the export. Its lock and failure paths are covered by
+- The site export has no test file of its own (the card export's is `test_card_tools_556.py`). Its lock and failure paths are covered by
   `scripts/test_async_blocking_550.py` and the `/preview` mount's headers by
   `scripts/test_f_sandbox_610.py`.
 

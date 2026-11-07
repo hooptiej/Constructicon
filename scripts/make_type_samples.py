@@ -630,6 +630,61 @@ def sketchup_file(_name):
     return head + b"\x00" * 16 + _png("SKETCHUP", (320, 240)) + b"\x00" * 64
 
 
+# ============================================================================ CAD source (#836)
+
+def cad_step_file(_name):
+    """A small but real STEP (ISO 10303-21): a HEADER the reader can read, one point of DATA."""
+    return (
+        "ISO-10303-21;\nHEADER;\n"
+        f"FILE_DESCRIPTION(('{MARK} STEP part'),'2;1');\n"
+        f"FILE_NAME('cad-sampler.step','2001-02-03T04:05:06',('Constructicon Sampler'),('Type Sampler 720'),"
+        "'Sampler Translator 1.0','Sampler CAD 2001','Unknown');\n"
+        "FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\n"
+        "ENDSEC;\nDATA;\n#1=CARTESIAN_POINT('',(0.,0.,0.));\nENDSEC;\nEND-ISO-10303-21;\n"
+    ).encode("ascii")
+
+
+def cad_3mf_file(_name):
+    """A 3MF package: the model part with metadata, and its own thumbnail (found through the
+    package's thumbnail relationship)."""
+    model = ('<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" '
+             'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">\n'
+             f' <metadata name="Title">{MARK} 3MF</metadata>\n <metadata name="Designer">Constructicon Sampler</metadata>\n'
+             ' <metadata name="Application">Sampler Slicer 1.0</metadata>\n'
+             ' <metadata name="CreationDate">2001-02-03</metadata>\n <resources/><build/>\n</model>\n')
+    rels = ('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+            '<Relationship Target="/Metadata/thumbnail.png" Id="rel1" '
+            'Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"/></Relationships>')
+    types = ('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+             '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+             '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>'
+             '<Default Extension="png" ContentType="image/png"/></Types>')
+    return _zip([("[Content_Types].xml", types), ("_rels/.rels", rels), ("3D/3dmodel.model", model),
+                 ("Metadata/thumbnail.png", _png("3MF"))])
+
+
+def cad_f3d_file(_name):
+    """A zip container shaped like a Fusion archive's outline, with a preview image. Hand-built: it is
+    NOT a real Fusion design (the type only reads the container: file count and a preview-named image)."""
+    return _zip([("Manifest.dat", MARK), ("Properties.dat", MARK), ("FusionAssetName", "cad-sampler"),
+                 ("Design1/Preview/thumbnail.png", _png("F3D"))])
+
+
+def cad_obj_file(_name):
+    return (f"# {MARK} OBJ\n# Sampler exporter 1.0 OBJ File\nmtllib cad-sampler.mtl\no Cube\n"
+            "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nv 0 0 1\nv 1 0 1\nv 1 1 1\nv 0 1 1\n"
+            "vn 0 0 1\nf 1 2 3 4\nf 5 6 7 8\nf 1 2 6 5\nf 2 3 7 6\nf 3 4 8 7\nf 4 1 5 8\n").encode("ascii")
+
+
+def cad_iges_file(_name):
+    """Fixed 80-column IGES records: Start, Global and Terminate sections (no entities)."""
+    def rec(text, section, n):
+        return f"{text:<72}{section}{n:>7}\n"
+    return (rec(f"{MARK} IGES", "S", 1) + rec("1H,,1H;,7Hsampler;", "G", 1)
+            + rec("S      1G      1D      0P      0", "T", 1)).encode("ascii")
+
+
 # ============================================================================ audio, video
 
 def video_file(suffix, muxer=None):
@@ -1072,6 +1127,20 @@ SAMPLES = [
     S("font-sampler.ttf", "font", font_ttf, shows="glyph sample (every letter is a box)"),
     S("font-sampler.otf", "font", font_otf, shows="glyph sample (every letter is a box)"),
     S("sketchup-model.skp", "sketchup", sketchup_file, hand_built=True, shows="embedded preview PNG as the thumbnail"),
+    # CAD source (#836): the files you edit. STEP/3MF/F3D/OBJ/IGES, read for their facts (the STEP header, a 3MF's
+    # metadata and own picture, an OBJ's counts); the .f3d is a hand-built zip, not a real Fusion design.
+    S("cad-source.step", "cad_source", cad_step_file, thumbnail=False, date=True,
+      shows="STEP header read (name, author, program, schema); date 2001-02-03 from its time stamp"),
+    S("cad-source.stp", "cad_source", cad_step_file, thumbnail=False, date=True,
+      shows="STEP header read (name, author, program, schema); date from its time stamp"),
+    S("cad-source.3mf", "cad_source", cad_3mf_file, thumbnail=True, date=True,
+      shows="3MF metadata read; the package's own picture as the thumbnail; date from CreationDate"),
+    S("cad-source.f3d", "cad_source", cad_f3d_file, thumbnail=True, hand_built=True,
+      shows="zip container read only (file count, preview-named image as the thumbnail)"),
+    S("cad-source.obj", "cad_source", cad_obj_file, thumbnail=False,
+      shows="OBJ counts and size read (8 vertices, 6 faces)"),
+    S("cad-source.igs", "cad_source", cad_iges_file, thumbnail=False, hand_built=True, shows="IGES Start section read"),
+    S("cad-source.iges", "cad_source", cad_iges_file, thumbnail=False, hand_built=True, shows="IGES Start section read"),
     # audio / video (ffmpeg)
     S("video-clip.mp4", "video", video_file(".mp4"), date=True, shows="player + frame thumbnail; date from creation_time"),
     S("video-clip.mov", "video", video_file(".mov"), date=True, shows="player + frame thumbnail; date from creation_time"),

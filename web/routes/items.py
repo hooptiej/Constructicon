@@ -718,6 +718,11 @@ def api_refresh_thumbnail(request: Request, slug: str):
     if hit:
         raise AppError("parse_limit", f"No thumbnail: rendering this file {hit['message']}.", status=422,
                        details={"kind": hit["kind"]})
+    # #852: the reason ensure_thumbnail recorded on the item, not just "see logs".
+    reason = ((db.get_by_slug(slug) or {}).get("type_metadata") or {}).get(thumbnails.THUMB_ERROR_KEY)
+    if reason:
+        raise AppError("thumbnail_failed", f"No thumbnail: {reason}. Nothing was changed; the file is stored as it was.",
+                       status=422, details={"reason": reason})
     raise HTTPException(status_code=500, detail="Failed to generate thumbnail (see logs for details)")
 
 

@@ -2358,6 +2358,30 @@ One generated file of every registered type and extension, to drop-test a new in
   written, sniffs as its type (`detect_media_type`) and is stable (skips the executables off Linux). A new
   type or extension needs a `Sample(...)` line in `make_type_samples.py`.
 
+### 16-bit greyscale thumbnails and failed thumbnails (#852)
+
+- **16-bit greyscale images get a thumbnail.** Pillow's `Image.thumbnail()` cannot reduce `I;16*` images
+  (`ValueError: image has wrong mode`; seen on Pillow 12.3 and 13.0), so an item holding a 16-bit PNG / TIFF
+  (scientific, medical, astronomy, scanner output) used to get no thumbnail and a bare `print`.
+  `storage.to_8bit_for_thumbnail` runs in `save_thumbnail_from_bytes` before the resize: `I;16`, `I;16B/L/N`,
+  `I` and `F` become 8-bit `L` with a **stretch of the image's own darkest..lightest value onto 0..255** (a dim
+  frame that uses 3% of the 16-bit range stays readable; a flat image falls back to `v / 256`, so black stays
+  black). Pure Pillow, no numpy. The stored original is untouched. Memory: the stretch holds a 32-bit copy
+  (4 bytes a pixel), inside the parser child's budget at the 100-megapixel cap.
+- **A failed thumbnail is loud.** `save_thumbnail_from_bytes` now raises `storage.ThumbnailError` ("couldn't make
+  a thumbnail from this image (ValueError: ...)") instead of printing. `thumbnails.ensure_thumbnail` catches it
+  (and any other error from a type's renderer), logs it through `besteffort.warn` with the slug, returns False
+  and leaves **`type_metadata.thumb_error`** on the item (raw bookkeeping like `thumb_renderer`, no change-log
+  row; a later success clears it to `""`). Shown on the object page (`#thumb-error-note`, "No thumbnail could
+  be made. <reason>") and in item JSON / MCP `type_metadata`; `POST /api/image/<slug>/thumbnail/refresh` answers
+  422 `thumbnail_failed` with the reason instead of "see logs". A parser limit hit keeps its own notice
+  (`#parse-limit-note`). `scripts/regenerate_thumbnails.py` counts and prints `FAILED:` rows and exits 1.
+- **Old items:** a 16-bit image uploaded before this has no thumbnail file and shows its original; re-render with
+  `./scripts/run_tool.sh <web> scripts/regenerate_thumbnails.py --type image` (or `--slug`), or the item's
+  "Refresh thumbnail" button.
+- Check: `scripts/test_greyscale16_thumbs_852.py` (generated `I;16` PNG, `I;16` TIFF, a hand-built big-endian
+  `I;16B` TIFF, `I` and `F` TIFFs; no fixture files in the repo).
+
 ### STL renders and the 3D viewer (#742, batch 15 "Lipstick on the Warehouse")
 
 Owner decision: STL thumbnails are a real render through **headless OpenGL**, not matplotlib doodles.

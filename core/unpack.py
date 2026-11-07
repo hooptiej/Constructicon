@@ -448,6 +448,66 @@ def job_status(job_id, *, actor=None):
     return _job_public(job)
 
 
+# #826: the processing drawer lists unpack jobs too, so a conversion can be watched from any page.
+DRAWER_RECENT_SECONDS = 3600     # a finished job stays in the drawer this long after it ends
+DRAWER_MAX_JOBS = 20
+DRAWER_FAILED_SHOWN = 10         # failed members named per job (the item page's dialog lists them all)
+
+
+def _drawer_job(job, row, who):
+    """One job as the drawer shows it: the archive (linked), state, progress, and when finished the
+    card it made, the failed members with their reasons, or why it failed."""
+    pub = _job_public(job)
+    p, r = pub["progress"], pub["result"]
+    failed = r.get("failed") or []
+    card = r.get("card")
+    card_hidden = bool(card) and not policy.can_view_card(card.get("id"), who)
+    if card_hidden:
+        # A private card the actor isn't on (made private after the unpack): say a card exists, not its name.
+        card = None
+    return {
+        "id": pub["id"], "status": pub["status"], "finished": pub["finished"],
+        "archive": {"slug": job["archive_slug"],
+                    "name": item_name(row) if row is not None else f"(deleted archive {job['archive_slug']})",
+                    "url": f"/object/{job['archive_slug']}" if row is not None else None},
+        "phase": p.get("phase"), "done": p.get("done") or 0, "total": p.get("total") or 0,
+        "current": p.get("current") if not pub["finished"] else None,
+        "message": pub["message"],
+        "card": card, "card_hidden": card_hidden,
+        "counts": r.get("counts"),
+        "failed": failed[:DRAWER_FAILED_SHOWN], "failed_more": max(len(failed) - DRAWER_FAILED_SHOWN, 0),
+        "error": pub["error"] if pub["status"] == "failed" else None,
+        "batch_id": r.get("batch_id"),
+        "is_mine": job.get("actor") == who,
+        "created_at": pub["created_at"], "finished_at": pub["finished_at"],
+    }
+
+
+def drawer_jobs(*, actor=None, recent_seconds=DRAWER_RECENT_SECONDS, now=None):
+    """#826: the unpack jobs for the processing drawer: every queued / running job, plus jobs that
+    finished in the last `recent_seconds`, only where the actor can see the archive. A deleted
+    archive's job (deleted since, or trashed by the unpack itself, #825) shows to admins and to the
+    person who started it (they saw the archive then), nobody else. Running first, then the newest.
+    -> list of dicts."""
+    who = actor_ctx.resolve(actor)
+    cutoff = (now or time.time()) - recent_seconds
+    jobs = db.list_unpack_jobs(status=ACTIVE, limit=DRAWER_MAX_JOBS)
+    jobs += [j for j in db.list_unpack_jobs(status=FINISHED, limit=DRAWER_MAX_JOBS)
+             if (j.get("finished_at") or 0) >= cutoff]
+    is_admin = roles.role_of(who) == roles.ADMIN
+    out = []
+    for job in jobs:
+        row = db.get_by_slug(job["archive_slug"])
+        if row is None and not (is_admin or job.get("actor") == who):
+            continue
+        if row is not None and not policy.can_view(row, who):
+            continue
+        out.append(_drawer_job(job, row, who))
+    order = {"running": 0, "queued": 1}
+    out.sort(key=lambda j: (order.get(j["status"], 2), -(j["finished_at"] or j["created_at"] or 0)))
+    return out[:DRAWER_MAX_JOBS]
+
+
 def run_action(row, params):
     """The archive type's "unpack" action (both doors): mode preview (default) | start | status."""
     mode = (params.get("mode") or "preview").strip().lower()

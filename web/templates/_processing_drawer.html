@@ -15,8 +15,10 @@
     <h2>Processing</h2>
     <button type="button" class="modal-close" id="proc-close" aria-label="Close">&times;</button>
   </div>
-  <p class="page-subtitle">Uploads still being chewed — OCR, captioning, embedding.</p>
+  <p class="page-subtitle">Uploads still being chewed — OCR, captioning, embedding — and archives being unpacked.</p>
   <p class="proc-note" id="proc-captions-off" style="display:none">Captions are off on this install, so images aren't captioned automatically. They count as settled once OCR is done. An agent can still caption them through the MCP tools.</p>
+  {# #826: unpack jobs (queued / running, and the last hour's finished ones) above the items. #}
+  <div class="proc-list proc-jobs" id="proc-jobs" hidden></div>
   <div class="proc-list" id="proc-list"></div>
   <p class="proc-empty" id="proc-empty" style="display:none">All caught up — nothing processing.</p>
 </div>
@@ -38,6 +40,7 @@
   const backdrop = document.getElementById('proc-backdrop');
   const closeBtn = document.getElementById('proc-close');
   const list = document.getElementById('proc-list');
+  const jobsBox = document.getElementById('proc-jobs');
   const empty = document.getElementById('proc-empty');
   const capsOff = document.getElementById('proc-captions-off');
   const SKEY = 'ctc_processing_session';
@@ -67,16 +70,48 @@
     return `<span class="proc-stage ${esc(st.state)}"${title}><span class="proc-stage-dot"></span>${label}</span>`;
   }
 
+  // #826: one unpack job: the archive (linked), its state, a progress bar while it runs, and once it
+  // has finished the card it made, the members that failed with their reasons, or why it failed.
+  const JOB_STATE = { queued: 'Waiting to start', running: 'Unpacking', done: 'Unpacked',
+                      partial: 'Unpacked, with failures', failed: 'Unpack failed' };
+  const JOB_DOT = { queued: 'pending', running: 'pending', done: 'done', partial: 'failed', failed: 'failed' };
+  function jobHtml(j) {
+    const a = j.archive || {};
+    const name = a.url ? `<a href="${esc(a.url)}">${esc(a.name)}</a>` : esc(a.name);
+    let body = `<div class="proc-stages"><span class="proc-stage ${esc(JOB_DOT[j.status] || 'pending')}">` +
+      `<span class="proc-stage-dot"></span>${esc(JOB_STATE[j.status] || j.status)}</span></div>`;
+    if (!j.finished) {
+      const total = Math.max(j.total || 0, 0);
+      if (total) body += `<progress class="proc-job-bar" max="${total}" value="${Math.min(j.done || 0, total)}"></progress>` +
+        `<div class="proc-job-line">${(j.done || 0).toLocaleString()} of ${total.toLocaleString()}` +
+        `${j.current ? ': ' + esc(j.current) : ''}</div>`;
+      else body += `<div class="proc-job-line">${esc(j.message || '')}</div>`;
+    } else {
+      body += `<div class="proc-job-line">${esc(j.message || '')}</div>`;
+      if (j.card && j.card.url) body += `<div class="proc-job-line"><a href="${esc(j.card.url)}">Open the card: ${esc(j.card.title)}</a></div>`;
+      else if (j.card_hidden) body += '<div class="proc-job-line">The card it made is private, and you are not on it.</div>';
+      if (j.failed && j.failed.length) {
+        body += '<ul class="proc-job-failed">' + j.failed.map(f => `<li>${esc(f.path)}: ${esc(f.reason)}</li>`).join('') +
+          (j.failed_more ? `<li>and ${j.failed_more.toLocaleString()} more (the archive's page lists them all)</li>` : '') + '</ul>';
+      }
+    }
+    return `<div class="proc-item proc-job ${j.is_mine ? 'is-session' : ''}">` +
+      `<div class="proc-item-name">Archive: ${name}</div>${body}</div>`;
+  }
+
   function render(data) {
     const items = (data && data.items) || [];
+    const jobs = (data && data.unpack_jobs) || [];
     const n = (data && data.count) || 0;
     badge.textContent = n > 99 ? '99+' : n;
     badge.hidden = n === 0;
     capsOff.style.display = (data && data.captions_disabled) ? 'block' : 'none';  // #585
     tab.classList.toggle('idle', n === 0);
+    jobsBox.hidden = !jobs.length;
+    jobsBox.innerHTML = jobs.map(jobHtml).join('');
     if (!items.length) {
       list.innerHTML = '';
-      empty.style.display = 'block';
+      empty.style.display = jobs.length ? 'none' : 'block';
       return;
     }
     empty.style.display = 'none';

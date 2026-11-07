@@ -9,8 +9,9 @@ Keys (KEYS below):
   app_name          the app's name in the header, home title and every tab title (#581)
   app_logo          slug of a brand-asset image shown as the logo (#581); the bundled logo when unset
   owner_name        the owner's name: home page gallery tab name and its initials
-  owner_label       the "who" prefix of every upload's Source label (capture_events.tech), e.g.
-                    "<owner_label> - manual upload". Defaults to owner_name.
+  owner_label       the owner's name in a Source label (capture_events.tech), e.g.
+                    "<owner_label> - automated upload". Defaults to owner_name. (#845: web uploads no
+                    longer write a "- manual upload" label; the label only names old rows.)
   site_title        the static export's site title
   copyright_holder  the static export footer's "(c) <holder>." (nothing when unset)
   publish_targets   {name: {repo: "owner/repo", branch}} for "Publish to GitHub Pages"
@@ -73,7 +74,7 @@ KEYS = {
     "app_logo": ("App logo", "A brand-asset image (mark one in the Brand drawer) shown as the logo. "
                              "Leave blank for the bundled logo."),
     "owner_name": ("Owner name", "Shown on the home page's gallery tab (its initials too)."),
-    "owner_label": ("Uploader label", "Starts the Source label of every upload, e.g. \"<label> — manual upload\". "
+    "owner_label": ("Uploader label", "Names the owner in a Source label, e.g. \"<label> — automated upload\". "
                                       "Defaults to the owner name. Changing it does not rewrite existing uploads."),
     "site_title": ("Export site title", "Title of the static site export."),
     "copyright_holder": ("Copyright holder", "Shown in the export footer as \"© <holder>.\" Leave blank for none."),

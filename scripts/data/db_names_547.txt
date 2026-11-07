@@ -382,3 +382,9 @@ transaction	callable
 unicodedata	module
 uuid	module
 write_images	callable
+# Names added to core.db after the move (a new public or _private name on the package is listed here, with its kind):
+MANUAL_UPLOAD_SUFFIX	value
+SOURCE_NONE	value
+_manual_upload_names_845	callable
+_mig_retire_manual_upload_845	callable
+is_retired_source_note	callable

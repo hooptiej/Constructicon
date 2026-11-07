@@ -72,9 +72,9 @@ async def api_upload(
     folder_name: str = Form(""),
     sensitive: str = Form(""),
 ):
-    # The Source string is decided server-side, never by a client-supplied field.
-    # #819: it names the signed-in uploader (not the owner); #562: any other actor keeps the owner label.
-    user = await run_in_threadpool(users.manual_upload_source)
+    # The Source note is decided server-side, never by a client-supplied field. #845: a web upload writes
+    # none (db.SOURCE_NONE): who is uploaded_by_user_id and how is the channel ("Arrived via the web app").
+    user = db.SOURCE_NONE
 
     # #433: get file size early for duplicate check; use file.size if available,
     # otherwise measure via seek/tell
@@ -116,9 +116,16 @@ async def api_upload(
         # _friendly_datetime, not a raw strftime with %-d/%-I -- those are the
         # platform-specific extensions that helper exists to avoid (#211).
         dupe_date = _friendly_datetime(result.row["timestamp"])
+        # #845: who uploaded it is the account (uploaded_by_user_id), not a Source note; a note that is
+        # a real label ("Claude — authored") still reads as before, and a retired/empty one is left out.
+        who = ""
+        if result.row.get("uploaded_by_user_id") is not None:
+            who = f" by {users.uploader_label(users.owner_info(result.row['uploaded_by_user_id']))}"
+        elif result.row.get("tech") and not db.is_retired_source_note(result.row["tech"]):
+            who = f" by {result.row['tech']}"
         raise HTTPException(
             status_code=409,
-            detail=f"Already uploaded by {result.row['tech']} on {dupe_date} — see /object/{result.row['slug']}",
+            detail=f"Already uploaded{who} on {dupe_date} — see /object/{result.row['slug']}",
         )
     elif result.error_kind == "too_large":
         # #812: a file between the upload cap and the cap + the body cap's framing allowance gets past
@@ -175,7 +182,7 @@ def api_create_content(
     link" field (#184): the client no longer decides youtube-vs-url itself,
     it just posts the URL and lets the server figure out what it is.
     """
-    user = users.manual_upload_source()  # #819 (names the signed-in uploader), #562 (owner label otherwise)
+    user = db.SOURCE_NONE  # #845: no Source note for a web upload (the uploader and the channel say it)
     tag_list = _parse_tags_form(tags)
     try:
         parsed_type_metadata = json.loads(type_metadata) if type_metadata else None
@@ -271,7 +278,8 @@ def api_processing(request: Request, session: str = ""):
     drawer. Returns everything still mid-pipeline across the whole box (however
     it was uploaded), plus any explicitly-requested `session` slugs even once
     settled, so the drawer can show the caller's own items finish. Derived from
-    existing per-row signals — no status is stored just for this."""
+    existing per-row signals — no status is stored just for this. #826: plus
+    `unpack_jobs` (core/unpack.py drawer_jobs) from the unpack_jobs table."""
     session_slugs = [s for s in session.split(",") if s][:200]
     # #603: a sensitive item's name never shows in anyone else's drawer (the item policy, per row).
     by_slug = {r["slug"]: r for r in policy.filter_visible(db.list_processing_candidates())}
@@ -297,7 +305,12 @@ def api_processing(request: Request, session: str = ""):
     # In-flight first, then settled; within each, session items ahead of the rest.
     order = {"processing": 0, "failed": 1, "done": 2}
     items.sort(key=lambda x: (order.get(x["overall"], 3), not x["is_session"]))
-    return JSONResponse({"items": items, "count": in_flight_count, "captions_disabled": captions.DISABLED})
+    # #826: archive unpack jobs (queued / running, and the last hour's finished ones with their result),
+    # only where the caller can see the archive. A queued or running job counts as in flight.
+    jobs = unpack.drawer_jobs()
+    in_flight_count += sum(1 for j in jobs if not j["finished"])
+    return JSONResponse({"items": items, "unpack_jobs": jobs, "count": in_flight_count,
+                         "captions_disabled": captions.DISABLED})
 
 
 @router.get("/api/image/{slug}", dependencies=requires(roles.VIEWER))
@@ -718,6 +731,11 @@ def api_refresh_thumbnail(request: Request, slug: str):
     if hit:
         raise AppError("parse_limit", f"No thumbnail: rendering this file {hit['message']}.", status=422,
                        details={"kind": hit["kind"]})
+    # #852: the reason ensure_thumbnail recorded on the item, not just "see logs".
+    reason = ((db.get_by_slug(slug) or {}).get("type_metadata") or {}).get(thumbnails.THUMB_ERROR_KEY)
+    if reason:
+        raise AppError("thumbnail_failed", f"No thumbnail: {reason}. Nothing was changed; the file is stored as it was.",
+                       status=422, details={"reason": reason})
     raise HTTPException(status_code=500, detail="Failed to generate thumbnail (see logs for details)")
 
 

@@ -695,21 +695,6 @@ def uploader_label(owner):
     return owner["name"] if owner else NO_USER_LABEL
 
 
-def manual_upload_source():
-    """#819: the default Source note a WEB upload (/api/upload, /api/content) writes. When a signed-in
-    user is uploading it names THEM ("<display name> — manual upload", the username when there is no
-    display name), not the owner. Any other actor (the install token: the owner's own scripts; anonymous
-    and in-process callers) keeps the owner's label, `db.source_manual_upload()`, as before. The note is
-    free text only; who uploaded is `uploaded_by_user_id` (#560). Existing rows are not touched."""
-    from . import actor as actor_mod  # lazy: actor must not be imported before users is ready
-    current = actor_mod.current_actor()
-    if isinstance(current, str) and current.startswith(USER_ACTOR_PREFIX):
-        u = db.get_user(username=current[len(USER_ACTOR_PREFIX):])
-        if u:
-            return f"{u.get('display_name') or u['username']} — manual upload"
-    return db.source_manual_upload()
-
-
 def role_for_actor(actor):
     """core/roles.role_of() for a "user:<name>" actor: that user's role (PUBLIC when the user is
     gone or disabled)."""

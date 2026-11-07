@@ -66,6 +66,41 @@ def thumb_path_for(slug):
     return paths.storage_dir() / f"{slug}_thumb.jpg"
 
 
+class ThumbnailError(Exception):
+    """#852: a thumbnail could not be made from bytes that were supposed to be an image. The message says
+    what was attempted and why it failed (the original exception rides in ``__cause__``). Never swallowed:
+    core/thumbnails.py's ensure_thumbnail logs it and records it on the item (``type_metadata.thumb_error``)
+    so the object page can say so instead of a thumbnail just being missing."""
+
+
+# Pillow modes that carry more than 8 bits per pixel of greyscale (#852). The reduce step behind
+# Image.thumbnail() cannot handle the 16-bit ones (ValueError "image has wrong mode"), so they are
+# brought down to 8-bit "L" first.
+_HIGH_DEPTH_INT_MODES = ("I;16", "I;16L", "I;16B", "I;16N", "I")
+_HIGH_DEPTH_MODES = _HIGH_DEPTH_INT_MODES + ("F",)
+
+
+def to_8bit_for_thumbnail(img):
+    """#852: a 16-bit (``I;16*``), 32-bit integer (``I``) or float (``F``) greyscale image as an 8-bit ``L``
+    image, any other mode returned unchanged. The tone mapping is a straight stretch of the image's own
+    darkest..lightest value onto 0..255, so a dim scientific / astronomy / scanner frame that only uses a
+    slice of the 16-bit range still shows its detail (a plain ``v / 256`` would leave it near-black). A
+    flat image (one value everywhere) falls back to the plain ``v / 256`` (float: ``v * 255``), clamped, so
+    a black frame stays black. Pure Pillow: no numpy."""
+    if img.mode not in _HIGH_DEPTH_MODES:
+        return img
+    if img.mode in _HIGH_DEPTH_INT_MODES and img.mode != "I":
+        img = img.convert("I")  # 16-bit (either byte order) to 32-bit signed, which Pillow's point() can scale
+    lo, hi = img.getextrema()
+    if img.mode == "F":
+        scale = 255.0 / (hi - lo) if hi > lo else 255.0
+        offset = -lo * scale if hi > lo else 0.0
+    else:
+        scale = 255.0 / (hi - lo) if hi > lo else 1 / 256
+        offset = -lo * scale if hi > lo else 0.0
+    return img.point(lambda v: v * scale + offset).convert("L")  # convert() clamps to 0..255
+
+
 def save_thumbnail_from_bytes(slug, image_bytes):
     """Given raw bytes that decode as an image, generate and save the
     standard downscaled JPEG thumbnail for `slug`. This is the shared
@@ -74,9 +109,15 @@ def save_thumbnail_from_bytes(slug, image_bytes):
     for UPLOADED_FILE types, and fetched/captured images for non-file types
     (see core/thumbnails.py) both funnel through here so there's exactly one
     place that resizes/flattens/encodes a thumbnail.
+
+    #852: 16-bit greyscale (and ``I`` / ``F``) images are converted to 8-bit before the resize.
+    A failure raises ``ThumbnailError`` saying what was attempted and why (it used to be a bare print and
+    a missing thumbnail); callers that treat "no thumbnail" as recoverable (ensure_thumbnail) catch it,
+    log it and leave a marker on the item.
     """
     try:
         img = exif_upright(Image.open(BytesIO(image_bytes)))
+        img = to_8bit_for_thumbnail(img)
         img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM))
         if img.mode in ("RGBA", "LA", "P"):
             flattened = Image.new("RGB", img.size, THUMB_BG)
@@ -86,9 +127,10 @@ def save_thumbnail_from_bytes(slug, image_bytes):
             img = img.convert("RGB")
         img.save(thumb_path_for(slug), "JPEG", quality=82)
     except Exception as e:
-        # Not fatal — thumb_path_or_original() falls back to the full image —
-        # but print so a systematic failure (e.g. a corrupt-image edge case) is traceable.
-        print(f"thumbnail generation failed for {slug}: {e!r}")
+        # Not fatal to the item (thumb_path_or_original() falls back to the full image), but never silent
+        # (#852): say what was attempted and why it failed. A parser limit (an image over the pixel cap) keeps
+        # its own classification through __cause__ (core/parse_limits.py walks it).
+        raise ThumbnailError(f"couldn't make a thumbnail from this image ({type(e).__name__}: {e})") from e
 
 
 def save_stream(filename, fileobj, chunk_size=1024*1024):

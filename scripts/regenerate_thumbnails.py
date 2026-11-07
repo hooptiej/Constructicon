@@ -109,7 +109,7 @@ def main():
         # file to regenerate from anyway.
         rows = db.search(limit=100000, include_brand=True)
 
-    candidates = regenerated = unreadable = 0
+    candidates = regenerated = unreadable = failed = 0
     manual_rotation = []
     for row in rows:
         stored = row.get("stored_filename")
@@ -138,7 +138,12 @@ def main():
         if args.dry_run:
             print(f"would regenerate: {label}")
             continue
-        storage.save_thumbnail_from_bytes(row["slug"], path.read_bytes())
+        try:
+            storage.save_thumbnail_from_bytes(row["slug"], path.read_bytes())
+        except storage.ThumbnailError as e:  # #852: a failure is said, with the slug, and counted
+            print(f"FAILED: {label}: {e}")
+            failed += 1
+            continue
         after = _thumb_size(row["slug"])
         print(f"regenerated: {label} -> {after}")
         regenerated += 1
@@ -146,7 +151,9 @@ def main():
     if args.dry_run:
         print(f"\n{candidates} thumbnail(s) would be regenerated (dry run, nothing written); {unreadable} unreadable")
     else:
-        print(f"\nregenerated {regenerated} of {candidates} thumbnail(s); {unreadable} unreadable")
+        print(f"\nregenerated {regenerated} of {candidates} thumbnail(s); {unreadable} unreadable; {failed} failed")
+        if failed:
+            sys.exit(1)
 
     if manual_rotation:
         print("\nRows with a manual #266 rotation set -- left untouched. With an upright thumbnail "

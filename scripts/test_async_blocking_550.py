@@ -391,7 +391,7 @@ gate = threading.Event()
 entered = threading.Event()
 
 
-def _gated_build(config, out_dir=None):
+def _gated_build(config, out_dir=None, **_kw):  # #781: build_site takes root= / scope= now
     entered.set()
     gate.wait(15)
     return {"projects": 0, "warnings": []}
@@ -413,7 +413,7 @@ t1.join(15)
 check("the first build finishes (200)", first.get("r", (None,))[0] == 200, first.get("r"))
 
 
-def _failing_build(config, out_dir=None):
+def _failing_build(config, out_dir=None, **_kw):
     raise RuntimeError("patched build failure")
 
 
@@ -421,7 +421,7 @@ site_export.build_site = _failing_build
 s4, b4 = http("POST", "/api/export/build", json_body={})
 check("a failing build is a 500 carrying the real message", s4 == 500 and b"patched build failure" in b4, (s4, b4[:200]))
 site_export.build_site = slow(site_export.build_site, {"projects": 0, "warnings": []})
-site_export.build_site = lambda config, out_dir=None: {"projects": 0, "warnings": []}
+site_export.build_site = lambda config, out_dir=None, **_kw: {"projects": 0, "warnings": []}
 s5, b5 = http("POST", "/api/export/build", json_body={})
 check("the lock was released after the failure: the next build runs (200)", s5 == 200, (s5, b5[:200]))
 

@@ -86,7 +86,8 @@ class RoleRouter(APIRouter):
 NON_ROUTE_ROLES = {
     "/static": roles.PUBLIC,      # CSS/JS/fonts: a login page needs them
     "/brand": roles.PUBLIC,       # logo, favicons
-    "/preview": roles.VIEWER,     # the last static-export build (exports/current); restricted items never in it
+    "/preview": roles.VIEWER,     # the last static-export build (exports/current); restricted items never in it.
+                                  # #781: /preview/u/<id>/ is that user's sandbox, checked per request (that user and admins)
     "/openapi.json": roles.VIEWER,
     "/docs": roles.VIEWER,
     "/docs/oauth2-redirect": roles.VIEWER,

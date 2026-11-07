@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import JSONResponse
 
-from core import besteffort, blog, db, install_config, mcp_tokens, paths, site_export
+from core import besteffort, blog, db, export_sandbox, install_config, mcp_tokens, paths, site_export
 from core.errors import AppError
 from web.common import from_request_thread
 from web.shapes import _to_blog_entry_detail
@@ -242,32 +242,49 @@ class _export_job:
         _EXPORT_JOB_LOCK.release()
         return False
 
-@router.post("/api/export/build", dependencies=requires(roles.ADMIN))
+def _sandbox_info(sb):
+    return {"sandbox": "install" if sb.is_install else "user", "user_id": sb.user_id,
+            "preview_url": sb.preview_url, "has_build": export_sandbox.has_build(sb),
+            # #781 scope (a): publishing stays the install's (admins), per-user targets wait for #325.
+            "can_publish": sb.is_install}
+
+
+@router.post("/api/export/build", dependencies=requires(roles.EDITOR))
 def api_export_build(request: Request):
     """Build a static website from the selected projects and blog entries.
 
     Request body (JSON):
     {
-        "project_slugs": ["slug1", "slug2"] (optional, defaults to all active),
-        "blog_entry_slugs": ["slug1", "slug2"] (optional, defaults to all ready),
+        "project_slugs": ["slug1", "slug2"] (optional: absent = the builder's own in-progress cards),
+        "blog_entry_slugs": ["slug1", "slug2"] (optional: absent = the builder's own ready entries),
         "site": {
             "title": "...",
             "tagline": "..."
         }
     }
 
-    Returns the build report with project/entry/media counts and any warnings.
-    Saves the submitted config to app settings for next time.
+    #781 scope (a): editors build too, each into their own sandbox (core/export_sandbox.py): an
+    admin's build is the install's (exports/current, /preview/, what Publish pushes); an editor's goes
+    to exports/users/<id>/ and previews at /preview/u/<id>/. What goes in is the builder's plan
+    (`export_sandbox.plan`); everything it left out comes back in `left_out` (+ `left_out_lines`), with
+    the reason. Returns the build report plus the sandbox info. Saves the config per sandbox.
     """
     _require_json_content_type(request)
     body = _json_body_or_400(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="The build config must be a JSON object.")
+    sb = export_sandbox.sandbox_for()
 
     try:
-        with _export_job("build"):
-            report = site_export.build_site(body)
-            # Persist the config for next time
-            db.set_setting("export_config", json.dumps(body))
-        return JSONResponse(report)
+        # The install's build shares the publish lock (both use exports/current); a user's sandbox
+        # has its own, so one user's build never waits on (or blocks) anyone else's.
+        with (_export_job("build") if sb.is_install else export_sandbox.build_lock(sb)):
+            scope = export_sandbox.plan(body)
+            report = site_export.build_site(body, root=sb.root, scope=scope)
+            # Persist the config for next time (this sandbox's own)
+            db.set_setting(sb.config_key, json.dumps(body))
+        report["left_out_lines"] = export_sandbox.left_out_lines(report.get("left_out") or [])
+        return JSONResponse({**report, **_sandbox_info(sb)})
     except AppError:
         raise  # export_busy (409): another build/publish is running, not a build failure
     except Exception as e:
@@ -278,19 +295,31 @@ def api_export_build(request: Request):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/api/export/config", dependencies=requires(roles.ADMIN))
+@router.get("/api/export/config", dependencies=requires(roles.EDITOR))
 def api_export_config():
-    """Retrieve the saved export configuration. Returns the last successfully
-    built config, or an empty object {} if none has been saved yet.
+    """Retrieve the saved export configuration of the caller's sandbox (#781: an admin's is the
+    install's, an editor's their own). Returns the last successfully built config, or an empty
+    object {} if none has been saved yet.
     """
+    sb = export_sandbox.sandbox_for()
     try:
-        saved_json = db.get_setting("export_config")
+        saved_json = db.get_setting(sb.config_key)
         if saved_json:
             return JSONResponse(json.loads(saved_json))
         return JSONResponse({})
     except Exception as e:
         besteffort.warn(log, "export config: the saved config is unreadable, returning {}", e)
         return JSONResponse({})
+
+
+@router.get("/api/export/sandbox", dependencies=requires(roles.EDITOR))
+def api_export_sandbox():
+    """#781: the caller's export sandbox: {sandbox: install | user, user_id, preview_url, has_build,
+    can_publish}, plus the drawer's lists (`candidates`: every card and blog entry the caller can
+    see, with its owner, whether it's theirs, whether it can go in at all and why not, and whether
+    it's ticked by default)."""
+    sb = export_sandbox.sandbox_for()
+    return JSONResponse({**_sandbox_info(sb), "candidates": export_sandbox.candidates()})
 
 
 @router.get("/api/export/targets", dependencies=requires(roles.ADMIN))

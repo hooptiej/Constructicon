@@ -1276,7 +1276,8 @@ identity, ownership, visibility or a gallery from `tech` or `channel`.
   (on the owner's installs "Hooptie J (me) — manual upload": install_config `owner_label` + " — manual
   upload", seeded by #562's LEGACY_VALUES), its channel is `web`, and its request-log row (if any) was not
   another signed-in user's. Install-token web uploads under that label count too (owner, 2026-10-30: "Give
-  them to me too"; they were the owner's own scripts), reported as `of_which_install_token`. Everything
+  them to me too"; they were the owner's own scripts), reported as `of_which_install_token`. (#845's
+  `retire_manual_upload_845` runs after this and clears that label, so this is the last thing that reads it.) Everything
   else stays admin-owned (a prod DB copy had 1,743 candidates: 1,738 + 5 made with the install token). **The owner's account** (`db.owner_account`): the one enabled admin whose
   display name or username is install_config `owner_name` (any case); with no owner name, the only
   enabled admin. None or several -> `db.MigrationDeferred`: `run_pending_migrations` rolls it back
@@ -1300,9 +1301,28 @@ identity, ownership, visibility or a gallery from `tech` or `channel`.
   and the grid cards' small "uploaded by" badge now group and name by `uploaded_by_user_id` (the user's display name,
   linking to `/gallery/user/<username>`; NULL = "Admin (no user recorded)", no link; `db.list_uploaders` returns
   `uploaded_by_user_id`, `db.search(no_uploader_user=True)` lists the NULL group; the free-text Source note stays visible in the
-  item details panel). A web upload by a signed-in user writes "<their display name> — manual upload" (`users.manual_upload_source`);
-  other actors (the install token) keep the owner's label. Existing rows were not rewritten. Left to the owner: dropping the label. Before this, a web upload
-  wrote the owner's "— manual upload" label whoever was signed in.
+  item details panel). **#845 (owner, 2026-11-07): the "<name> — manual upload" Source note is retired.** A web upload
+  (`/api/upload`, `/api/content`) writes **no** Source note (`db.SOURCE_NONE`, `tech` = '' since the column is NOT NULL):
+  the uploader is `uploaded_by_user_id` and "Arrived via" the channel. `users.manual_upload_source` (#819) is gone;
+  `db.source_manual_upload()` stays only to recognise the old label (the two #560 backfills read it), and
+  `db.is_retired_source_note(tech)` is true for any note ending " — manual upload". The item page leaves a Source line
+  out when it is that shape (`web/shapes.py` `source_display` is '' then; a genuine label such as "Claude — authored"
+  still shows, as do "Claude — migrated from X" and "<owner> — automated upload", which also drive the
+  `migration:<X>` channel); item JSON `uploaded_by` and MCP `source_note` keep the raw note (MCP: None when empty).
+  A duplicate-upload 409 names the uploader's account ("Already uploaded by Ed Itor on ...") or, for a row with no
+  account and no genuine note, just "Already uploaded on ...". **Migration `retire_manual_upload_845`** (web, once, last
+  in `MIGRATIONS`, after both #560 steps because it reads `channel` and the label they read): sets `tech` to '' on
+  `channel = 'web'` items whose note is exactly "<name> — manual upload" for a name this install used (the install
+  config's `owner_label`, the neutral "Owner", the owner's name, any user's display name or username); touches
+  nothing else on the row; leaves every other label, any label on an mcp / script item, and a manual-upload-shaped
+  label naming nobody it knows (counted in the boot log line and the change-log details, by label). It **defers**
+  (`MigrationDeferred`: loud, nothing changed, retried each start) while `capture_channel_560` or
+  `owner_upload_backfill_560` is unapplied, so a deferred owner backfill never loses its input. Idempotent. Logged as
+  one change-log row (`migration_retire_manual_upload_845`) with a row image per item under the **`system`** actor
+  (not `migration`, whose rows the generic undo refuses): `POST /api/changes/<batch>/undo` (or `constructicon_undo`)
+  puts every label back. Check: `scripts/test_retire_manual_upload_845.py`. Before #845, #819 had a web upload write
+  "<their display name> — manual upload" (the owner's label for the token); before that, the owner's label whoever was
+  signed in.
 - **#778 credit: "<user>'s <token name>".** A personal MCP key's id rides in `acting_via` (set by
   `server._call_as_mcp` from `auth.IDENTITY`); `actor.token_id_for(actor)` hands it out ONLY when the
   writing actor is that key's user. Stored as `capture_events.uploaded_via_token_id`,
@@ -2504,8 +2524,9 @@ Shadows, outlines and the page frame (#751's other bucket items) are not done.
     what added this row, and how"). See `source_manual_upload()` /
     `source_automated_upload()` (the owner label is install config, #562), `SOURCE_AUTHORED`,
     `source_migrated_from()`/`source_group()` for the fixed vocabulary
-    (manual web upload, the legacy automated-upload label, migrated by
-    Claude from a named source, or authored by Claude directly).
+    (the legacy automated-upload label, migrated by Claude from a named
+    source, or authored by Claude directly; #845: a web upload writes no
+    note, and the old "— manual upload" label is retired, see "Who and how").
     **#560: a note only** (the who is `uploaded_by_user_id`, the how is `channel`); see "Who and how".
   - `channel` (#560: web | mcp | script | system | migration:<source> | unknown) and
     `uploaded_via_token_id` (#778, the personal MCP key): see "Who and how".
@@ -3147,8 +3168,8 @@ JSON body). No secrets there: the publish token stays a write-only API key (`app
 - **Audit reason (#583):** `web/middleware.py` fills `audit_log.error_detail` for any >= 400 response from a
   small, already-complete JSON body (`"<code>: <message>"` or a plain `detail`); streams and files are never
   read; redacted routes keep only the code.
-- **Keys:** `owner_name` (home page gallery tab + its initials), `owner_label` (the "who" prefix of
-  every upload's Source label, defaults to `owner_name`), `site_title` (static export title),
+- **Keys:** `owner_name` (home page gallery tab + its initials), `owner_label` (the owner's name in a
+  Source label such as "<label> — automated upload", defaults to `owner_name`; #845: web uploads no longer write one), `site_title` (static export title),
   `copyright_holder` (export footer "(c) <holder>.", nothing when unset), `publish_targets`
   (`{name: {repo: "owner/repo", branch}}`). Owner's installs, seeded: "Hooptie J", "Hooptie J (me)",
   "hooptiej.com", "hooptiej", test = `hooptiej/constructicon-export-test`, live =
@@ -3157,7 +3178,8 @@ JSON body). No secrets there: the publish token stays a write-only API key (`app
   `owner_label()`, `display_owner_name()`, `owner_initials()`, `site_title()`, `copyright_holder()`,
   `publish_targets()`, `setup_needed()`. Upload labels come from `db.source_manual_upload()` /
   `db.source_automated_upload()` / `db.source_groups()` (were the `SOURCE_*` constants): on the
-  owner's installs byte-identical to before ("Hooptie J (me) — manual upload").
+  owner's installs byte-identical to before ("Hooptie J (me) — automated upload"; `source_manual_upload()` only
+  recognises the label #845 retired).
 - **Writes:** `install_config.update({key: value})` ("" clears): validated (`bad_install_key`,
   `bad_install_config`, `bad_publish_target`), one imaged change-log row (op
   `install_config_update`), undoable with the generic undo.

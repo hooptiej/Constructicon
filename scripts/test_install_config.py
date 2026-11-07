@@ -93,9 +93,10 @@ r = client.post("/api/upload", files={"file": ("note.txt", b"hello", "text/plain
 check("fresh: web upload ok", r.status_code == 200, (r.status_code, r.text[:200]))
 r2 = client.post("/api/upload", files={"file": ("note2.txt", b"hello again", "text/plain")})
 techs = [t for (t,) in q("SELECT tech FROM capture_events ORDER BY id")]
-check("fresh: uploads stamped with the neutral label",
-      techs == ["Owner — manual upload", "Owner — manual upload"], techs)
-check("fresh: the gallery groups them under 'Owner'", db.source_group(techs[0]) == "Owner")
+check("fresh: web uploads write no Source note (#845: the '— manual upload' label is retired)",
+      techs == ["", ""], techs)
+check("fresh: an OLD neutral label still groups under 'Owner' (the label mechanism stays for old rows)",
+      db.source_group("Owner — manual upload") == "Owner")
 
 home = client.get("/").text
 check("fresh: home shows 'Owner' and 'O'", '<span class="gallery-drawer-name">Owner</span>' in home
@@ -175,10 +176,10 @@ check("save install config", r.status_code == 200 and r.json()["batch_id"], (r.s
 batch = r.json()["batch_id"]
 check("labels follow the config", db.source_manual_upload() == "Jane Q (me) — manual upload"
       and install_config.owner_initials() == "JQ" and not install_config.setup_needed())
-check("the old neutral uploads still group (under 'Owner')", db.source_group(techs[0]) == "Owner")
+check("the old neutral label still groups (under 'Owner')", db.source_group("Owner — manual upload") == "Owner")
 client.post("/api/upload", files={"file": ("note3.txt", b"third", "text/plain")})
-check("a new upload gets the owner's label",
-      q("SELECT tech FROM capture_events ORDER BY id DESC LIMIT 1")[0][0] == "Jane Q (me) — manual upload")
+check("a new upload still writes no Source note, whatever the owner label is (#845)",
+      q("SELECT tech FROM capture_events ORDER BY id DESC LIMIT 1")[0][0] == "")
 home = client.get("/").text
 check("home shows the owner", '<span class="gallery-drawer-name">Jane Q</span>' in home
       and '<div class="gallery-drawer-avatar">JQ</div>' in home)

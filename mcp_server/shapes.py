@@ -66,7 +66,7 @@ def _to_public(row):
         # | ...); `uploaded_by` above stays the free-text Source note, never who uploaded it.
         "uploaded_via": mcp_tokens.credit(row.get("uploaded_by_user_id"), row.get("uploaded_via_token_id")),
         "channel": row.get("channel"),
-        "source_note": row.get("tech"),
+        "source_note": row.get("tech") or None,  # #845: None when there is none (web uploads write no note)
         "sensitive": policy.restriction_reason(row) is not None,
         "sensitive_reason": policy.restriction_reason(row),
     }

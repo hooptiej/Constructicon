@@ -3,14 +3,14 @@
 
     python scripts/test_uploader_identity_819_820.py
 
-  #819  a web upload's default Source note names the ACTUAL signed-in uploader, not the owner:
-        1. a non-owner's /api/upload writes "<their display name> — manual upload" (not the owner's
-           label) and is theirs (uploaded_by_user_id); the owner's own upload reads "<owner> — manual
-           upload"; the install token (the owner's scripts) keeps the owner's label and stays
-           admin-owned; no display name -> the username; negative control: the OLD call
-           (db.source_manual_upload) answers the owner's label for the very same actor;
+  #819  who a web upload belongs to is the ACTUAL signed-in uploader, not the owner. (#845 then retired
+        the "<name> — manual upload" Source note it used to write; this test follows that.)
+        1. a web upload by a non-owner / the owner / a user with no display name is theirs
+           (uploaded_by_user_id, channel web) and writes NO Source note; the install token's upload stays
+           admin-owned with no note either; users.manual_upload_source is gone, db.source_manual_upload
+           stays only to recognise the old label;
         2. forward-looking only: every row that existed before keeps its tech and uploader, and the
-           label mechanism (db.source_manual_upload, the Source note on the item page) is still there.
+           label mechanism (db.source_manual_upload, source_group) is still there for old rows.
   #820  /api/gallery and the grid's "uploaded by" badge group and name by `uploaded_by_user_id`:
         3. /api/gallery: one group per user id named by display name, NULL -> "Admin (no user
            recorded)", each linking to /gallery/user/<username> (NULL and deleted users: no link);
@@ -147,30 +147,18 @@ OWN_UP = upload("O", "ui-owner.png", 2, "uid820owner")
 NAMELESS_UP = upload("N", "ui-nameless.png", 3)
 TOK_UP = upload("token", "ui-token.png", 4, "uid820token")
 re_ = row(ED_UP)
-check("a non-owner's web upload: the note names THEM, not the owner",
-      re_["tech"] == "Ed Itor — manual upload" and "Ui Owner" not in re_["tech"], re_["tech"])
-check("... and the row is theirs (uploaded_by_user_id) via the web channel",
-      re_["uploaded_by_user_id"] == UID["E"] and re_["channel"] == "web", re_)
+check("a non-owner's web upload writes no Source note (#845), and is theirs via the web channel",
+      re_["tech"] == "" and re_["uploaded_by_user_id"] == UID["E"] and re_["channel"] == "web", re_)
 ro = row(OWN_UP)
-check("the owner's own upload reads sensibly: '<owner> — manual upload', theirs",
-      ro["tech"] == f"{OWNER_NAME} — manual upload" and ro["uploaded_by_user_id"] == UID["O"], ro["tech"])
+check("the owner's own upload: no note, theirs", ro["tech"] == "" and ro["uploaded_by_user_id"] == UID["O"], ro["tech"])
 rn = row(NAMELESS_UP)
-check("no display name: the username stands in", rn["tech"] == "ui_nameless — manual upload"
-      and rn["uploaded_by_user_id"] == UID["N"], rn["tech"])
+check("a user with no display name: no note, theirs", rn["tech"] == "" and rn["uploaded_by_user_id"] == UID["N"], rn["tech"])
 rt = row(TOK_UP)
-check("the install token (the owner's scripts) keeps the owner's label and stays admin-owned",
-      rt["tech"] == LABEL and rt["uploaded_by_user_id"] is None, (rt["tech"], rt["uploaded_by_user_id"]))
-with actor.acting_as("user:ui_ed"):
-    new_note = users.manual_upload_source()
-    old_note = db.source_manual_upload()
-check("negative control: the OLD call answers the owner's label for the very same actor",
-      old_note == LABEL and new_note == "Ed Itor — manual upload" and old_note != new_note, (old_note, new_note))
-with actor.acting_as("user:no-such-user"):
-    ghost = users.manual_upload_source()
-check("an actor naming no account falls back to the owner's label (never crashes)", ghost == LABEL, ghost)
-with actor.acting_as(actor.ACTOR_MCP):
-    check("MCP / other actors: the owner's label (the MCP's own Source note is separate)",
-          users.manual_upload_source() == LABEL)
+check("the install token (the owner's scripts): no note, and stays admin-owned",
+      rt["tech"] == "" and rt["uploaded_by_user_id"] is None, (rt["tech"], rt["uploaded_by_user_id"]))
+check("the name-the-uploader writer is gone (users.manual_upload_source), the label recogniser stays",
+      not hasattr(users, "manual_upload_source") and db.source_manual_upload() == LABEL
+      and db.is_retired_source_note(LABEL) and not db.is_retired_source_note("Claude — authored"))
 r = C["E"].post("/api/content", data={"external_url": "", "content_description": "x"}, headers=H["E"])
 check("/api/content still refuses an empty request cleanly (the Source change did not break it)",
       r.status_code == 400, (r.status_code, r.text[:200]))
@@ -300,13 +288,24 @@ else:
 # ---- 5. the Source note is still visible in the details panel -------------------------------------------
 print("--- 5. the Source note stays on the item page ---")
 page = C["V"].get(f"/object/{TRAP}")
-check("the item page shows the Source note (the owner's label, as written)",
-      page.status_code == 200 and f"Source: {LABEL}" in page.text, page.status_code)
-check("... and who really uploaded it (ORIGIN: 'Uploaded by' Ed, linked)",
+check("the item page leaves out the retired '— manual upload' note (#845), though the row still carries it",
+      page.status_code == 200 and "Source:" not in page.text and row(TRAP)["tech"] == LABEL, page.status_code)
+check("... and says who really uploaded it (ORIGIN: 'Uploaded by' Ed, linked)",
       "/gallery/user/ui_ed" in page.text and "Ed Itor" in page.text)
+with actor.acting_as(actor.ACTOR_MCP):
+    GENUINE = f"ui-genuine-{secrets.token_hex(3)}"
+    db.insert_upload(GENUINE, "genuine.png", None, db.SOURCE_AUTHORED)
+page = C["V"].get(f"/object/{GENUINE}")
+check("a genuine label still shows: 'Source: Claude — authored'", f"Source: {db.SOURCE_AUTHORED}" in page.text)
 page = C["V"].get(f"/object/{ED_UP}")
-check("a new web upload's note shows too: 'Source: Ed Itor — manual upload'",
-      f"Source: Ed Itor — manual upload" in page.text)
+check("a new web upload shows no Source line, but 'Uploaded by' Ed and 'Arrived via the web app'",
+      "Source:" not in page.text and "/gallery/user/ui_ed" in page.text and "the web app" in page.text)
+first = C["E"].post("/api/upload", files={"file": ("ui-dup.png", png_bytes(9), "image/png")},
+                    data={"modified_at": "1700000000000"}, headers=H["E"])
+dup = C["E"].post("/api/upload", files={"file": ("ui-dup.png", png_bytes(9), "image/png")},
+                  data={"modified_at": "1700000000000"}, headers=H["E"])
+check("a duplicate upload is refused with who and when, not an empty label (409 'Already uploaded by Ed Itor on ...')",
+      dup.status_code == 409 and "Already uploaded by Ed Itor on" in dup.text, (dup.status_code, dup.text[:200]))
 
 print()
 print(("FAILED: " + ", ".join(FAILS)) if FAILS else "ALL PASS")

@@ -34,9 +34,24 @@ HOBBY_STATUSES = list(card_rules.HOBBY_ACTIVITIES)
 # install "Owner — manual upload" until an owner is set. #560: `tech` is only the free-text
 # Source NOTE now: WHO is `uploaded_by_user_id` (from the actor, #604) and HOW is `channel` (below);
 # nothing decides identity, ownership or a gallery from it.
+#
+# #845 (owner, 2026-11-07): the "<name> — manual upload" note is RETIRED. A web upload (/api/upload,
+# /api/content) writes no Source note at all (SOURCE_NONE), because the real uploader and "Arrived via
+# the web app" say everything it used to. source_manual_upload() is kept ONLY to recognise the old
+# label (the #560 backfills and the retire_manual_upload_845 migration read it); nothing writes it.
+SOURCE_NONE = ""
+MANUAL_UPLOAD_SUFFIX = " — manual upload"
+
+
 def source_manual_upload():
     from .. import install_config  # lazy: install_config imports this module
-    return f"{install_config.owner_label()} — manual upload"
+    return f"{install_config.owner_label()}{MANUAL_UPLOAD_SUFFIX}"
+
+
+def is_retired_source_note(tech):
+    """#845: True for a Source note of the retired "<name> — manual upload" shape (whoever the name is).
+    The item page leaves such a note out of its details; the stored text is not touched here."""
+    return bool(tech) and tech.strip().endswith(MANUAL_UPLOAD_SUFFIX)
 
 
 def source_automated_upload():

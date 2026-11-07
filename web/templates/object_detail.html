@@ -180,7 +180,8 @@
         </div>
         <p class="title-edit-error" id="object-title-error" style="display:none" role="alert"></p>
         <div class="detail-meta" style="margin-top:8px">
-          <span>Source: {{ item.source_display }}</span>
+          {# #845: the retired "<name> — manual upload" note is not shown (Uploaded by / Arrived via, below, say it) #}
+          {% if item.source_display %}<span>Source: {{ item.source_display }}</span>{% endif %}
           {# #725: the upload time is only ever "Imported <date>", never the item's date. #}
           <span>Imported {{ item.uploaded_at_display }}</span>
           <span>Date: {{ item.date_shown }}</span>

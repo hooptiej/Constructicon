@@ -11,7 +11,7 @@ import time
 
 from .. import actor as actor_ctx
 from .conn import get_conn, transaction
-from .labels import migration_source, SOURCE_AUTHORED, SOURCE_CLAUDE, source_groups
+from .labels import migration_source, MANUAL_UPLOAD_SUFFIX, SOURCE_AUTHORED, SOURCE_CLAUDE, SOURCE_NONE, source_groups
 from .changelog import insert_change_log
 from .tags import _ensure_chip_triggers, MIGRATION_555, _refresh_chip_cache
 from .search_index import rebuild_search_index
@@ -925,6 +925,76 @@ def _mig_archive_stats_605():
           f"{len(failed)} unreadable{(': ' + '; '.join(failed[:20])) if failed else ''}", flush=True)
 
 
+def _manual_upload_names_845(conn):
+    """The names the app itself ever put in front of " — manual upload": the owner's label as the install
+    config builds it today (owner_label, else owner_name, else "Owner"), every Source group (the owner's
+    label, and the neutral "Owner" kept for uploads made before an owner was set), the owner's name, and
+    every user's display name and username (the #819 label named the signed-in uploader). Exact strings,
+    nothing pattern-matched: a label that merely resembles one is left alone."""
+    from .. import install_config
+    label, owner_name = _owner_manual_label(conn)
+    names = {label[:-len(MANUAL_UPLOAD_SUFFIX)], install_config.FALLBACK_OWNER}
+    names |= {g for g in source_groups() if g != SOURCE_CLAUDE}
+    if owner_name:
+        names.add(owner_name)
+    for u in conn.execute("SELECT username, display_name FROM users"):
+        for n in (u["username"], u["display_name"]):
+            if n and n.strip():
+                names.update({n, n.strip()})
+    return names
+
+
+def _mig_retire_manual_upload_845():
+    # #845 (owner decision 2026-11-07): the free-text Source label "<name> — manual upload" is retired.
+    # A web upload writes no note any more (db.SOURCE_NONE); this clears the old ones too, so old items
+    # read like new ones. ONLY a label of exactly that shape, with a name this install ever used (see
+    # _manual_upload_names_845), on an item whose channel is `web` (only the web routes ever wrote it):
+    # `tech` becomes '' (the column is NOT NULL) and nothing else is touched. "Claude — authored",
+    # "Claude — migrated from X", "<owner> — automated upload" and every label on an mcp / script item stay.
+    # Fill-/clear-only and idempotent (a second run finds nothing). Logged as ONE change-log row with a row
+    # image per item, under the `system` actor rather than `migration`, because the generic undo refuses
+    # migration rows and the owner asked for this to be undoable: POST /api/changes/<batch>/undo (or
+    # constructicon_undo) puts every label back. The details say how many, which labels, and which were
+    # left. It must run AFTER capture_channel_560 (it reads `channel`) and owner_upload_backfill_560 (it
+    # reads this very label to give the owner's old uploads their owner), so it defers, loudly, until
+    # both are recorded: an owner backfill that is itself deferred must not lose its input.
+    from .. import changes
+    conn = get_conn()
+    done = {r[0] for r in conn.execute("SELECT name FROM schema_migrations")}
+    waiting = [n for n in ("capture_channel_560", "owner_upload_backfill_560") if n not in done]
+    if waiting:
+        raise MigrationDeferred(
+            f"{', '.join(waiting)} {'has' if len(waiting) == 1 else 'have'} not been applied yet, and "
+            "it reads the '— manual upload' label this migration clears (to set each item's channel, or to give the "
+            "owner's old uploads their owner). Fix what that migration reported (it says what), then restart "
+            "the web app.")
+    known = {n + MANUAL_UPLOAD_SUFFIX for n in _manual_upload_names_845(conn)}
+    rows = conn.execute("SELECT slug, tech FROM capture_events WHERE channel = 'web' AND tech LIKE ?",
+                        ("%" + MANUAL_UPLOAD_SUFFIX,)).fetchall()
+    cleared = [r for r in rows if r["tech"] in known]
+    left = {}
+    for r in rows:
+        if r["tech"] not in known:
+            left[r["tech"]] = left.get(r["tech"], 0) + 1
+    by_label = {}
+    for r in cleared:
+        by_label[r["tech"]] = by_label.get(r["tech"], 0) + 1
+    if cleared:
+        for i in range(0, len(cleared), 500):
+            conn.executemany("UPDATE capture_events SET tech = ? WHERE slug = ? AND tech = ?",
+                             [(SOURCE_NONE, r["slug"], r["tech"]) for r in cleared[i:i + 500]])
+        insert_change_log(
+            conn, "migration_retire_manual_upload_845", changes.ACTOR_SYSTEM,
+            [changes.row_image("capture_events", {"slug": r["slug"]}, {"tech": r["tech"]}, {"tech": SOURCE_NONE})
+             for r in cleared],
+            batch_id=changes.new_batch_id(), affected_slugs=[r["slug"] for r in cleared],
+            details={"cleared": len(cleared), "by_label": by_label, "left_alone": left,
+                     "undo": "POST /api/changes/<batch id>/undo restores every label"})
+    print(f"schema_migrations: retire_manual_upload_845 cleared the '— manual upload' note on {len(cleared)} web item(s) "
+          f"{by_label}; left {sum(left.values())} web item(s) with a manual-upload-shaped note naming nobody "
+          f"this install knows {left}", flush=True)
+
+
 MIGRATIONS = [
     ("drop_legacy_uploads", _mig_drop_legacy_uploads),
     ("curator_snooze_519", _mig_curator_snooze_519),
@@ -956,6 +1026,7 @@ MIGRATIONS = [
     ("capture_channel_560", _mig_capture_channel_560),
     ("owner_upload_backfill_560", _mig_owner_upload_backfill_560),  # after the channel fill: it reads it
     ("archive_stats_605", _mig_archive_stats_605),
+    ("retire_manual_upload_845", _mig_retire_manual_upload_845),  # after both #560 steps: it reads what they read
 ]
 
 

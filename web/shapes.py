@@ -362,7 +362,9 @@ def _to_object_detail(row):
         # Full Source string, unshortened — this is the one place it's meant
         # to be spelled out in full (see _to_public for the compact/grouped
         # version used everywhere else).
-        "source_display": row["tech"],
+        # #845: the retired "<name> — manual upload" note is left out (the page names the real uploader
+        # and how it arrived); a genuine label ("Claude — authored") still shows.
+        "source_display": "" if db.is_retired_source_note(row["tech"]) else row["tech"],
         "redacted": bool(row["redacted"]),
         "extracted_text": row["extracted_text"],
         # #607: the page itself never embeds the text (a 1 MB file text froze the tab); it gets the

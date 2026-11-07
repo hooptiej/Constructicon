@@ -72,9 +72,9 @@ async def api_upload(
     folder_name: str = Form(""),
     sensitive: str = Form(""),
 ):
-    # The Source string is decided server-side, never by a client-supplied field.
-    # #819: it names the signed-in uploader (not the owner); #562: any other actor keeps the owner label.
-    user = await run_in_threadpool(users.manual_upload_source)
+    # The Source note is decided server-side, never by a client-supplied field. #845: a web upload writes
+    # none (db.SOURCE_NONE): who is uploaded_by_user_id and how is the channel ("Arrived via the web app").
+    user = db.SOURCE_NONE
 
     # #433: get file size early for duplicate check; use file.size if available,
     # otherwise measure via seek/tell
@@ -116,9 +116,16 @@ async def api_upload(
         # _friendly_datetime, not a raw strftime with %-d/%-I -- those are the
         # platform-specific extensions that helper exists to avoid (#211).
         dupe_date = _friendly_datetime(result.row["timestamp"])
+        # #845: who uploaded it is the account (uploaded_by_user_id), not a Source note; a note that is
+        # a real label ("Claude — authored") still reads as before, and a retired/empty one is left out.
+        who = ""
+        if result.row.get("uploaded_by_user_id") is not None:
+            who = f" by {users.uploader_label(users.owner_info(result.row['uploaded_by_user_id']))}"
+        elif result.row.get("tech") and not db.is_retired_source_note(result.row["tech"]):
+            who = f" by {result.row['tech']}"
         raise HTTPException(
             status_code=409,
-            detail=f"Already uploaded by {result.row['tech']} on {dupe_date} — see /object/{result.row['slug']}",
+            detail=f"Already uploaded{who} on {dupe_date} — see /object/{result.row['slug']}",
         )
     elif result.error_kind == "too_large":
         # #812: a file between the upload cap and the cap + the body cap's framing allowance gets past
@@ -175,7 +182,7 @@ def api_create_content(
     link" field (#184): the client no longer decides youtube-vs-url itself,
     it just posts the URL and lets the server figure out what it is.
     """
-    user = users.manual_upload_source()  # #819 (names the signed-in uploader), #562 (owner label otherwise)
+    user = db.SOURCE_NONE  # #845: no Source note for a web upload (the uploader and the channel say it)
     tag_list = _parse_tags_form(tags)
     try:
         parsed_type_metadata = json.loads(type_metadata) if type_metadata else None

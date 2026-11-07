@@ -2333,6 +2333,14 @@ a.uploader-label:hover, a.uploader-label:focus-visible { text-decoration: underl
 .proc-stage.failed .proc-stage-dot { background: var(--hazard-red); }
 @keyframes proc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .proc-empty { color: var(--icon-muted); font-size: 13px; text-align: center; padding: 28px 0; }
+/* #826: unpack jobs, above the items */
+.proc-jobs { margin-bottom: 10px; }
+.proc-jobs[hidden] { display: none; }
+.proc-job .proc-item-name a { color: inherit; }
+.proc-job-bar { width: 100%; margin-top: 7px; height: 8px; }
+.proc-job-line { font-size: 11.5px; color: var(--text-2); margin-top: 5px; line-height: 1.35; overflow-wrap: anywhere; }
+.proc-job-line a { color: var(--accent); }
+.proc-job-failed { margin: 5px 0 0 16px; padding: 0; font-size: 11px; color: var(--hazard-red); max-height: 140px; overflow: auto; overflow-wrap: anywhere; }
 
 /* #508: build version badge, bottom-left, deliberately quiet */
 .app-version { position: fixed; left: 8px; bottom: 6px; z-index: 1; font: 400 10px/1 "JetBrains Mono", monospace; color: var(--text-2); pointer-events: none; user-select: text; }  /* #848: light grey, opaque — was --icon-muted (#3F4530) at 0.55, invisible on the dark footer gradient */

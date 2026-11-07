@@ -81,11 +81,51 @@ def ensure_thumbnail(row, wait=None):
     except parse_limits.LimitExceeded:  # silent-ok: parse_limits logged the hit and remembers it for the page
         return False
     except Exception as e:
-        print(f"thumbnail generation failed for {slug}: {e!r}")
+        # #852: never a bare print and a silent gap. Logged with the slug, and left on the item
+        # (type_metadata.thumb_error) so the object page, the refresh button and MCP readers can say why.
+        besteffort.warn(log, "thumbnails: couldn't make a thumbnail", e, slug=slug, media_type=row.get("media_type"))
+        record_thumb_error(slug, _thumb_error_text(e))
         return False
     if isinstance(result, dict):  # #742: a CaptureResult's facts, recorded here, in the app process
         record_capture_metadata(slug, result)
+    if result:
+        clear_thumb_error(slug)
     return bool(result)
+
+
+THUMB_ERROR_KEY = "thumb_error"  # type_metadata key (#852): why the last attempt to make a thumbnail failed
+
+
+def _thumb_error_text(exc):
+    """The plain reason shown to a person: ThumbnailError already reads as a sentence; anything else is
+    named by its type and message."""
+    if isinstance(exc, storage.ThumbnailError):
+        return str(exc)[:500]
+    return f"couldn't make a thumbnail ({type(exc).__name__}: {exc})"[:500]
+
+
+def record_thumb_error(slug, message):
+    """#852: remember on the item why its thumbnail couldn't be made. Pipeline bookkeeping like the caption
+    status, so it uses the raw merge writer (no change-log row). Writing the note itself failing is logged,
+    never raised: the caller is already reporting a failure."""
+    try:
+        from . import db
+        row = db.get_by_slug(slug)
+        if row is not None and (row.get("type_metadata") or {}).get(THUMB_ERROR_KEY) != message:
+            db._update_content_metadata(slug, type_metadata={THUMB_ERROR_KEY: message})
+    except Exception as e:
+        besteffort.warn(log, "thumbnails: couldn't record why the thumbnail failed", e, slug=slug)
+
+
+def clear_thumb_error(slug):
+    """#852: a thumbnail now exists, so drop an older failure note (set to "": the merge writer keeps keys)."""
+    try:
+        from . import db
+        row = db.get_by_slug(slug)
+        if row is not None and (row.get("type_metadata") or {}).get(THUMB_ERROR_KEY):
+            db._update_content_metadata(slug, type_metadata={THUMB_ERROR_KEY: ""})
+    except Exception as e:
+        besteffort.warn(log, "thumbnails: couldn't clear the old thumbnail failure note", e, slug=slug)
 
 
 def record_capture_metadata(slug, type_metadata):

@@ -254,7 +254,9 @@ def constructicon_run_type_action(slug: str, action: str, params: dict | None = 
     background; -> job with id and batch_id), {"mode": "status", "job": <id>} (progress, then the
     result; partial failures name each member and why), plus "shape": "collection" (flat, default)
     | "project" (flat) | "nested" (a project, sub-folders as nested cards) and "depth": 1 or 2 (nested
-    only, default 2). The whole conversion undoes with constructicon_undo(batch_id).
+    only, default 2), and with start "trash_original": true (opt-in, default false) to send the archive
+    to the trash once the job ends done (never partial / failed), in the same batch. The whole
+    conversion (that trashing included) undoes with constructicon_undo(batch_id).
     -> {ok, action, item, ...what the action adds}. Errors: redacted, unknown_action,
     action_failed; retry_ocr: bad_request (redacted, or a type without OCR); unpack: archive_encrypted,
     archive_corrupt, archive_hostile_path, archive_too_big, archive_too_many, archive_ratio,

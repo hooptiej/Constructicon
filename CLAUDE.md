@@ -1682,6 +1682,14 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     `static/js/unpack-crate.js` opens the dialog: shape + depth, Preview, Unpack (enabled only after a preview
     of that choice), the progress bar polling every 1.5 s, the result (card link, failed / skipped / linked
     lists) and "Undo the whole conversion".
+  - **Trash the original (#825, opt-in, default off):** the dialog's checkbox / the action's `trash_original`
+    param (`unpack.flag`: true / 1 / on / yes, false / 0 / off / no / empty; anything else 400) is stored on the
+    job (`unpack_jobs.trash_original`, 0 by default, added at boot to an older table). Only when the job ends
+    `done` (never `partial` / `failed`), `unpack._trash_original` sends the archive to the trash through
+    `items.delete` under the job's own batch, so the one undo restores it (row and file) with everything else;
+    members keep `extracted_from` (the link shows again after the undo). A refused trash step keeps the unpack
+    `done` and the archive, and the message says why (`result.trash_original` {requested, trashed, message}).
+    Check: `scripts/test_unpack_trash_original_825.py`.
   - **The archive's own `type_metadata` (the `{}` on the work install's Venza manual):**
     `archive.get_embedded_metadata` returned `{}` for zip and 7z (only tars stored stats, #485). Every format
     now stores `archive_stats` at upload (entries, folders, links, uncompressed, compressed (zip), encrypted,
@@ -1689,9 +1697,8 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     "Deepest folder". Migration `archive_stats_605` fills it once for every archive row without it
     (fill-only, through a parser child; missing / unreadable files are counted and named in the boot log).
   - Not built (owner calls on #605): a relation from each member back to the archive (the archive on the same
-    card plus `extracted_from` is the link; 1,000 related items would swamp both Related panels); the
-    optional "trash the original archive afterwards"; a processing-drawer entry for the job (its progress is on
-    the item page). Converting a nested project to a collection afterwards is refused by `cards.set_kind`
+    card plus `extracted_from` is the link; 1,000 related items would swamp both Related panels); a
+    processing-drawer entry for the job (its progress is on the item page). Converting a nested project to a collection afterwards is refused by `cards.set_kind`
     with the existing nest_group_kind reason. Check: `scripts/test_unpack_crate_605.py` (throwaway DB,
     synthetic archives; the .7z part needs py7zr, in the app image).
 - Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),

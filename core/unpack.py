@@ -41,6 +41,10 @@ archive and every member on them (`membership.add_files`, imaged), and one `item
 row per item it made (`items.record_created`). `cards.undo(batch_id)` removes the cards and the
 memberships and sends every created item to the trash (7 days, like any delete; undoing that undo
 restores them). Linked items and the original archive are only taken off the card.
+**Trash the original (#825, opt-in, default off):** `start(..., trash_original=True)` (the dialog's
+checkbox, the action's `trash_original` param) sends the archive to the trash when the job ends `done`
+(never `partial` / `failed`), through `items.delete` under the same batch, so the one undo restores it
+too. If that step is refused, the unpack still counts as done and the message says why the archive stayed.
 
 **Background job with progress** (#549: the web process runs it; the MCP only queues). `start()`
 inserts an `unpack_jobs` row (queued) and wakes the web worker (`start_worker()`, one thread, one job
@@ -406,7 +410,8 @@ def _job_public(job):
         return None
     p, r = job.get("progress") or {}, job.get("result") or {}
     out = {"id": job["id"], "archive_slug": job["archive_slug"], "status": job["status"], "shape": job["shape"],
-           "depth": job["depth"] or None, "batch_id": job["batch_id"], "created_at": job["created_at"],
+           "depth": job["depth"] or None, "trash_original": bool(job.get("trash_original")),
+           "batch_id": job["batch_id"], "created_at": job["created_at"],
            "started_at": job["started_at"], "finished_at": job["finished_at"], "error": job.get("error"),
            "progress": p, "result": r, "finished": job["status"] in FINISHED}
     out["message"] = r.get("message") or job.get("error") or p.get("message") or {
@@ -414,10 +419,26 @@ def _job_public(job):
     return out
 
 
-def start(slug, shape=DEFAULT_SHAPE, depth=None, *, actor=None):
-    """Queues the conversion (see the module docstring). -> the job (status queued)."""
+def flag(value):
+    """A yes/no parameter from either door: True / "1" / "true" / "on" / "yes" (any case) = True; False,
+    None, "" / "0" / "false" / "off" / "no" = False; anything else is refused (never guessed)."""
+    if isinstance(value, bool) or value is None:
+        return bool(value)
+    s = str(value).strip().lower()
+    if s in ("1", "true", "on", "yes"):
+        return True
+    if s in ("", "0", "false", "off", "no"):
+        return False
+    raise InvalidInput(f"trash_original must be true or false, not {value!r}.")
+
+
+def start(slug, shape=DEFAULT_SHAPE, depth=None, *, trash_original=False, actor=None):
+    """Queues the conversion (see the module docstring). -> the job (status queued).
+    #825: `trash_original` (opt-in, default off) sends the archive to the trash when the job ends
+    `done`, in the job's own batch, so the one undo brings it back with everything else."""
     row = _archive_row(slug, actor)
     shape, depth = check_shape(shape, depth)
+    trash_original = flag(trash_original)
     busy = db.list_unpack_jobs(status=ACTIVE, archive_slug=row["slug"], limit=1)
     if busy:
         raise Conflict(f"{item_name(row)} is already being unpacked (job {busy[0]['id']}, {busy[0]['status']}); wait "
@@ -426,14 +447,17 @@ def start(slug, shape=DEFAULT_SHAPE, depth=None, *, actor=None):
     # #560 / #778: how the starter reached the app and their personal MCP key, replayed by run_job, so
     # the members say "Arrived via the MCP" and "<user>'s <key name>" when a personal key started it.
     job_id = db._insert_unpack_job(row["slug"], changes.new_batch_id(), who, shape, depth,
-                                   channel=actor_ctx.current_channel(), via_token_id=actor_ctx.token_id_for(who))
+                                   channel=actor_ctx.current_channel(), via_token_id=actor_ctx.token_id_for(who),
+                                   trash_original=trash_original)
     wake_worker()
     return _job_public(db.get_unpack_job(job_id))
 
 
 def job_status(job_id, *, actor=None):
     """The job, for the page's poll and MCP's mode=status. 404 when there is no such job or the actor
-    can't see its archive (a job reveals nothing about an item the actor can't see)."""
+    can't see its archive (a job reveals nothing about an item the actor can't see). #825: once the
+    archive is gone (trashed by the job itself, or deleted since) the job stays readable by admins and
+    by whoever started it (they saw the archive), so the dialog's last poll still gets its result."""
     try:
         job = db.get_unpack_job(int(job_id))
     except (TypeError, ValueError):
@@ -441,11 +465,72 @@ def job_status(job_id, *, actor=None):
     if job is None:
         raise NotFound(f"No unpack job {job_id}.")
     row = db.get_by_slug(job["archive_slug"])
+    who = actor_ctx.resolve(actor)
     if row is not None:
         policy.require_view(row, actor, message=f"No unpack job {job_id}.")
-    elif roles.role_of(actor_ctx.resolve(actor)) != roles.ADMIN:
+    elif roles.role_of(who) != roles.ADMIN and job.get("actor") != who:
         raise NotFound(f"No unpack job {job_id}.")
     return _job_public(job)
+
+
+# #826: the processing drawer lists unpack jobs too, so a conversion can be watched from any page.
+DRAWER_RECENT_SECONDS = 3600     # a finished job stays in the drawer this long after it ends
+DRAWER_MAX_JOBS = 20
+DRAWER_FAILED_SHOWN = 10         # failed members named per job (the item page's dialog lists them all)
+
+
+def _drawer_job(job, row, who):
+    """One job as the drawer shows it: the archive (linked), state, progress, and when finished the
+    card it made, the failed members with their reasons, or why it failed."""
+    pub = _job_public(job)
+    p, r = pub["progress"], pub["result"]
+    failed = r.get("failed") or []
+    card = r.get("card")
+    card_hidden = bool(card) and not policy.can_view_card(card.get("id"), who)
+    if card_hidden:
+        # A private card the actor isn't on (made private after the unpack): say a card exists, not its name.
+        card = None
+    return {
+        "id": pub["id"], "status": pub["status"], "finished": pub["finished"],
+        "archive": {"slug": job["archive_slug"],
+                    "name": item_name(row) if row is not None else f"(deleted archive {job['archive_slug']})",
+                    "url": f"/object/{job['archive_slug']}" if row is not None else None},
+        "phase": p.get("phase"), "done": p.get("done") or 0, "total": p.get("total") or 0,
+        "current": p.get("current") if not pub["finished"] else None,
+        "message": pub["message"],
+        "card": card, "card_hidden": card_hidden,
+        "counts": r.get("counts"),
+        "failed": failed[:DRAWER_FAILED_SHOWN], "failed_more": max(len(failed) - DRAWER_FAILED_SHOWN, 0),
+        "error": pub["error"] if pub["status"] == "failed" else None,
+        "batch_id": r.get("batch_id"),
+        "is_mine": job.get("actor") == who,
+        "created_at": pub["created_at"], "finished_at": pub["finished_at"],
+    }
+
+
+def drawer_jobs(*, actor=None, recent_seconds=DRAWER_RECENT_SECONDS, now=None):
+    """#826: the unpack jobs for the processing drawer: every queued / running job, plus jobs that
+    finished in the last `recent_seconds`, only where the actor can see the archive. A deleted
+    archive's job (deleted since, or trashed by the unpack itself, #825) shows to admins and to the
+    person who started it (they saw the archive then), nobody else. Running first, then the newest.
+    -> list of dicts."""
+    who = actor_ctx.resolve(actor)
+    cutoff = (now or time.time()) - recent_seconds
+    jobs = db.list_unpack_jobs(status=ACTIVE, limit=DRAWER_MAX_JOBS)
+    jobs += [j for j in db.list_unpack_jobs(status=FINISHED, limit=DRAWER_MAX_JOBS)
+             if (j.get("finished_at") or 0) >= cutoff]
+    is_admin = roles.role_of(who) == roles.ADMIN
+    out = []
+    for job in jobs:
+        row = db.get_by_slug(job["archive_slug"])
+        if row is None and not (is_admin or job.get("actor") == who):
+            continue
+        if row is not None and not policy.can_view(row, who):
+            continue
+        out.append(_drawer_job(job, row, who))
+    order = {"running": 0, "queued": 1}
+    out.sort(key=lambda j: (order.get(j["status"], 2), -(j["finished_at"] or j["created_at"] or 0)))
+    return out[:DRAWER_MAX_JOBS]
 
 
 def run_action(row, params):
@@ -457,9 +542,12 @@ def run_action(row, params):
             raise NotFound(f"No unpack job {params.get('job')} for this archive.")
         return {"job": job, "message": job["message"]}
     if mode == "start":
-        job = start(row["slug"], params.get("shape"), params.get("depth"))
+        job = start(row["slug"], params.get("shape"), params.get("depth"),
+                    trash_original=params.get("trash_original"))
+        tidy = (" When every member is in, the original archive goes to the trash (7 days); Undo brings it back "
+                "too." if job["trash_original"] else "")
         return {"job": job, "message": f"Unpacking started (job {job['id']}). It runs in the background; this "
-                                      "page shows its progress, and Undo removes the whole conversion."}
+                                      f"page shows its progress, and Undo removes the whole conversion.{tidy}"}
     if mode == "preview":
         plan = preview(row["slug"], params.get("shape"), params.get("depth"))
         return {"preview": plan, "message": plan["message"]}
@@ -627,6 +715,34 @@ def _summary(plan, root, card_ids, created, linked, skipped, failed, stopped, no
                                "failed": len(failed)}}
 
 
+def _trash_original(job, status, result):
+    """#825: the opt-in tidy-up. Only for a job that ended `done` (never partial / failed): the archive
+    goes to the trash through `items.delete` under the job's own batch, so the conversion's one undo
+    restores it (file and rows) along with everything else. Members keep `extracted_from` (the slug
+    comes back with the undo). A refusal or failure here never fails the unpack: the archive stays,
+    and the message says why. -> None (not asked) or {requested, trashed, message[, expires_at]}."""
+    if not job.get("trash_original"):
+        return None
+    if status != "done":
+        return {"requested": True, "trashed": False,
+                "message": "The original archive was kept, though you asked to trash it, because the unpack didn't "
+                           "finish cleanly; once the failures are sorted out you can trash it from its page."}
+    try:
+        res = items.delete([job["archive_slug"]], batch_id=job["batch_id"])
+    except AppError as e:
+        why = e.message
+    except Exception as e:  # the unpack itself succeeded; this step must not turn it into a failure
+        besteffort.warn(log, "unpack: trash the original archive", e, job=job["id"], slug=job["archive_slug"])
+        why = object_types.short_error(e)
+    else:
+        return {"requested": True, "trashed": True, "expires_at": res.data.get("expires_at"),
+                "message": f"The original archive went to the trash (kept {items.TRASH_DAYS} days); Undo brings "
+                           "it back with everything else."}
+    return {"requested": True, "trashed": False,
+            "message": f"The original archive was NOT sent to the trash: {why} Everything else was unpacked; trash "
+                       "it from its page if you still want it gone."}
+
+
 def run_job(job_id, *, run_background=None):
     """Runs one queued job to the end (the worker calls this; tests call it directly). Returns the job."""
     if not db._claim_unpack_job(job_id):
@@ -637,6 +753,10 @@ def run_job(job_id, *, run_background=None):
             actor_ctx.acting_via(job.get("channel") or actor_ctx.channel_for_actor(job["actor"]), job.get("via_token_id")):
         try:
             status, result = _run(job, run_background or _background)
+            tidy = _trash_original(job, status, result)
+            if tidy is not None:
+                result["trash_original"] = tidy
+                result["message"] += " " + tidy["message"]
             db._update_unpack_job(job_id, status=status, result=result, finished_at=time.time())
         except AppError as e:
             made = bool(db.get_change_rows(batch_id=job["batch_id"]))

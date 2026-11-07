@@ -281,7 +281,8 @@ CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id);
 -- running | done | partial (finished, some members failed) | failed (stopped; see `error`).
 -- `progress` / `result` are JSON. `channel` / `via_token_id`: how the starter reached the app and their
 -- personal MCP key (#560 / #778), replayed when the worker runs it, so members get the right credit. Not imaged: the conversion's own rows are in the change log
--- under `batch_id`, which is what undo reverses.
+-- under `batch_id`, which is what undo reverses. `trash_original` (#825, opt-in, 0 = keep): send the
+-- archive to the trash, in the same batch, when the job ends `done` (never on partial / failed).
 CREATE TABLE IF NOT EXISTS unpack_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     archive_slug TEXT NOT NULL,
@@ -291,6 +292,7 @@ CREATE TABLE IF NOT EXISTS unpack_jobs (
     depth INTEGER NOT NULL DEFAULT 0,
     channel TEXT,
     via_token_id INTEGER,
+    trash_original INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL,
     progress TEXT NOT NULL DEFAULT '{}',
     result TEXT NOT NULL DEFAULT '{}',
@@ -588,7 +590,9 @@ def init_db(migrate=True):
         # #605: an unpack job replays its starter's channel and personal MCP key in the web worker
         # (an install that ran an earlier build of the branch has the table without them).
         existing_unpack_columns = {row["name"] for row in conn.execute("PRAGMA table_info(unpack_jobs)")}
-        for column, ddl_type in (("channel", "TEXT"), ("via_token_id", "INTEGER")):
+        # #825: and its opt-in "trash the original archive when it ends done" flag.
+        for column, ddl_type in (("channel", "TEXT"), ("via_token_id", "INTEGER"),
+                                 ("trash_original", "INTEGER NOT NULL DEFAULT 0")):
             if existing_unpack_columns and column not in existing_unpack_columns:
                 _add_column(conn, "unpack_jobs", column, ddl_type)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_capture_events_owner ON capture_events(uploaded_by_user_id)")

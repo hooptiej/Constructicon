@@ -13,6 +13,7 @@ templates object in web/common.py, audit logging in web/middleware.py.
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core import actor as actor_ctx, captions, db, decisions, errors, install_token, ocr, paths, transcripts, unpack
@@ -105,19 +107,54 @@ app.mount("/brand", _BrandFiles(directory=_BRAND_FALLBACK_DIR), name="brand")
 
 # Preview mount for exported sites — points to the current build directory.
 # Ensure the directory exists (even if empty) so the mount doesn't fail at startup.
+def _media_headers(path, response):
+    # #610: the generated pages are ours and must render, but media/ holds the owner's uploaded
+    # files copied verbatim (an .html or .svg among them): those get the same treatment as /f/.
+    if path.replace("\\", "/").lstrip("/").startswith("media/") and getattr(response, "path", None):
+        for key, value in content_security.file_headers(response.path, Path(response.path).name).items():
+            response.headers[key] = value
+    return response
+
+
+_USER_PREVIEW = re.compile(r"^u/([^/]+)(?:/(.*))?$")
+
+
+class _UserExportFiles(StaticFiles):
+    """#781: one user's export sandbox (<exports>/users/<id>/current). One instance per folder, made
+    on demand, so concurrent requests for different users never share a directory setting."""
+
+
 class _CurrentExportFiles(StaticFiles):
     """#578: serves paths.current_export_dir(), resolved per request (not frozen at import), so a
-    test that repoints CONSTRUCTICON_EXPORTS_DIR after importing the app serves its own build."""
+    test that repoints CONSTRUCTICON_EXPORTS_DIR after importing the app serves its own build.
+    #781: `/preview/u/<user id>/...` is that user's own sandbox (core/export_sandbox.py), open to them
+    and to admins only (403 saying why); everything else is the install's build, as before."""
+
+    _per_user = {}
 
     async def get_response(self, path, scope):
+        m = _USER_PREVIEW.match(path.replace("\\", "/").lstrip("/"))
+        if m:
+            return await self._user_response(m.group(1), m.group(2) or "", scope)
         self.all_directories = self.get_directories(paths.current_export_dir(), None)
-        response = await super().get_response(path, scope)
-        # #610: the generated pages are ours and must render, but media/ holds the owner's uploaded
-        # files copied verbatim (an .html or .svg among them): those get the same treatment as /f/.
-        if path.replace("\\", "/").lstrip("/").startswith("media/") and getattr(response, "path", None):
-            for key, value in content_security.file_headers(response.path, Path(response.path).name).items():
-                response.headers[key] = value
-        return response
+        return _media_headers(path, await super().get_response(path, scope))
+
+    async def _user_response(self, user_id, rest, scope):
+        from core import export_sandbox
+        try:
+            folder = await run_in_threadpool(export_sandbox.preview_dir_for, user_id)
+        except errors.AppError as e:
+            return JSONResponse({"ok": False, "error": {"code": e.code, "message": e.message}, "detail": e.message},
+                                status_code=e.status)
+        if not (folder / "index.html").is_file():
+            msg = "This export sandbox has no build yet: build one from the Export tab, then preview it."
+            return JSONResponse({"ok": False, "error": {"code": "not_found", "message": msg}, "detail": msg},
+                                status_code=404)
+        key = str(folder)
+        files = self._per_user.get(key)
+        if files is None:
+            files = self._per_user[key] = _UserExportFiles(directory=folder, html=True, check_dir=False)
+        return _media_headers(rest, await files.get_response(rest or ".", scope))
 
 
 paths.current_export_dir().mkdir(parents=True, exist_ok=True)

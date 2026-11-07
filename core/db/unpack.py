@@ -27,13 +27,15 @@ def _unpack_job_dict(r):
     return d
 
 
-def _insert_unpack_job(archive_slug, batch_id, actor, shape, depth, channel=None, via_token_id=None):
+def _insert_unpack_job(archive_slug, batch_id, actor, shape, depth, channel=None, via_token_id=None,
+                       trash_original=False):
     conn = get_conn()
     try:
         cur = conn.execute(
-            "INSERT INTO unpack_jobs (archive_slug, batch_id, actor, shape, depth, channel, via_token_id, status, "
-            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
-            (archive_slug, batch_id, actor, shape, int(depth or 0), channel, via_token_id, time.time()))
+            "INSERT INTO unpack_jobs (archive_slug, batch_id, actor, shape, depth, channel, via_token_id, "
+            "trash_original, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+            (archive_slug, batch_id, actor, shape, int(depth or 0), channel, via_token_id,
+             1 if trash_original else 0, time.time()))
         conn.commit()
         return cur.lastrowid
     finally:

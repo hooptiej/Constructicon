@@ -369,6 +369,14 @@
         <span id="admin-caption-skipped-msg" class="backup-status">…</span>
         <button type="button" class="btn-ms admin-apikey-save" id="admin-caption-skipped-run">Caption skipped items</button>
       </div>
+      {#- #556 / #454: the circuit breaker (core/captions.py breaker_status): it opens after N caption
+          failures in a row and pauses captioning (the queue waits) until someone resets it here
+          (POST /api/captions/reset-breaker). A restart of the web container also clears it. -#}
+      <div class="admin-apikey-input-row" id="admin-caption-breaker-row">
+        <span id="admin-caption-breaker-msg" class="backup-status" role="status" aria-live="polite">Breaker: …</span>
+        <button type="button" class="btn-ms admin-apikey-save" id="admin-caption-breaker-reset"
+                title="Clear the breaker and its failure count, so captioning resumes">Reset breaker</button>
+      </div>
       <div class="admin-caption-layout">
         <div class="admin-caption-controls">
           <div class="admin-apikey-input-row">
@@ -1150,11 +1158,46 @@
     } finally { capSkippedRun.disabled = false; }
   });
 
+  // #556: the caption circuit breaker (#454) — status and a reset, which it never had in the UI.
+  const capBreakerMsg = document.getElementById('admin-caption-breaker-msg');
+  const capBreakerReset = document.getElementById('admin-caption-breaker-reset');
+  function renderBreaker(b, disabled) {
+    if (!b) { capBreakerMsg.textContent = 'Breaker: the server sent no status.'; capBreakerMsg.className = 'backup-status backup-status-error'; return; }
+    if (b.open) {
+      capBreakerMsg.textContent = `Breaker OPEN: captioning is paused (${b.reason}). Nothing is captioned and the queue waits until you reset it.`;
+      capBreakerMsg.className = 'backup-status backup-status-error';
+    } else {
+      capBreakerMsg.textContent = (disabled ? 'Breaker closed (captions are off on this install, so it never trips). '
+        : `Breaker closed: captioning runs. It opens after ${b.max_failures} failures in a row; ${b.consecutive_failures} so far. `) +
+        `A restart of Ollama waits at least ${Math.round(b.cooldown_seconds / 60)} min between tries.`;
+      capBreakerMsg.className = 'backup-status';
+    }
+  }
+  capBreakerReset.addEventListener('click', async () => {
+    capBreakerReset.disabled = true;
+    try {
+      const res = await fetch('/api/captions/reset-breaker', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((body.error && body.error.message) || body.detail || `the server answered ${res.status}`);
+      renderBreaker(body.breaker);
+      capBreakerMsg.textContent = 'Reset. ' + capBreakerMsg.textContent;
+    } catch (err) {
+      capBreakerMsg.textContent = `Couldn't reset the breaker: ${err.message}. Nothing was changed.`;
+      capBreakerMsg.className = 'backup-status backup-status-error';
+    } finally { capBreakerReset.disabled = false; }
+  });
+
   (async function loadCaptionDefaults() {
     try {
       const res = await fetch('/api/captions/defaults');
-      if (!res.ok) return;
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        capBreakerMsg.textContent = `Couldn't read the caption settings: ${(body.error && body.error.message) || body.detail || 'the server answered ' + res.status}.`;
+        capBreakerMsg.className = 'backup-status backup-status-error';
+        return;
+      }
       const d = await res.json();
+      renderBreaker(d.breaker, d.disabled);
       capTemp.value = d.temperature; capTempVal.textContent = Number(d.temperature).toFixed(2);
       capTokens.value = d.num_predict; capTokensVal.textContent = d.num_predict;
       capPrompt.value = d.prompt;
@@ -1164,7 +1207,10 @@
       capSkippedMsg.textContent = d.disabled
         ? `Captions are off on this install (CAPTION_DISABLED). ${d.needs_caption} item(s) have no caption; an agent can caption them through the MCP tools.`
         : `${d.needs_caption} item(s) never got a caption, or it failed or was skipped.`;
-    } catch (err) { /* leave the placeholder */ }
+    } catch (err) {
+      capBreakerMsg.textContent = `Couldn't reach the server for the caption settings: ${err.message}.`;
+      capBreakerMsg.className = 'backup-status backup-status-error';
+    }
   })();
 
   // Remember the last test slug per browser so re-tuning later doesn't

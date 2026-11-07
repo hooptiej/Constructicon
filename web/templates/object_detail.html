@@ -117,6 +117,16 @@
       </div>
       {% endif %}
 
+      {# #852: the last attempt to make this item's thumbnail failed (core/thumbnails.py records the reason in
+         type_metadata.thumb_error and clears it when a thumbnail is made). The file itself is stored unchanged. #}
+      {% if item.type_metadata.thumb_error %}
+      <div class="rev-banner thumb-error-note" id="thumb-error-note" role="status">
+        <p style="margin:0"><strong>No thumbnail could be made.</strong> {{ item.type_metadata.thumb_error }}.
+          The file is stored unchanged{% if item.is_image_file %}, so the full image is shown instead{% endif %}.
+          {% if item.thumb_url %}"Refresh thumbnail" tries again; if it fails again, the reason is shown here.{% endif %}</p>
+      </div>
+      {% endif %}
+
       {# #266: display-only rotation (0/90/180/270), stored in type_metadata.rotation -- never touches the stored file.
          #385: Refresh thumbnail only when a thumbnail exists. Open full size opens the stored file. #}
       {% if item.is_image_file or item.thumb_url or (item.url and not item.redacted) %}

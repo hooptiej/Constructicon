@@ -56,13 +56,13 @@ SIDES = {
     "left": ["curator", "export", "brand", "admin"],
     "right": ["upload", "processing", "blog", "hobbies", "wallpaper"],
 }
-MIN_ROLE = {"export": "admin", "admin": "admin", "upload": "editor", "blog": "editor"}
+MIN_ROLE = {"export": "editor", "admin": "admin", "upload": "editor", "blog": "editor"}  # #781: Export = editor
 LABEL = {"export": "Export", "admin": "Admin", "upload": "Upload", "blog": "Blog"}
 NEED = {"admin": "admins only", "editor": "editors and admins"}
 LOCKED = {
     "admin": set(),
     "token": set(),
-    "editor": {"export", "admin"},
+    "editor": {"admin"},
     "viewer": {"export", "admin", "upload", "blog"},
 }
 # Markup each restricted drawer sends (its partial's own ids) and the header trigger for it.
@@ -103,10 +103,13 @@ for r in web_roles.flat_routes(webapp.app.routes):
     for m in (getattr(r, "methods", None) or []):
         ROUTE_ROLE[(m, getattr(r, "path", ""))] = web_roles.label_of(r)
 check("server: GET /admin is admin", ROUTE_ROLE.get(("GET", "/admin")) == "admin", ROUTE_ROLE.get(("GET", "/admin")))
-for path in ("/api/export/build", "/api/export/publish"):
-    check(f"server: POST {path} is admin", ROUTE_ROLE.get(("POST", path)) == "admin", ROUTE_ROLE.get(("POST", path)))
-for path in ("/api/export/config", "/api/export/targets"):
-    check(f"server: GET {path} is admin", ROUTE_ROLE.get(("GET", path)) == "admin", ROUTE_ROLE.get(("GET", path)))
+# #781 scope (a): building, the config and the sandbox are editor; publish targets and publishing stay admin.
+check("server: POST /api/export/build is editor", ROUTE_ROLE.get(("POST", "/api/export/build")) == "editor",
+      ROUTE_ROLE.get(("POST", "/api/export/build")))
+check("server: POST /api/export/publish is admin", ROUTE_ROLE.get(("POST", "/api/export/publish")) == "admin",
+      ROUTE_ROLE.get(("POST", "/api/export/publish")))
+for path, want in (("/api/export/config", "editor"), ("/api/export/sandbox", "editor"), ("/api/export/targets", "admin")):
+    check(f"server: GET {path} is {want}", ROUTE_ROLE.get(("GET", path)) == want, ROUTE_ROLE.get(("GET", path)))
 for path in ("/api/upload", "/api/content", "/api/blog-entries"):
     check(f"server: POST {path} is editor", ROUTE_ROLE.get(("POST", path)) == "editor", ROUTE_ROLE.get(("POST", path)))
 for m, path in (("GET", "/api/curator/queue"), ("GET", "/api/brand-assets"), ("GET", "/api/hobbies/html"),

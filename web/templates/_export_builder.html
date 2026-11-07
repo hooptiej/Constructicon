@@ -1,5 +1,10 @@
-{#- #779: Exporting and publishing the site is for admins and up (the server refuses anyone below on its routes). Below that the nav rail shows its tab greyed and explains it, and none of this markup or script is sent. -#}
-{% if has_role("admin") %}
+{#- #781 scope (a): building and previewing an export is for editors and up, each in their own sandbox
+    (core/export_sandbox.py: an admin's build is the install's, /preview/; an editor's previews at
+    /preview/u/<id>/). Publishing stays admin-only (per-user targets wait for #325): below admin the
+    PUBLISH part is drawn greyed and explained, never hidden (#779). Below editor the nav rail shows the
+    tab greyed and explains it, and none of this markup or script is sent. -#}
+{% if has_role("editor") %}
+{% set can_publish = has_role("admin") %}
 <!-- Export builder (#314 farm 2) — self-contained drawer for building and configuring
      a static website export. Vanilla JS IIFE with client-side state as the single
      source of truth, matching _blog_builder.html pattern. -->
@@ -42,8 +47,10 @@
     <div id="export-report" class="export-report" style="display: none">
       <div class="export-report-title">Build Report</div>
       <div id="export-report-stats" class="export-report-stats"></div>
+      <div id="export-report-leftout" class="export-report-warnings"></div>
       <div id="export-report-warnings" class="export-report-warnings"></div>
     </div>
+    <div id="export-error" class="export-publish-error" role="alert" style="display: none"></div>
 
     <!-- Current build actions — shown whenever a build exists (this session OR a
          prior one), so the preview link + publish don't vanish on reopen (#335). -->
@@ -52,6 +59,15 @@
         Preview in New Tab
       </a>
 
+      {% if not can_publish %}
+      {#- #781: publishing is the install's (admins); an editor's own publish targets come with #325. -#}
+      <div class="export-publish-section">
+        <div class="export-section">
+          <h3>PUBLISH</h3>
+          <button type="button" class="btn-primary role-locked"{{ role_lock_attrs('admin', 'Publishing to the install’s site', note='Your own builds preview above and download from a card’s Export; publishing to your own site comes later (#325).') }}>Publish to Pages</button>
+        </div>
+      </div>
+      {% else %}
       <!-- Publish section -->
       <div id="export-publish-section" class="export-publish-section" style="display: none">
         <div class="export-section">
@@ -92,6 +108,7 @@
           </div>
         </div>
       </div>
+      {% endif %}
     </div>
   </div>
 </div>
@@ -128,7 +145,13 @@
   const report = document.getElementById('export-report');
   const reportStats = document.getElementById('export-report-stats');
   const reportWarnings = document.getElementById('export-report-warnings');
+  const reportLeftOut = document.getElementById('export-report-leftout');
+  const exportError = document.getElementById('export-error');
   const previewBtn = document.getElementById('export-preview-btn');
+  // #781: an editor's drawer has no publish controls (a greyed, explained button instead).
+  const canPublish = {{ can_publish | tojson }};
+  state.previewUrl = '/preview/';
+  state.candidates = { cards: [], entries: [] };
   const publishSection = document.getElementById('export-publish-section');
   const publishTargetSelect = document.getElementById('export-publish-target');
   const publishBtn = document.getElementById('export-publish-btn');
@@ -157,17 +180,20 @@
     document.getElementById('export-current').style.display = 'none';
   }
 
+  function showError(msg) {
+    exportError.textContent = msg;
+    exportError.style.display = msg ? 'block' : 'none';
+  }
+
   async function showCurrentIfBuilt() {
-    // A build persists at /preview/ across drawer sessions. If one exists, show
-    // the preview link + publish section on open (not only after an in-session
-    // build), so they don't vanish on reopen (#335).
-    try {
-      const res = await fetch('/preview/index.html', { method: 'HEAD' });
-      if (res.ok) {
-        document.getElementById('export-current').style.display = 'block';
-        renderPublish();
-      }
-    } catch (e) { /* no build yet — leave hidden */ }
+    // A build persists in this user's sandbox across drawer sessions (#781: the install's at
+    // /preview/ for admins, /preview/u/<id>/ for an editor). If one exists, show the preview link +
+    // publish section on open (not only after an in-session build), so they don't vanish on reopen (#335).
+    previewBtn.href = state.previewUrl;
+    if (state.hasBuild) {
+      document.getElementById('export-current').style.display = 'block';
+      renderPublish();
+    }
   }
 
   const trigger = document.getElementById('export-builder-trigger');
@@ -178,43 +204,39 @@
     if (e.key === 'Escape' && builder.classList.contains('open')) closeBuilder();
   });
 
+  async function getJson(url) {
+    const res = await fetch(url);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body.error && body.error.message) || body.detail || `${url} answered ${res.status}`);
+    return body;
+  }
+
   async function loadData() {
+    showError('');
     try {
-      // Load saved config
-      const cfgRes = await fetch('/api/export/config');
+      // #781: this user's sandbox (where the build goes, its preview) and the lists to pick from:
+      // every card / entry they can see, with its owner, whether it is theirs, and whether it can go
+      // in at all (a private card can't: drawn greyed with why).
+      const sb = await getJson('/api/export/sandbox');
+      state.previewUrl = sb.preview_url || '/preview/';
+      state.hasBuild = !!sb.has_build;
+      state.candidates = sb.candidates || { cards: [], entries: [] };
+      state.projects = state.candidates.cards;
+      state.blogEntries = state.candidates.entries;
+
+      // Load saved config (this sandbox's own)
       let savedConfig = {};
-      if (cfgRes.ok) {
-        const data = await cfgRes.json();
-        if (data && typeof data === 'object') savedConfig = data;
-      }
+      const data = await getJson('/api/export/config');
+      if (data && typeof data === 'object') savedConfig = data;
 
-      // Load projects (plain array)
-      const projRes = await fetch('/api/projects');
-      if (projRes.ok) {
-        const projects = await projRes.json(); // ARRAY
-        state.projects = projects || [];
-        // Pre-select from saved config or default to all
-        const saved = (savedConfig.project_slugs || []);
-        state.selectedProjects = new Set(
-          saved.length > 0 ? saved : state.projects.map(p => p.slug)
-        );
-      }
-
-      // Load blog entries (plain array)
-      const blogRes = await fetch('/api/blog-entries');
-      if (blogRes.ok) {
-        const entries = await blogRes.json(); // ARRAY
-        state.blogEntries = entries || [];
-        // Pre-select from saved config or default to "ready" ones
-        const saved = (savedConfig.blog_entry_slugs || []);
-        if (saved.length > 0) {
-          state.selectedBlogEntries = new Set(saved);
-        } else {
-          state.selectedBlogEntries = new Set(
-            state.blogEntries.filter(e => e.status === 'ready').map(e => e.slug)
-          );
-        }
-      }
+      // Pre-select from the saved config, else the builder's own cards and entries ("they can publish
+      // your words on their site, but never their words on yours": another user's card is shown,
+      // unticked, with its owner; ticking it includes it on purpose).
+      const okCards = new Set(state.projects.filter(p => p.ok).map(p => p.slug));
+      const savedP = (savedConfig.project_slugs || []).filter(s => okCards.has(s));
+      state.selectedProjects = new Set(savedP.length ? savedP : state.projects.filter(p => p.default).map(p => p.slug));
+      const savedE = (savedConfig.blog_entry_slugs || []);
+      state.selectedBlogEntries = new Set(savedE.length ? savedE : state.blogEntries.filter(e => e.default).map(e => e.slug));
 
       // Pre-fill site meta from saved config
       state.site.title = savedConfig.site?.title || '';
@@ -222,9 +244,9 @@
       titleInput.value = state.site.title;
       taglineInput.value = state.site.tagline;
 
-      // Load publish targets (object of {target: {repo, branch, ...}})
-      const targetsRes = await fetch('/api/export/targets');
-      if (targetsRes.ok) {
+      // Load publish targets (object of {target: {repo, branch, ...}}); admins only (#781)
+      const targetsRes = canPublish ? await fetch('/api/export/targets') : null;
+      if (targetsRes && targetsRes.ok) {
         const targets = await targetsRes.json(); // OBJECT
         state.publishTargets = (typeof targets === 'object' && targets !== null) ? targets : {};
         // Default to 'test' if available
@@ -235,8 +257,8 @@
       }
 
       // Load settings to check if token is configured
-      const settingsRes = await fetch('/api/settings');
-      if (settingsRes.ok) {
+      const settingsRes = canPublish ? await fetch('/api/settings') : null;
+      if (settingsRes && settingsRes.ok) {
         const settings = await settingsRes.json();
         state.publishTokenConfigured = !!(settings && settings.pages_publish_token);
       }
@@ -245,6 +267,7 @@
       renderBlogEntries();
     } catch (err) {
       console.error('loadData failed', err);
+      showError(`Couldn't load the export lists: ${err.message}. Nothing was built; close and reopen to try again.`);
     }
   }
 
@@ -253,11 +276,15 @@
     state.projects.forEach(proj => {
       const el = document.createElement('div');
       el.className = 'export-checklist-item';
-      const checked = state.selectedProjects.has(proj.slug);
+      const checked = proj.ok && state.selectedProjects.has(proj.slug);
+      // #781: another user's card says whose it is; one that can't go into a site (private) is
+      // drawn disabled with the reason, never hidden.
+      const note = !proj.ok ? `<span class="dp-muted"> (left out: ${esc(proj.why)})</span>`
+        : proj.owner ? `<span class="dp-muted"> (owned by ${esc(proj.owner)})</span>` : '';
       el.innerHTML = `
-        <label>
-          <input type="checkbox" ${checked ? 'checked' : ''}>
-          <span>${esc(proj.title || proj.name || 'Project')}</span>
+        <label${proj.ok ? '' : ' title="' + esc(proj.why) + '"'}>
+          <input type="checkbox" ${checked ? 'checked' : ''} ${proj.ok ? '' : 'disabled'}>
+          <span>${esc(proj.title || proj.name || 'Project')}</span>${note}
         </label>
       `;
       const input = el.querySelector('input');
@@ -278,10 +305,11 @@
       const badge = entry.status === 'ready'
         ? '<span class="export-status-badge ready">Ready</span>'
         : '<span class="export-status-badge draft">Draft</span>';
+      const owner = entry.owner ? `<span class="dp-muted"> (owned by ${esc(entry.owner)})</span>` : '';
       el.innerHTML = `
         <label>
           <input type="checkbox" ${checked ? 'checked' : ''}>
-          <span>${esc(entry.title || entry.slug)}</span>
+          <span>${esc(entry.title || entry.slug)}</span>${owner}
           ${badge}
         </label>
       `;
@@ -295,6 +323,7 @@
   }
 
   function renderPublish() {
+    if (!canPublish) return;  // #781: an editor's drawer has the greyed, explained button instead
     // Populate target select from state.publishTargets
     publishTargetSelect.innerHTML = '';
     Object.keys(state.publishTargets).forEach(targetName => {
@@ -352,8 +381,17 @@
         body: JSON.stringify(config),
       });
 
-      if (!res.ok) throw new Error('Build failed: ' + res.status);
-      const result = await res.json();
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((result.error && result.error.message) || result.detail || `the server answered ${res.status}`);
+      showError('');
+      state.previewUrl = result.preview_url || state.previewUrl;
+      previewBtn.href = state.previewUrl;
+      // #781: what was left out, and why (cards held back as another user's, private cards, files
+      // that never leave the install, ...), never silently.
+      const lines = result.left_out_lines || [];
+      reportLeftOut.innerHTML = lines.length
+        ? '<div class="export-warnings-title">Left out:</div>' + lines.map(l => `<div class="export-warning">• ${esc(l)}</div>`).join('')
+        : '';
 
       // Display report
       reportStats.innerHTML = `
@@ -374,13 +412,15 @@
       renderPublish();
     } catch (err) {
       console.error('build failed', err);
-      alert('Error building site: ' + err.message);
+      showError('The build failed: ' + err.message);
     } finally {
       state.buildInProgress = false;
       buildBtn.disabled = false;
       buildBtn.textContent = 'Build Site';
     }
   });
+
+  if (!canPublish) return;  // #781: no publish controls on an editor's drawer
 
   publishTargetSelect.addEventListener('change', (e) => {
     state.selectedPublishTarget = e.target.value;

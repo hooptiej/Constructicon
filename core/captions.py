@@ -366,17 +366,23 @@ def breaker_status():
         "open": _breaker_reason is not None,
         "reason": _breaker_reason,
         "consecutive_failures": _consecutive_failures,
+        "max_failures": CAPTION_MAX_CONSECUTIVE_FAILURES,  # #556: the Admin panel says when it opens
         "seconds_since_restart": secs_since,
         "cooldown_seconds": CAPTION_RESTART_COOLDOWN_SECONDS,
     }
 
 
 def reset_breaker():
-    """#454: Clears the circuit breaker and failure counter. Under CAPTION_LOCK."""
+    """#454: Clears the circuit breaker and failure counter. Under CAPTION_LOCK.
+    #556: the Admin page's Reset button; the log line says who reset it and what was open."""
     global _consecutive_failures, _breaker_reason
     with CAPTION_LOCK:
+        was = _breaker_reason
         _consecutive_failures = 0
         _breaker_reason = None
+    from . import actor as actor_ctx  # lazy: keeps this module's import list as it was
+    print(f"caption: circuit breaker reset by {actor_ctx.current_actor()} "
+          f"({'it was open: ' + was if was else 'it was closed'})", flush=True)
 
 
 # --- The one-image cycle ---

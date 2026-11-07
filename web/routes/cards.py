@@ -2,14 +2,17 @@
 /api/families/*, /api/changes/*."""
 
 import logging
+import shutil
 from datetime import datetime
 
 from fastapi import Request, Form, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from core import besteffort, card_rules, cards, changes, db, hobbies, membership, sharing, timeline
 from core.errors import NotFound
+from web import content_security
 from web.common import from_request_thread
 from web.shapes import _to_card_face, _to_project_option
 from core import policy, roles
@@ -446,6 +449,28 @@ def api_export_project(project_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/api/projects/{project_id}/export.html.zip", dependencies=requires(roles.EDITOR))
+def api_export_project_html(project_id: str, template: str = "default"):
+    """#556: the card page's "Export this card…" HTML format: a small static site of just this card
+    (core/project_export.export_card_site), zipped, with a README.txt naming what was left out and
+    why. Editor (building an export is an editor's door, #781's direction; viewers see the format
+    greyed). Refusals in the shared shape: 404 not_found, 400 bad_template, 409 card_private. The
+    temp folder is removed once the download has been sent."""
+    from core import project_export
+    built = project_export.export_card_site(project_id, template)
+    folder = built["folder"]
+
+    def _cleanup():
+        try:
+            shutil.rmtree(folder)
+        except OSError as e:
+            besteffort.warn(log, "card HTML export: remove the temp folder", e, folder=str(folder))
+
+    return FileResponse(built["path"], media_type="application/zip", filename=built["filename"],
+                        headers=content_security.zip_stream_headers(built["filename"]),
+                        background=BackgroundTask(_cleanup))
 
 
 # --- Typed links (V2 cards 3.8). Rule violations are CardErrors: 422 bad_link,

@@ -4,7 +4,7 @@
 // project with nested cards for folders + a depth), Preview (POST .../action/unpack mode=preview:
 // nothing is written), then Unpack (mode=start: a background job), then poll GET /api/unpack/jobs/{id}
 // until it finishes; the result names every failure, and Undo reverses the whole conversion
-// (POST /api/changes/{batch_id}/undo). Every failure shows the server's own words. No inline handlers
+// (POST /api/changes/{batch_id}/undo). #825: an opt-in checkbox sends trash_original=1 with the start. Every failure shows the server's own words. No inline handlers
 // (CSP, #645/#660): everything is wired here with addEventListener.
 (function () {
   const POLL_MS = 1500;
@@ -82,6 +82,16 @@
     depthRow.appendChild(depth);
     fs.appendChild(depthRow);
     modal.appendChild(fs);
+
+    // #825: opt-in tidy-up, off by default. Applied only when the job ends "done" (every member in);
+    // the archive goes to the trash in the same batch, so "Undo the whole conversion" brings it back.
+    const tidyRow = el('div', { style: 'margin:4px 0 8px 0' });
+    const tidy = el('input', { type: 'checkbox', id: 'unpack-trash-original' });
+    tidyRow.appendChild(tidy);
+    tidyRow.appendChild(el('label', { for: 'unpack-trash-original', style: 'margin-left:6px' },
+      'When every member is in, send the original archive to the trash (kept 7 days; Undo brings it back). ' +
+      'If anything fails, the archive is kept.'));
+    modal.appendChild(tidyRow);
 
     const buttons = el('div', { style: 'display:flex;gap:8px;margin:8px 0' });
     const previewBtn = el('button', { type: 'button', className: 'dp-btn' }, 'Preview');
@@ -207,10 +217,11 @@
       previewBtn.disabled = true;
       showInfo('Starting…');
       try {
-        const body = await post(slug, { mode: 'start', shape: c.shape, depth: c.depth });
+        const body = await post(slug, { mode: 'start', shape: c.shape, depth: c.depth, trash_original: tidy.checked ? '1' : '' });
         job = body.job;
         modal.querySelectorAll('input[name="unpack-shape"]').forEach(r => { r.disabled = true; });
         depth.disabled = true;
+        tidy.disabled = true;
         renderJob(job);
         timer = setInterval(poll, POLL_MS);
       } catch (e) {
@@ -231,7 +242,8 @@
         if (!res.ok) throw new Error(errText(body, res));
         undoBtn.hidden = true;
         out.replaceChildren();
-        showInfo('Undone: the card(s) are gone and the items it made are in the trash. The archive is as it was.');
+        showInfo('Undone: the card(s) are gone and the items it made are in the trash. The archive is as it was' +
+          ((job.result && job.result.trash_original && job.result.trash_original.trashed) ? ' (back out of the trash).' : '.'));
       } catch (e) {
         undoBtn.disabled = false;
         showError(`Undo failed: ${e.message}`);

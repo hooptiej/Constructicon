@@ -224,6 +224,19 @@ LOCKED_COVER_MESSAGE = ("Only editors and admins can pick the cover. You are sig
                         "ask an admin to give you the editor role.")
 
 
+def _card_export_formats(project):
+    """#556: the export picker's formats for this card, each with `locked` = {need, message} when the
+    current role is below the format's door (web/role_lock.py's words), else None."""
+    from core import project_export
+    from web import role_lock
+    out = []
+    for f in project_export.formats_for(project):
+        locked = role_lock.locked(f["role"])
+        out.append({**f, "locked": {"need": f["role"], "message": role_lock.message(
+            f"Exporting a card as {f['key'].upper()}", f["role"])} if locked else None})
+    return out
+
+
 @router.get("/project/{slug}", response_class=HTMLResponse)
 def project_detail_page(request: Request, slug: str, rev: str = ""):
     project = db.get_project(slug)
@@ -387,6 +400,9 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
                             for s in card_rules.STAGES],
             "card_stop_reasons": [{"key": r, "label": card_rules.STOP_REASON_LABELS[r]} for r in card_rules.STOP_REASONS],
             "card_status": cards.status_fields(project),
+            # #556: the "Export this card…" dialog's formats (core/project_export.FORMATS), each with the
+            # lock a role below its door gets (#779: greyed and explained, never hidden).
+            "card_export_formats": _card_export_formats(project),
             # V2 cards 3.4 / 3.5 / 3.12: whereabouts, card provenance + credit, highlight.
             "card_extra": cards.whereabouts_fields(project),
             "card_created_by": users.owner_info(project.get("created_by_user_id")),  # #604 step 1

@@ -174,7 +174,7 @@ check(f"every GET page route is in this test's list ({len(page_routes)} routes)"
 
 # --- what a page must carry -----------------------------------------------------------------------
 TAB_IDS = ["curator", "export", "brand", "admin", "upload", "processing", "blog", "hobbies", "wallpaper"]
-TAB_ROLE = {"export": "admin", "admin": "admin", "upload": "editor", "blog": "editor"}
+TAB_ROLE = {"export": "editor", "admin": "admin", "upload": "editor", "blog": "editor"}  # #781: Export = editor
 DRAWER_ROOT = {"upload": "upload-drawer", "blog": "blog-builder", "export": "export-builder"}
 TRIGGER = {"upload": "upload-trigger", "blog": "blog-builder-trigger", "export": "export-builder-trigger"}
 RANK = {"viewer": 1, "editor": 2, "admin": 3}

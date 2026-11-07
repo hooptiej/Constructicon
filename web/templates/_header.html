@@ -24,7 +24,7 @@
       Blog
     </button>
     {% endif %}
-    {% if has_role("admin") %}
+    {% if has_role("editor") %}{#- #781: Export is an editor tab now -#}
     <button type="button" class="export-builder-trigger" id="export-builder-trigger">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M19 9l-7 7-7-7M12 16V4" stroke="#ECE8DA" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Export

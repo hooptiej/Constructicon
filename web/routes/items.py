@@ -278,7 +278,8 @@ def api_processing(request: Request, session: str = ""):
     drawer. Returns everything still mid-pipeline across the whole box (however
     it was uploaded), plus any explicitly-requested `session` slugs even once
     settled, so the drawer can show the caller's own items finish. Derived from
-    existing per-row signals — no status is stored just for this."""
+    existing per-row signals — no status is stored just for this. #826: plus
+    `unpack_jobs` (core/unpack.py drawer_jobs) from the unpack_jobs table."""
     session_slugs = [s for s in session.split(",") if s][:200]
     # #603: a sensitive item's name never shows in anyone else's drawer (the item policy, per row).
     by_slug = {r["slug"]: r for r in policy.filter_visible(db.list_processing_candidates())}
@@ -304,7 +305,12 @@ def api_processing(request: Request, session: str = ""):
     # In-flight first, then settled; within each, session items ahead of the rest.
     order = {"processing": 0, "failed": 1, "done": 2}
     items.sort(key=lambda x: (order.get(x["overall"], 3), not x["is_session"]))
-    return JSONResponse({"items": items, "count": in_flight_count, "captions_disabled": captions.DISABLED})
+    # #826: archive unpack jobs (queued / running, and the last hour's finished ones with their result),
+    # only where the caller can see the archive. A queued or running job counts as in flight.
+    jobs = unpack.drawer_jobs()
+    in_flight_count += sum(1 for j in jobs if not j["finished"])
+    return JSONResponse({"items": items, "unpack_jobs": jobs, "count": in_flight_count,
+                         "captions_disabled": captions.DISABLED})
 
 
 @router.get("/api/image/{slug}", dependencies=requires(roles.VIEWER))

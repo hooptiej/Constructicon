@@ -19,7 +19,8 @@
      the accent colour (Processing's), default is hazard yellow (Curator's).
      `min_role` (#779, optional): the lowest role that can USE the tab. It
      mirrors what the server already enforces for that drawer and never adds a
-     rule of its own: Export = admin (every /api/export/* route), Admin = admin
+     rule of its own: Export = editor (#781: build / config / sandbox are editor; targets and publish stay
+     admin, greyed inside the drawer), Admin = admin
      (GET /admin, the drawer's iframe), Upload = editor (POST /api/upload and
      /api/content), Blog = editor (the builder's POST/PUT/DELETE
      /api/blog-entries*). Curator, Brand, Hobbies, Wallpaper and Processing
@@ -33,7 +34,7 @@
   {"id": "curator", "side": "left", "order": 10, "label": "Curator",
    "kind": "drawer", "trigger": "nudges-drawer-trigger", "badge": "nudges-rail-badge",
    "icon": '<path d="M12 22a2.4 2.4 0 002.4-2h-4.8A2.4 2.4 0 0012 22zm6-6V11c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 00-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" fill="currentColor"/>'},
-  {"id": "export", "side": "left", "order": 20, "label": "Export", "min_role": "admin",
+  {"id": "export", "side": "left", "order": 20, "label": "Export", "min_role": "editor",
    "kind": "drawer", "trigger": "export-builder-trigger",
    "icon": '<path d="M19 9l-7 7-7-7M12 16V4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>'},
   {"id": "brand", "side": "left", "order": 30, "label": "Brand",

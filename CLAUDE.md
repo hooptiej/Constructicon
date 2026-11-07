@@ -159,7 +159,7 @@ the date and commit forward when you re-verify.
   fake` rebinds it in every submodule that held it; `cards.edit.update = ...` reaches only that file).
   Check with `scripts/test_cards_package_547.py` (against `scripts/data/cards_names_547.txt`).
 - **`core/object_types/`** — a package, one module per object/media type (`image.py`, `video.py`,
-  `pdf.py`, `stl.py`, `psd.py`, `svg.py`, `eps.py`, `audio.py`, `youtube.py`, `code.py`, ... plus the
+  `pdf.py`, `stl.py`, `cad_source.py`, `psd.py`, `svg.py`, `eps.py`, `audio.py`, `youtube.py`, `code.py`, ... plus the
   underscore helpers `_preview.py`, `_textstats.py`, `_office.py`, `_pe.py`). `__init__.py` holds the
   registry: `ObjectTypeSpec` (thumbnail strategy, OCR / caption eligibility, preview and properties
   functions, per-type metadata fields), `register()`, `get_object_type()`, `mismatch_reason()` and
@@ -2393,7 +2393,7 @@ To add a new object type (issue #448 contract v2):
 One generated file of every registered type and extension, to drop-test a new install (owner, 2026-10-17).
 - **Generate** (in the app image, so the executables get made on Linux):
   `docker run --rm --network none -u 1000:1000 -v "$PWD":/app:ro -v "$PWD/samples-out":/out -w /app <image> python scripts/make_type_samples.py /out`.
-  It writes one sample per entry in its `SAMPLES` list (110 files: every extension any type claims, incl.
+  It writes one sample per entry in its `SAMPLES` list (121 files, #836 added the CAD source set: every extension any type claims, incl.
   both `.zip` types and both `.exe` types), `content.json` + `urls.txt` (the no-file types: YouTube, web
   page, written post), `manifest.json` (per file: the type it must land as and what a correct install shows,
   derived from the registry at run time) and a `README.md` table. Nothing comes from the archive; credentials
@@ -2500,6 +2500,41 @@ Owner decision: STL thumbnails are a real render through **headless OpenGL**, no
   doesn't show (over the cap, no WebGL, the vendored files missing, the download or parse failing) is said
   in `#stl-viewer-note`, and the thumbnail stays.
 - Check: `scripts/test_lipstick_742_751.py` (throwaway DB; the real-GL checks SKIP off the app image).
+
+### CAD source files: `.step` `.stp` `.f3d` `.3mf` `.obj` `.igs` (#836)
+
+Owner decision 2026-11-07, from a Thingiverse bundle (Ubiquiti Mini Rack, thing 3446815) whose `.step` and `.f3d`
+were refused as "Unsupported file type": the files you *edit* belong on a model's card beside its STLs. One drop-in
+type, **`core/object_types/cad_source.py`** (key `cad_source`, label "CAD source", badge CAD), per the drop-in
+standard (#67): nothing outside the file branches on it; the sampler, the checks and this section are the plumbing.
+- **Extensions:** `.step` `.stp` `.f3d` `.3mf` `.obj` `.igs`, plus `.iges` (the same format as `.igs`; not on the
+  owner's list, added because it is the same file under its long name). No other type claims any of them.
+- **Sniffing** (`sniff_fn`; a refusal reads "This .step file isn't a valid STEP (ISO 10303-21) file" through
+  `content_noun`): `.step`/`.stp` must start `ISO-10303-21;`; `.3mf` must be a zip with a `.model` part; `.obj` must
+  be text whose first statement is an OBJ keyword (a Windows compiled `.obj` has NUL bytes and is refused).
+  `.f3d` and `.igs` are accepted **by extension**, on purpose: keeping the owner's source files is the point.
+- **What is read, once, at upload** (`embedded_metadata_fn`, stored in `type_metadata.cad_stats`; the per-view hooks
+  only format it): **STEP header reader**, the first 256 KB only: FILE_NAME (name in file, time stamp, author,
+  organization, exporter, program), FILE_DESCRIPTION, FILE_SCHEMA (+ AP203/AP214/AP242 when recognisable); string
+  escapes (`\X2\`, `''`) decoded, `/* */` comments dropped, a damaged header keeps what read before the damage
+  and says where it stopped (`header_problem`). The time stamp seeds `content_date` (export-prone, so #769's
+  near-the-upload flag applies). **Never a title:** a STEP "name" is often a path or an exporter banner.
+  **3MF:** the model part's first 128 KB (Title, Designer, Application, CreationDate, unit) and the package's own
+  picture (the `_rels/.rels` thumbnail relationship, else `Metadata/thumbnail.png` / slicer plate names) as the
+  thumbnail (`capture_fn`, `has_thumbnail_fn`; a picture over 4 MB is ignored). **OBJ:** vertex / face / normal /
+  texture counts, object count, material library names, size in model units, malformed vertex lines counted, the
+  first header comments with a program guess labelled as a guess; read as a stream, at most 64 MB. **F3D:** only the
+  zip container is *verified* (file count, a few member names, a preview-named image as the thumbnail); the page
+  says the design itself opens in Fusion, and a non-zip `.f3d` is stored with a note. **IGES:** the Start section.
+  Zip members are read in memory with size caps, never extracted; everything shown is escaped.
+- **Findable:** `ocr_capable=True` only so `text_extract_fn` runs; its text is the file name, "CAD source", the
+  format and the header facts, so search finds a model by its program, author or part name. It is never empty, so
+  OCR never reads a 3MF's picture. Not captioned (`caption_excuse`).
+- **Not done (ideas):** a rendered/3D preview of an `.obj` or `.3mf` mesh (the STL pipeline could be reused);
+  reading anything inside a real `.f3d` beyond the container (needs a real Fusion file to study); unit-aware sizes
+  for OBJ. #829's archive unpack picks the type up with no change (`unpack.py` asks `detect_media_type`).
+- Check: `scripts/test_cad_source_836.py` (fixtures built in memory, through the real upload route); the sampler
+  has a sample per extension (`cad-source.*`; the `.f3d` is a hand-built zip, not a real Fusion design).
 
 **Status lamps (#751, owner decision):** on the item page (READ FROM THE FILE) the OCR and caption lamps
 are 14px with a thin ring, and red "failed" is 16px with a red halo and three slow pulses (none under

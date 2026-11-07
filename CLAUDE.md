@@ -1690,6 +1690,14 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     members keep `extracted_from` (the link shows again after the undo). A refused trash step keeps the unpack
     `done` and the archive, and the message says why (`result.trash_original` {requested, trashed, message}).
     Check: `scripts/test_unpack_trash_original_825.py`.
+  - **The processing drawer (#826)** lists unpack jobs too, so a conversion can be watched from any page:
+    `unpack.drawer_jobs()` (every queued / running job, plus jobs finished in the last
+    `DRAWER_RECENT_SECONDS`, an hour; at most `DRAWER_MAX_JOBS`) rides in `GET /api/processing` as
+    `unpack_jobs`, and a queued / running job counts in the tab's in-flight badge. Each: the archive (linked),
+    state, done / total and the current member, then the card it made, its counts, the failed members with
+    their reasons (first `DRAWER_FAILED_SHOWN`, the rest counted) or why it failed. Same visibility as
+    `job_status`: only jobs whose archive the asker can see; a deleted archive's job shows to admins and its starter. Check:
+    `scripts/test_unpack_drawer_826.py`.
   - **The archive's own `type_metadata` (the `{}` on the work install's Venza manual):**
     `archive.get_embedded_metadata` returned `{}` for zip and 7z (only tars stored stats, #485). Every format
     now stores `archive_stats` at upload (entries, folders, links, uncompressed, compressed (zip), encrypted,
@@ -1697,8 +1705,7 @@ one undo reverses the request. Every table an op images must be in `db.IMAGE_TAB
     "Deepest folder". Migration `archive_stats_605` fills it once for every archive row without it
     (fill-only, through a parser child; missing / unreadable files are counted and named in the boot log).
   - Not built (owner calls on #605): a relation from each member back to the archive (the archive on the same
-    card plus `extracted_from` is the link; 1,000 related items would swamp both Related panels); a
-    processing-drawer entry for the job (its progress is on the item page). Converting a nested project to a collection afterwards is refused by `cards.set_kind`
+    card plus `extracted_from` is the link; 1,000 related items would swamp both Related panels). Converting a nested project to a collection afterwards is refused by `cards.set_kind`
     with the existing nest_group_kind reason. Check: `scripts/test_unpack_crate_605.py` (throwaway DB,
     synthetic archives; the .7z part needs py7zr, in the app image).
 - Checks: `scripts/test_items_service.py` (phase B), `test_membership_tags.py` (phase C),

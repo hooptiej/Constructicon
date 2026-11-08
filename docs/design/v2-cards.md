@@ -112,12 +112,16 @@ Hobbies stay `blog_tags` rows with `is_hobby = 1` (no `kind` column; they are no
 `capture_events` rows and are the "asset" cards. The card renderer treats three row sources uniformly via a
 `card_type` in its JSON: `project|thing|action|family|collection|event` (from `projects.kind`), `hobby`, `asset`.
 
+**Addendum (#771, 2026-11-08): `place`.** `KINDS` also holds `place` (a track, a club field, a shop): a group kind like
+a collection (members shown as "At this place"; each member's page says "Where: <place>"), no whereabouts, a stage of
+`in_use` ("Still going") or `done` ("Closed") only. CLAUDE.md, "Card pages per kind", is the current description.
+
 Kind rules (enforced in `cards.set_kind` and on create):
 
-- `family` and `collection` ("group kinds") must not have a `parent_id`, and cannot be a nesting parent. Use
+- `family`, `collection` and `place` ("group kinds") must not have a `parent_id`, and cannot be a nesting parent. Use
   membership.
-- Leaving a group kind with members present is refused unless `force=True`, which drops the memberships (logged, undoable).
-- `action`, `event`, `family`, `collection` cannot carry `whereabouts` (3.4); changing to one of those kinds with
+- Leaving the group kinds with members present is refused unless `force=True`, which drops the memberships (logged, undoable). Moving between group kinds keeps them (#771).
+- `action`, `event`, `family`, `place` cannot carry `whereabouts` (3.4); changing to one of those kinds with
   whereabouts set is refused unless the caller also clears it.
 
 ### 3.2 Status: activity + stage + stop reason

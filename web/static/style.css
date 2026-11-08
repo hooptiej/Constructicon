@@ -1132,6 +1132,9 @@ a.uploader-label:hover, a.uploader-label:focus-visible { text-decoration: underl
   font-size: 26px; font-weight: 700; letter-spacing: 0.3px; margin: 4px 0 14px; color: var(--text);
 }
 .project-writeup-lead { margin-top: 0; margin-bottom: 24px; }
+/* #771: "Where: <place>" under the title block of a card that is a member of a place. */
+.card-where { font-size: 16px; margin: 0 0 12px; color: var(--text-2, var(--text)); }
+.card-where .card-where-label { font-weight: 700; margin-right: 4px; }
 .media-type-pill {
   font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.3px; padding: 1px 7px; border-radius: 100px;
   background: var(--hazard-yellow); color: var(--hazard-black); font-weight: 600; display: inline-block;

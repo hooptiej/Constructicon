@@ -36,7 +36,7 @@ def create(title, *, description="", cover_slug=None, parent=None, kind=None, st
     if not title:
         raise InvalidInput("Project name can't be empty")
     kind = card_rules.validate_kind(kind or card_rules.DEFAULT_KIND)
-    card_rules.validate_status(kind, stage or card_rules.DEFAULT_STAGE, stop_reason)
+    card_rules.validate_status(kind, stage or card_rules.default_stage(kind), stop_reason)  # #771: a place starts Still going
     parent_row = None
     if parent not in (None, ""):
         parent_row = db.get_project(parent)

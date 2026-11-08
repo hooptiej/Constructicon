@@ -48,6 +48,11 @@
   {# #554: an event's date (or range) up top, big. Set it in the DATES group (its files' real dates, or by hand). #}
   <p class="card-date-banner" id="card-date-banner">{% if header_dates %}{{ header_dates }}{% else %}<span class="dp-muted">No date yet: set the start (and end) in the DATES group below.</span>{% endif %}</p>
   {% endif %}
+  {% if where_places %}
+  {# #771 (owner, 2026-11-08): "Where: <place>" from the card's membership(s) in place cards. where_places
+     already leaves out a private place the viewer can't see, so a hidden place is never named. #}
+  <p class="card-where" id="card-where"><span class="card-where-label">Where:</span>{% for pl in where_places %} <a href="/project/{{ pl.slug }}">{{ pl.title }}</a>{% if not loop.last %} &middot;{% endif %}{% endfor %}</p>
+  {% endif %}
   {% set writeup_section %}
   {% if writeup_body %}
   <div class="project-writeup-solo{% if page.lead == 'writeup' %} project-writeup-lead{% endif %}">
@@ -126,7 +131,7 @@
       <dl class="dp-rows">
         <div class="dp-row"><dt>Kind</dt><dd>{{ card_status.kind_label }}{% if card_queue['items'] | selectattr('kind', 'equalto', 'card_kind') | list %} <span class="dp-muted">(question open)</span>{% endif %}</dd></div>
         <div class="dp-row"><dt>{{ hobby_label.many }}</dt><dd>{% for h in project_hobbies %}<a href="{{ hobby_label.url(h.slug) }}">{{ h.name }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
-        <div class="dp-row"><dt>{{ 'Members' if page.members else 'Family' }}</dt><dd>{% for c in (family_info.members if page.members else family_info.families) %}<a href="/project/{{ c.slug }}">{{ c.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
+        <div class="dp-row"><dt>{{ 'Members' if page.members else ('Family / place' if where_places else 'Family') }}</dt><dd>{% for c in (family_info.members if page.members else family_info.families) %}<a href="/project/{{ c.slug }}">{{ c.title }}</a>{% if not loop.last %} &middot; {% endif %}{% else %}<span class="dp-muted">&mdash;</span>{% endfor %}</dd></div>
         {% if page.nests %}<div class="dp-row"><dt>Part of</dt><dd>{% if parent_card %}<a href="/project/{{ parent_card.slug }}">{{ parent_card.title }}</a>{% else %}<span class="dp-muted">&mdash;</span>{% endif %}</dd></div>{% endif %}
       </dl>
       {% endset %}
@@ -138,6 +143,16 @@
           {% for k in card_kinds %}<option value="{{ k.key }}" {% if card_status.kind == k.key %}selected{% endif %}>{{ k.label }}</option>{% endfor %}
         </select>
       </div>
+      {# #771: a place is only Still going or Closed. Picking Place for a card whose stage isn't one of those asks
+         for the stage here and sends it WITH the kind change (the server never picks one for you). #}
+      <div class="dp-field" id="place-stage-field" hidden>
+        <label for="place-stage-select">Stage as a place</label>
+        <select id="place-stage-select" class="input">
+          <option value="">— pick one —</option>
+          {% for s in place_stages %}<option value="{{ s.key }}">{{ s.label }}</option>{% endfor %}
+        </select>
+        <p class="dp-note">A place is either Still going or Closed. This card is "{{ card_status.stage_label or 'not set' }}" now, which a place can't be: pick the stage it should have, and Save changes both together.</p>
+      </div>
       {# #381 / #365: hobbies the card is in (add / remove act immediately) #}
       <div class="dp-field">
         <span class="dp-label" id="hobby-chips-label">{{ hobby_label.many }}</span>
@@ -147,10 +162,10 @@
           <option value="">+ Add to {{ hobby_label.one_lc }}…</option>
         </select>
       </div>
-      {# V2 cards 3.6: a family or collection lists its MEMBERS; any other card shows the families it is IN.
+      {# V2 cards 3.6: a family, collection or place lists its MEMBERS; any other card shows the families it is IN.
          Membership is not nesting: no file moves. Add / remove act immediately. #}
       <div class="dp-field" id="family-row">
-        <span class="dp-label" id="family-chips-label">{% if page.members %}Members{% else %}In family{% endif %}</span>
+        <span class="dp-label" id="family-chips-label">{% if page.members %}Members{% else %}In family or place{% endif %}</span>
         <div id="family-chips-container" class="dp-chips" role="group" aria-labelledby="family-chips-label">
           {% for c in (family_info.members if page.members else family_info.families) %}
           <span class="chip family-chip" data-card-id="{{ c.id }}">
@@ -159,12 +174,12 @@
             <button type="button" class="dp-chip-x family-chip-remove{{ role_lock_class('editor') }}" data-card-id="{{ c.id }}"{% if role_locked('editor') %}{{ role_lock_attrs('editor', 'Removing a card from a family') }}{% else %} title="Remove"{% endif %} aria-label="Remove {{ c.title }}">&times;</button>
           </span>
           {% else %}
-          <span class="dp-muted">{% if page.members %}No members yet.{% else %}Not in any family or collection.{% endif %}</span>
+          <span class="dp-muted">{% if page.members %}No members yet.{% else %}Not in any family, collection or place.{% endif %}</span>
           {% endfor %}
         </div>
-        <label class="dp-sr-label" for="family-add-select">{% if page.members %}Add member{% else %}Add to family{% endif %}</label>
+        <label class="dp-sr-label" for="family-add-select">{% if page.members %}Add member{% else %}Add to family or place{% endif %}</label>
         <select id="family-add-select" class="input">
-          <option value="">{% if page.members %}+ Add member…{% else %}+ Add to family…{% endif %}</option>
+          <option value="">{% if page.members %}+ Add member…{% else %}+ Add to family or place…{% endif %}</option>
         </select>
         <p id="family-error" class="dp-error" role="alert"></p>
       </div>
@@ -686,12 +701,31 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
   const parentSel = document.getElementById('parent-project-select');
   let savedKind = kindSel.value;
   let savedParent = String(currentParentId || '');
+  // #771: a place only takes these stages (stored values; the labels are the place words).
+  const PLACE_STAGES = {{ (place_stages | map(attribute='key') | list) | tojson }};
+  const CURRENT_STAGE = {{ (card_status.stage or '') | tojson }};
+  const placeStageField = document.getElementById('place-stage-field');
+  const placeStageSel = document.getElementById('place-stage-select');
+  // Offer the stage question only when the kind is Place and the current stage isn't one a place can have.
+  function syncPlaceStage() {
+    placeStageField.hidden = !(kindSel.value === 'place' && savedKind !== 'place' && !PLACE_STAGES.includes(CURRENT_STAGE));
+  }
+  kindSel.addEventListener('change', syncPlaceStage);
 
   DP.register('identity', {
+    cancel: syncPlaceStage,
     save: async () => {
       if (kindSel.value !== savedKind) {
-        await postForm(`/api/projects/${PROJECT_ID}`, { kind: kindSel.value });
+        const fields = { kind: kindSel.value };
+        if (!placeStageField.hidden) {
+          if (!placeStageSel.value) throw new Error('A place is either Still going or Closed: pick which one above, then Save. Nothing was changed.');
+          fields.stage = placeStageSel.value;
+        }
+        const wasPlace = savedKind === 'place';
+        await postForm(`/api/projects/${PROJECT_ID}`, fields);
         savedKind = kindSel.value;
+        // To or from a place the page's stage words, picker and Where / At this place layout all change: reload.
+        if (fields.kind === 'place' || wasPlace) { window.location.reload(); return; }
       }
       if (parentSel && parentSel.value !== savedParent) {
         // replace=1: the owner picking a different parent here means "move it"; the API alone
@@ -711,7 +745,7 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
       const excluded = new Set([PROJECT_ID]);
       let frontier = [PROJECT_ID];
       while (frontier.length) { frontier = frontier.flatMap(id => childrenByParent[id] || []); frontier.forEach(id => excluded.add(id)); }
-      projects.filter(p => !excluded.has(p.id) && p.kind !== 'family' && p.kind !== 'collection')
+      projects.filter(p => !excluded.has(p.id) && p.kind !== 'family' && p.kind !== 'collection' && p.kind !== 'place')
         .forEach(p => parentSel.appendChild(opt(p.id, p.title, p.id === currentParentId)));
       parentSel.value = savedParent;
     }).catch(err => console.error('Failed to load projects:', err));
@@ -737,7 +771,7 @@ document.querySelectorAll('.project-writeup-selector').forEach(radio => {
     }
     fetch('/api/projects').then(r => r.json()).then(projects => {
       const wantGroup = !isGroup;  // a member picks a family; a family picks members
-      projects.filter(p => p.id !== PROJECT_ID && !inChips.has(p.id) && ((p.kind === 'family' || p.kind === 'collection') === wantGroup))
+      projects.filter(p => p.id !== PROJECT_ID && !inChips.has(p.id) && ((p.kind === 'family' || p.kind === 'collection' || p.kind === 'place') === wantGroup))
         .forEach(p => select.appendChild(opt(p.id, p.title)));
     }).catch(() => {});
     select.addEventListener('change', () => {

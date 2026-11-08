@@ -327,7 +327,7 @@ def split_card(source, parts, *, keep_in_source=False, dry_run=False, actor=None
         for i, p in enumerate(parts):
             relation = relations[i]
             kind = card_rules.validate_kind(p.get("kind") or card_rules.DEFAULT_KIND)
-            stage = p.get("stage") or card_rules.DEFAULT_STAGE
+            stage = p.get("stage") or card_rules.default_stage(kind)
             description = p.get("description") or ""
             if p.get("move_description"):
                 description = src.get("description") or ""
@@ -386,7 +386,7 @@ def _merge_one(keep, a, actor, batch_id, rows, warnings):
     if keep_group != a_group:
         raise CardError("bad_merge", f"Can't merge '{a['title']}' ({card_rules.kind_label(a.get('kind') or 'project')}) "
                         f"into '{keep['title']}' ({card_rules.kind_label(keep.get('kind') or 'project')}): "
-                        "families and collections only merge with their own kind.")
+                        "families, collections and places only merge with other group cards.")
     slugs = [keep["slug"], a["slug"]]
     op = "merge_cards"
     descendants = db._descendant_project_ids(a["id"])

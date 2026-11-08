@@ -20,7 +20,7 @@ def constructicon_nest(child: str | int, parent: str | int | None = None, replac
     """Make `child` PART OF `parent` ("nest", default; it only makes sense inside it, e.g. a Lua
     script inside the truck it runs on), or take it out of its parent ("unnest"; no-op if none).
     Not family membership (constructicon_family). Refused: nest_self, nest_cycle, nest_group_kind
-    (a family/collection can't nest or be a parent), nest_second_parent (already part of another
+    (a family/collection/place can't nest or be a parent), nest_second_parent (already part of another
     card: replace=true moves it). -> {ok, dry_run, changes, warnings, batch_id}.
     """
     if action == "nest":
@@ -41,9 +41,10 @@ def constructicon_unnest(child: str | int, dry_run: bool = False) -> dict:
 @mcp.tool(selector="action")
 def constructicon_family(family: str | int, member: str | int, action: typing.Literal["add", "remove"] = "add",
                          dry_run: bool = False) -> dict:
-    """Put a card in a family or collection ("add", default; many-to-many, moves no files, twice is
-    a no-op) or take it out ("remove"). `family` must be a family/collection card and `member` must
-    not be one (bad_membership). -> {ok, dry_run, changes, warnings, batch_id}."""
+    """Put a card in a family, collection or place ("add", default; many-to-many, moves no files, twice is
+    a no-op) or take it out ("remove"). `family` must be a family/collection/place card and `member` must
+    not be one (bad_membership). A place's members show as "At this place", and each member's page says
+    "Where: <place>". -> {ok, dry_run, changes, warnings, batch_id}."""
     if action == "add":
         return cards.add_to_family(family, member, dry_run=dry_run).to_dict()
     if action == "remove":

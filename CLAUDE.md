@@ -1814,7 +1814,7 @@ Owner decisions 2026-10-18 (on the issue). Before this, tags lived in two stores
 ## Card faces (#596)
 
 One card component (`web/templates/_card.html`, `static/css/cards.css`; sizes full / small / mini),
-fed by `core/cards/faces.py`: `card_face(card)` (project, thing, action, family, collection, event),
+fed by `core/cards/faces.py`: `card_face(card)` (project, thing, action, family, collection, event, place),
 `hobby_card_face(...)` and `file_face(...)` (files; `static/js/cards.js` builds the same file face
 client-side for the item grids, `scripts/check_item_cards.py` compares the two). Zones, top to bottom,
 matching the V2 mockup's Card template:
@@ -1824,10 +1824,11 @@ matching the V2 mockup's Card template:
   `applies_to` link of its own reads "Applies to: <parent>."; then each OUTGOING directed typed link,
   "Built for: X." / "Applies to: X." / "Used in: X." / "Inspired by: X." (2 lines, then "+N more").
   Then the card's own text (`text`), then a hobby's `notes`, then the italic `flavor` under a rule.
-- **Status box** (`zone`): the stage ("In progress", "Stopped · failed"); "Inside · <parent>" for a
+- **Status box** (`zone`): the stage ("In progress", "Stopped · failed"; a place says "Still going" /
+  "Closed", #771); "Inside · <parent>" for a
   nested card; "Hobby · active|inactive"; "Stacked · <card>" on a file. Activity dot + "needs your input".
 - **Stat box** (`stat`): "N stacked · M nested" (files on the card, cards nested in it), "N members"
-  (family / collection), "N projects" (hobby), the file extension (file).
+  (family / collection / place), "N projects" (hobby), the file extension (file).
 - **Footer** (`foot`): "<CODE> · <hobby>" (the home hobby, else the first; "+N" for more), "<CODE> ·
   family card" / "collection card", "<CODE> · group card" (hobby), "<CODE> · <card>" (file); "n of N"
   on the right for an ordered family member.
@@ -1877,9 +1878,39 @@ matching the V2 mockup's Card template:
   reads `page.*`. A family / collection shows its MEMBERS in the hobby member layout
   (`_hobby_nodes.html` `project_nodes(nodes, zone, remove_label=, cover=)`, built by
   `pages._card_nodes`, shared with the hobby page) under its Stacks, each with the cover pick and
-  "Remove from family|collection" (undo bar). An **event** leads with the date banner, then its
-  write-up, then the card and details (owner decision 2026-10-18; the "where" link waits for the V2
-  place kind #771; no attendee field).
+  "Remove from family|collection|place" (undo bar). An **event** leads with the date banner, then its
+  write-up, then the card and details (owner decision 2026-10-18; no attendee field).
+- **The `place` kind (#771, owner decisions 2026-11-08): a track, a club field, a shop.** A **group
+  kind** like a collection (`KINDS`, `GROUP_KINDS`; label "Place"): its events (and things / projects,
+  e.g. builds done at a shop) are its members through the ordinary `family_members` machinery, so
+  privacy inheritance, `family_fields`, the member layout, the hobby-node layout, `card_span`, merge and
+  the Curator's group grading all follow `GROUP_KINDS` with no place-specific code. `CARD_PAGES["place"]`:
+  `members_label` **"At this place"**, `member_noun` "place". **"Where: <place>"** (`#card-where`, in
+  `project_detail.html`, from `pages.where_places`) shows on EVERY non-place card that is a member of a
+  place (all of them, middle-dot separated), built from `cards.family_fields(...)["families"]`, which is
+  already filtered by `policy.filter_visible_cards`, so a private place (#604) is never named (and since
+  privacy inherits down family edges, an outsider can't open the member either). **No whereabouts:** place
+  is outside `WHEREABOUTS_KINDS`, so `validate_whereabouts` refuses it (`bad_whereabouts`: "Whereabouts
+  doesn't apply to a Place ..."), the STATUS group's whereabouts row and picker aren't sent
+  (`whereabouts_applies`), it never greys (`whereabouts_gone`), and `provenance_whereabouts_needs` never
+  asks; it is in `NO_PROVENANCE_NAG_KINDS` (not built, not bought) and out of the Apprentice's
+  `CORRELATION_KINDS`. **Stages: only `in_use` and `done`** (`PLACE_STAGES`, enforced in
+  `validate_status` like `EVENT_STAGES`; the refusal is in the place words and names the two), shown as
+  **"Still going" / "Closed"**: stored values unchanged, words from `card_rules.stage_label(stage, kind)`
+  (the ONE helper: `stages_for(kind)` for the picker, `default_stage(kind)` = `in_use` for a place, so
+  every create path starts it Still going). **Any new place that shows a stage label must pass the kind**
+  (card pages and the stage picker, faces, hobby/card lists, Curator score and dashboard, explain_card,
+  MCP answers, project export); `stage_label(stage)` with no kind is the generic words.
+  **Changing a card's kind to place** is the normal kind change (`cards.set_kind`, web Save, MCP
+  `constructicon_update_project(kind="place")`): moving between group kinds KEEPS the members (only
+  leaving the group kinds needs `force`, which drops them); a stage a place can't have is REFUSED, never
+  re-staged silently (422 `bad_status`, `details.allowed_stages`, "Nothing was changed. Send a stage with
+  the kind change ... or set its stage first") unless an allowed stage rides in the same change
+  (`set_kind(..., stage=)`, which the web route and the MCP tool pass: `kind="place", stage="in_use"`);
+  the Identity group asks for the stage right there when Place is picked (`#place-stage-field`).
+  Whereabouts on the card must be cleared first (the refusal says so). One batch, one undo restores the
+  kind, the stage and the memberships. Icon: a map pin (`_card.html` `kind_icon`), frame `#9A4B2A`.
+  Check: `scripts/test_place_kind_771.py`.
 - **The cover pick, the same everywhere** (`templates/_cover_pick.html` `cover_pick(kind, ref, title,
   checked, can_edit)` + `cover_pick_config(cfg)` once per page; `static/js/cover-pick.js`; the item
   grids draw the same markup in `cards.js` when the grid config carries `cover_pick`). It sits where
@@ -2315,13 +2346,13 @@ Two ideas share the nav rail's "Curator" tab and one queue:
   `scripts/test_one_report_card_545.py`.
 - **Group cards are graded by their members (#765, #554 rules; owner decisions 2026-10-18).**
   `card_level.shared_checks(card, files)` is the one kind-aware entry point the pips AND
-  `curator.score_project` call. For a family / collection: cover = its own (the art its face shows);
+  `curator.score_project` call. For a family / collection / place: cover = its own (the art its face shows);
   write-up = its own passes, or >= `GROUP_SHARE` (80%) of its members' write-ups pass; dates = its own
   start and end set, or >= 80% of its units pass `check_dates` (each member, plus, for a collection only,
   its own loose files as one unit). The stack pip for a group counts files OR members (3 of either). A
   family is never nagged for provenance or credit (`card_rules.provenance_nag_applies`) and has no
-  whereabouts (`WHEREABOUTS_KINDS`); a collection keeps both (whereabouts on a collection of events /
-  places is the V2 place question, #771). Check: `scripts/test_family_values_554_765_772.py`.
+  whereabouts (`WHEREABOUTS_KINDS`); a collection keeps both. A place (#771) is graded like any group
+  card and is never nagged for provenance or whereabouts. Check: `scripts/test_family_values_554_765_772.py`.
 - **Where it surfaces:** the **Curator tab in the nav rail** (`_nav_tabs.html`) opens the Curator drawer
   (`_nudges_drawer.html`, rendered by `static/js/curator-queue.js`); its count badge is
   `GET /api/curator/queue?summary=1` and refreshes on the `pending-decisions-changed` /

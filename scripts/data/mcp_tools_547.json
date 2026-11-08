@@ -1248,7 +1248,7 @@
   },
   {
    "name": "constructicon_list_projects",
-   "description": "All cards, most recently updated first. Filters: kind (project | thing | action | family |\ncollection | event), activity (active | inactive), stage (in_progress | in_use | idea | paused |\ndone | stopped). Each card has its status fields and labels, and needs_input (an open question).",
+   "description": "All cards, most recently updated first. Filters: kind (project | thing | action | family |\ncollection | event | place), activity (active | inactive), stage (in_progress | in_use | idea | paused |\ndone | stopped). Each card has its status fields and labels (a place reads Still going / Closed for\nin_use / done), and needs_input (an open question).",
    "inputSchema": {
     "properties": {
      "kind": {
@@ -1294,7 +1294,7 @@
   },
   {
    "name": "constructicon_create_project",
-   "description": "Create a card, with a root tag of the same name linked to it and a blank write-up, as one\nbatch. kind: project (default) | thing | action | family | collection | event. stage:\nin_progress (default) | in_use | idea | paused | done | stopped (stopped needs stop_reason\nfailed | abandoned). parent_id makes it \"part of\" that card (a family/collection can't nest or\nbe a parent: nest_group_kind). Errors: bad_status, not_found. Returns the card + batch_id.",
+   "description": "Create a card, with a root tag of the same name linked to it and a blank write-up, as one\nbatch. kind: project (default) | thing | action | family | collection | event | place. stage:\nin_progress (default) | in_use | idea | paused | done | stopped (stopped needs stop_reason\nfailed | abandoned); a place is only in_use (\"Still going\", its default) or done (\"Closed\"). parent_id makes it \"part of\" that card (a family/collection/place can't nest or\nbe a parent: nest_group_kind). Errors: bad_status, not_found. Returns the card + batch_id.",
    "inputSchema": {
     "properties": {
      "title": {
@@ -1376,7 +1376,7 @@
   },
   {
    "name": "constructicon_update_project",
-   "description": "Edit a card, every change in ONE batch, applied in order (kind, status, whereabouts,\nprovenance, highlight, home, face text, write-up, then title and the rest).\ncard (or project_id): its id or slug. Parameters left out (None) are left alone.\nkind: project | thing | action | family | collection | event. stage: in_progress | in_use\n(active) | idea | paused | done | stopped (inactive); stopped needs stop_reason failed |\nabandoned; an event can't be in_use or paused. status: the old v1 word (wip, complete,\nshelved ...), translated to a stage with a warning.\nstart_date / end_date: timeline overrides (unix seconds); reset_start_date / reset_end_date clear.\nfields: more fields, key present = set it, absent = leave it; null or \"\" clears:\n  activity (must agree with the stage), force_kind (bool: leave a family/collection that has\n  members), whereabouts (have_it | partial | parted_out | sold | gifted | lost | abandoned |\n  never_built; thing / project / collection only; anything but have_it greys the card's art;\n  abandoned = the object was left behind (towed, impound), not stop_reason abandoned, which\n  is walking away from the project), whereabouts_note, provenance (an active card key,\n  constructicon_list_provenance_options(scope=\"card\")), provenance_credit, highlight (bool),\n  home (\"card:<slug>\" | \"hobby:<slug>\" | a card; null = automatic), synopsis (max 600: a few\n  sentences saying what the card is; set it whenever you write a write-up), flavor (one italic\n  line, max 140), writeup_slug (an item that can be a write-up; it joins the card),\n  owner_words (bool: the write-up is the owner's own words), cover_card (a nested part or a\n  family / collection member, id or slug: the card borrows its cover and follows it; bad_cover\n  with details.reason when it can't: not_related, no_cover, cover_loop, hidden, ...).\nE.g. fields={\"whereabouts\": \"have_it\", \"synopsis\": \"A 3D-printed rover.\"}.\ndry_run=true answers as the call would and writes nothing.\nReturns the card plus batch_id, changes and warnings (if any). Codes: bad_status, bad_kind,\nbad_whereabouts, bad_provenance, bad_home, bad_card_text, unknown_field.",
+   "description": "Edit a card, every change in ONE batch, applied in order (kind, status, whereabouts,\nprovenance, highlight, home, face text, write-up, then title and the rest).\ncard (or project_id): its id or slug. Parameters left out (None) are left alone.\nkind: project | thing | action | family | collection | event | place. stage: in_progress | in_use\n(active) | idea | paused | done | stopped (inactive); stopped needs stop_reason failed |\nabandoned; an event can't be in_use or paused; a place is only in_use (\"Still going\") or done\n(\"Closed\"), has no whereabouts, and its members (events, things, projects) are its \"At this place\".\nChanging a card to a place whose stage isn't in_use / done is refused unless you send stage= in the\nsame call (e.g. kind=\"place\", stage=\"in_use\"); it never picks a stage for you. status: the old v1 word (wip, complete,\nshelved ...), translated to a stage with a warning.\nstart_date / end_date: timeline overrides (unix seconds); reset_start_date / reset_end_date clear.\nfields: more fields, key present = set it, absent = leave it; null or \"\" clears:\n  activity (must agree with the stage), force_kind (bool: leave a family/collection/place that has\n  members), whereabouts (have_it | partial | parted_out | sold | gifted | lost | abandoned |\n  never_built; thing / project / collection only; anything but have_it greys the card's art;\n  abandoned = the object was left behind (towed, impound), not stop_reason abandoned, which\n  is walking away from the project), whereabouts_note, provenance (an active card key,\n  constructicon_list_provenance_options(scope=\"card\")), provenance_credit, highlight (bool),\n  home (\"card:<slug>\" | \"hobby:<slug>\" | a card; null = automatic), synopsis (max 600: a few\n  sentences saying what the card is; set it whenever you write a write-up), flavor (one italic\n  line, max 140), writeup_slug (an item that can be a write-up; it joins the card),\n  owner_words (bool: the write-up is the owner's own words), cover_card (a nested part or a\n  family / collection member, id or slug: the card borrows its cover and follows it; bad_cover\n  with details.reason when it can't: not_related, no_cover, cover_loop, hidden, ...).\nE.g. fields={\"whereabouts\": \"have_it\", \"synopsis\": \"A 3D-printed rover.\"}.\ndry_run=true answers as the call would and writes nothing.\nReturns the card plus batch_id, changes and warnings (if any). Codes: bad_status, bad_kind,\nbad_whereabouts, bad_provenance, bad_home, bad_card_text, unknown_field.",
    "inputSchema": {
     "properties": {
      "project_id": {
@@ -2502,7 +2502,7 @@
   },
   {
    "name": "constructicon_nest",
-   "description": "Make `child` PART OF `parent` (\"nest\", default; it only makes sense inside it, e.g. a Lua\nscript inside the truck it runs on), or take it out of its parent (\"unnest\"; no-op if none).\nNot family membership (constructicon_family). Refused: nest_self, nest_cycle, nest_group_kind\n(a family/collection can't nest or be a parent), nest_second_parent (already part of another\ncard: replace=true moves it). -> {ok, dry_run, changes, warnings, batch_id}.",
+   "description": "Make `child` PART OF `parent` (\"nest\", default; it only makes sense inside it, e.g. a Lua\nscript inside the truck it runs on), or take it out of its parent (\"unnest\"; no-op if none).\nNot family membership (constructicon_family). Refused: nest_self, nest_cycle, nest_group_kind\n(a family/collection/place can't nest or be a parent), nest_second_parent (already part of another\ncard: replace=true moves it). -> {ok, dry_run, changes, warnings, batch_id}.",
    "inputSchema": {
     "properties": {
      "child": {
@@ -2560,7 +2560,7 @@
   },
   {
    "name": "constructicon_family",
-   "description": "Put a card in a family or collection (\"add\", default; many-to-many, moves no files, twice is\na no-op) or take it out (\"remove\"). `family` must be a family/collection card and `member` must\nnot be one (bad_membership). -> {ok, dry_run, changes, warnings, batch_id}.",
+   "description": "Put a card in a family, collection or place (\"add\", default; many-to-many, moves no files, twice is\na no-op) or take it out (\"remove\"). `family` must be a family/collection/place card and `member` must\nnot be one (bad_membership). A place's members show as \"At this place\", and each member's page says\n\"Where: <place>\". -> {ok, dry_run, changes, warnings, batch_id}.",
    "inputSchema": {
     "properties": {
      "family": {

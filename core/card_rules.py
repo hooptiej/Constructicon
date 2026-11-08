@@ -17,8 +17,10 @@ from .errors import AppError
 log = logging.getLogger("constructicon.card_rules")
 
 # --- Kinds (3.1) -------------------------------------------------------------
-KINDS = ("project", "thing", "action", "family", "collection", "event")
-GROUP_KINDS = ("family", "collection")
+KINDS = ("project", "thing", "action", "family", "collection", "event", "place")
+# #771: a place (a track, a club field, a shop) is a group kind like a collection: its events (and
+# things / projects, say a shop's builds) are its members, with the same membership machinery.
+GROUP_KINDS = ("family", "collection", "place")
 KIND_LABELS = {
     "project": "Project",
     "thing": "Thing",
@@ -26,6 +28,7 @@ KIND_LABELS = {
     "family": "Family",
     "collection": "Collection",
     "event": "Event",
+    "place": "Place",
 }
 
 # --- Per-kind page layout (#554, batch 5 "Every Kind Gets Its Own Room") --------------------
@@ -45,9 +48,12 @@ CARD_PAGES = {
     "action": {},
     "family": {"members": True, "nests": False, "members_label": "Members", "member_noun": "family"},
     "collection": {"members": True, "nests": False, "members_label": "In this collection", "member_noun": "collection"},
-    # #554 owner decision 2026-10-18: write-up front and centre, the date prominently up top. The
-    # "where" link waits for the V2 place kind (#771); no attendee field.
+    # #554 owner decision 2026-10-18: write-up front and centre, the date prominently up top. No
+    # attendee field. The "Where: <place>" line (#771) is shown on EVERY member's page, not only an
+    # event's: it comes from the place memberships (see where_places).
     "event": {"lead": "writeup", "date_banner": True},
+    # #771 (owner, 2026-11-08): a place is a group kind; its members section reads "At this place".
+    "place": {"members": True, "nests": False, "members_label": "At this place", "member_noun": "place"},
 }
 
 
@@ -78,6 +84,13 @@ STAGE_LABELS = {
 STOP_REASON_LABELS = {"failed": "Failed", "abandoned": "Abandoned"}
 # Event cards only allow these stages (3.2 rule 4).
 EVENT_STAGES = ("idea", "in_progress", "done", "stopped")
+# #771 (owner, 2026-11-08): a place is either still going or closed, nothing else. The stored values
+# stay the two existing stages; only the words differ. ALWAYS show a stage through stage_label(stage,
+# kind) so a place says "Still going" / "Closed" wherever it appears.
+PLACE_STAGES = ("in_use", "done")
+PLACE_STAGE_LABELS = {"in_use": "Still going", "done": "Closed"}
+# The kind that has place-only stage words.
+PLACE_KIND = "place"
 
 # --- Whereabouts (3.4) -------------------------------------------------------
 # Where the physical thing is now. NULL = not recorded / not applicable.
@@ -109,13 +122,15 @@ WHEREABOUTS_HELP = {
 # #770: whereabouts that mean "I don't have it": the card's art goes grey on every face.
 # Only have_it (and not recorded) keep full color. Kinds outside WHEREABOUTS_KINDS never grey.
 WHEREABOUTS_GONE = ("partial", "parted_out", "sold", "gifted", "lost", "abandoned", "never_built")
-# Kinds a whereabouts value applies to (an action, event or family has no physical whereabouts).
+# Kinds a whereabouts value applies to (an action, event, family or place has no physical whereabouts).
 # #554 (owner, 2026-10-18): a family's whereabouts live on its members; a collection (a set you
-# own) keeps its own. Whereabouts on a collection of events / places is the V2 place question (#771).
+# own) keeps its own. #771 (owner, 2026-11-08): a place is never asked "do you still own it?" and never
+# greys; keep it OUT of this tuple (every whereabouts question, field, refusal and grey follows it).
 WHEREABOUTS_KINDS = ("thing", "project", "collection")
 # #554: kinds the Curator never nags for provenance (missing provenance, missing credit). A
 # family's provenance lives on its members, like its whereabouts. It can still be set by hand.
-NO_PROVENANCE_NAG_KINDS = ("family",)
+# #771: a place isn't built or bought either.
+NO_PROVENANCE_NAG_KINDS = ("family", "place")
 
 
 def provenance_nag_applies(kind):
@@ -216,8 +231,32 @@ class CardError(AppError):
         return 422
 
 
-def stage_label(stage):
+def stage_label(stage, kind=None):
+    """#771: the words for a stage on a card of `kind`. THE one helper every screen, list, face,
+    Curator line and MCP answer uses: a place says "Still going" / "Closed", anything else (or no
+    kind) the STAGE_LABELS words. The stored value is untouched."""
+    if kind == PLACE_KIND and stage in PLACE_STAGE_LABELS:
+        return PLACE_STAGE_LABELS[stage]
     return STAGE_LABELS.get(stage, stage or "")
+
+
+def stages_for(kind=None):
+    """#771: the stages a card of `kind` may be at, in picker order (all six, or a place's two)."""
+    return PLACE_STAGES if kind == PLACE_KIND else STAGES
+
+
+def place_stage_message(stage=None):
+    """#771: the refusal for a stage a place can't have, in the place words, saying how to fix it."""
+    now = f"{STAGE_LABELS.get(stage, stage)!r} (stage {stage}) " if stage else ""
+    return (f"A place can't be {now}".rstrip() + ": it is either Still going or Closed. "
+            f"Set its stage to one of: {', '.join(PLACE_STAGES)} "
+            f"({' / '.join(f'{PLACE_STAGE_LABELS[s]} = {s}' for s in PLACE_STAGES)}).")
+
+
+def default_stage(kind=None):
+    """#771: the stage a new card of `kind` starts at: in progress, or Still going for a place
+    (a place can't be in progress)."""
+    return "in_use" if kind == PLACE_KIND else DEFAULT_STAGE
 
 
 def kind_label(kind):
@@ -336,6 +375,8 @@ def validate_status(kind, stage, stop_reason=None, activity=None, whereabouts=No
         raise CardError("bad_status", f"A stop reason only applies to stopped cards, not {stage!r}.")
     if kind == "event" and stage not in EVENT_STAGES:
         raise CardError("bad_status", f"An event can't be {stage!r}; use one of: {', '.join(EVENT_STAGES)}.")
+    if kind == PLACE_KIND and stage not in PLACE_STAGES:
+        raise CardError("bad_status", place_stage_message(stage))
     if whereabouts:
         if stage == "in_use" and whereabouts not in ("have_it", "partial"):
             raise CardError(
@@ -440,13 +481,13 @@ def validate_membership(family, member):
     fkind = family.get("kind") or DEFAULT_KIND
     if fkind not in GROUP_KINDS:
         raise CardError("bad_membership",
-                        f"'{family['title']}' is a {kind_label(fkind)}, not a family or collection, so it can't have members.")
+                        f"'{family['title']}' is a {kind_label(fkind)}, not a family, collection or place, so it can't have members.")
     if family["id"] == member["id"]:
         raise CardError("bad_membership", "A family can't be a member of itself.")
     mkind = member.get("kind") or DEFAULT_KIND
     if mkind in GROUP_KINDS:
         raise CardError("bad_membership",
-                        f"'{member['title']}' is a {kind_label(mkind)}; families and collections can't contain each other.")
+                        f"'{member['title']}' is a {kind_label(mkind)}; families, collections and places can't contain each other.")
     return True
 
 

@@ -18,8 +18,9 @@ from core.errors import InvalidInput, NotFound
 def constructicon_list_projects(kind: str | None = None, activity: str | None = None,
                                 stage: str | None = None) -> list[dict]:
     """All cards, most recently updated first. Filters: kind (project | thing | action | family |
-    collection | event), activity (active | inactive), stage (in_progress | in_use | idea | paused |
-    done | stopped). Each card has its status fields and labels, and needs_input (an open question).
+    collection | event | place), activity (active | inactive), stage (in_progress | in_use | idea | paused |
+    done | stopped). Each card has its status fields and labels (a place reads Still going / Closed for
+    in_use / done), and needs_input (an open question).
     """
     return [_to_public_project(p) for p in  # #604 step 3: not the private cards this caller isn't on
             policy.filter_visible_cards(db.list_projects(kind=kind, activity=activity, stage=stage))]
@@ -29,9 +30,9 @@ def constructicon_list_projects(kind: str | None = None, activity: str | None = 
 def constructicon_create_project(title: str, description: str = "", cover_slug: str | None = None, parent_id: int | None = None,
                                  kind: str | None = None, stage: str | None = None, stop_reason: str | None = None) -> dict:
     """Create a card, with a root tag of the same name linked to it and a blank write-up, as one
-    batch. kind: project (default) | thing | action | family | collection | event. stage:
+    batch. kind: project (default) | thing | action | family | collection | event | place. stage:
     in_progress (default) | in_use | idea | paused | done | stopped (stopped needs stop_reason
-    failed | abandoned). parent_id makes it "part of" that card (a family/collection can't nest or
+    failed | abandoned); a place is only in_use ("Still going", its default) or done ("Closed"). parent_id makes it "part of" that card (a family/collection/place can't nest or
     be a parent: nest_group_kind). Errors: bad_status, not_found. Returns the card + batch_id.
     """
     # #541 phase D: core validates everything first; tag + card + write-up are ONE undoable batch.
@@ -83,13 +84,16 @@ def constructicon_update_project(project_id: str | int | None = None, title: str
     """Edit a card, every change in ONE batch, applied in order (kind, status, whereabouts,
     provenance, highlight, home, face text, write-up, then title and the rest).
     card (or project_id): its id or slug. Parameters left out (None) are left alone.
-    kind: project | thing | action | family | collection | event. stage: in_progress | in_use
+    kind: project | thing | action | family | collection | event | place. stage: in_progress | in_use
     (active) | idea | paused | done | stopped (inactive); stopped needs stop_reason failed |
-    abandoned; an event can't be in_use or paused. status: the old v1 word (wip, complete,
+    abandoned; an event can't be in_use or paused; a place is only in_use ("Still going") or done
+    ("Closed"), has no whereabouts, and its members (events, things, projects) are its "At this place".
+    Changing a card to a place whose stage isn't in_use / done is refused unless you send stage= in the
+    same call (e.g. kind="place", stage="in_use"); it never picks a stage for you. status: the old v1 word (wip, complete,
     shelved ...), translated to a stage with a warning.
     start_date / end_date: timeline overrides (unix seconds); reset_start_date / reset_end_date clear.
     fields: more fields, key present = set it, absent = leave it; null or "" clears:
-      activity (must agree with the stage), force_kind (bool: leave a family/collection that has
+      activity (must agree with the stage), force_kind (bool: leave a family/collection/place that has
       members), whereabouts (have_it | partial | parted_out | sold | gifted | lost | abandoned |
       never_built; thing / project / collection only; anything but have_it greys the card's art;
       abandoned = the object was left behind (towed, impound), not stop_reason abandoned, which
@@ -131,7 +135,9 @@ def constructicon_update_project(project_id: str | int | None = None, title: str
     batch_id = changes.new_batch_id()
     with db.transaction(dry_run=dry_run):
         if kind:
-            take(cards.set_kind(cid, kind, force=f.get("force_kind", False), batch_id=batch_id))
+            # #771: a stage sent in the same call is checked against the NEW kind (collection -> place
+            # with stage="in_use"); set_status validates it in full right after.
+            take(cards.set_kind(cid, kind, force=f.get("force_kind", False), batch_id=batch_id, stage=stage or None))
         if stage or stop_reason or "activity" in f:
             if not (stage or stop_reason):  # activity alone: checked against the current stage
                 now = db.get_project(cid)

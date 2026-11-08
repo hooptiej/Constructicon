@@ -44,12 +44,13 @@ def provisional_legacy_status(card):
 def status_fields(card):
     """The live status fields in the shape every API/page returns, plus labels."""
     stage = card.get("stage")
+    kind = card.get("kind") or "project"
     return {
-        "kind": card.get("kind") or "project",
-        "kind_label": card_rules.kind_label(card.get("kind") or "project"),
+        "kind": kind,
+        "kind_label": card_rules.kind_label(kind),
         "activity": card.get("activity"),
         "stage": stage,
-        "stage_label": card_rules.stage_label(stage),
+        "stage_label": card_rules.stage_label(stage, kind),  # #771: a place reads Still going / Closed
         "stop_reason": card.get("stop_reason"),
         "stop_reason_label": card_rules.STOP_REASON_LABELS.get(card.get("stop_reason")),
         "needs_input": bool(open_card_decisions(card["slug"])) if card.get("slug") else False,

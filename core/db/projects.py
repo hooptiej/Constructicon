@@ -47,7 +47,7 @@ def _create_project(title, description="", cover_slug=None, tag_id=None, parent_
     from .. import card_rules, changes
     batch_id = batch_id or changes.new_batch_id()
     kind = card_rules.validate_kind(kind or card_rules.DEFAULT_KIND)
-    status_triple = card_rules.validate_status(kind, stage or card_rules.DEFAULT_STAGE, stop_reason)
+    status_triple = card_rules.validate_status(kind, stage or card_rules.default_stage(kind), stop_reason)
     if parent_id is not None:
         # Nest rules (3.7) guard creation too: the parent must exist and be nestable
         # under, and a new group-kind card can't start life nested.

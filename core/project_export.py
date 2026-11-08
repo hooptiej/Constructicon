@@ -133,7 +133,7 @@ def export_project(project_id_or_slug):
             # #545: the live status (the frozen v1 `status` word is retired)
             "kind": project.get("kind") or "project",
             "stage": project.get("stage"),
-            "stage_label": card_rules.stage_label(project.get("stage")),
+            "stage_label": card_rules.stage_label(project.get("stage"), project.get("kind")),
             "stop_reason": project.get("stop_reason"),
             "writeup_body": writeup_body,
         },

@@ -338,7 +338,7 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "description": child.get("description"),
             "kind": child.get("kind") or "project",
             "stage": child.get("stage"),
-            "stage_label": card_rules.stage_label(child.get("stage")),
+            "stage_label": card_rules.stage_label(child.get("stage"), child.get("kind")),
             "activity": child.get("activity"),
             "cover_url": _project_effective_cover_url(child),
             "item_count": len(child_items),
@@ -396,8 +396,15 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "timeline_can_edit": roles.at_least(roles.role_of(actor_ctx.current_actor()), roles.EDITOR),
             # V2 cards: the kind / stage / stop-reason controls on the detail page.
             "card_kinds": [{"key": k, "label": card_rules.KIND_LABELS[k]} for k in card_rules.KINDS],
-            "card_stages": [{"key": s, "label": card_rules.STAGE_LABELS[s], "activity": card_rules.ACTIVITY_OF[s]}
-                            for s in card_rules.STAGES],
+            # #771: a place is only Still going / Closed, so its picker offers just those two, in the
+            # place words (card_rules.stage_label is the one helper for a stage's words).
+            "card_stages": [{"key": s, "label": card_rules.stage_label(s, project.get("kind")),
+                             "activity": card_rules.ACTIVITY_OF[s]}
+                            for s in card_rules.stages_for(project.get("kind"))],
+            # #771: the two stages a card becoming a place can take, in the place words (the Identity
+            # group asks for one when the card's current stage isn't allowed for a place).
+            "place_stages": [{"key": s, "label": card_rules.stage_label(s, card_rules.PLACE_KIND)}
+                             for s in card_rules.PLACE_STAGES],
             "card_stop_reasons": [{"key": r, "label": card_rules.STOP_REASON_LABELS[r]} for r in card_rules.STOP_REASONS],
             "card_status": cards.status_fields(project),
             # #556: the "Export this card…" dialog's formats (core/project_export.FORMATS), each with the
@@ -434,6 +441,9 @@ def project_detail_page(request: Request, slug: str, rev: str = ""):
             "card_sharing": sharing.state("card", project["id"]),
             # V2 cards 3.6: families this card is in / members of this family or collection.
             "family_info": family_info,
+            # #771: "Where: <place>" on a member's page. family_fields already leaves out a private
+            # place this viewer can't see (#604), so a hidden place is never named here.
+            "where_places": [f for f in family_info["families"] if f["kind"] == card_rules.PLACE_KIND],
             "header_card": header_card,
             "stacks": stacks,
             "rev_note": _rev_note(request, n_sup, rev == "all"),

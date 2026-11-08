@@ -12,6 +12,7 @@
   --card-frame-family: #7A3F70;
   --card-frame-collection: #8A6A1F;
   --card-frame-event: #2F7F86;
+  --card-frame-place: #9A4B2A;
   --card-band-project: #E6DDF3;
   --card-band-thing: #DCE7F5;
   --card-band-action: #F4DDDB;
@@ -20,6 +21,7 @@
   --card-band-family: #EBDDE8;
   --card-band-collection: #F1E6CC;
   --card-band-event: #D8EBED;
+  --card-band-place: #F0DED2;
   --card-ink: #1E1B16;
   --card-pip-on: #E9C45C;
   --card-font-display: 'Cinzel', Georgia, serif;
@@ -69,6 +71,7 @@
 .cx-kind-family { --frame: var(--card-frame-family); --band: var(--card-band-family); }
 .cx-kind-collection { --frame: var(--card-frame-collection); --band: var(--card-band-collection); }
 .cx-kind-event { --frame: var(--card-frame-event); --band: var(--card-band-event); }
+.cx-kind-place { --frame: var(--card-frame-place); --band: var(--card-band-place); }
 
 /* Name bar */
 .cx-namebar {

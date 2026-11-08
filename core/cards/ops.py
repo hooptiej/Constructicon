@@ -26,11 +26,15 @@ def set_status(card, stage, stop_reason=None, *, activity=None, dry_run=False, a
     return Result(True, rows, warnings, batch_id, dry_run)
 
 
-def set_kind(card, kind, *, force=False, dry_run=False, actor=None, batch_id=None):
-    """Changes a card's kind. Rules (3.1): a group kind (family, collection) must
+def set_kind(card, kind, *, force=False, dry_run=False, actor=None, batch_id=None, stage=None):
+    """Changes a card's kind. Rules (3.1): a group kind (family, collection, place) must
     not be nested or be a nesting parent; leaving a group kind with members is
-    refused unless force=True; the card's current stage must still be valid for
-    the new kind (an event can't be in use or paused)."""
+    refused unless force=True (moving between group kinds keeps them, #771); the card's current
+    stage must still be valid for the new kind (an event can't be in use or paused; a place is only Still going or Closed).
+    `stage` (#771): the stage the caller sets in the SAME change (the web Save and the MCP update
+    send kind + stage together, kind first). The stage check then looks at that stage, not the
+    current one, so collection -> place with stage=in_use works; set_status validates it in full
+    right after. Without it a stage the new kind doesn't allow is refused, saying how to fix it."""
     row = get_card(card)
     card_rules.validate_kind(kind)
     old_kind = row.get("kind") or "project"
@@ -43,21 +47,42 @@ def set_kind(card, kind, *, force=False, dry_run=False, actor=None, batch_id=Non
                             f"A {kind} can't have nested cards; unnest its children first (use membership instead).")
     if kind in card_rules.GROUP_KINDS and db.list_families_for_member(row["id"]):
         raise CardError("bad_membership",
-                        f"'{row['title']}' is a member of a family or collection, and a {kind} can't be a member; "
+                        f"'{row['title']}' is a member of a family, collection or place, and a {kind} can't be a member; "
                         "take it out of those first.")
     members = 0
-    if old_kind in card_rules.GROUP_KINDS and kind != old_kind:
+    # #771: a group kind -> another group kind (collection -> place, family -> collection) KEEPS its
+    # members: the membership rows are the same for every group kind, so nothing is dropped. Only
+    # leaving the group kinds altogether drops them (and then only with force).
+    if old_kind in card_rules.GROUP_KINDS and kind not in card_rules.GROUP_KINDS:
         members = db.count_family_members(row["id"])
         if members and not force:
             raise CardError("bad_kind",
                             f"This {old_kind} still has {members} member(s); pass force=True to drop the memberships.",
                             {"members": members})
-    if row.get("stage"):
-        # The stage must stay legal under the new kind (event restriction).
-        card_rules.validate_status(kind, row["stage"], row.get("stop_reason"), whereabouts=row.get("whereabouts"))
+    if row.get("stage") and stage is None:
+        # The stage must stay legal under the new kind (event / place restriction). #771: say how to
+        # fix it (a stage sent with the kind change, or set first), never pick one silently.
+        try:
+            card_rules.validate_status(kind, row["stage"], row.get("stop_reason"), whereabouts=row.get("whereabouts"))
+        except CardError as e:
+            if e.code != "bad_status" or kind not in (card_rules.PLACE_KIND, "event"):
+                raise
+            allowed = card_rules.stages_for(kind) if kind == card_rules.PLACE_KIND else card_rules.EVENT_STAGES
+            raise CardError("bad_status",
+                            f"Can't make '{row['title']}' a {card_rules.kind_label(kind).lower()}: it is "
+                            f"{card_rules.stage_label(row['stage'], old_kind)!r} now. {e.message} Nothing was "
+                            f"changed. Send a stage with the kind change (stage = one of: {', '.join(allowed)}), "
+                            "or set its stage first.",
+                            {"allowed_stages": list(allowed), "current_stage": row["stage"]}) from e
     if row.get("whereabouts"):
-        # Whereabouts doesn't apply to an action / event / family (3.4).
-        card_rules.validate_whereabouts(kind, row["whereabouts"], row.get("stage"))
+        # Whereabouts doesn't apply to an action / event / family / place (3.4).
+        try:
+            card_rules.validate_whereabouts(kind, row["whereabouts"], stage or row.get("stage"))
+        except CardError as e:
+            if kind in card_rules.WHEREABOUTS_KINDS:
+                raise
+            raise CardError(e.code, f"{e.message} Clear this card's whereabouts first (it is "
+                                    f"{card_rules.whereabouts_label(row['whereabouts'])!r}); nothing was changed.") from e
     fields = {"kind": kind}
     rows = _change_rows(row["slug"], {"kind": old_kind}, fields)
     warnings = []

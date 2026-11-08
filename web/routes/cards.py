@@ -251,7 +251,9 @@ def api_update_project(
                 stage, stop_reason = legacy["stage"], legacy["stop_reason"]
             card_warnings.extend(legacy["warnings"])
         if kind:
-            card_warnings.extend(cards.set_kind(project["id"], kind, batch_id=batch_id).warnings)
+            # #771: a stage sent in the same Save is checked against the NEW kind (collection -> place
+            # with stage=in_use); one that isn't allowed there is refused by set_status right after.
+            card_warnings.extend(cards.set_kind(project["id"], kind, batch_id=batch_id, stage=stage or None).warnings)
         if stage or activity or stop_reason:
             card_warnings.extend(cards.set_status(project["id"], stage, stop_reason or None,
                                                   activity=activity or None, batch_id=batch_id).warnings)

@@ -94,7 +94,7 @@ def _not_scored_why(card, stage):
     """Why a check is excused by the card itself (is_silent's reasons, or the stage), in plain words."""
     if card.get("kind") == "collection" and card.get("provenance") in (None, "referenced"):
         return "a reference collection isn't scored"
-    label = card_rules.stage_label(stage) or "not started"
+    label = card_rules.stage_label(stage, card.get("kind")) or "not started"
     if STAGE_APPLICABILITY.get(stage) is None:
         return f"the card is {label}"
     return f"not checked while the card is {label}"
@@ -497,7 +497,7 @@ def score_project(project_id_or_dict):
         "slug": project["slug"],
         "title": project["title"],
         "stage": stage,
-        "stage_label": card_rules.stage_label(stage),
+        "stage_label": card_rules.stage_label(stage, project.get("kind")),
         "silent": silent,
         "score": score,
         "band": band,

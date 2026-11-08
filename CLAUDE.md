@@ -3661,6 +3661,19 @@ checkout, a tar-over-ssh branch, an image built without the args) `core/version.
 `build source <git short sha>` when git answers (cached 60 s so a render never spawns git each time), else
 `build source`; it never raises. `/healthz` stays `{"ok": true}` (public). Check with
 `python scripts/test_build_stamp_835.py`.
+**A mounted checkout tells the truth about itself (#858).** `VERSION.json` is written only by `deploy.sh`,
+so a branch checked out (or copied in by tar) on constructicon-test afterwards used to run under the old
+stamp. When the checkout's `.git` is visible to the app (`core/version.py` `GIT_DIR`; the test override
+mounts `./.git:/app/.git:ro`, see `docker-compose.override.yml.example`), one cached `git -c
+safe.directory=* --no-optional-locks status --porcelain=v2 --branch -- core web mcp_server assets` decides:
+a checkout whose HEAD differs from the file's `commit`, or that has local changes, wins, with
+`build source <sha> (branch <name>)` / `build source <sha> + local changes (branch <name>)` /
+`(detached HEAD)`, `build_origin` `checkout`. A clean checkout that matches the file keeps the file's label
+and date. `/api/version` adds `build_branch` and `build_local_changes` (None when no checkout is visible).
+Prod has no `.git` (the image never carries one), so nothing changes there; git failing for any reason
+falls back to the #835 behaviour. A tar-over-ssh copy-in shows as `+ local changes` on the box's HEAD;
+to make test name a branch exactly, check it out on the box instead (`git fetch origin <branch> && git
+checkout -B <branch> FETCH_HEAD`, then restart). Check with `python scripts/test_footer_truth_858.py`.
 
 **Pre-deploy backup = a ZFS snapshot, taken by `scripts/deploy.sh` itself
 (#442, 2026-09-30).** Prod's data (DB dir + storage) lives in its own dataset,

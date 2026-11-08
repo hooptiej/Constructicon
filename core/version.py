@@ -7,7 +7,8 @@ core/VERSION.json ({version, commit, deployed_at}) comes from one of two places:
 - scripts/deploy.sh on a checkout whose code is bind-mounted over the image
   (constructicon-test, dev): it writes the gitignored file into the checkout's
   core/ after the reset, since the mount hides the baked one.
-A tar-over-ssh deploy has no such file, so the app reports "dev". Read fresh on
+A tar-over-ssh deploy has no such file, so the app reports "dev"; and when the checkout's .git is
+mounted (#858), its HEAD, branch and local changes decide the build stamp. Read fresh on
 every call (the file is tiny) so a deploy is picked up even by a process that
 wasn't restarted. The "-dev" suffix for CONSTRUCTICON_ENV=dev is added here at
 read time, so one image reports correctly wherever it runs.
@@ -38,8 +39,9 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
 def reset_git_cache() -> None:
-    """Forget the cached git sha (tests)."""
+    """Forget the cached git sha and checkout state (tests)."""
     _git_cache.clear()
+    _checkout_cache.clear()
 
 
 def _git_short_sha(root: Path | None = None) -> str | None:
@@ -64,9 +66,68 @@ def _git_short_sha(root: Path | None = None) -> str | None:
     return sha
 
 
+# #858: a mounted checkout (constructicon-test) can run code VERSION.json doesn't describe: a branch
+# checked out or copied in by hand after deploy.sh last wrote the file. When the checkout's .git is
+# visible (the test override mounts it read-only), its HEAD, branch and local changes win over the file.
+# Prod has no .git (the image's .dockerignore drops it), so it keeps the baked stamp.
+GIT_DIR = REPO_ROOT / ".git"
+CHECKOUT_PATHS = ("core", "web", "mcp_server", "assets")  # what the override mounts: what's running
+_checkout_cache: dict = {}  # {"at": monotonic seconds, "state": dict | None}
+
+
+def _checkout_state() -> dict | None:
+    """{sha, branch, dirty} of the checkout the app runs from, or None when there is no .git or git
+    can't say. One `git status` (porcelain v2), cached like the sha above. branch is None on a detached
+    HEAD; dirty = a tracked file under CHECKOUT_PATHS differs from HEAD. Never raises."""
+    if not GIT_DIR.exists():
+        return None
+    now = time.monotonic()
+    cached = _checkout_cache.get("at")
+    if cached is not None and _checkout_cache.get("dir") == str(GIT_DIR) and now - cached < _GIT_CACHE_SECONDS:
+        return _checkout_cache.get("state")
+    state = None
+    try:
+        # safe.directory: the mounted .git belongs to the host's user, not necessarily the container's.
+        # --no-optional-locks: the mount is read-only, so never try to refresh the index.
+        done = subprocess.run(["git", "-c", "safe.directory=*", "--no-optional-locks", "status", "--porcelain=v2",
+                               "--branch", "--untracked-files=no", "--", *CHECKOUT_PATHS],
+                              cwd=str(GIT_DIR.parent), capture_output=True, text=True, timeout=5, check=False)
+        oid, head, dirty = None, None, False
+        for line in (done.stdout or "").splitlines() if done.returncode == 0 else ():
+            if line.startswith("# branch.oid "):
+                oid = line.split()[2]
+            elif line.startswith("# branch.head "):
+                head = line.split(maxsplit=2)[2]
+            elif line and not line.startswith("#"):
+                dirty = True
+        if oid and oid != "(initial)":
+            state = {"sha": oid[:7], "branch": None if head in (None, "(detached)") else head, "dirty": dirty}
+        else:
+            log.info("build stamp: git status in %s gave no HEAD (exit %s); using VERSION.json",
+                     GIT_DIR.parent, done.returncode)
+    except (OSError, subprocess.SubprocessError) as e:  # silent-ok: logged at info; the stamp falls back to VERSION.json
+        log.info("build stamp: git status could not run (%s); using VERSION.json", e)
+    _checkout_cache.update({"at": now, "dir": str(GIT_DIR), "state": state})
+    return state
+
+
 def _build_stamp(commit: str | None, built_at: str | None) -> dict:
-    """{build, build_origin, build_label} for the footer and /api/version. Never raises."""
+    """{build, build_origin, build_label, build_branch, build_local_changes} for the footer and
+    /api/version. Never raises."""
     date = built_at[:10] if built_at and _DATE_RE.match(built_at) else None
+    co = _checkout_state()
+    if co and (co["dirty"] or not commit or not (co["sha"].startswith(commit) or commit.startswith(co["sha"]))):
+        # #858: the checkout is not what VERSION.json says (or there is no file): say what is running.
+        where = f"branch {co['branch']}" if co["branch"] else "detached HEAD"
+        label = f"build {BUILD_SOURCE} {co['sha']}" + (" + local changes" if co["dirty"] else "") + f" ({where})"
+        return {"build": co["sha"], "build_origin": "checkout", "build_label": label,
+                "build_branch": co["branch"], "build_local_changes": co["dirty"]}
+    extra = {"build_branch": co["branch"] if co else None, "build_local_changes": False if co else None}
+    return {**_build_stamp_file(commit, date), **extra}
+
+
+def _build_stamp_file(commit: str | None, date: str | None) -> dict:
+    """The #835 stamp: VERSION.json's commit, else `git rev-parse` (a checkout git can read), else source."""
     if commit:
         label = f"build {commit}" + (f" ({date})" if date else "")
         return {"build": commit, "build_origin": "VERSION.json", "build_label": label}
@@ -111,6 +172,9 @@ def get_version_info() -> dict:
         "built_at": deployed_at,
         "build_origin": stamp["build_origin"],
         "build_label": stamp["build_label"],
+        # #858: the checkout's branch and whether its files differ from HEAD (None = no checkout seen).
+        "build_branch": stamp["build_branch"],
+        "build_local_changes": stamp["build_local_changes"],
     }
 
 

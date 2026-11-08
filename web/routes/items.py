@@ -60,6 +60,18 @@ def api_delete_selected(slugs: list[str] = Form(...)):
 
 # --- API ---
 
+def _duplicate_uploader(row) -> str:
+    """' by <who>' for the duplicate-upload 409, or ''. #845: who uploaded it is the account
+    (uploaded_by_user_id), not a Source note; a note that is a real label ("Claude — authored") still
+    reads as before, and a retired/empty one is left out. Plain def (#863): it reads the DB, so the
+    async upload route calls it through run_in_threadpool."""
+    if row.get("uploaded_by_user_id") is not None:
+        return f" by {users.uploader_label(users.owner_info(row['uploaded_by_user_id']))}"
+    if row.get("tech") and not db.is_retired_source_note(row["tech"]):
+        return f" by {row['tech']}"
+    return ""
+
+
 @router.post("/api/upload")
 async def api_upload(
     request: Request,
@@ -116,13 +128,7 @@ async def api_upload(
         # _friendly_datetime, not a raw strftime with %-d/%-I -- those are the
         # platform-specific extensions that helper exists to avoid (#211).
         dupe_date = _friendly_datetime(result.row["timestamp"])
-        # #845: who uploaded it is the account (uploaded_by_user_id), not a Source note; a note that is
-        # a real label ("Claude — authored") still reads as before, and a retired/empty one is left out.
-        who = ""
-        if result.row.get("uploaded_by_user_id") is not None:
-            who = f" by {users.uploader_label(users.owner_info(result.row['uploaded_by_user_id']))}"
-        elif result.row.get("tech") and not db.is_retired_source_note(result.row["tech"]):
-            who = f" by {result.row['tech']}"
+        who = await run_in_threadpool(_duplicate_uploader, result.row)  # #863: DB reads, off the event loop
         raise HTTPException(
             status_code=409,
             detail=f"Already uploaded{who} on {dupe_date} — see /object/{result.row['slug']}",

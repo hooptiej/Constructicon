@@ -37,6 +37,9 @@ except Exception:  # no libcairo on this machine (e.g. Windows): object types im
 from core import db  # noqa: E402
 from core import version as V  # noqa: E402
 _testenv.assert_isolated()
+# #858: a visible .git makes the checkout's own HEAD win over VERSION.json. These checks are about the
+# file and the `git rev-parse` fallback, so they run as if there were no checkout (#858 has its own test).
+V.GIT_DIR = Path(TMP) / "no-checkout" / ".git"
 
 FAILS = []
 

@@ -13,6 +13,9 @@
 # A checkout that runs prod AND test in one project (as the single example file does) keeps only the
 # constructicon-test entry, so prod's services stay on the baked image.
 # Mount only what the base file doesn't already (no data or secrets here).
+# #858: .git goes in read-only so the footer's build stamp names the checkout's own HEAD, branch and local
+# changes (core/version.py), not a VERSION.json left behind by the last deploy.sh. .git holds no secrets
+# (secrets/ is gitignored); the image never has one, so prod keeps its baked stamp.
 services:
   constructicon-web:
     volumes:
@@ -20,6 +23,7 @@ services:
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
       - ./assets:/app/assets:ro
+      - ./.git:/app/.git:ro
 
   constructicon-mcp:
     volumes:
@@ -27,6 +31,7 @@ services:
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
       - ./assets:/app/assets:ro
+      - ./.git:/app/.git:ro
 
   constructicon-test:
     volumes:
@@ -34,3 +39,4 @@ services:
       - ./web:/app/web
       - ./mcp_server:/app/mcp_server
       - ./assets:/app/assets:ro
+      - ./.git:/app/.git:ro

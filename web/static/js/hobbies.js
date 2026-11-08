@@ -27,7 +27,7 @@
     if (btn) btn.addEventListener('click', createHobby);
   });
 
-  // The drawer (only present when base.html includes it: not in ?embed=1 mode).
+  // The drawer (base.html includes it on every page since #851 removed ?embed=1 mode; the guard stays).
   const drawer = document.getElementById('hobbies-drawer');
   if (!drawer) return;
   const backdrop = document.getElementById('hobbies-drawer-backdrop');

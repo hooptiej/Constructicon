@@ -437,23 +437,60 @@ a.uploader-label:hover, a.uploader-label:focus-visible { text-decoration: underl
 .upload-drawer .dropzone { padding: 28px 16px; }
 .upload-drawer .meta-form { width: 100%; background: none; border: none; padding: 0; margin-top: 18px; }
 
-/* The page itself: a widget grid, same card bones as .home-widget and the
-   same auto-fill track recipe as .gallery-grid, so it reads as one more of
-   this app's card grids rather than a new layout language.
-   Two panels (caption tuning, audit log) span the full row -- `1 / -1`
-   rather than `span 2` so a 1-column viewport never gets an implicit
-   overflow track. `dense` lets the DOM-last Maintenance card backfill a
-   hole in the first row at 4-column widths (see admin.html's grid comment
-   for the intended arrangement per column count). */
-.admin-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  grid-auto-flow: dense; gap: 20px; align-items: start;
-}
+/* The page itself. #851: it was a dense grid of always-open cards (#295); now every section is a
+   collapsed-by-default disclosure (<details class="admin-section">, see below), so it is a plain
+   full-width stack of rows that reads well on a phone (the old .admin-panel-wide full-row class is gone). */
+.admin-grid { display: flex; flex-direction: column; gap: 10px; }
 .admin-panel {
   min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 12px;
   padding: 18px; display: flex; flex-direction: column; gap: 14px;
 }
-.admin-panel-wide { grid-column: 1 / -1; }
+/* #851: a collapsible section of /admin: a <details> whose <summary> is the heading row (name and
+   count stay visible when collapsed), with a chevron that turns when it opens. The card look is
+   .admin-panel's; display:block + no padding here so the summary can be a full-width tap target
+   (44px tall) and the body carries the spacing. static/js/admin-sections.js remembers which are open. */
+.admin-section.admin-panel { display: block; padding: 0; }
+.admin-section-summary {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 18px;
+  cursor: pointer; list-style: none; user-select: none;
+}
+.admin-section-summary::-webkit-details-marker { display: none; }
+.admin-section-summary::before {
+  content: ""; flex: 0 0 auto; width: 7px; height: 7px;
+  border-right: 2px solid var(--text-2); border-bottom: 2px solid var(--text-2);
+  transform: rotate(-45deg); transition: transform 0.15s ease;
+}
+.admin-section[open] > .admin-section-summary::before { transform: rotate(45deg); }
+.admin-section-summary:hover h2 { color: var(--accent); }
+.admin-section-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 12px; }
+.admin-section-summary h2 { font-size: 15px; font-weight: 500; margin: 0; flex: 1 1 auto; min-width: 0; }
+.admin-section-summary .apikey-status { margin-left: 6px; }
+.admin-section-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 18px 18px; border-top: 1px solid var(--border); }
+/* An admin-only section seen by a lower role: a greyed row (the ONE #779 look, .role-locked) that
+   explains itself on click; none of the section's contents or scripts were sent. */
+.admin-locked-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 18px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  color: var(--text); font: inherit; font-size: 15px; font-weight: 500; text-align: left;
+}
+.admin-locked-row::before {
+  content: ""; flex: 0 0 auto; width: 7px; height: 7px;
+  border-right: 2px solid var(--text-2); border-bottom: 2px solid var(--text-2); transform: rotate(-45deg);
+}
+/* The Tools group: one row per tool, each opening its drawer (or the Wallpaper page). */
+.admin-tools { display: flex; flex-direction: column; gap: 8px; }
+.admin-tool-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 8px 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font: inherit; text-align: left; text-decoration: none; cursor: pointer;
+}
+.admin-tool-row:hover { border-color: var(--border-strong); }
+.admin-tool-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.admin-tool-row[aria-disabled="true"] { cursor: not-allowed; }
+.admin-tool-icon { flex: 0 0 auto; width: 20px; height: 20px; color: var(--text); }
+.admin-tool-text { display: flex; flex-direction: column; min-width: 0; }
+.admin-tool-name { font-size: 14px; font-weight: 500; }
+.admin-tool-hint { font-size: 11px; color: var(--text-3); }
 .admin-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .admin-panel-header h2 { font-size: 15px; font-weight: 500; margin: 0; }
 .admin-panel-header .apikey-status { padding-top: 3px; }
@@ -2121,9 +2158,20 @@ a.uploader-label:hover, a.uploader-label:focus-visible { text-decoration: underl
    <nav class="nav-rails"> wrapper has no box of its own on wide screens; below
    760px it becomes the one right rail and the two lists stack inside it, left
    list first (see the @media block after the tab styles). */
+/* #851: a rail NEVER grows past the visible screen. 100vh on a phone includes the browser's own
+   bars, so a tall rail ran off the top (Curator / Upload out of reach, measured on the owner's
+   screenshots IMG_9393 / IMG_9394); 100dvh is the visible height (the 100vh line is the fallback for
+   a browser without dvh). Past that it scrolls (overflow-y). The padding on the screen-facing side
+   leaves room for the tabs' drop shadow, which the scroll box would otherwise clip; the rail itself
+   ignores the pointer so that strip never blocks the page, only the tabs take it. */
 .nav-rail {
   position: fixed; top: 50%; z-index: 45; transform: translateY(-50%);
+  box-sizing: border-box; max-height: 100vh; max-height: 100dvh;
+  overflow-y: auto; scrollbar-width: thin; pointer-events: none;
 }
+.nav-rail .nav-tab { pointer-events: auto; }
+.nav-rail-right { padding: 10px 0 10px 14px; }
+.nav-rail-left { padding: 10px 14px 10px 0; }
 .nav-rail-right { right: 0; }
 .nav-rail-left { left: 0; }
 /* Every tab on that side hid itself (no drawer triggers on this page). */
@@ -2212,21 +2260,52 @@ a.uploader-label:hover, a.uploader-label:focus-visible { text-decoration: underl
   .nav-rail-left .nav-tab-badge { right: auto; left: 4px; }
 }
 
-/* #774: narrow screens / phones: ONE right rail, left tabs first. The
-   wrapper takes the rail's place and the two lists flow inside it. It
-   scrolls (scrollbar hidden) when nine tabs are taller than the screen. */
+/* #774: narrow screens / phones: ONE right rail. The wrapper takes the rail's place and the two
+   lists flow inside it. #851: the markup lists the RIGHT side first, so Upload leads, then
+   Processing, Curator, Admin (the old merge put the left list first and pushed Upload up out of
+   reach). The wrapper is capped at the visible height (dvh, with a vh fallback line) and scrolls if
+   it ever has to; the lists inside it are plain boxes (no cap, padding or scrolling of their own). */
 @media (max-width: 760px) {
   .nav-rails {
     position: fixed; top: 50%; right: 0; z-index: 45; transform: translateY(-50%);
     display: flex; flex-direction: column; align-items: stretch; gap: 10px;
-    max-height: 100vh; overflow-y: auto; scrollbar-width: none;
+    box-sizing: border-box; padding: 10px 0 10px 14px;
+    max-height: 100vh; max-height: 100dvh; overflow-y: auto; scrollbar-width: thin;
+    pointer-events: none;
   }
-  .nav-rails .nav-rail { position: static; transform: none; }
+  .nav-rails .nav-rail {
+    position: static; transform: none; padding: 0; max-height: none; overflow: visible;
+  }
+}
+
+/* #851: short screens (a landscape phone is ~330-470px tall): icon-only tabs, tighter padding and
+   gap, so two tabs per side (four in the merged narrow rail) fit with room to spare. The label
+   stays in the markup (screen readers, and the tab's title and aria-label) but is visually hidden.
+   Badges stay: smaller, tucked in the corner on the screen-edge side. No transparency (owner rule). */
+@media (max-height: 560px) {
+  .nav-tabs-list { gap: 6px; }
+  .nav-rail-right, .nav-rail-left { padding-top: 6px; padding-bottom: 6px; }
+  .nav-tab { padding: 8px 7px; gap: 0; }
+  .nav-tab-icon { width: 20px; height: 20px; }
+  .nav-tab-label {
+    position: absolute; width: 1px; height: 1px; max-height: 1px; margin: -1px; padding: 0; border: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .nav-tab-badge { top: 1px; right: 1px; min-width: 14px; height: 14px; padding: 0 3px;
+    font-size: 9px; line-height: 14px; border-radius: 7px; }
+}
+/* the merged narrow rail wears the padding itself (its lists have none) */
+@media (max-height: 560px) and (max-width: 760px) {
+  .nav-rails { padding-top: 6px; padding-bottom: 6px; }
+}
+/* wide-and-short: the left rail's badge sits on its screen-edge (left) side */
+@media (max-height: 560px) and (min-width: 761px) {
+  .nav-rail-left .nav-tab-badge { right: auto; left: 1px; }
 }
 
 /* --- Hide redundant old nav controls (now all in the nav rail) ---
    Keep the drawer trigger buttons in the DOM (their drawers' JS wires
-   open logic to them; the rail tabs dispatch a click to them), just hide
+   open logic to them; the rail tabs and /admin's Tools rows dispatch a click to them), just hide
    them visually. The admin gear becomes the rail's Admin tab, and the
    home page's gallery-drawer hover-tab (#345: it popped out over the rail
    and made the whole thing a mess) is hidden too — home's upload is now
@@ -2285,12 +2364,9 @@ a.uploader-label:hover, a.uploader-label:focus-visible { text-decoration: underl
 .brand-asset-copy-btn { background: none; border: none; padding: 2px 4px; cursor: pointer; color: var(--accent); font-size: 12px; opacity: 0.7; transition: opacity 0.2s; }
 .brand-asset-copy-btn:hover { opacity: 1; }
 
-/* Admin drawer (#345) — the admin page loads chrome-less into an iframe that
-   fills the wide drawer below the header. */
-.admin-drawer { overflow: hidden; }
-.admin-drawer-frame { flex: 1 1 auto; width: 100%; border: 0; background: var(--bg); margin-top: 12px; }
+/* (#851: the Admin popout drawer and its iframe styles are gone; the Admin tab opens /admin.)
 
-/* Needs badge (#240) on the Admin nav-rail tab, mirroring the old .admin-badge
+   Count badge (#240) on a nav-rail tab (Curator's, Processing's), mirroring the old .admin-badge
    that rode the header gear. .nav-tab is position:relative so this anchors to it. */
 .nav-tab-badge {
   position: absolute; top: 4px; right: 4px; min-width: 16px; height: 16px; padding: 0 4px;

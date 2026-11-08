@@ -7,18 +7,19 @@ Throwaway SQLite DB and storage (scripts/_testenv.py), the real FastAPI app thro
     python scripts/test_nav_tabs_774.py
 
   1. NAV_TABS (the one tab list at the top of web/templates/_nav_tabs.html) puts each tab on the
-     owner's side, in the owner's order: left = Curator, Export, Brand, Admin; right = Upload,
-     Processing, Blog, Hobbies (the hobby label), Wallpaper. Checked on the rendered HTML of
-     several pages, so it is the config AS RENDERED, not a copy of it.
+     owner's side, in the owner's order. #851 (owner decision 2026-11-08) cut the rail to four:
+     left = Curator, Admin; right = Upload, Processing (Hobbies, Blog, Wallpaper, Brand and Export
+     moved into /admin's Tools group). Checked on the rendered HTML of several pages, so it is
+     the config AS RENDERED, not a copy of it.
   2. Every tab renders exactly once per page, in exactly one rail; the ids the drawers' scripts
      look up (#proc-tab, #proc-tab-badge, #nudges-rail-badge) are unique on the page; the old
      standalone .proc-tab button is gone.
   3. Processing is a normal rail tab: a .nav-tab button with id proc-tab, idle by default, its
      accent badge; base.html includes the rails BEFORE the processing drawer's script.
-  4. The left list comes before the right list in the DOM (the narrow-screen merged rail shows
-     them in that order), and style.css has the narrow-screen merge rule and the right-sliding
-     processing drawer.
-  5. ?embed=1 (the admin drawer's iframe) still renders no rails.
+  4. The RIGHT list comes before the left list in the DOM (#851: the narrow-screen merged rail shows
+     them in that order, so Upload leads), and style.css has the narrow-screen merge rule and the
+     right-sliding processing drawer.
+  5. #851: the chrome-less /admin?embed=1 page is gone; /admin renders the rails like any page.
 Prints PASS/FAIL per check, then FAILED: <names> or ALL PASS.
 """
 
@@ -44,9 +45,10 @@ from web import app as webapp  # noqa: E402
 FAILS = []
 BASE = "http://testserver"
 
+# #851 (owner decision 2026-11-08): the rail keeps four tabs; the other five live in /admin's Tools group.
 EXPECTED = {
-    "left": ["curator", "export", "brand", "admin"],
-    "right": ["upload", "processing", "blog", "hobbies", "wallpaper"],
+    "left": ["curator", "admin"],
+    "right": ["upload", "processing"],
 }
 ALL_TABS = EXPECTED["left"] + EXPECTED["right"]
 
@@ -98,11 +100,12 @@ for path in PAGES:
           'class="nav-tab-badge" id="nudges-rail-badge"' in html)
     check(f"{path}: rails render before the processing drawer script",
           0 <= html.find('id="proc-tab"') < html.find("document.getElementById('proc-tab')"))
-    # 4. left list first in the DOM (merged narrow rail order)
-    check(f"{path}: left list before right list",
-          0 <= html.find("nav-rail-left") < html.find("nav-rail-right"))
-    check(f"{path}: hobbies tab uses the hobby label",
-          '<span class="nav-tab-label">Hobbies</span>' in html)
+    # 4. #851: right list first in the DOM (merged narrow rail order: Upload leads)
+    check(f"{path}: right list before left list (Upload first in the narrow rail)",
+          0 <= html.find('nav-rail-right') < html.find('nav-rail-left'))
+    # #851: the five tabs that moved are not on the rail any more (the hobby label tab included)
+    check(f"{path}: no Hobbies / Blog / Wallpaper / Brand / Export tab on the rail",
+          not re.search(r'data-nav-tab="(hobbies|blog|wallpaper|brand|export)"', html))
 
 css = open(os.path.join(ROOT, "web", "static", "style.css"), encoding="utf-8").read()
 check("css: narrow screens merge into one right rail",
@@ -117,9 +120,10 @@ nav_rules = re.findall(r"\.nav-(?:tab|rail)[^{]*\{[^}]*\}", css)
 check("css: no opacity on any rail tab rule", not any("opacity" in rule for rule in nav_rules),
       [r[:80] for r in nav_rules if "opacity" in r])
 
-# 5. embed mode has no rails
+# 5. #851: no embed mode any more. /admin is a normal page with the rails (and ?embed=1 is ignored).
 r = tok.get("/admin?embed=1")
-check("embed: /admin?embed=1 200", r.status_code == 200, r.status_code)
-check("embed: no rails in the iframe page", "nav-rails" not in r.text and 'id="proc-tab"' not in r.text)
+check("admin: /admin?embed=1 200 (the parameter is ignored now)", r.status_code == 200, r.status_code)
+check("admin: the full page, with its rails (no chrome-less mode)",
+      "nav-rails" in r.text and 'id="proc-tab"' in r.text)
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")

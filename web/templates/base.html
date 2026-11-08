@@ -37,29 +37,25 @@
     copied into every page; /curator and /captions/review skipped some, so their nav-rail tabs
     clicked a trigger with no drawer behind it. Each drawer partial still checks has_role itself
     (#779): below the role nothing of it is sent and the rail shows the tab greyed.
-    Opting out: ?embed=1 (the Admin drawer's iframe) drops all of it, like the nav rail below. A
+    #851: the Admin popout drawer and its chrome-less ?embed=1 iframe page are gone (the Admin tab
+    opens the full /admin page), so nothing opts the whole shell out any more. A
     page that genuinely needs a different or no drawer overrides that one block, with a comment
     saying why (home.html swaps upload_drawer for its hover pop-out, _gallery_drawer.html). Never
-    include these partials from a page as well: their element ids would appear twice. -#}
-{% if not embed %}
+    include these partials from a page as well: their element ids would appear twice. /admin's Tools
+    group clicks the hidden triggers these partials (and _header.html) carry. -#}
 {% block header %}{% include "_header.html" %}{% endblock %}
 {% block upload_drawer %}{% include "_upload_drawer.html" %}{% endblock %}
 {% block blog_builder %}{% include "_blog_builder.html" %}{% endblock %}
 {% block export_builder %}{% include "_export_builder.html" %}{% endblock %}
-{% endif %}
 {% block body %}{% endblock %}
-{# #345: the nav rail + its global drawers. Skipped in ?embed=1 mode so the
-   Admin drawer's iframe (which loads /admin?embed=1) has no nested chrome. #}
-{% if not embed %}
+{# #345: the nav rail + its global drawers. #}
 {% include "_brand_drawer.html" %}
 {% include "_hobbies_drawer.html" %}
 {% include "_nudges_drawer.html" %}
-{% include "_admin_drawer.html" %}
 {# #774: nav tabs first: the Processing tab (#proc-tab) is a NAV_TABS entry
    that _processing_drawer.html's script looks up when it runs. #}
 {% include "_nav_tabs.html" %}
 {% include "_processing_drawer.html" %}
 <div class="app-version" title="Constructicon version and build (#508, #835)">{% set _v = app_version() %}{{ "v" ~ _v if _v[0].isdigit() else _v }} - {{ app_build() }}</div>
-{% endif %}
 </body>
 </html>

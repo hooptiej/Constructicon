@@ -1,8 +1,8 @@
 {#- #781 scope (a): building and previewing an export is for editors and up, each in their own sandbox
     (core/export_sandbox.py: an admin's build is the install's, /preview/; an editor's previews at
     /preview/u/<id>/). Publishing stays admin-only (per-user targets wait for #325): below admin the
-    PUBLISH part is drawn greyed and explained, never hidden (#779). Below editor the nav rail shows the
-    tab greyed and explains it, and none of this markup or script is sent. -#}
+    PUBLISH part is drawn greyed and explained, never hidden (#779). Below editor /admin's Tools group shows the
+    Export row greyed and explains it (#851: it was a rail tab), and none of this markup or script is sent. -#}
 {% if has_role("editor") %}
 {% set can_publish = has_role("admin") %}
 <!-- Export builder (#314 farm 2) — self-contained drawer for building and configuring

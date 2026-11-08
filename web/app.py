@@ -147,7 +147,7 @@ class _CurrentExportFiles(StaticFiles):
             return JSONResponse({"ok": False, "error": {"code": e.code, "message": e.message}, "detail": e.message},
                                 status_code=e.status)
         if not (folder / "index.html").is_file():
-            msg = "This export sandbox has no build yet: build one from the Export tab, then preview it."
+            msg = "This export sandbox has no build yet: build one from Admin > Tools > Export, then preview it."
             return JSONResponse({"ok": False, "error": {"code": "not_found", "message": msg}, "detail": msg},
                                 status_code=404)
         key = str(folder)

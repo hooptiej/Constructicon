@@ -206,7 +206,9 @@ MATRIX = [
      {"anonymous": PAGE_ANON, V: 200, E: 200, A: 200, "token": 200}),
     ("page /project/<card>", "GET", lambda r: f"/project/{CARD['slug']}", None,
      {"anonymous": PAGE_ANON, V: 200, E: 200, A: 200, "token": 200}),
-    ("page /admin (admin)", "GET", lambda r: "/admin", None, {"anonymous": PAGE_ANON, V: 403, E: 403, A: 200, "token": 200}),
+    # #851 (owner decision 2026-11-08): /admin opens to every role (a viewer; its admin-only sections are
+    # greyed inside the page, and the admin APIs below keep their own admin roles).
+    ("page /admin (viewer)", "GET", lambda r: "/admin", None, {"anonymous": PAGE_ANON, V: 200, E: 200, A: 200, "token": 200}),
     ("GET /api/projects", "GET", lambda r: "/api/projects", None, {"anonymous": 401, V: 200, E: 200, A: 200, "token": 200}),
     ("GET /api/image/<plain>", "GET", lambda r: f"/api/image/{PLAIN}", None,
      {"anonymous": 401, V: 200, E: 200, A: 200, "token": 200}),

@@ -2296,7 +2296,7 @@ a.uploader-label:hover, a.uploader-label:focus-visible { text-decoration: underl
 }
 /* the merged narrow rail wears the padding itself (its lists have none) */
 @media (max-height: 560px) and (max-width: 760px) {
-  .nav-rails { padding-top: 6px; padding-bottom: 6px; }
+  .nav-rails { padding-top: 6px; padding-bottom: 6px; gap: 6px; }
 }
 /* wide-and-short: the left rail's badge sits on its screen-edge (left) side */
 @media (max-height: 560px) and (min-width: 761px) {

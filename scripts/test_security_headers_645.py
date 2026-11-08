@@ -111,7 +111,7 @@ def app_headers_ok(name, r, csp=sh.APP_CSP):
 
 
 print("--- app pages, API answers, errors and refusals ---")
-for path in ["/", "/admin", "/admin?embed=1", f"/object/{S['png']}", f"/object/{S['html']}", "/curator",
+for path in ["/", "/admin", f"/object/{S['png']}", f"/object/{S['html']}", "/curator",
              "/api/gallery", f"/api/image/{S['png']}", "/healthz", "/api/version", "/no-such-page-645"]:
     r = client.get(path, follow_redirects=False)
     check(f"GET {path}: answered", r.status_code in (200, 404), r.status_code)
@@ -287,7 +287,7 @@ def page_nonce_ok(name, r):
 
 card = client.post("/api/projects", data={"title": "Nonce Card 660"}).json()
 hobby = client.post("/api/hobbies", data={"name": "Nonce Hobby 660"}).json()
-PAGES = ["/", "/admin", "/admin?embed=1", f"/object/{S['png']}", f"/object/{S['html']}", f"/object/{S['svg']}",
+PAGES = ["/", "/admin", f"/object/{S['png']}", f"/object/{S['html']}", f"/object/{S['svg']}",
          f"/project/{card['slug']}", "/hobbies", f"/hobby/{hobby['slug']}", "/unfiled", "/brand", "/wallpaper",
          "/curator", "/captions/review", "/guides/capture-physical-piece", "/logout"]
 total = 0

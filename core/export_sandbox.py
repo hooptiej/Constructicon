@@ -99,7 +99,7 @@ def preview_dir_for(user_id, actor=None):
     mine = users.user_id_for_actor(who)
     if not (roles.at_least(roles.role_of(who), roles.ADMIN) or (mine is not None and mine == int(user_id))):
         raise AppError("forbidden", "This preview is another user's export sandbox: only they and admins can "
-                       "open it. Your own builds preview from the Export tab.", status=403)
+                       "open it. Your own builds preview from Admin > Tools > Export.", status=403)
     return root / "current"
 
 
@@ -205,7 +205,7 @@ def plan(config, actor=None):
                 _note(notes, f"card {why}", p["title"])
             elif not b.owns(p.get("created_by_user_id")):
                 _note(notes, f"card held back: owned by {b.owner_name(p.get('created_by_user_id'))} "
-                             "(pick it in the Export tab to include it)", p["title"])
+                             "(pick it in Admin > Tools > Export to include it)", p["title"])
             else:
                 projects[p["id"]] = p
     else:
@@ -231,7 +231,7 @@ def plan(config, actor=None):
             _note(notes, "blog entry " + NOT_FOUND, str(e["slug"]))
         elif picked_e is None and not b.owns(e.get("created_by_user_id")):
             _note(notes, f"blog entry held back: owned by {b.owner_name(e.get('created_by_user_id'))} "
-                         "(pick it in the Export tab to include it)", e.get("title") or e["slug"])
+                         "(pick it in Admin > Tools > Export to include it)", e.get("title") or e["slug"])
         else:
             entries.append(e)
     return {"projects": projects, "entries": entries, "left_out": notes, "builder": b}

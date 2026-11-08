@@ -15,7 +15,8 @@ Covers:
   bug this step fixes: their tabs clicked a trigger with no drawer behind it);
 - an editor and a viewer see every tab; the ones above their role are greyed (#779), never missing,
   and the drawer markup above their role is not sent;
-- the opt-outs: ?embed=1 (the Admin drawer's iframe) has no header, drawers or rail; anonymous
+- #851: no Admin drawer and no ?embed=1 mode any more (the parameter is ignored: the full page),
+  /admin opens to editors and viewers too; anonymous
   /login, /setup and /logout get the header with "Sign in" and none of the role-gated drawers;
 - no element id appears twice on any page, and every inline <script> carries the header's nonce.
 Exits 1 if any check fails.
@@ -65,7 +66,7 @@ TEMPLATES = Path(ROOT) / "web" / "templates"
 print("--- no page includes the always-on pieces itself ---")
 SHELL = ["_header.html", "_upload_drawer.html", "_blog_builder.html", "_export_builder.html",
          "_gallery_drawer.html", "_nav_tabs.html", "_processing_drawer.html", "_brand_drawer.html",
-         "_hobbies_drawer.html", "_nudges_drawer.html", "_admin_drawer.html"]
+         "_hobbies_drawer.html", "_nudges_drawer.html"]  # #851: _admin_drawer.html is gone (see below)
 INC = re.compile(r"""\{%-?\s*include\s+["']([^"']+)["']""")
 for p in sorted(TEMPLATES.glob("*.html")):
     if p.name == "base.html":
@@ -84,6 +85,11 @@ for part in SHELL:
     if part == "_gallery_drawer.html":
         continue
     check(f"base.html includes {part} exactly once", len(re.findall(r'include "' + re.escape(part) + '"', base)) == 1)
+# #851 (owner decision 2026-11-08): the Admin tab opens the full /admin page; the popout drawer, its
+# include, its iframe and the chrome-less ?embed=1 mode (which only that iframe used) are gone.
+check("#851: _admin_drawer.html is deleted and nothing includes it",
+      not (TEMPLATES / "_admin_drawer.html").exists() and "_admin_drawer" not in base)
+check("#851: base.html has no embed opt-out any more", "{% if not embed %}" not in base)
 check("base.html: the header and the three drawers render BEFORE the page body",
       base.index('include "_export_builder.html"') < base.index("{% block body %}")
       and base.index('include "_header.html"') < base.index('include "_upload_drawer.html"')
@@ -173,8 +179,11 @@ check(f"every GET page route is in this test's list ({len(page_routes)} routes)"
       missing or len(page_routes))
 
 # --- what a page must carry -----------------------------------------------------------------------
-TAB_IDS = ["curator", "export", "brand", "admin", "upload", "processing", "blog", "hobbies", "wallpaper"]
-TAB_ROLE = {"export": "editor", "admin": "admin", "upload": "editor", "blog": "editor"}  # #781: Export = editor
+# #851: the rail keeps four tabs; Admin has no minimum role (it opens to everyone), so only Upload can be greyed.
+TAB_IDS = ["curator", "admin", "upload", "processing"]
+TAB_ROLE = {"upload": "editor"}
+# the role each drawer's markup needs (Blog and Export have no rail tab now, but the same has_role gate; #781: Export = editor)
+DRAWER_ROLE = {"upload": "editor", "blog": "editor", "export": "editor"}
 DRAWER_ROOT = {"upload": "upload-drawer", "blog": "blog-builder", "export": "export-builder"}
 TRIGGER = {"upload": "upload-trigger", "blog": "blog-builder-trigger", "export": "export-builder-trigger"}
 RANK = {"viewer": 1, "editor": 2, "admin": 3}
@@ -224,7 +233,7 @@ def full_page_checks(name, r, role):
           sorted(locked_tabs(html)))
     home = name.split()[-1] == "/"
     for d, root in DRAWER_ROOT.items():
-        allowed = RANK[role] >= RANK[TAB_ROLE[d]]
+        allowed = RANK[role] >= RANK[DRAWER_ROLE[d]]
         if d == "upload" and home:
             check(f"{name}: the hover pop-out instead of the Upload drawer",
                   (ids["gallery-drawer"] == (1 if allowed else 0)) and ids["upload-drawer"] == 0,
@@ -249,9 +258,11 @@ for url in ("/curator", "/captions/review"):
     html = token.get(url).text
     ids = ids_of(html)
     for d in ("upload", "blog", "export"):
-        check(f"{url}: the {d} tab has its trigger AND its drawer",
-              tabs_of(html)[d] == 1 and ids[TRIGGER[d]] == 1 and ids[DRAWER_ROOT[d]] == 1,
-              (tabs_of(html)[d], ids[TRIGGER[d]], ids[DRAWER_ROOT[d]]))
+        # #851: only Upload still has a rail tab; Blog and Export are reached from /admin's Tools group,
+        # which clicks the same trigger, so each page must still carry the trigger AND the drawer.
+        check(f"{url}: the {d} trigger has its drawer behind it",
+              ids[TRIGGER[d]] == 1 and ids[DRAWER_ROOT[d]] == 1,
+              (ids[TRIGGER[d]], ids[DRAWER_ROOT[d]]))
 
 print("\n--- signed-in sessions: editor and viewer see every tab, greyed above their role ---")
 for role in ("admin", "editor", "viewer"):
@@ -260,16 +271,23 @@ for role in ("admin", "editor", "viewer"):
         check(f"{role} GET {url}: 200", r.status_code == 200, r.status_code)
         if r.status_code == 200:
             full_page_checks(f"{role} GET {url}", r, role)
-r = SESS["editor"].get("/admin")
-check("editor /admin: refused (admin page), not rendered", r.status_code == 403, r.status_code)
+# #851 (owner decision 2026-11-08): /admin opens to every role, so an editor and a viewer get the full page
+# (its admin-only sections are greyed inside; scripts/test_tab_rail_admin_851.py checks those).
+for role in ("editor", "viewer"):
+    r = SESS[role].get("/admin")
+    check(f"{role} /admin: 200, a full page", r.status_code == 200, r.status_code)
+    if r.status_code == 200:
+        full_page_checks(f"{role} GET /admin", r, role)
 
 print("\n--- opt-outs ---")
+# #851: the chrome-less ?embed=1 mode is gone (only the removed Admin drawer's iframe used it): the
+# parameter is ignored and the page is the full one, with the header, the drawers and the rails.
 r = token.get("/admin?embed=1")
 check("/admin?embed=1: 200", r.status_code == 200, r.status_code)
 ids = common_checks("/admin?embed=1", r)
-check("/admin?embed=1: no header, drawers, triggers or nav rail",
-      not any(ids[k] for k in ["user-chip", *DRAWER_ROOT.values(), *TRIGGER.values(), "proc-tab", "gallery-drawer"])
-      and not tabs_of(r.text) and 'class="app-header"' not in r.text)
+check("/admin?embed=1: ignored, the full page with header, drawers, triggers and nav rail",
+      all(ids[k] == 1 for k in ["user-chip", *DRAWER_ROOT.values(), *TRIGGER.values(), "proc-tab"])
+      and len(tabs_of(r.text)) == len(TAB_IDS) and 'class="app-header"' in r.text)
 users.limiter.reset()
 for name, r in (("anonymous /setup", SETUP_PAGE), ("anonymous /login", anon.get("/login")),
                 ("anonymous /logout", anon.get("/logout"))):

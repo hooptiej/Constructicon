@@ -736,8 +736,8 @@ def image_detail_redirect(slug: str):
     return RedirectResponse(f"/object/{slug}", status_code=308)
 
 
-@router.get("/admin", response_class=HTMLResponse, dependencies=requires(roles.ADMIN))
-def admin_page(request: Request, embed: int = 0):
+@router.get("/admin", response_class=HTMLResponse, dependencies=requires(roles.VIEWER))
+def admin_page(request: Request):
     """#295: the admin surface as its own full page. It was a bottom-right
     pop-out (_admin_pane.html) included on every page until it outgrew a
     320px column; every panel on it still talks to the same /api/* routes
@@ -745,13 +745,16 @@ def admin_page(request: Request, embed: int = 0):
     captions/test, backup, delete-all) -- the page itself carries no data,
     the JS fetches it, so there's nothing to pass in here.
 
-    #345: ?embed=1 renders a chrome-less version (no header, no nav rail,
-    no other drawers) so it can be loaded inside the Admin nav-rail drawer's
-    iframe without nested chrome. The panels/JS are identical either way."""
+    #851 (owner decisions, 2026-11-08): the page is the Admin rail tab's target (the popout drawer
+    and its chrome-less ?embed=1 iframe page are gone) and it opens to EVERY role: nothing is
+    hidden by permission (#779). The Tools group at the top (Hobbies, Blog, Wallpaper, Brand,
+    Export) is usable by role as the old rail tabs were, and each admin-only section shows to a
+    lower role as a greyed row that explains on click; its markup and the page's admin scripts
+    are not sent (admin.html checks has_role itself, like the drawer partials). The admin APIs
+    the sections call keep their own admin roles."""
     # #562: "Finish setting up this install" banner until the owner name is set (Admin > Install).
     # #467 step 1: "Create the admin account" banner while the install has no user at all.
-    return templates.TemplateResponse(request, "admin.html", {"embed": bool(embed),
-                                                              "install_setup_needed": install_config.setup_needed(),
+    return templates.TemplateResponse(request, "admin.html", {"install_setup_needed": install_config.setup_needed(),
                                                               "users_setup_needed": users.setup_needed(),
                                                               # #700: the label's warning text + the MCP restart notice
                                                               "hobby_label_status": install_config.hobby_label_status()})

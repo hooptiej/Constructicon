@@ -1,33 +1,82 @@
 {% extends "base.html" %}
 {% block title %}Admin — {{ app_name() }}{% endblock %}
 {% block body %}
-{#- #547: the header and the Upload / Blog / Export drawers come from base.html, which leaves them
-    out in ?embed=1 mode (the Admin drawer's iframe), as this page used to itself. -#}
-<!-- Admin page (#295) — the full-page home of every admin/destructive/meta
+{#- #547: the header and the Upload / Blog / Export drawers come from base.html. -#}
+{#- #851 (owner decisions, 2026-11-08): the page is open to EVERY role (nothing is hidden by permission,
+    #779). It has two kinds of content:
+      * the Tools group (Hobbies, Blog, Wallpaper, Brand, Export), the five tabs that left the nav rail:
+        each row clicks the hidden trigger of its drawer (the same ids the rail used) or links to
+        /wallpaper, and below the tool's role it is greyed and explains on click;
+      * the admin sections (everything this page held before). `section()` below draws each as a
+        collapsed <details> for an admin, and for a lower role as a greyed row ("Users (admins only)")
+        that explains on click, WITHOUT the section's markup. The page's admin script block (every
+        fetch of an admin API) is only sent to an admin, so a viewer's page makes no admin call and
+        gets no 403 noise.
+    static/js/admin-sections.js wires the disclosures (remembers which are open, opens the one a
+    #hash names) and the Tools rows. -#}
+{% set is_admin = has_role("admin") %}
+
+{#- One collapsible admin section. Call it as {% call section(...) %}body{% endcall %}. `key` names
+    it (the remembered-open key and the default id admin-<key>-section), `title` is the heading, `count_id`
+    the id of the count span next to the heading (the page script fills it), `summary_extra` anything
+    else that rides on the summary line (HTML, trusted), `need` the role it takes (every section here
+    is admin; "Needs your input" is just a link, so it takes viewer). Below `need` it is a greyed row
+    with the shared #779 attributes, and the body (caller) is never rendered. -#}
+{% macro section(key, title, count_id=None, summary_extra="", need="admin", section_id=None) -%}
+{%- if has_role(need) -%}
+<details class="admin-panel admin-section" data-admin-section="{{ key }}" id="{{ section_id or ('admin-' ~ key ~ '-section') }}">
+  <summary class="admin-section-summary"><h2 id="admin-{{ key }}-heading">{{ title }}{% if count_id %} <span id="{{ count_id }}" class="apikey-status"></span>{% endif %}</h2>{{ summary_extra }}</summary>
+  <div class="admin-section-body">
+    {{ caller() }}
+  </div>
+</details>
+{%- else -%}
+<button type="button" class="admin-locked-row role-locked" data-admin-locked="{{ key }}"{{ role_lock_attrs(need, title) }}>{{ title }} <span class="role-locked-role">({{ role_need_phrase(need) }})</span></button>
+{%- endif -%}
+{%- endmacro %}
+
+{#- One row of the Tools group. A tool with `href` is a link; otherwise its row clicks the hidden
+    drawer trigger `trigger` (static/js/admin-sections.js; if that trigger is missing from the page
+    the row says so, never a dead click). Below `need` it is a greyed button that explains. -#}
+{% macro tool_row(key, label, hint, icon, need=None, trigger=None, href=None) -%}
+{%- set _locked = need and not has_role(need) -%}
+{%- if _locked -%}
+<button type="button" class="admin-tool-row role-locked" data-admin-tool="{{ key }}"{{ role_lock_attrs(need, label) }}>
+{%- elif href -%}
+<a class="admin-tool-row" data-admin-tool="{{ key }}" href="{{ href }}">
+{%- else -%}
+<button type="button" class="admin-tool-row" data-admin-tool="{{ key }}" data-tool-trigger="{{ trigger }}" data-tool-label="{{ label }}">
+{%- endif -%}
+  <svg class="admin-tool-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">{{ icon | safe }}</svg>
+  <span class="admin-tool-text"><span class="admin-tool-name">{{ label }}{% if _locked %} <span class="role-locked-role">({{ role_need_phrase(need) }})</span>{% endif %}</span><span class="admin-tool-hint">{{ hint }}</span></span>
+{%- if _locked %}</button>{% elif href %}</a>{% else %}</button>{% endif %}
+{%- endmacro %}
+
+{#- Admin page (#295) — the full-page home of every admin/destructive/meta
      control. This started life as #24's small bottom-right pop-out
      (_admin_pane.html, included on every page); by the time the pending
      -decision queue (#240), caption tuning (#239), the audit log (#122),
      four API-key rows and the redacted-items list (#282) had all landed in
-     it, a 320px column couldn't hold them, and the site-wide 110% zoom
-     (#292) pushed the rest off-screen. So it's a real route now
-     (GET /admin, reached from the gear in _header.html) with a widget grid
-     that gives each panel its own card and lets the two that need width
-     (caption tuning, audit log) take a full row.
+     it, a 320px column couldn't hold them. So it's a real route
+     (GET /admin, the rail's Admin tab). #851: every section is a collapsed
+     disclosure that remembers if you left it open, and the Tools group on top
+     holds the five tabs that left the rail.
 
      The one thing that did NOT move here is "Delete mode": that's a
      page-scoped body class consumed by user_gallery.html's tiles, so it
      lives on that page now (next to its sort control) rather than on a page
      it can't affect. Everything else keeps its endpoint and behavior
-     exactly as before -- this is a layout change, not a feature change. -->
+     exactly as before -- this is a layout change, not a feature change. -#}
 <div class="app-main">
   <div>
     <h1 class="page-title">Admin</h1>
-    <p class="page-subtitle">Decisions waiting on you, hidden items, integration keys, caption tuning, recent activity and maintenance.</p>
+    <p class="page-subtitle">Tools for {{ hobby_label.many_lc }}, the blog, wallpaper, brand and export, plus the install's questions, settings and upkeep. A greyed row needs a higher role than yours: tap it to see which.</p>
   </div>
 
+  {#- The three notices below are for the admin only (they say what to do to the install). -#}
   {#- #467: shown while the install has no user account at all (only the install token reaches
       /admin then: step 2 sends every browser to /setup); gone once the first admin exists. -#}
-  {% if users_setup_needed %}
+  {% if is_admin and users_setup_needed %}
   <div class="admin-panel" id="users-setup-banner" role="status"
        style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 16px;border-color:var(--hazard-yellow)">
     <span><strong>Create the admin account.</strong> This install has no accounts yet: the first one you create is its admin.</span>
@@ -42,13 +91,15 @@
       app_settings at startup). Until it restarts after a label change, say so on every admin load.
       install_config.hobby_label_status(); hidden (but present, for the JS) otherwise. -#}
   {% set _hl = hobby_label_status %}
+  {% if is_admin %}
   <div class="admin-panel" id="hobby-label-mcp-notice" role="status"{% if not _hl.mcp_needs_restart %} hidden{% endif %}
        style="margin:8px 0 16px;border-color:var(--hazard-yellow)">
     <strong>Restart the MCP server.</strong>
     <span id="hobby-label-mcp-notice-text">{% if _hl.mcp_needs_restart %}Its tools are still named for "{{ _hl.mcp_started.one }} / {{ _hl.mcp_started.many }}", but this install now says "{{ _hl.current.one }} / {{ _hl.current.many }}". Restart the MCP container (e.g. sudo docker restart constructicon-mcp); MCP clients must then reconnect to see the renamed tools.{% endif %}</span>
   </div>
+  {% endif %}
 
-  {% if install_setup_needed %}
+  {% if is_admin and install_setup_needed %}
   <div class="admin-panel" id="install-setup-banner" role="status"
        style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 16px;border-color:var(--hazard-yellow)">
     <span><strong>Finish setting up this install.</strong> Give it an owner name, a site title and its publish targets in
@@ -57,30 +108,39 @@
   </div>
   {% endif %}
 
-  <!-- Grid order + grid-auto-flow: dense (see style.css .admin-grid): the
-       four single-track panels come first, then the two full-row ones, with
-       Maintenance last in DOM so dense packing can pull it back up into a
-       hole in the first row at 4-column widths while at 3 columns the one
-       ragged cell lands at the bottom of the page instead of mid-page. -->
+  {#- A plain stack of full-width sections (.admin-grid is a flex column since #851). -#}
   <div class="admin-grid">
 
-    <!-- (#345) The Curator "what the beast needs" nudges panel that used to
-         live here moved to its own nav-rail drawer (_nudges_drawer.html). -->
-
-    <!-- Needs your input: moved into the Curator queue (#519). Every question (including the
-         uploads whose name matched more than one project, #240) now lives in ONE place, so this
-         panel is just the way there. -->
-    <section class="admin-panel" id="admin-pending-section">
-      <div class="admin-panel-header">
-        <div>
-          <h2>Needs your input <span id="admin-pending-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Questions now live in the Curator queue, together with suggestions and gaps, grouped by card.</div>
+    {#- Tools (#851): the five tabs that left the nav rail, open by default (the page remembers if you
+         close it). Each drawer row clicks the same hidden trigger the rail tab did; Blog and Export need
+         an editor, the rest need nothing, exactly as the tabs did. -#}
+    <details class="admin-panel admin-section" data-admin-section="tools" id="admin-tools-section" open>
+      <summary class="admin-section-summary"><h2 id="admin-tools-heading">Tools</h2></summary>
+      <div class="admin-section-body">
+        <div class="admin-tools">
+          {{ tool_row("hobbies", hobby_label.many, "Browse and start " ~ hobby_label.many_lc, '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z" fill="currentColor"/>', trigger="hobbies-drawer-trigger") }}
+          {{ tool_row("blog", "Blog", "Write and edit blog entries", '<path d="M4 5h16M4 9h16M4 13h16M4 17h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>', need="editor", trigger="blog-builder-trigger") }}
+          {{ tool_row("wallpaper", "Wallpaper", "The pictures picked as wallpaper, and the zip of them", '<rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.6"/><circle cx="8.5" cy="9.5" r="1.5" fill="currentColor"/><path d="M4 17l5-5 3.5 3.5L16 12l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>', href="/wallpaper") }}
+          {{ tool_row("brand", "Brand", "Logos and other brand assets", '<path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z" fill="currentColor" opacity="0.6"/><path d="M12 12.5c.83 0 1.5-.67 1.5-1.5s-.67-1.5-1.5-1.5-1.5.67-1.5 1.5.67 1.5 1.5 1.5z" fill="currentColor"/>', trigger="brand-drawer-trigger") }}
+          {{ tool_row("export", "Export", "Build, preview and publish the static site", '<path d="M19 9l-7 7-7-7M12 16V4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>', need="editor", trigger="export-builder-trigger") }}
         </div>
+        <div class="admin-row-hint" id="admin-tools-msg" role="status" aria-live="polite" hidden></div>
       </div>
-      <p><a class="btn-ms" id="admin-curator-link" href="/curator" target="_top">Open the Curator queue</a></p>
-    </section>
+    </details>
 
-    <!-- Redacted items (#282) — every row whose file was removed via the
+    {#- (#345) The Curator "what the beast needs" nudges panel that used to
+         live here moved to its own nav-rail drawer (_nudges_drawer.html). -#}
+
+    {#- Needs your input: moved into the Curator queue (#519). Every question (including the
+         uploads whose name matched more than one project, #240) now lives in ONE place, so this
+         panel is just the way there. A link anyone can follow, so it takes viewer (#851); its count
+         is filled in by the admin script, so it is blank for a lower role. -#}
+    {% call section("pending", "Needs your input", "admin-pending-count", need="viewer", section_id="admin-pending-section") %}
+      <div class="admin-row-hint">Questions now live in the Curator queue, together with suggestions and gaps, grouped by card.</div>
+      <p><a class="btn-ms" id="admin-curator-link" href="/curator" target="_top">Open the Curator queue</a></p>
+    {% endcall %}
+
+    {#- Redacted items (#282) — every row whose file was removed via the
          detail page's "Remove file, keep info" button (POST
          /api/image/{slug}/redact) or the constructicon_redact MCP tool.
          Since #282 those rows are hidden from every list, search, project
@@ -88,61 +148,41 @@
          so this is the one place to find them again. "Un-redact" (POST
          /api/image/{slug}/unredact) only clears the flag so the row rejoins
          normal browsing — the file itself was deleted at redaction time and
-         can't come back. -->
-    <section class="admin-panel">
-      <div class="admin-panel-header">
-        <div>
-          <h2>Redacted items <span id="admin-redacted-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Hidden from every list and search, reachable by direct link only (#282). A redacted file is held on the NAS and never deleted unless you click "Delete file permanently". Recover it to put the file back, or delete it for good. Un-redact (only for rows whose file is already gone) just puts the row back in browsing.</div>
-        </div>
-      </div>
+         can't come back. -#}
+    {% call section("redacted", "Redacted items", "admin-redacted-count") %}
+      <div class="admin-row-hint">Hidden from every list and search, reachable by direct link only (#282). A redacted file is held on the NAS and never deleted unless you click "Delete file permanently". Recover it to put the file back, or delete it for good. Un-redact (only for rows whose file is already gone) just puts the row back in browsing.</div>
       <div id="admin-redacted-list" class="admin-redacted-list"></div>
-    </section>
+    {% endcall %}
 
-    <!-- Trash (#541 phase B): files of deleted or redacted items, kept 7 days so the delete can be
+    {#- Trash (#541 phase B): files of deleted or redacted items, kept 7 days so the delete can be
          undone (POST /api/changes/{batch}/undo), then purged by the web worker's hourly pass.
-         "Empty trash now" purges everything at once (typed phrase, like Delete all). -->
-    <section class="admin-panel" id="admin-trash-section">
-      <div class="admin-panel-header">
-        <div>
-          <h2>Trash <span id="admin-trash-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Deleted items' files wait here 7 days so a delete can be undone, then they're removed for good. Redacted files are held separately, with no expiry: "Empty trash now" never touches them.</div>
-        </div>
-      </div>
+         "Empty trash now" purges everything at once (typed phrase, like Delete all). -#}
+    {% call section("trash", "Trash", "admin-trash-count") %}
+      <div class="admin-row-hint">Deleted items' files wait here 7 days so a delete can be undone, then they're removed for good. Redacted files are held separately, with no expiry: "Empty trash now" never touches them.</div>
       <div id="admin-trash-summary" class="admin-row-hint">Loading…</div>
       <div class="admin-divider"></div>
       <button type="button" class="btn-danger admin-full-btn" id="admin-empty-trash-btn"
               title="Removes every deleted item's file in the trash now. Those deletes can no longer be undone. Held redacted files are NOT removed.">Empty trash now</button>
-    </section>
+    {% endcall %}
 
-    <!-- Keys & certificates (#443) — every item of a restricted type. They
+    {#- Keys & certificates (#443) — every item of a restricted type. They
          stay out of general browsing (home, gallery/search, tags, unfiled)
          and out of every export, but show on the projects they're attached
          to; this list is where the loose ones live. Locking it down properly
-         is #467 (authentication). -->
-    <section class="admin-panel">
-      <div class="admin-panel-header">
-        <div>
-          <h2>Sensitive items <span id="admin-restricted-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Keys, certificates and every item marked "This is sensitive". Only admins and each item's uploader can see them; they are never exported. The reason says which: its type, or who marked it and when.</div>
-        </div>
-      </div>
+         is #467 (authentication). -#}
+    {% call section("restricted", "Sensitive items", "admin-restricted-count") %}
+      <div class="admin-row-hint">Keys, certificates and every item marked "This is sensitive". Only admins and each item's uploader can see them; they are never exported. The reason says which: its type, or who marked it and when.</div>
       <div id="admin-restricted-list" class="admin-redacted-list"></div>
-    </section>
+    {% endcall %}
 
-    <!-- Provenance options (#529) — the two editable "where did this come from" lists:
+    {#- Provenance options (#529) — the two editable "where did this come from" lists:
          the CARD list (projects.provenance) and the FILE list (capture_events.provenance).
          Add / rename the label / retire / reorder. A retired option keeps working and
          displaying on records that already have it but can't be picked for new ones; keys
          are stable and never change. Rendered by the script below from
-         GET/POST /api/provenance-options (core/provenance_options.py, change-logged). -->
-    <section class="admin-panel admin-panel-wide" id="admin-provenance-section" aria-labelledby="admin-provenance-heading">
-      <div class="admin-panel-header">
-        <div>
-          <h2 id="admin-provenance-heading">Provenance options</h2>
-          <div class="admin-row-hint">The choices offered for where a card or a file came from. Rename changes only the label; retire hides an option from pickers but records that already use it keep it.</div>
-        </div>
-      </div>
+         GET/POST /api/provenance-options (core/provenance_options.py, change-logged). -#}
+    {% call section("provenance", "Provenance options") %}
+      <div class="admin-row-hint">The choices offered for where a card or a file came from. Rename changes only the label; retire hides an option from pickers but records that already use it keep it.</div>
       <div class="prov-lists">
         <div class="prov-list" data-scope="card">
           <h3 id="prov-heading-card">Card provenance</h3>
@@ -168,19 +208,14 @@
         </div>
       </div>
       <div id="prov-status" class="backup-status" role="status" aria-live="polite"></div>
-    </section>
+    {% endcall %}
 
-    <!-- Word lists (#556): the brand roles the item page's picker offers, and the tag names the
+    {#- Word lists (#556): the brand roles the item page's picker offers, and the tag names the
          Wallpaper page gathers. Add / rename / remove / merge (brand roles) / reorder, each one
          undoable batch. Rendered by static/js/admin-vocab.js from GET/POST /api/vocab/<list>
-         (core/vocab.py, change-logged). -->
-    <section class="admin-panel admin-panel-wide" id="admin-vocab-section" aria-labelledby="admin-vocab-heading">
-      <div class="admin-panel-header">
-        <div>
-          <h2 id="admin-vocab-heading">Word lists</h2>
-          <div class="admin-row-hint">Brand roles: renaming one renames it on every item that has it; one still in use can't be removed, merge it into another role instead. Wallpaper tags: which tag names put a picture on the Wallpaper page; removing one says how many pictures leave the page.</div>
-        </div>
-      </div>
+         (core/vocab.py, change-logged). -#}
+    {% call section("vocab", "Word lists") %}
+      <div class="admin-row-hint">Brand roles: renaming one renames it on every item that has it; one still in use can't be removed, merge it into another role instead. Wallpaper tags: which tag names put a picture on the Wallpaper page; removing one says how many pictures leave the page.</div>
       <div class="prov-lists">
         <div class="prov-list" data-vocab="brand_role">
           <h3 id="vocab-heading-brand_role">Brand roles</h3>
@@ -202,19 +237,14 @@
         </div>
       </div>
       <div id="vocab-status" class="backup-status" role="status" aria-live="polite"></div>
-    </section>
+    {% endcall %}
 
-    <!-- Tags (#555): the tag tree, the one tag store, with rename / merge / move / delete (each one
+    {#- Tags (#555): the tag tree, the one tag store, with rename / merge / move / delete (each one
          undoable batch), and the cleanup sweep, which only LISTS orphan, empty and near-duplicate tags:
          nothing is deleted until the owner ticks them and confirms. Rendered by static/js/admin-tags.js
-         from GET /api/tags/tree and GET /api/tags/sweep (core/tags.py). -->
-    <section class="admin-panel admin-panel-wide" id="admin-tags-section" aria-labelledby="admin-tags-heading">
-      <div class="admin-panel-header">
-        <div>
-          <h2 id="admin-tags-heading">Tags <span id="admin-tags-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Every tag, nested as it is filed. Renaming changes it on every item; merging moves one tag's items and sub-tags into another and removes it. A card's own tag follows the card's title, so rename the card instead. Every change can be undone.</div>
-        </div>
-      </div>
+         from GET /api/tags/tree and GET /api/tags/sweep (core/tags.py). -#}
+    {% call section("tags", "Tags", "admin-tags-count") %}
+      <div class="admin-row-hint">Every tag, nested as it is filed. Renaming changes it on every item; merging moves one tag's items and sub-tags into another and removes it. A card's own tag follows the card's title, so rename the card instead. Every change can be undone.</div>
       <div class="admin-tags-tools">
         <label for="admin-tags-filter">Find a tag</label>
         <input type="search" class="input" id="admin-tags-filter" placeholder="Type part of a name" autocomplete="off">
@@ -225,18 +255,13 @@
       <button type="button" class="btn-ms" id="admin-tags-sweep-btn">Find tags to clean up</button>
       <div id="admin-tags-sweep" aria-labelledby="admin-tags-sweep-heading"></div>
       <div id="admin-tags-status" class="backup-status" role="status" aria-live="polite"></div>
-    </section>
+    {% endcall %}
 
-    <!-- Install (#562): who this install belongs to and where it publishes. Was hard-wired to the
+    {#- Install (#562): who this install belongs to and where it publishes. Was hard-wired to the
          owner's name, domain and GitHub repositories; per-install data now (core/install_config.py,
-         GET/POST /api/install-config). No secrets here: the publish token is an API key below. -->
-    <section class="admin-panel admin-panel-wide" id="admin-install-section" aria-labelledby="admin-install-heading">
-      <div class="admin-panel-header">
-        <div>
-          <h2 id="admin-install-heading">Install</h2>
-          <div class="admin-row-hint">This install's owner and where its site export is published. Every save can be undone.</div>
-        </div>
-      </div>
+         GET/POST /api/install-config). No secrets here: the publish token is an API key below. -#}
+    {% call section("install", "Install") %}
+      <div class="admin-row-hint">This install's owner and where its site export is published. Every save can be undone.</div>
       <div id="admin-install-fields"></div>
       {#- #700: what renaming hobbies does, shown before anyone saves a new label (install_config.
           HOBBY_LABEL_WARNING; the Save asks to confirm with the same words). -#}
@@ -257,19 +282,14 @@
         <button type="button" class="btn-ms" id="admin-install-save" style="width:auto">Save</button>
         <span id="admin-install-msg" class="backup-status" role="status"></span>
       </div>
-    </section>
+    {% endcall %}
 
-    <!-- Users (#467 step 1): who can sign in, and with which role (core/users.py, /api/users).
+    {#- Users (#467 step 1): who can sign in, and with which role (core/users.py, /api/users).
          Roles are recorded but not enforced yet (step 2 turns them on). Passwords are never shown
-         or logged; the last enabled admin can't be demoted, disabled or deleted. -->
-    <section class="admin-panel admin-panel-wide" id="admin-users-section" aria-labelledby="admin-users-heading">
-      <div class="admin-panel-header">
-        <div>
-          <h2 id="admin-users-heading">Users <span id="admin-users-count" class="apikey-status"></span></h2>
-          <div class="admin-row-hint">Viewers read the archive, editors curate it, admins run the install. Roles are not enforced
-            yet: signing in records who made each change.</div>
-        </div>
-      </div>
+         or logged; the last enabled admin can't be demoted, disabled or deleted. -#}
+    {% call section("users", "Users", "admin-users-count") %}
+      <div class="admin-row-hint">Viewers read the archive, editors curate it, admins run the install. Roles are not enforced
+        yet: signing in records who made each change.</div>
       <div style="overflow-x:auto">
         <table class="admin-users-table">
           <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th>Last sign-in</th><th>MCP keys</th><th>Actions</th></tr></thead>
@@ -292,9 +312,9 @@
         </form>
       </div>
       <span id="admin-users-msg" class="backup-status" role="status"></span>
-    </section>
+    {% endcall %}
 
-    <!-- API Keys (#55) — general secrets store for the app itself, starting
+    {#- API Keys (#55) — general secrets store for the app itself, starting
          with a YouTube Data API key (real view/like/comment counts, full
          descriptions, tags, duration — see #54) rather than wiring a key in
          from outside the app via a docker-compose env var. Storage is a
@@ -304,14 +324,9 @@
          left blank on load/save, same as a normal password field never
          redisplaying what you last typed. Add another labeled row here (and
          to web/routes/admin.py's KNOWN_SETTINGS, and the JS API_KEY_SETTINGS array
-         below) for each additional integration that needs a key. -->
-    <section class="admin-panel">
-      <div class="admin-panel-header">
-        <div>
-          <h2>API keys</h2>
-          <div class="admin-row-hint">Stored server-side; only "set / not set" is ever shown here</div>
-        </div>
-      </div>
+         below) for each additional integration that needs a key. -#}
+    {% call section("apikeys", "API keys") %}
+      <div class="admin-row-hint">Stored server-side; only "set / not set" is ever shown here</div>
       <div class="admin-row admin-apikey-row">
         <div class="admin-apikey-label-row">
           <div>
@@ -343,9 +358,9 @@
         </div>
         <span id="admin-apikey-msg-pages_publish_token" class="backup-status"></span>
       </div>
-    </section>
+    {% endcall %}
 
-    <!-- Caption tuning (#239) — live sliders for the local vision model
+    {#- Caption tuning (#239) — live sliders for the local vision model
          (moondream via Ollama) run against a real existing object's preview
          image, showing the model's actual output for each setting. Same
          philosophy as every other subjective-tuning control in this repo:
@@ -353,18 +368,11 @@
          through the exact pipeline cycle (POST /api/captions/test →
          core/captions.py caption_once: lock, one call, guarded restart on
          failure, #454; via the restart sidecar, #643), so the timings shown are what
-         production will see. Nothing here writes to the object. Full-row
-         panel: controls on the left, the preview image and model output on
-         the right, so a long caption has real width to wrap into instead of
-         a 300px column. -->
-    <section class="admin-panel admin-panel-wide admin-caption-tuning">
-      <div class="admin-panel-header">
-        <div>
-          <h2>Caption tuning</h2>
-          <div class="admin-row-hint">Live moondream output vs. temperature / token cap (#239)</div>
-        </div>
-        <span id="admin-caption-ollama-status" class="apikey-status">…</span>
-      </div>
+         production will see. Nothing here writes to the object. Controls on the left, the
+         preview image and model output on the right, so a long caption has real width to
+         wrap into instead of a 300px column. -#}
+    {% call section("caption-tuning", "Caption tuning", summary_extra='<span id="admin-caption-ollama-status" class="apikey-status">…</span>'|safe) %}
+      <div class="admin-row-hint">Live moondream output vs. temperature / token cap (#239)</div>
       <div class="admin-apikey-input-row" id="admin-caption-skipped-row">
         <span id="admin-caption-skipped-msg" class="backup-status">…</span>
         <button type="button" class="btn-ms admin-apikey-save" id="admin-caption-skipped-run">Caption skipped items</button>
@@ -400,52 +408,36 @@
           <span id="admin-caption-timing" class="backup-status"></span>
         </div>
       </div>
-    </section>
+    {% endcall %}
 
-    <!-- Audit log (#122) — recent mutating API calls, for debugging and
-         recovery. Full-row panel because each entry is itself a five-column
-         grid (method / path / status / affected slugs / time) that only
-         reads well with real horizontal room. -->
-    <section class="admin-panel admin-panel-wide">
-      <div class="admin-panel-header">
-        <div>
-          <h2>Recent activity</h2>
-          <div class="admin-row-hint">Audit log of recent mutating API calls (#122)</div>
-        </div>
-      </div>
+    {#- Audit log (#122) — recent mutating API calls, for debugging and
+         recovery. Each entry is itself a five-column grid (method / path / status /
+         affected slugs / time) that reads best with real horizontal room. -#}
+    {% call section("activity", "Recent activity") %}
+      <div class="admin-row-hint">Audit log of recent mutating API calls (#122)</div>
       <div id="admin-audit-log-container" class="admin-audit-log-container"></div>
-    </section>
+    {% endcall %}
 
-    <!-- Storage (#352) — silo stats: total storage + DB, file count by type,
+    {#- Storage (#352) — silo stats: total storage + DB, file count by type,
          exported-site size, and backup count/size. Complements the Maintenance
-         panel's backup control with the "how big is the silo?" view. -->
-    <section class="admin-panel">
-      <div class="admin-panel-header">
-        <div>
-          <h2>Storage</h2>
-          <div class="admin-row-hint">Silo size, file distribution, exports, and backups (#352)</div>
-        </div>
-        <button type="button" class="btn-ms admin-storage-refresh" id="admin-storage-refresh" title="Refresh stats">↻</button>
-      </div>
+         panel's backup control with the "how big is the silo?" view. -#}
+    {% call section("storage", "Storage") %}
+      <div class="admin-row-hint">Silo size, file distribution, exports, and backups (#352)</div>
+      <div><button type="button" class="btn-ms admin-storage-refresh" id="admin-storage-refresh" title="Refresh stats">↻ Refresh</button></div>
       <div id="admin-storage-content" class="admin-storage-content">
         <div class="admin-storage-loading">Loading…</div>
       </div>
-    </section>
+    {% endcall %}
 
-    <!-- Maintenance — the original #24 contents that weren't a list or a
+    {#- Maintenance — the original #24 contents that weren't a list or a
          form: "Back up now" (relocated from _header.html back then) and the
          "Delete all" development convenience (relocated from
          user_gallery.html, since the endpoint wipes everything regardless of
          which page it's clicked from), plus the #11 display-name/icon stub.
          That stub is still a placeholder: no editing UI exists anywhere yet,
-         it just marks where one belongs once built. -->
-    <section class="admin-panel">
-      <div class="admin-panel-header">
-        <div>
-          <h2>Maintenance</h2>
-          <div class="admin-row-hint">Backups and the whole-library reset</div>
-        </div>
-      </div>
+         it just marks where one belongs once built. -#}
+    {% call section("maintenance", "Maintenance") %}
+      <div class="admin-row-hint">Backups and the whole-library reset</div>
       <div class="admin-divider"></div>
       <button type="button" class="btn-ms admin-full-btn" id="admin-backup-btn"
               title="Zips the current DB and storage files to a timestamped archive on the share. Independent of any delete action.">
@@ -463,10 +455,17 @@
       <div class="admin-divider"></div>
       <button type="button" class="btn-danger admin-full-btn" id="admin-delete-all-btn"
               title="Development convenience while content is still in flux">Delete all</button>
-    </section>
+    {% endcall %}
   </div>
 </div>
 
+{#- #851: the disclosures (remembered open/closed in localStorage, a #hash opens its section) and the
+    Tools rows. Sent to every role: it fetches nothing. -#}
+<script src="/static/js/admin-sections.js?v={{ static_version('js/admin-sections.js') }}"></script>
+
+{#- Everything below is for the admin only (#851): the styles and the one script that fetches the admin
+    APIs. A lower role gets the greyed rows above and none of this. -#}
+{% if is_admin %}
 <style>
 /* (#345) Curator-nudge styles moved to style.css with the Nudges drawer. */
 
@@ -1604,4 +1603,5 @@
   loadBackupFiles();
 })();
 </script>
+{% endif %}
 {% endblock %}

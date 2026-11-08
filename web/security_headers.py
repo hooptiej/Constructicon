@@ -8,8 +8,8 @@ the sign-in gate carries the headers too), sets these defaults on each HTTP resp
   never the path (`/object/<slug>`, `?next=`). Not `same-origin`: YouTube embeds now refuse to play
   with no Referer at all, and the object page embeds them.
 - `X-Frame-Options: SAMEORIGIN` and the CSP's `frame-ancestors 'self'`: no other site can frame an
-  app page (clickjacking). Same-origin framing stays: the admin drawer iframes `/admin?embed=1`, and
-  the HTML Rendered view iframes `/api/image/<slug>/rendered`.
+  app page (clickjacking). Same-origin framing stays: the HTML Rendered view iframes
+  `/api/image/<slug>/rendered` (#851: the Admin drawer's `/admin?embed=1` iframe is gone).
 - `Content-Security-Policy`: `APP_CSP` below on app pages and API answers. See CLAUDE.md "Browser
   security headers" for what each source is for. Scripts run only from `'self'` or with this
   request's nonce (#660): the middleware makes a fresh `secrets.token_urlsafe(16)` per request, puts

@@ -275,7 +275,7 @@ def resolution_urls(routes, v):
 
 def snapshot_urls(v):
     u = ["/", "/?rev=all", "/unfiled", "/unfiled?rev=all", "/gallery", "/upload", "/hobbies",
-         "/brand", "/wallpaper", "/admin", "/admin?embed=1", "/curator", "/captions/review",
+         "/brand", "/wallpaper", "/admin", "/curator", "/captions/review",
          "/object/does-not-exist", "/project/does-not-exist", "/hobby/does-not-exist",
          "/healthz", "/api/version", "/api/settings", "/api/pending-decisions", "/api/audit-log?limit=25",
          "/api/redacted", "/api/restricted", "/api/admin/storage-stats", "/api/processing",

@@ -9,11 +9,12 @@
        moved into the nav rail (_nav_tabs.html) as drawer tabs; the badge now
        rides the Nudges tab. These three drawer trigger buttons stay but are
        CSS-hidden (.app-header .upload-trigger/... in style.css) because the
-       rail's Upload/Blog/Export tabs dispatch a click to them to open the
-       matching drawer -- they're the wiring, not visible controls.
+       rail's Upload tab and /admin's Tools rows for Blog and Export (#851: they
+       were rail tabs) dispatch a click to them to open the matching drawer --
+       they're the wiring, not visible controls.
        #779: each trigger is sent only to a role that may use its drawer (the
-       same check as the drawer partial); below it the rail shows that tab
-       greyed with an explanation instead. #}
+       same check as the drawer partial); below it the rail's tab (Upload) or the
+       Tools row (Blog, Export) shows greyed with an explanation instead. #}
     {% if has_role("editor") %}
     <button type="button" class="upload-trigger" id="upload-trigger">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12H19" stroke="#ECE8DA" stroke-width="1.8" stroke-linecap="round"/></svg>

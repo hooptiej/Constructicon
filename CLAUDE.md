@@ -98,16 +98,46 @@ the date and commit forward when you re-verify.
     once each: the header (`_header.html`, which holds the hidden drawer triggers), the Upload,
     Blog and Export drawers (`_upload_drawer.html`, `_blog_builder.html`, `_export_builder.html`),
     in that order and BEFORE the page's `{% block body %}` (so page scripts still run after the
-    drawer scripts), then after the body the Brand, Hobbies, Curator and Admin drawers, the nav rail
+    drawer scripts), then after the body the Brand, Hobbies and Curator drawers, the nav rail
     (`_nav_tabs.html`) and the Processing drawer. **A page never includes these itself** (their ids
     would appear twice). Each drawer partial checks `has_role` itself (#779: below the role nothing of
-    it is sent and the rail tab is greyed). Opting out: `?embed=1` (`embed` in the context, the Admin
-    drawer's iframe) drops the whole shell; a page that needs a different or no drawer overrides that
+    it is sent and the rail tab, or the /admin Tools row, is greyed). **The rail has four tabs (#851,
+    owner decisions 2026-11-08):** Curator and Admin on the left, Upload and Processing on the right,
+    nothing else; the narrow (<=760px) merge is one right rail whose markup lists the RIGHT side first,
+    so Upload leads. The Admin tab is a plain link to `/admin` (there is no Admin drawer and no
+    `?embed=1` chrome-less mode any more: the shell is never opted out). Hobbies, Blog, Wallpaper, Brand
+    and Export left the rail for the **Tools group at the top of `/admin`** (below). The rail never grows
+    past the visible screen (`max-height: 100vh; max-height: 100dvh`, scrolls past that) and goes
+    icon-only on short screens (`@media (max-height: 560px)`: label visually hidden but kept for screen
+    readers, less padding, smaller gap, smaller badge); no transparency on tabs. A page that needs a
+    different or no drawer overrides that
     one block (`header`, `upload_drawer`, `blog_builder`, `export_builder`) with a comment saying why.
     The only override today: `home.html` puts its hover pop-out (`_gallery_drawer.html`) in
     `upload_drawer`. Before this, pages copied the includes and `/curator` and `/captions/review`
     skipped some, so their Blog / Export / Upload tabs clicked a trigger with no drawer behind it.
     Check with `scripts/test_drawers_base_547.py`.
+  - **The `/admin` page (#851, owner decisions 2026-11-08).** `GET /admin` is a **viewer** door (it was
+    admin); the admin APIs its sections call keep their own admin roles, nothing under `/api/*` was
+    loosened. Top of the page: the **Tools group** (open by default): one row each for Hobbies, Blog,
+    Wallpaper, Brand and Export (`tool_row` in `admin.html`; the same icons and roles the rail tabs had).
+    A drawer row clicks that drawer's hidden trigger (`hobbies-drawer-trigger`, `blog-builder-trigger`,
+    `brand-drawer-trigger`, `export-builder-trigger`; Wallpaper is a link to `/wallpaper`); Blog and Export
+    need an editor and are greyed below it with the #779 helpers; a trigger missing from the page makes the
+    row say so (`#admin-tools-msg`), never a dead click. **Every admin section is a collapsed
+    `<details class="admin-section">`** drawn by the `section()` macro (a `{% call %}` block): the heading
+    and count span ride the `<summary>`, the hint and body sit inside; the page is a plain full-width stack
+    (`.admin-grid` is a flex column). `static/js/admin-sections.js` (sent to every role, fetches nothing)
+    remembers which sections you left open in `localStorage` (`constructicon.admin.sections`, every storage
+    call in try/catch, the page works with storage blocked) and opens the section a `#hash` names (the
+    Wallpaper page links `/admin#admin-vocab-section`; opening by hash is not remembered). **For a role
+    below admin each admin-only section is a greyed row** ("Users (admins only)", `.admin-locked-row.role-locked`,
+    the one #779 pattern) that explains on click, and **its markup and the page's whole admin script block
+    (every admin fetch) are not sent**, nor are the setup / MCP-restart banners, so a viewer's page makes
+    no admin API call and gets no 403 noise. "Needs your input" is just a link to the Curator, so it takes
+    viewer and shows for everyone. A new admin section = a `{% call section("key", "Heading", count_id) %}`
+    block plus its code in the admin-only script block; its comment goes in `{# #}` (an HTML comment would
+    be sent to every role). Check with `scripts/test_tab_rail_admin_851.py` and
+    `scripts/test_admin_sections_851.js`.
 - **`core/db/`** (a package since #547 step 1; was the ~6,700-line `core/db.py`) — the SQLite layer
   and the schema source of truth (`SCHEMA`, `MIGRATIONS`, `init_db`, `transaction()`, `ImageLog`, every
   read query, the pipeline writers). Callers are unchanged: `from core import db`, then `db.<name>`
@@ -617,14 +647,17 @@ this door at all?) and the item **policy** (may this actor see this item?). Each
   `role_lock_class(need)`, `role_lock_if(need, label)`, `role_lock_message`, `role_need_phrase`) and
   `static/js/role-lock.js` (base.html, every page: one capture-phase click listener on
   `.role-locked[data-locked-message]` that stops the click and shows the message; `RoleLock.decorate` /
-  `show` for JS-built controls). The nav tabs' locked message comes from the same helper. Locked today:
+  `show` for JS-built controls). The nav tabs' locked message comes from the same helper. Locked today
+  (#851: the rail's only role-gated tab is Upload, editor; the Blog and Export rows of /admin's Tools group
+  are locked the same way, and so is every admin-only section of /admin for a role below admin, as a
+  greyed "<Section> (admins only)" row):
   every details-panel Edit (viewers), the item page's More menu (type actions, Replace file, Remove
   file, Delete) and "This is sensitive" / "Clear sensitive", the card page's rename pencil, Delete
   (editor) and Convert (admin), a family chip's x, the hobby page's Convert to card (admin), + New
   project (home, Unfiled) and + New hobby (/hobbies, the drawer), every file grid's Select (`<grid>-
   select-locked`, viewers), the Curator queue's and the needs strip's answer / defer / dismiss buttons,
   the caption review page's Accept / Skip, and the Account page's backup download (admin). Hiding stays
-  ONLY for private content, and for a restricted drawer's markup (its tab is greyed). The older
+  ONLY for private content, and for a restricted drawer's or admin section's markup (its tab or row is greyed). The older
   cover-pick and tag-chip locks (`is-locked`, own JS) predate it and work the same way.
 
 ## Users and sessions (#467 step 1: users, sign-in, first-run setup)
@@ -864,8 +897,8 @@ defaults to every HTTP response. A header the response already set always wins.
   https://fonts.googleapis.com` (on purpose, see below); font `'self'
   https://fonts.gstatic.com`; img, media, connect, worker `'self'`; frame `'self'
   https://www.youtube.com`; `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`,
-  `frame-ancestors 'self'`. Same-origin framing stays allowed: the admin drawer iframes
-  `/admin?embed=1`, the HTML Rendered view iframes `/api/image/<slug>/rendered`.
+  `frame-ancestors 'self'`. Same-origin framing stays allowed: the HTML Rendered view iframes
+  `/api/image/<slug>/rendered` (the Admin drawer's `/admin?embed=1` iframe is gone, #851).
 - **`/f/...`** keeps #610's headers as they are (sandbox CSP on active content, nosniff); no app CSP and
   no X-Frame-Options, so a hotlinked file can still be embedded elsewhere. **`/preview`** (the export
   preview) gets only `PREVIEW_CSP` (`object-src 'none'; base-uri 'self'; form-action 'self';
@@ -2177,7 +2210,7 @@ targets) stays admin-only** until #325 brings per-user targets and tokens.
   admin's default build too:** cards editors created are held back unless ticked. `GET /api/export/sandbox`
   (editor) = the sandbox info plus `candidates` (every visible card / entry with owner, own, ok + why,
   default), which the drawer lists (another user's card unticked with its owner; a private one disabled with
-  why). The drawer (`_export_builder.html`, Export tab = editor, `_nav_tabs.html`) shows Publish greyed and
+  why). The drawer (`_export_builder.html`, opened from /admin's Tools row for Export = editor since #851, was a rail tab) shows Publish greyed and
   explained for an editor. Check: `scripts/test_editor_export_781.py`.
 - **Build** (`core/site_export.py` `build_site(config, out_dir=None)`, `POST /api/export/build`):
   renders `web/export_templates/` for the chosen cards (default: `card_rules.export_included_by_default`,
@@ -2199,7 +2232,7 @@ targets) stays admin-only** until #325 brings per-user targets and tokens.
   setting, used only for the push URL and scrubbed from errors and from `.git/config`.
 - **One lock:** the install's build and publish share one lock; a second one while one runs is 409
   `export_busy`. (#781: an editor's sandbox has its own.)
-- **UI:** the **Export** tab in the nav rail opens the export builder drawer
+- **UI:** the **Export** row of /admin's Tools group (#851; it was a nav-rail tab) opens the export builder drawer
   (`web/templates/_export_builder.html`). Live pages only: the static site's own templates are
   `web/export_templates/`, not `web/templates/`.
 - **Separate and older:** `core/project_export.py` / `GET /api/projects/{id}/export.zip` bundles one

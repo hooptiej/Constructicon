@@ -1,16 +1,22 @@
-<!-- Navigation rails (#345, #774) — folder tabs on BOTH screen edges.
-     #345 made one right-edge rail; #774 split it: admin/site tabs on the
-     LEFT, user/files tabs on the RIGHT, and folded the Processing tab
-     (#388, once its own left-edge pop-out) into the right rail after Upload.
-     Below 760px the two lists merge back into one right rail, left list
-     first (CSS only, see .nav-rails in style.css).
+<!-- Navigation rails (#345, #774, #851) — folder tabs on BOTH screen edges.
+     #345 made one right-edge rail; #774 split it: site tabs on the LEFT,
+     user/files tabs on the RIGHT. #851 (owner decisions, 2026-11-08) cut the
+     rail to FOUR tabs so it always fits a phone: Upload and Processing on the
+     right, Curator and Admin on the left. Hobbies, Blog, Wallpaper, Brand and
+     Export moved into the Tools group at the top of /admin (admin.html), and
+     the Admin tab is a plain link to the full /admin page (the popout drawer
+     is gone). Below 760px the two lists merge into one right rail with the
+     RIGHT list first, so Upload leads (the markup order, nothing in CSS). The
+     rails never grow past the visible screen (100dvh) and go icon-only on
+     short screens such as a landscape phone (style.css).
 
      NAV_TABS below is the ONE place the tabs are defined. To move a tab to
      the other side, change its `side`; to reorder, change its `order`
      (sorted ascending within a side). Each tab is one of:
      - kind "drawer": clicks the page's hidden trigger (`trigger`, else
        `fallback`) and hides itself when neither exists on the page;
-     - kind "link": a plain href;
+     - kind "link": a plain href (the tab for the page you are on carries
+       aria-current="page");
      - kind "button": a button with its own `dom_id`, wired by its own
        drawer's script (Processing: _processing_drawer.html).
      `extra_class` adds a class (Processing's "idle" is a state hook its
@@ -19,14 +25,14 @@
      the accent colour (Processing's), default is hazard yellow (Curator's).
      `min_role` (#779, optional): the lowest role that can USE the tab. It
      mirrors what the server already enforces for that drawer and never adds a
-     rule of its own: Export = editor (#781: build / config / sandbox are editor; targets and publish stay
-     admin, greyed inside the drawer), Admin = admin
-     (GET /admin, the drawer's iframe), Upload = editor (POST /api/upload and
-     /api/content), Blog = editor (the builder's POST/PUT/DELETE
-     /api/blog-entries*). Curator, Brand, Hobbies, Wallpaper and Processing
-     have none: a viewer can read them (their writes are checked server-side).
+     rule of its own: Upload = editor (POST /api/upload and /api/content).
+     Curator and Processing have none: a viewer can read them (their writes
+     are checked server-side). Admin has none either since #851 (owner
+     decision 2026-11-08): GET /admin is open to every role, and the sections
+     that need admin show greyed inside the page. Blog and Export (editor)
+     live in /admin's Tools group now and lock there the same way.
      Below it the tab still shows, greyed out and labelled with the role it
-     needs ("Admin (admins only)"), and a click explains instead of opening
+     needs ("Upload (editors and admins)"), and a click explains instead of opening
      anything; the drawer's own markup is left off the page for that user
      (each drawer partial checks has_role itself). Owner, #779: a permission
      never makes a feature invisible. -->
@@ -34,14 +40,8 @@
   {"id": "curator", "side": "left", "order": 10, "label": "Curator",
    "kind": "drawer", "trigger": "nudges-drawer-trigger", "badge": "nudges-rail-badge",
    "icon": '<path d="M12 22a2.4 2.4 0 002.4-2h-4.8A2.4 2.4 0 0012 22zm6-6V11c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 00-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" fill="currentColor"/>'},
-  {"id": "export", "side": "left", "order": 20, "label": "Export", "min_role": "editor",
-   "kind": "drawer", "trigger": "export-builder-trigger",
-   "icon": '<path d="M19 9l-7 7-7-7M12 16V4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>'},
-  {"id": "brand", "side": "left", "order": 30, "label": "Brand",
-   "kind": "drawer", "trigger": "brand-drawer-trigger",
-   "icon": '<path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z" fill="currentColor" opacity="0.6"/><path d="M12 12.5c.83 0 1.5-.67 1.5-1.5s-.67-1.5-1.5-1.5-1.5.67-1.5 1.5.67 1.5 1.5 1.5z" fill="currentColor"/>'},
-  {"id": "admin", "side": "left", "order": 40, "label": "Admin", "min_role": "admin",
-   "kind": "drawer", "trigger": "admin-drawer-trigger",
+  {"id": "admin", "side": "left", "order": 20, "label": "Admin",
+   "kind": "link", "href": "/admin",
    "icon": '<path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="currentColor" stroke-width="1.6"/><path d="M19.4 13.5a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V19.5a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H4.5a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H10a1.65 1.65 0 001-1.51V4.5a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V10a1.65 1.65 0 001.51 1h.09a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="1.3"/>'},
   {"id": "upload", "side": "right", "order": 10, "label": "Upload", "min_role": "editor",
    "kind": "drawer", "trigger": "upload-trigger", "fallback": "gallery-drawer-tab",
@@ -50,15 +50,6 @@
    "kind": "button", "dom_id": "proc-tab", "extra_class": "idle",
    "badge": "proc-tab-badge", "badge_tone": "accent",
    "icon": '<path d="M12 3a9 9 0 109 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'},
-  {"id": "blog", "side": "right", "order": 30, "label": "Blog", "min_role": "editor",
-   "kind": "drawer", "trigger": "blog-builder-trigger",
-   "icon": '<path d="M4 5h16M4 9h16M4 13h16M4 17h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'},
-  {"id": "hobbies", "side": "right", "order": 40, "label": hobby_label.many,
-   "kind": "drawer", "trigger": "hobbies-drawer-trigger",
-   "icon": '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z" fill="currentColor"/>'},
-  {"id": "wallpaper", "side": "right", "order": 50, "label": "Wallpaper",
-   "kind": "link", "href": "/wallpaper",
-   "icon": '<rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.6"/><circle cx="8.5" cy="9.5" r="1.5" fill="currentColor"/><path d="M4 17l5-5 3.5 3.5L16 12l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'},
 ] -%}
 
 {%- macro nav_tab(t) -%}
@@ -75,7 +66,9 @@
           title="{{ t.label }} ({{ _need }})" aria-label="{{ t.label }} ({{ _need }})"
           data-locked-message="{{ role_lock_message(t.label, t.min_role) }}">
   {%- elif t.kind == "link" %}
-  <a class="nav-tab" href="{{ t.href }}" title="{{ t.label }}">
+  {#- #851: the link for the page you are on is marked, for screen readers and the .active look -#}
+  {%- set _here = request is defined and request.url.path == t.href %}
+  <a class="nav-tab{% if _here %} active{% endif %}" href="{{ t.href }}" title="{{ t.label }}"{% if _here %} aria-current="page"{% endif %}>
   {%- elif t.kind == "button" %}
   <button type="button" class="nav-tab{% if t.extra_class %} {{ t.extra_class }}{% endif %}" id="{{ t.dom_id }}" title="{{ t.label }}" aria-label="{{ t.label }}">
   {%- else %}
@@ -95,9 +88,11 @@
 {%- endmacro %}
 
 {# #774: one wrapper, two lists. Wide screens pin each list to its own edge;
-   narrow screens turn the wrapper into one right rail (left list first). #}
+   narrow screens turn the wrapper into one right rail. #851: the RIGHT list is
+   written first, so on a phone Upload leads (then Processing, Curator, Admin);
+   on wide screens each list is fixed to its own edge, so the order is invisible. #}
 <nav class="nav-rails" role="navigation" aria-label="Navigation tabs">
-  {%- for side in ["left", "right"] %}
+  {%- for side in ["right", "left"] %}
   <ul class="nav-tabs-list nav-rail nav-rail-{{ side }}" data-nav-side="{{ side }}">
     {%- for t in NAV_TABS | selectattr("side", "equalto", side) | sort(attribute="order") %}
     {{ nav_tab(t) }}

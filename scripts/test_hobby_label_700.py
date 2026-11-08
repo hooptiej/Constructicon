@@ -107,7 +107,9 @@ check("default: /hobbies 200 (no redirect)", r.status_code == 200, r.status_code
 check("default: index title and heading say Hobbies",
       "<title>Hobbies — " in r.text and '<h1 class="page-title">Hobbies</h1>' in r.text)
 check("default: + New hobby button", "+ New hobby</button>" in r.text)
-check("default: nav rail label Hobbies", '<span class="nav-tab-label">Hobbies</span>' in r.text)
+# #851: the hobbies tab left the rail; its label shows on /admin's Tools row now.
+check("default: /admin Tools row label Hobbies",
+      '<span class="admin-tool-name">Hobbies</span>' in tok.get("/admin").text)
 check("default: drawer heading Hobbies", "<h2>Hobbies</h2>" in r.text)
 check("default: <html data-hobby-label> carries the default words",
       "&#34;one&#34;: &#34;Hobby&#34;" in r.text and "&#34;many&#34;: &#34;Hobbies&#34;" in r.text
@@ -183,7 +185,9 @@ check("/departments 200", r.status_code == 200, r.status_code)
 txt = visible(r.text)
 check("/departments: title, heading, button and nav say Department(s)",
       "<title>Departments — " in r.text and '<h1 class="page-title">Departments</h1>' in r.text
-      and "+ New department</button>" in r.text and '<span class="nav-tab-label">Departments</span>' in r.text)
+      and "+ New department</button>" in r.text
+      # #851: the tool moved from the rail into /admin's Tools group
+      and '<span class="admin-tool-name">Departments</span>' in tok.get("/admin").text)
 check("/departments: no visible 'hobby'/'hobbies' word left", not re.search(r"\bhobb(y|ies)\b", txt, re.I),
       re.findall(r".{30}\bhobb(?:y|ies)\b.{30}", txt, re.I)[:3])
 check("/departments: data-hobby-label carries Department",
@@ -205,7 +209,8 @@ check("project page: no visible 'hobby' word left", not re.search(r"\bhobb(y|ies
       re.findall(r".{30}\bhobb(?:y|ies)\b.{30}", visible(r.text), re.I)[:3])
 r = tok.get("/")
 check("home: nav and drawer say Departments, no visible 'hobby' word",
-      '<span class="nav-tab-label">Departments</span>' in r.text
+      # #851: the nav tab became /admin's Tools row (the drawer fragment itself is unchanged)
+      '<span class="admin-tool-name">Departments</span>' in tok.get("/admin").text
       and not re.search(r"\bhobb(y|ies)\b", visible(r.text), re.I),
       re.findall(r".{30}\bhobb(?:y|ies)\b.{30}", visible(r.text), re.I)[:3])
 r = tok.get("/guides/capture-physical-piece")

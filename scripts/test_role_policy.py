@@ -265,7 +265,9 @@ try:
     def forbidden(r):
         return r.status_code == 403 and r.json().get("error", {}).get("code") == "forbidden" and r.json().get("ok") is False
     check("enforce: viewer GET /api/settings (admin) -> 403 forbidden", forbidden(client.get("/api/settings")))
-    check("enforce: viewer GET /admin (admin) -> 403", forbidden(client.get("/admin")))
+    # #851 (owner decision 2026-11-08): the /admin page is a viewer door now (its admin-only sections lock
+    # inside the page); the admin APIs it calls stay admin (the /api/settings check above).
+    check("enforce: viewer GET /admin (viewer since #851) -> 200", client.get("/admin").status_code == 200)
     check("enforce: viewer POST /api/image/{slug} (editor) -> 403",
           forbidden(client.post(f"/api/image/{PLAIN}", data={"display_name": "x"}, headers=same)))
     check("enforce: viewer GET / (viewer) -> 200", client.get("/").status_code == 200)

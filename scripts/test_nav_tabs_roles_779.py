@@ -7,18 +7,22 @@ plus the install token. No server, no network:
 
     python scripts/test_nav_tabs_roles_779.py
 
-  1. Every role sees all nine tabs, each exactly once, on its usual side (#774 still holds).
-  2. Which tabs are locked (greyed) mirrors the server's own route roles: Export and Admin are
-     admin-only, Upload and Blog editor-and-up (their writes), the rest viewer. So: admin and the
-     token none; editor Export + Admin; viewer Export + Admin + Upload + Blog. And the mapping
-     itself is checked against the route table (web/roles.label_of on the real routes).
+  #851 (owner decisions, 2026-11-08) cut the rail to four tabs (Curator, Admin | Upload, Processing)
+  and moved Hobbies, Blog, Wallpaper, Brand and Export into /admin's Tools group, whose locks are
+  checked in scripts/test_tab_rail_admin_851.py. The Admin tab is open to every role now. So here:
+
+  1. Every role sees all four tabs, each exactly once, on its usual side (#774 still holds).
+  2. Which tabs are locked (greyed) mirrors the server's own route roles: only Upload is gated
+     (editor-and-up: its writes). So: admin, editor and the token none; viewer Upload. And the
+     mapping itself is checked against the route table (web/roles.label_of on the real routes).
   3. A locked tab is a .nav-tab-locked button, aria-disabled, with no drawer trigger, id or badge;
-     its title / aria-label carry the role ("Admin (admins only)", "Upload (editors and admins)");
-     its data-locked-message names the tab, the role it needs, the user's own role and "Ask an
+     its title / aria-label carry the role ("Upload (editors and admins)"); its
+     data-locked-message names the tab, the role it needs, the user's own role and "Ask an
      admin" (what the click shows: the rail script reads that attribute, never an empty note).
-  4. The restricted drawer's markup is absent for that user: no admin iframe / drawer, no export
-     builder, no blog builder, no upload drawer or home upload pop-out, and none of their header
-     triggers; an allowed user still gets all of them.
+  4. The restricted drawers' markup is absent for a user below their role (no upload drawer or home
+     upload pop-out, no export builder, no blog builder, and none of their header triggers); an
+     allowed user still gets all of them. (The Blog and Export drawers have no rail tab any more,
+     but their markup is still gated by the same has_role check.)
   5. Admins: no locked tab anywhere, every drawer present (as before #779).
   6. The rail script handles locked tabs (click, Escape, the note element) and style.css greys them
      with a filter, never opacity.
@@ -51,23 +55,26 @@ from web import roles as web_roles  # noqa: E402
 FAILS = []
 BASE = "http://testserver"
 SAME = {"Origin": BASE}
+web_roles_ladder = ["public", "viewer", "editor", "admin"]  # the role ladder, lowest first
 
+# #851: four tabs on the rail; Admin is open to every role, so only Upload can be locked.
 SIDES = {
-    "left": ["curator", "export", "brand", "admin"],
-    "right": ["upload", "processing", "blog", "hobbies", "wallpaper"],
+    "left": ["curator", "admin"],
+    "right": ["upload", "processing"],
 }
-MIN_ROLE = {"export": "editor", "admin": "admin", "upload": "editor", "blog": "editor"}  # #781: Export = editor
-LABEL = {"export": "Export", "admin": "Admin", "upload": "Upload", "blog": "Blog"}
+MIN_ROLE = {"upload": "editor"}  # rail tabs with a role (Export / Blog / Admin left the rail or opened up)
+LABEL = {"upload": "Upload"}
 NEED = {"admin": "admins only", "editor": "editors and admins"}
 LOCKED = {
     "admin": set(),
     "token": set(),
-    "editor": {"admin"},
-    "viewer": {"export", "admin", "upload", "blog"},
+    "editor": set(),
+    "viewer": {"upload"},
 }
+# Drawers whose markup is gated by role (their tab may have left the rail): the role they need.
+DRAWER_ROLE = {"export": "editor", "blog": "editor", "upload": "editor"}  # #781: Export = editor
 # Markup each restricted drawer sends (its partial's own ids) and the header trigger for it.
 DRAWER_MARKUP = {
-    "admin": ['id="admin-drawer"', 'id="admin-drawer-frame"', 'id="admin-drawer-trigger"'],
     "export": ['id="export-builder"', 'id="export-builder-trigger"'],
     "blog": ['id="blog-builder"', 'id="blog-builder-trigger"'],
     "upload": ['id="upload-drawer"', 'id="gallery-drawer"', 'id="upload-trigger"', 'id="upload-form"',
@@ -102,7 +109,9 @@ ROUTE_ROLE = {}
 for r in web_roles.flat_routes(webapp.app.routes):
     for m in (getattr(r, "methods", None) or []):
         ROUTE_ROLE[(m, getattr(r, "path", ""))] = web_roles.label_of(r)
-check("server: GET /admin is admin", ROUTE_ROLE.get(("GET", "/admin")) == "admin", ROUTE_ROLE.get(("GET", "/admin")))
+# #851 (owner decision 2026-11-08): /admin opens to every role, so the Admin tab has no minimum; the
+# admin-only sections lock inside the page (checked in scripts/test_tab_rail_admin_851.py).
+check("server: GET /admin is viewer (the Admin tab has no minimum role)", ROUTE_ROLE.get(("GET", "/admin")) == "viewer", ROUTE_ROLE.get(("GET", "/admin")))
 # #781 scope (a): building, the config and the sandbox are editor; publish targets and publishing stay admin.
 check("server: POST /api/export/build is editor", ROUTE_ROLE.get(("POST", "/api/export/build")) == "editor",
       ROUTE_ROLE.get(("POST", "/api/export/build")))
@@ -140,7 +149,7 @@ for who, c in CLIENTS.items():
         if r.status_code != 200:
             continue
         html = r.text
-        # 1. all nine tabs, once each, on their side
+        # 1. all four tabs, once each, on their side
         check(f"{who} {path}: rails unchanged by role", rails(html) == SIDES, rails(html))
         # 2. exactly the expected tabs are locked
         locked_now = {t for t in MIN_ROLE if "nav-tab-locked" in tab_li(html, t)}
@@ -162,21 +171,25 @@ for who, c in CLIENTS.items():
                 check(f"{who} {path}: {t} message names it, the role, the user's role and who to ask",
                       msg.startswith(f"{LABEL[t]} needs the {MIN_ROLE[t]} role") and f"{'an' if role_word[0] in 'aeiou' else 'a'} {role_word}." in msg
                       and "Ask an admin" in msg, msg)
-                # 4. its drawer's markup is not on the page
-                for marker in DRAWER_MARKUP[t]:
-                    check(f"{who} {path}: {t} markup absent ({marker})", marker not in html)
             else:
                 check(f"{who} {path}: {t} is a working tab", "nav-tab-locked" not in li and li != "", li[:200])
-        # allowed drawers are still sent (home has the upload pop-out instead of the upload drawer)
-        for t in set(MIN_ROLE) - LOCKED[who]:
+        # 4. a drawer's markup is not on the page below its role, and is (still) sent at or above it
+        #    (home has the upload pop-out instead of the upload drawer). #851: Blog and Export have no
+        #    rail tab now, so this walks the drawers, not the tabs.
+        for t, need_role in DRAWER_ROLE.items():
+            allowed = web_roles_ladder.index("admin" if who == "token" else who) >= web_roles_ladder.index(need_role)
             markers = DRAWER_MARKUP[t]
             if t == "upload":
                 markers = ['id="gallery-drawer"'] if path == "/" else ['id="upload-drawer"', 'id="upload-trigger"']
             if t in ("blog", "export") and path in ("/curator", "/unfiled", "/wallpaper"):
                 # those pages never included the blog/export builders (unchanged by #779)
                 markers = [mk for mk in markers if "trigger" in mk]
-            for marker in markers:
-                check(f"{who} {path}: allowed {t} markup present ({marker})", marker in html)
+            if allowed:
+                for marker in markers:
+                    check(f"{who} {path}: allowed {t} markup present ({marker})", marker in html)
+            else:
+                for marker in DRAWER_MARKUP[t]:  # all of it, wherever the page would put it
+                    check(f"{who} {path}: {t} markup absent ({marker})", marker not in html)
 
 # ---- 5. admins: nothing greyed anywhere ----------------------------------------------------------
 for who in ("admin", "token"):

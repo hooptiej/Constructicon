@@ -2,8 +2,8 @@
      drawer, so it's reachable from the nav rail on every page instead of a page
      navigation that read as inconsistent sitting among the drawer tabs. Included
      globally from base.html. Assets load lazily on first open. The hidden
-     #brand-drawer-trigger is what the rail's Brand tab dispatches its click to,
-     the same pattern the Upload/Blog/Export tabs use. The standalone /brand page
+     #brand-drawer-trigger is what /admin's Tools row for Brand clicks (#851: it was the
+     rail's Brand tab), the same pattern as the other drawers. The standalone /brand page
      still exists as a direct-URL fallback. -->
 <button type="button" id="brand-drawer-trigger" style="display:none" aria-hidden="true" tabindex="-1"></button>
 <div class="drawer-backdrop" id="brand-drawer-backdrop"></div>
